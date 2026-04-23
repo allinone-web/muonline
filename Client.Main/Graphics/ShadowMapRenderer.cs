@@ -26,6 +26,7 @@ namespace Client.Main.Graphics
         private Vector3 _lastCameraTarget = new(float.NaN, float.NaN, float.NaN);
         private float _lastShadowDistance = float.NaN;
         private bool _forceRender = true;
+        private int _lastWorldGeometryTick = int.MinValue;
         private readonly object _candidateMergeLock = new();
         private const int ParallelCasterThreshold = 160;
         private static readonly ParallelOptions CandidateParallelOptions = new()
@@ -115,9 +116,19 @@ namespace Client.Main.Graphics
             bool cameraChanged = HasCameraChanged(camera, shadowDistance);
             float frustumGuardBand = Math.Max(5f, shadowDistance * 0.01f);
 
-            // Always update when camera/light range changed; otherwise respect interval for static views
-            if (!_forceRender && !cameraChanged && _frameCounter % updateInterval != 0)
+            int worldTick = Controls.WorldControl.WorldGeometryTick;
+            bool geometryChanged = worldTick != _lastWorldGeometryTick;
+
+            // Skip entirely when nothing changed: cached shadow map is still valid for sampling.
+            if (!_forceRender && !cameraChanged && !geometryChanged)
                 return;
+
+            // Throttle by preset interval. Even when camera/geometry changed, render every Nth frame
+            // (Ultra=1 = every frame, Low=4 = ~15 fps shadow at 60 fps).
+            if (!_forceRender && _frameCounter % updateInterval != 0)
+                return;
+
+            _lastWorldGeometryTick = worldTick;
 
             UpdateLightMatrices(camera, shadowDistance);
             _lastCameraPosition = camera.Position;
@@ -261,7 +272,10 @@ namespace Client.Main.Graphics
 
             int shadowMapSize = _shadowMap?.Width ?? Math.Max(256, Constants.SHADOW_MAP_SIZE);
             float texelWorldSize = shadowDistance / shadowMapSize;
-            float thresholdSq = Math.Max(1f, texelWorldSize * texelWorldSize);
+            // Light view snaps focus to texel grid, so sub-2-texel camera moves produce no
+            // visible change. Loosen threshold to skip redundant re-renders during slow pans.
+            float positionTexels = texelWorldSize * 2f;
+            float thresholdSq = Math.Max(1f, positionTexels * positionTexels);
 
             if (Vector3.DistanceSquared(camera.Position, _lastCameraPosition) > thresholdSq)
                 return true;

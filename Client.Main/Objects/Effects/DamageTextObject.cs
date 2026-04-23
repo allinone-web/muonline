@@ -283,15 +283,23 @@ namespace Client.Main.Objects.Effects
             }
 
             // --------------------------------------------------------------------------
-            using (new SpriteBatchScope(
-                spriteBatch,
-                SpriteSortMode.Deferred,
-                BlendState.AlphaBlend,
-                SamplerState.AnisotropicClamp,
-                DepthStencilState.None,
-                RasterizerState.CullNone,
-                null,
-                UiScaler.SpriteTransform))
+            // When WorldControl.DrawAfterPass already opened a shared damage-text batch,
+            // skip our own scope and draw straight into it (saves Begin/End per instance).
+            bool ownScope = !SpriteBatchScope.BatchIsBegun;
+            SpriteBatchScope scope = default;
+            if (ownScope)
+            {
+                scope = new SpriteBatchScope(
+                    spriteBatch,
+                    SpriteSortMode.Deferred,
+                    BlendState.AlphaBlend,
+                    SamplerState.AnisotropicClamp,
+                    DepthStencilState.None,
+                    RasterizerState.CullNone,
+                    null,
+                    UiScaler.SpriteTransform);
+            }
+            try
             {
                 // Shadow (only for bigger text)
                 if (scale > 0.8f)
@@ -358,6 +366,11 @@ namespace Client.Main.Objects.Effects
                             0f, origin, scale * 1.02f, SpriteEffects.None, 0f);
                     }
                 }
+            }
+            finally
+            {
+                if (ownScope)
+                    scope.Dispose();
             }
         }
 

@@ -104,6 +104,9 @@ namespace Client.Main.Controls.Terrain
         private readonly int _blocksPerSide;
         private readonly sbyte[] _visibleBlockLod;
         private bool _hasLodTransitions;
+        // Cache so the color and shadow passes don't both rebuild the LOD grid in the same frame.
+        private int _lodGridBuiltVersion = int.MinValue;
+        private bool _lodGridBuiltResult;
 
         public float WaterSpeed { get; set; } = 0f;
         public float DistortionAmplitude { get; set; } = 0f;
@@ -422,6 +425,12 @@ namespace Client.Main.Controls.Terrain
             if (_visibility?.VisibleBlocks == null || _visibleBlockLod == null || _visibleBlockLod.Length == 0)
                 return false;
 
+            // Both color and shadow passes call this each frame. Reuse the result when the
+            // visibility manager hasn't rebuilt its block set since the last grid build.
+            int version = _visibility.Version;
+            if (version == _lodGridBuiltVersion)
+                return _lodGridBuiltResult;
+
             Array.Fill(_visibleBlockLod, (sbyte)-1);
 
             foreach (var block in _visibility.VisibleBlocks)
@@ -450,9 +459,15 @@ namespace Client.Main.Controls.Terrain
                 int bx = block.Xi / BlockSize;
                 int by = block.Yi / BlockSize;
                 if (HasLowerLodNeighbor(bx, by, lodStep))
+                {
+                    _lodGridBuiltVersion = version;
+                    _lodGridBuiltResult = true;
                     return true;
+                }
             }
 
+            _lodGridBuiltVersion = version;
+            _lodGridBuiltResult = false;
             return false;
         }
 

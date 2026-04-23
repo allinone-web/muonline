@@ -405,7 +405,9 @@ namespace Client.Main.Scenes
             World.DrawAfter(gameTime);
 
 #if !ANDROID
-            var worldObjects = World.Objects.GetSnapshot();
+            // Iterate only the post-cull visible set for overlay UI (nameplates / bboxes).
+            // Avoids touching every WorldObject on the map for off-screen entities.
+            var worldObjects = World.VisibleObjects;
             var droppedItems = World.DroppedItems;
 
             // --- Pass 2a: Render batched dropped-item shine sprites ---

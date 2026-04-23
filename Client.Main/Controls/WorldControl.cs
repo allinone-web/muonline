@@ -180,6 +180,11 @@ namespace Client.Main.Controls
         private readonly List<DroppedItemObject> _droppedItems = [];
         private readonly Queue<WorldObject> _objectsToInitialize = [];
         private readonly List<WorldObject> _visibleObjects = [];
+
+        // Snapshot of objects that survived this frame's visibility/culling pass.
+        // Overlay/UI passes (nameplates, bbox, hover) should iterate this rather than the
+        // full World.Objects snapshot to avoid touching everything on the map.
+        public IReadOnlyList<WorldObject> VisibleObjects => _visibleObjects;
         private readonly HashSet<WorldObject> _visibleObjectSet = [];
         private readonly HashSet<WorldObject> _positionDirtyObjects = [];
         private readonly object _visibleMergeLock = new();
@@ -281,7 +286,15 @@ namespace Client.Main.Controls
             }
             else
                 _dirtyVisibleObjects = true;
+
+            unchecked { System.Threading.Interlocked.Increment(ref s_worldGeometryTick); }
         }
+
+        private static int s_worldGeometryTick;
+
+        // Monotonic counter bumped whenever any tracked WorldObject reports a position change.
+        // Read by ShadowMapRenderer to detect a fully static frame and skip redundant casters.
+        public static int WorldGeometryTick => System.Threading.Volatile.Read(ref s_worldGeometryTick);
 
         private void Object_StatusChanged(object sender, EventArgs e)
         {
@@ -942,8 +955,41 @@ namespace Client.Main.Controls
             var objCount = list.Count;
             if (objCount == 0) return;
             SetDepthState(state);
+
+            // Damage texts use identical sprite-batch state and are depth-disabled overlays.
+            // Defer them so we open one scope per pass rather than one per instance.
+            int damageCount = 0;
             for (var i = 0; i < objCount; i++)
-                list[i].DrawAfter(time);
+            {
+                var obj = list[i];
+                if (obj is DamageTextObject)
+                {
+                    damageCount++;
+                    continue;
+                }
+                obj.DrawAfter(time);
+            }
+
+            if (damageCount > 0)
+            {
+                var sb = GraphicsManager.Instance.Sprite;
+                using (new Helpers.SpriteBatchScope(
+                    sb,
+                    SpriteSortMode.Deferred,
+                    BlendState.AlphaBlend,
+                    SamplerState.AnisotropicClamp,
+                    DepthStencilState.None,
+                    RasterizerState.CullNone,
+                    null,
+                    UiScaler.SpriteTransform))
+                {
+                    for (var i = 0; i < objCount; i++)
+                    {
+                        if (list[i] is DamageTextObject)
+                            list[i].DrawAfter(time);
+                    }
+                }
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -131,7 +131,7 @@ namespace Client.Main
                     ENABLE_SHADOW_MAPPING = true;
                     SHADOW_MAP_SIZE = 512;
                     SHADOW_DISTANCE = 1500f;
-                    SHADOW_UPDATE_INTERVAL = 1;
+                    SHADOW_UPDATE_INTERVAL = 4;
                     SHADOW_MAX_CASTERS = 10;
                     SHADOW_SKIP_SMALL_PARTS = false;
                     break;
@@ -140,7 +140,7 @@ namespace Client.Main
                     ENABLE_SHADOW_MAPPING = true;
                     SHADOW_MAP_SIZE = 1024;
                     SHADOW_DISTANCE = 2000f;
-                    SHADOW_UPDATE_INTERVAL = 1;
+                    SHADOW_UPDATE_INTERVAL = 3;
                     SHADOW_MAX_CASTERS = 15;
                     SHADOW_SKIP_SMALL_PARTS = false;
                     break;
@@ -149,7 +149,7 @@ namespace Client.Main
                     ENABLE_SHADOW_MAPPING = true;
                     SHADOW_MAP_SIZE = 1024;
                     SHADOW_DISTANCE = 3000f;
-                    SHADOW_UPDATE_INTERVAL = 1;
+                    SHADOW_UPDATE_INTERVAL = 2;
                     SHADOW_MAX_CASTERS = 35;
                     SHADOW_SKIP_SMALL_PARTS = false;
                     break;
@@ -224,7 +224,7 @@ namespace Client.Main
             MSAA_ENABLED = false;
             ENABLE_DYNAMIC_LIGHTS = true;
             ENABLE_DYNAMIC_LIGHTING_SHADER = true;
-            ENABLE_GPU_SKINNING = false;
+            ENABLE_GPU_SKINNING = true;
             ENABLE_TERRAIN_GPU_LIGHTING = true;
             OPTIMIZE_FOR_INTEGRATED_GPU = false;
             DEBUG_LIGHTING_AREAS = false;

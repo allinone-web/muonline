@@ -53,6 +53,9 @@ namespace Client.Main.Controls.Terrain
 
         public IReadOnlyCollection<TerrainBlock> VisibleBlocks => _visibleBlocks;
         public int[] LodSteps => _lodSteps;
+        // Bumped each time the visible-block set is rebuilt. Consumers can cache derived data
+        // (e.g. per-block LOD grid) keyed on this version to avoid recomputing within the same frame.
+        public int Version { get; private set; }
 
         public TerrainVisibilityManager(TerrainData data)
         {
@@ -205,6 +208,8 @@ namespace Client.Main.Controls.Terrain
 
             foreach (var block in visible)
                 _visibleBlocks.Enqueue(block);
+
+            unchecked { Version++; }
         }
 
         private bool TryClassifyVisibleBlock(

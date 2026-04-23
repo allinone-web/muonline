@@ -730,7 +730,13 @@ namespace Client.Main.Objects
             if (!IsMonsterCrowdInstancingSupported())
                 return false;
 
-            if (this is not MonsterObject monster)
+            // Allow any WalkerObject crowd member. Player characters intentionally excluded:
+            // they carry per-instance equipment children, weapon glow, and frequent action cancels
+            // that would either break the shared bone palette or split every player into its own batch.
+            if (this is not WalkerObject walker)
+                return false;
+
+            if (walker is Player.PlayerObject)
                 return false;
 
             if (UsesMutableMeshData)
@@ -742,7 +748,10 @@ namespace Client.Main.Objects
             if (LinkParentAnimation || ParentBoneLink >= 0 || ContinuousAnimation || _isBlending || !_animationSampleValid)
                 return false;
 
-            if (monster.IsDead || monster.IsOneShotPlaying)
+            // Death/one-shot animations cancel pose sharing: keep them on the per-instance path.
+            if (walker is MonsterObject monster && (monster.IsDead || monster.IsOneShotPlaying))
+                return false;
+            if (walker is not MonsterObject && walker.IsOneShotPlaying)
                 return false;
 
             if (TotalAlpha < 0.999f || EnableCustomShader)
