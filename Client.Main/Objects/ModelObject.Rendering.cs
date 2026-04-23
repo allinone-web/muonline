@@ -230,10 +230,6 @@ namespace Client.Main.Objects
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private ShaderSelection DetermineShaderForMesh(int mesh)
         {
-            // Only force standard path for fading monsters (to guarantee alpha/darken visibility)
-            if (this is MonsterObject mo && mo.IsDead)
-                return new ShaderSelection(false, false, false);
-
             // Item material shader (for excellent/ancient/high level items)
             bool useItemMaterial = Constants.ENABLE_ITEM_MATERIAL_SHADER &&
                                    (ItemLevel >= 7 || IsExcellentItem || IsAncientItem) &&

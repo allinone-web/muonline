@@ -287,14 +287,19 @@ namespace Client.Main.Controls
             else
                 _dirtyVisibleObjects = true;
 
-            unchecked { System.Threading.Interlocked.Increment(ref s_worldGeometryTick); }
+            MarkWorldGeometryChanged();
         }
 
         private static int s_worldGeometryTick;
 
-        // Monotonic counter bumped whenever any tracked WorldObject reports a position change.
+        // Monotonic counter bumped whenever tracked world geometry or caster visibility changes.
         // Read by ShadowMapRenderer to detect a fully static frame and skip redundant casters.
         public static int WorldGeometryTick => System.Threading.Volatile.Read(ref s_worldGeometryTick);
+
+        private static void MarkWorldGeometryChanged()
+        {
+            unchecked { System.Threading.Interlocked.Increment(ref s_worldGeometryTick); }
+        }
 
         private void Object_StatusChanged(object sender, EventArgs e)
         {
@@ -305,6 +310,7 @@ namespace Client.Main.Controls
             {
                 _positionDirtyObjects.Add(obj);
                 UpdateSpatialRegistration(obj);
+                MarkWorldGeometryChanged();
                 return;
             }
 
@@ -313,6 +319,7 @@ namespace Client.Main.Controls
                 RemoveVisibleObject(obj);
                 _positionDirtyObjects.Remove(obj);
                 UnregisterSpatialObject(obj);
+                MarkWorldGeometryChanged();
             }
         }
 
@@ -529,6 +536,7 @@ namespace Client.Main.Controls
 
             RegisterSpatialObject(e.Control);
             _positionDirtyObjects.Add(e.Control);
+            MarkWorldGeometryChanged();
             if (e.Control.Status == GameControlStatus.NonInitialized)
                 _objectsToInitialize.Enqueue(e.Control);
         }
@@ -543,6 +551,8 @@ namespace Client.Main.Controls
                 RemoveVisibleObject(obj);
             else
                 _positionDirtyObjects.Add(obj);
+
+            MarkWorldGeometryChanged();
         }
 
         private void OnObjectRemoved(object sender, ChildrenEventArgs<WorldObject> e)
@@ -574,6 +584,7 @@ namespace Client.Main.Controls
             RemoveVisibleObject(e.Control);
             _positionDirtyObjects.Remove(e.Control);
             UnregisterSpatialObject(e.Control);
+            MarkWorldGeometryChanged();
         }
 
         private void TrackObjectType(WorldObject obj)

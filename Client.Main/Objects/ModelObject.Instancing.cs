@@ -739,6 +739,9 @@ namespace Client.Main.Objects
             if (walker is Player.PlayerObject)
                 return false;
 
+            if (walker is MonsterObject)
+                return false;
+
             if (UsesMutableMeshData)
                 return false;
 

@@ -176,6 +176,7 @@ namespace Client.Main.Objects
 
                         bool canUseGpuSkinning = SupportsGpuDynamicSkinning &&
                                                  Constants.ENABLE_GPU_SKINNING &&
+                                                 this is not MonsterObject &&
                                                  !usesMutableMeshData &&
                                                  !hasVertexDeformer &&
                                                  DetermineShaderForMesh(meshIndex).UseDynamicLighting;
