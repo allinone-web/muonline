@@ -606,7 +606,7 @@ namespace Client.Main.Objects
             if (GraphicsQualityManager.ActivePreset == GraphicsQualityPreset.High)
                 return false;
 
-            return LowQuality || Constants.ENABLE_GPU_SKINNING || Constants.OPTIMIZE_FOR_INTEGRATED_GPU;
+            return LowQuality || Constants.OPTIMIZE_FOR_INTEGRATED_GPU;
         }
 
         private void DrawMeshesHighlight(List<int> meshIndices, Matrix highlightMatrix, Vector3 highlightColor)
