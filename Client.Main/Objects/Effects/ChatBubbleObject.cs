@@ -21,6 +21,8 @@ namespace Client.Main.Objects.Effects
         private const float OffsetZ = 60f;
         private const int PixelGap = 8;
         private const int MaxBubbleWidth = 200;
+        // Keep UI-backed bubbles in the off-grid update path; labels project from the target each frame.
+        private static readonly Vector3 OverlayLifecyclePosition = new(-Constants.TERRAIN_SCALE, -Constants.TERRAIN_SCALE, 0f);
 
         private string _text;
         private readonly string _playerName;
@@ -50,6 +52,8 @@ namespace Client.Main.Objects.Effects
 
             IsTransparent = true;
             AffectedByTransparency = false;
+            Position = OverlayLifecyclePosition;
+            BoundingBoxLocal = new BoundingBox(Vector3.Zero, Vector3.Zero);
         }
 
         public override async Task Load()
@@ -107,10 +111,7 @@ namespace Client.Main.Objects.Effects
             _elapsed += (float)gameTime.ElapsedGameTime.TotalSeconds;
             if (_elapsed >= _lifetime)
             {
-                World?.Scene?.Controls.Remove(_nameLabel);
-                World?.Scene?.Controls.Remove(_textLabel);
-                _nameLabel.Dispose();
-                _textLabel.Dispose();
+                RemoveLabels();
                 World?.RemoveObject(this);
                 Dispose();
                 return;
@@ -119,8 +120,7 @@ namespace Client.Main.Objects.Effects
             var target = ResolveTarget();
             if (target == null || target.Hidden || target.Status != GameControlStatus.Ready)
             {
-                _nameLabel.Visible = false;
-                _textLabel.Visible = false;
+                HideLabels();
                 return;
             }
 
@@ -150,8 +150,7 @@ namespace Client.Main.Objects.Effects
 
             if (screen.Z < 0f || screen.Z > 1f)
             {
-                _nameLabel.Visible = false;
-                _textLabel.Visible = false;
+                HideLabels();
                 return;
             }
 
@@ -188,6 +187,32 @@ namespace Client.Main.Objects.Effects
 
             _nameLabel.Visible = true;
             _textLabel.Visible = true;
+        }
+
+        private void HideLabels()
+        {
+            if (_nameLabel != null)
+                _nameLabel.Visible = false;
+
+            if (_textLabel != null)
+                _textLabel.Visible = false;
+        }
+
+        private void RemoveLabels()
+        {
+            if (_nameLabel != null)
+            {
+                _nameLabel.Parent?.Controls.Remove(_nameLabel);
+                _nameLabel.Dispose();
+                _nameLabel = null;
+            }
+
+            if (_textLabel != null)
+            {
+                _textLabel.Parent?.Controls.Remove(_textLabel);
+                _textLabel.Dispose();
+                _textLabel = null;
+            }
         }
 
         private Vector2 MeasureLabelSize(LabelControl label)
@@ -268,16 +293,7 @@ namespace Client.Main.Objects.Effects
 
         public override void Dispose()
         {
-            if (_nameLabel != null)
-            {
-                _nameLabel.Parent?.Controls.Remove(_nameLabel);
-                _nameLabel.Dispose();
-            }
-            if (_textLabel != null)
-            {
-                _textLabel.Parent?.Controls.Remove(_textLabel);
-                _textLabel.Dispose();
-            }
+            RemoveLabels();
             base.Dispose();
         }
     }
