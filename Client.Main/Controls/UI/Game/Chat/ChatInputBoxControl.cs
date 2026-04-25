@@ -596,7 +596,6 @@ namespace Client.Main.Controls.UI
             {
                 _currentInputType = type;
                 UpdateVisualStates();
-                Console.WriteLine($"[Chat] Input type set to: {type}");
             }
         }
 
@@ -604,7 +603,6 @@ namespace Client.Main.Controls.UI
         {
             _isWhisperLocked = !_isWhisperLocked;
             UpdateVisualStates();
-            Console.WriteLine($"[Chat] Whisper Lock: {_isWhisperLocked}");
         }
 
         private void ToggleWhisperSendMode()
@@ -626,7 +624,6 @@ namespace Client.Main.Controls.UI
                 Scene.FocusControl = _chatInput;
                 _chatInput.MoveCursorToEnd();
             }
-            Console.WriteLine($"[Chat] Whisper Send Mode: {_isWhisperSendMode}");
         }
 
         private void ToggleSystemMessages()
@@ -635,7 +632,6 @@ namespace Client.Main.Controls.UI
             bool newState = !_chatLogWindowRef.IsSysMsgVisible;
             _chatLogWindowRef.ShowSystemMessages(newState);
             UpdateVisualStates();
-            Console.WriteLine($"[Chat] System Messages Visible: {newState}");
         }
 
         private void ToggleChatLogVisibility()
@@ -644,7 +640,6 @@ namespace Client.Main.Controls.UI
             bool newState = !_chatLogWindowRef.IsChatLogVisible;
             _chatLogWindowRef.ShowChatLogMessages(newState);
             UpdateVisualStates();
-            Console.WriteLine($"[Chat] Chat Log Visible: {newState}");
         }
 
         private void UpdateVisualStates()

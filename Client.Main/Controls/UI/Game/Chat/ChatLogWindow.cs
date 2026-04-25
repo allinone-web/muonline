@@ -176,12 +176,7 @@ namespace Client.Main.Controls.UI
             // Always add to 'All'
             AddSplitLinesInternal(_messages[MessageType.All], splitLines, MAX_TOTAL_MESSAGES);
             // Update scroll if 'All' is active
-            if (_currentViewType == MessageType.All && type != MessageType.All)
-            {
-                if (_scrollOffset == 0) ScrollToBottom();
-                UpdateScrollbar();
-            }
-            else if (_currentViewType == MessageType.All && type == MessageType.All)
+            if (_currentViewType == MessageType.All)
             {
                 if (_scrollOffset == 0) ScrollToBottom();
                 UpdateScrollbar();
@@ -195,8 +190,6 @@ namespace Client.Main.Controls.UI
             if (_isSysMsgVisible != show)
             {
                 _isSysMsgVisible = show;
-                // TODO: Add logic here if system messages are actually filtered/hidden based on this flag
-                Console.WriteLine($"[ChatLog] System Messages Visible set to: {show}");
             }
         }
 
@@ -205,8 +198,6 @@ namespace Client.Main.Controls.UI
             if (_isChatLogVisible != show)
             {
                 _isChatLogVisible = show;
-                // TODO: Add logic here if chat messages are actually filtered/hidden based on this flag
-                Console.WriteLine($"[ChatLog] Chat Log Messages Visible set to: {show}");
             }
         }
 
@@ -378,21 +369,6 @@ namespace Client.Main.Controls.UI
                 {
                     DetectHoveredMessage(mouse.Position);
 
-                    // PLACEHOLDER: Handle right-click for whisper
-                    if (_hoveredMessageGlobalIndex != -1 && mouse.RightButton == ButtonState.Pressed && prevMouse.RightButton == ButtonState.Released)
-                    {
-                        var msgList = _messages[_currentViewType];
-                        if (_hoveredMessageGlobalIndex < msgList.Count)
-                        {
-                            ChatMessage msg = msgList[_hoveredMessageGlobalIndex];
-                            // Check if whisper can be sent to this message type
-                            if (!string.IsNullOrEmpty(msg.SenderID) && msg.Type != MessageType.System && msg.Type != MessageType.Error && msg.Type != MessageType.Unknown)
-                            {
-                                // TODO: Invoke method in ChatInputBox to set whisper target
-                                Console.WriteLine($"[ChatLog] PLACEHOLDER: Set Whisper Target -> {msg.SenderID}");
-                            }
-                        }
-                    }
                 }
             }
             else

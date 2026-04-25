@@ -198,7 +198,6 @@ namespace Client.Main.Controls.UI.Login
                 Scene.FocusControl = null; // keep focus cleared so keyboard stays hidden
             }
 
-            Console.WriteLine("LoginDialog: Login attempt triggered."); // Debug log
             LoginAttempt?.Invoke(this, EventArgs.Empty);
         }
     }

@@ -9,12 +9,25 @@ using Client.Main.Controls.UI.Game.Character;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Client.Main.Core.Models;
+using System;
 
 namespace Client.Main.Scenes
 {
     internal sealed class GameSceneHotkeys
     {
         private static readonly Keys[] MoveCommandKeys = { Keys.Up, Keys.Down, Keys.Left, Keys.Right, Keys.Enter, Keys.Escape };
+        private static readonly MessageType[] ChatLogViewCycle =
+        {
+            MessageType.All,
+            MessageType.Chat,
+            MessageType.Whisper,
+            MessageType.System,
+            MessageType.Party,
+            MessageType.Guild,
+            MessageType.Union,
+            MessageType.Gens,
+            MessageType.GM
+        };
 
         private readonly GameScene _scene;
         private readonly PauseMenuControl _pauseMenu;
@@ -299,12 +312,10 @@ namespace Client.Main.Scenes
                 return;
             }
 
-            var nextType = _chatLog.CurrentViewType + 1;
-            if (!System.Enum.IsDefined(typeof(MessageType), nextType) || nextType == MessageType.Unknown) nextType = MessageType.All;
-            if (nextType == MessageType.Info || nextType == MessageType.Error) nextType++;
-            if (!System.Enum.IsDefined(typeof(MessageType), nextType) || nextType == MessageType.Unknown) nextType = MessageType.All;
+            var currentIndex = Array.IndexOf(ChatLogViewCycle, _chatLog.CurrentViewType);
+            var nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % ChatLogViewCycle.Length;
+            var nextType = ChatLogViewCycle[nextIndex];
             _chatLog.ChangeViewType(nextType);
-            System.Console.WriteLine($"[ChatLog] Changed view to: {nextType}");
         }
 
         private void ScrollChatLogPageUp(HotkeyContext context)
