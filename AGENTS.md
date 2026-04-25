@@ -1,3 +1,27 @@
+# context-mode + RTK routing — mandatory
+
+Use context-mode and RTK together; they solve different parts of the same problem.
+
+- context-mode is the outer routing layer for exploration, analysis, broad search, build/test logs, and any command that may produce more than ~20 lines.
+- RTK is the shell-output filter. When a context-mode shell command runs an RTK-supported command, put `rtk ...` inside the context-mode command.
+- Direct `rtk ...` is for short exact commands, compact diffs, targeted reads, and final verification where the RTK summary is the desired output.
+- Do not replace context-mode with direct RTK for broad repo investigation. Prefer `ctx_batch_execute` with commands like `rtk grep ...`, `rtk diff ...`, or `rtk dotnet build ...`.
+- If context-mode tools are not visible in a fresh Codex session, use `tool_search` for `context-mode` once, then continue with `ctx_batch_execute`, `ctx_execute`, `ctx_search`, and `ctx_stats`.
+- Do not use `rtk proxy sed`, raw `rg`, raw `grep`, or raw build output as the default exploration path. Use them only for small nearby source context or exact raw output.
+
+Good combined examples:
+
+```text
+ctx_batch_execute(commands: [
+  { label: "Relevant render symbols", command: "rtk grep \"DrawAfter|IsTransparent\" Client.Main" },
+  { label: "Focused diff", command: "rtk diff -- Client.Main/Controls/WorldControl.cs" }
+], queries: ["transparent render order", "draw after pass"])
+```
+
+```text
+ctx_execute(language: "shell", code: "rtk dotnet build ./MuMac/MuMac.csproj -c Debug -p:UsePrebuiltContent=true")
+```
+
 @RTK.md
 
 # AGENTS.md
@@ -34,7 +58,7 @@
 - `Client.Main/Objects/` — world entities (player/NPC/monster/items/effects) and rendering behavior.
 
 ## Dev environment tips
-- Restore local tools first: `dotnet tool restore`.
+- Restore local tools first: `rtk err dotnet tool restore`.
 - Configure local data path in `Client.Main/Constants.cs` (`DataPath`) before running.
 - Configure server and graphics settings in `Client.Main/appsettings.json`.
 - Windows heads must always pass `-p:MonoGameFramework=...`:
@@ -43,15 +67,15 @@
 
 ## Build commands
 - Windows DX11:
-  - `dotnet build ./MuWinDX/MuWinDX.csproj -c Debug -p:MonoGameFramework=MonoGame.Framework.WindowsDX`
+  - `rtk dotnet build ./MuWinDX/MuWinDX.csproj -c Debug -p:MonoGameFramework=MonoGame.Framework.WindowsDX`
 - Windows OpenGL:
-  - `dotnet build ./MuWinGL/MuWinGL.csproj -c Debug -p:MonoGameFramework=MonoGame.Framework.DesktopGL`
+  - `rtk dotnet build ./MuWinGL/MuWinGL.csproj -c Debug -p:MonoGameFramework=MonoGame.Framework.DesktopGL`
 - Linux:
-  - `dotnet build ./MuLinux/MuLinux.csproj -c Debug`
+  - `rtk dotnet build ./MuLinux/MuLinux.csproj -c Debug`
 - macOS:
-  - `dotnet build ./MuMac/MuMac.csproj -c Debug`
+  - `rtk dotnet build ./MuMac/MuMac.csproj -c Debug`
 - macOS fallback (prebuilt content):
-  - `dotnet build ./MuMac/MuMac.csproj -c Debug -p:UsePrebuiltContent=true`
+  - `rtk dotnet build ./MuMac/MuMac.csproj -c Debug -p:UsePrebuiltContent=true`
 
 ## Run commands
 - Windows DX11:
@@ -91,12 +115,11 @@
 
 ## Fast checks
 - Verify mgcb/prebuilt parity count:
-  - `awk -F: '/^\\/build:/{print $2}' Client.Main/MGContent/Content.mgcb | sed 's#\\#/#g' | sed 's#^.*/##' | sed 's/\.[^.]*$//' | sort -u | wc -l`
-  - `find Client.Main/MGContent/PrebuiltContent/DesktopGL/Content -maxdepth 1 -name '*.xnb' -printf '%f\n' | sed 's/\.xnb$//' | sort -u | wc -l`
+  - Use `ctx_execute` with a small script for counts, or `rtk proxy` only if exact shell output is required.
 - Validate prebuilt mode contract on macOS project:
-  - `dotnet msbuild ./MuMac/MuMac.csproj -nologo -t:ValidatePrebuiltContent -p:UsePrebuiltContent=true`
+  - `rtk err dotnet msbuild ./MuMac/MuMac.csproj -nologo -t:ValidatePrebuiltContent -p:UsePrebuiltContent=true`
 - Verify wine detection path on non-Windows:
-  - `dotnet msbuild ./MuMac/MuMac.csproj -nologo -t:DetectWine -p:UsePrebuiltContent=false`
+  - `rtk err dotnet msbuild ./MuMac/MuMac.csproj -nologo -t:DetectWine -p:UsePrebuiltContent=false`
 
 ## Content and shaders
 - Content is built from `Client.Main/MGContent/Content.mgcb`.

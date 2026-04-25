@@ -50,8 +50,11 @@ namespace Client.Main.Scenes
         private CharacterInfoWindowControl _characterInfoWindow;
         private ILogger _logger = MuGame.AppLoggerFactory?.CreateLogger<GameScene>() ?? NullLogger<GameScene>.Instance;
         private LabelControl _pingLabel; // Displays current ping
+        private LabelControl _fpsLabel; // Displays current FPS independently of DebugPanel
         private double _pingTimer = 0;
+        private double _fpsTimer = 0;
         private int? _lastPingValue = null;
+        private int _lastFpsValue = -1;
         private PauseMenuControl _pauseMenu; // ESC menu
         // (SkillQuickSlot removed — replaced by ModernBottomHud)
         private Controls.UI.Game.Skills.SkillSelectionPanel _skillSelectionPanel; // Skill selection panel (independent)
@@ -161,15 +164,26 @@ namespace Client.Main.Scenes
             _partyPanel = new PartyPanelControl();
             Controls.Add(_partyPanel);
 
+            _fpsLabel = new LabelControl
+            {
+                Text = "FPS: --",
+                Align = ControlAlign.Top | ControlAlign.Right,
+                Margin = new Margin { Top = 5, Right = 5 },
+                FontSize = 10,
+                TextColor = Color.LightGreen
+            };
+            Controls.Add(_fpsLabel);
+
             _pingLabel = new LabelControl
             {
                 Text = "Ping: --",
-                Align = ControlAlign.Bottom | ControlAlign.Right,
-                Margin = new Margin { Bottom = 5, Right = 5 },
+                Align = ControlAlign.Top | ControlAlign.Right,
+                Margin = new Margin { Top = 22, Right = 5 },
                 FontSize = 10,
                 TextColor = Color.White
             };
             Controls.Add(_pingLabel);
+            _fpsLabel.BringToFront();
             _pingLabel.BringToFront();
 
             _chatInput.BringToFront();
@@ -589,6 +603,14 @@ namespace Client.Main.Scenes
                 _pingTimer = 0;
                 _ = UpdatePingAsync();
             }
+
+            // Keep this separate from DebugPanel so it is always available.
+            _fpsTimer += gameTime.ElapsedGameTime.TotalSeconds;
+            if (_fpsTimer >= 0.25)
+            {
+                _fpsTimer = 0;
+                UpdateFpsLabel();
+            }
         }
 
         // ─────────────────────────── Draw Loop ───────────────────────────
@@ -617,7 +639,7 @@ namespace Client.Main.Scenes
                 for (int i = 0; i < Controls.Count; i++)
                 {
                     var ctrl = Controls[i];
-                    if (ctrl == null || ctrl == World || !ctrl.Visible)
+                    if (ctrl == null || ctrl == World || ctrl == _fpsLabel || ctrl == _pingLabel || !ctrl.Visible)
                     {
                         continue;
                     }
@@ -643,8 +665,15 @@ namespace Client.Main.Scenes
                 VaultControl.Instance?.DrawPickedPreview(sprite, gameTime);
                 ChaosMixControl.Instance?.DrawPickedPreview(sprite, gameTime);
                 TradeControl.Instance?.DrawPickedPreview(sprite, gameTime);
+                DrawPerformanceOverlay(gameTime);
             }
             _characterInfoWindow?.BringToFront();
+        }
+
+        private void DrawPerformanceOverlay(GameTime gameTime)
+        {
+            _fpsLabel?.Draw(gameTime);
+            _pingLabel?.Draw(gameTime);
         }
 
         private new void DrawBackground()
@@ -691,6 +720,19 @@ namespace Client.Main.Scenes
                 _lastPingValue = ping;
                 _pingLabel.Text = ping.HasValue ? $"Ping: {ping.Value} ms" : "Ping: --";
             });
+        }
+
+        private void UpdateFpsLabel()
+        {
+            if (_fpsLabel == null)
+                return;
+
+            int fps = (int)FPSCounter.Instance.FPS_AVG;
+            if (fps == _lastFpsValue)
+                return;
+
+            _lastFpsValue = fps;
+            _fpsLabel.Text = $"FPS: {fps}";
         }
 
         private void StartWhisperToPlayer(string playerName)

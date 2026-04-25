@@ -53,22 +53,33 @@ namespace Client.Main.Objects
 
         private static int _animationStrideSeed = 0;
         private static int _gpuSkinnedMeshesDrawnThisFrame = 0;
+        private static int _modelFallbackDrawCallsThisFrame = 0;
 
         // Track per-pass preparation to avoid re-uploading shared effect parameters per mesh
         private static int _drawModelInvocationCounter = 0;
         public static int LastFrameGpuSkinnedMeshesDrawn { get; private set; }
+        public static int LastFrameModelDrawCalls { get; private set; }
+        public static int LastFrameModelFallbackDrawCalls { get; private set; }
+        public static int LastFrameModelInstancedDrawCalls { get; private set; }
         public static bool IsGpuSkinningBackendSupported => SupportsGpuDynamicSkinning;
 
         public static void BeginFrameGpuSkinningMetrics()
         {
             LastFrameGpuSkinnedMeshesDrawn = _gpuSkinnedMeshesDrawnThisFrame;
+            LastFrameModelFallbackDrawCalls = _modelFallbackDrawCallsThisFrame;
             _gpuSkinnedMeshesDrawnThisFrame = 0;
+            _modelFallbackDrawCallsThisFrame = 0;
             BeginFrameStaticMapInstancingMetrics();
         }
 
         private static void RegisterGpuSkinnedMeshDraw()
         {
             _gpuSkinnedMeshesDrawnThisFrame++;
+        }
+
+        private static void RegisterModelFallbackDrawCall()
+        {
+            _modelFallbackDrawCallsThisFrame++;
         }
 
         public static ILoggerFactory AppLoggerFactory { get; private set; }

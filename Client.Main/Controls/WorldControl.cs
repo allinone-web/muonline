@@ -741,6 +741,7 @@ namespace Client.Main.Controls
             _solidBehind.Clear();
             _transparentObjects.Clear();
             _solidInFront.Clear();
+            FieryAuraEffect.BeginFrameBatchMetrics();
 
             var objects = _visibleObjects;
 
@@ -767,6 +768,9 @@ namespace Client.Main.Controls
                 {
                     _solidInFront.Add(obj);
                 }
+
+                if (obj.HasTransparentDescendants)
+                    CollectTransparentChildren(obj);
             }
 
             // Sort lists
@@ -792,15 +796,35 @@ namespace Client.Main.Controls
 
             // Draws
             DrawListWithSpriteBatchGrouping(_solidBehind, DepthStateDefault, time);
-            DrawListWithSpriteBatchGrouping(_transparentObjects, DepthStateDepthRead, time);
             DrawListWithSpriteBatchGrouping(_solidInFront, DepthStateDefault, time);
+            DrawListWithSpriteBatchGrouping(_transparentObjects, DepthStateDepthRead, time);
 
             // Draw post-pass (DrawAfter)
             DrawAfterPass(_solidBehind, DepthStateDefault, time);
-            DrawAfterPass(_transparentObjects, DepthStateDepthRead, time);
             DrawAfterPass(_solidInFront, DepthStateDefault, time);
+            DrawAfterPass(_transparentObjects, DepthStateDepthRead, time);
 
             OverheadNameplateRenderer.FlushQueuedNameplates(GraphicsManager.Instance.Sprite);
+        }
+
+        private void CollectTransparentChildren(WorldObject obj)
+        {
+            if (!obj.HasTransparentDescendants)
+                return;
+
+            var children = obj.Children;
+            for (int i = 0; i < children.Count; i++)
+            {
+                var child = children[i];
+                if (!child.Visible)
+                    continue;
+
+                if (child.IsTransparent)
+                    _transparentObjects.Add(child);
+
+                if (child.HasTransparentDescendants)
+                    CollectTransparentChildren(child);
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -866,6 +890,30 @@ namespace Client.Main.Controls
                     continue;
 
                 obj.DepthState = depthState;
+
+                if (obj is FieryAuraEffect auraEffect)
+                {
+                    scope?.Dispose();
+                    scope = null;
+                    currentBlend = null;
+                    currentSampler = null;
+                    currentBatchDepth = null;
+
+                    if (FieryAuraEffect.TryQueueForBatch(auraEffect))
+                    {
+                        obj.RenderOrder = ++_renderCounter;
+                        continue;
+                    }
+                }
+                else if (FieryAuraEffect.HasPendingBatches)
+                {
+                    scope?.Dispose();
+                    scope = null;
+                    currentBlend = null;
+                    currentSampler = null;
+                    currentBatchDepth = null;
+                    FieryAuraEffect.FlushBatches();
+                }
 
                 bool usesSpriteBatch =
                     obj is SpriteObject ||
@@ -946,6 +994,11 @@ namespace Client.Main.Controls
                         mapModel.IsMapPlacementObject)
                         ModelObject.RegisterStaticMapInstancingFallback();
 
+                    if (canUseMonsterCrowdInstancing &&
+                        ModelObject.IsMonsterCrowdInstancingBackendSupported &&
+                        obj is MonsterObject)
+                        ModelObject.RegisterMonsterCrowdInstancingFallback();
+
                     obj.Draw(time);
                 }
 
@@ -953,6 +1006,7 @@ namespace Client.Main.Controls
             }
 
             scope?.Dispose();
+            FieryAuraEffect.FlushBatches();
 
             if (canUseMonsterCrowdInstancing && ModelObject.HasPendingMonsterCrowdInstancingBatches())
                 ModelObject.FlushMonsterCrowdInstancingBatches(this);

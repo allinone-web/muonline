@@ -3,6 +3,7 @@ using Client.Main.Controllers;
 using Client.Main.Content;
 using Client.Main.Models;
 using Client.Main.Objects;
+using Client.Main.Objects.Effects;
 using Microsoft.Xna.Framework;
 
 namespace Client.Main.Controls.UI
@@ -20,6 +21,9 @@ namespace Client.Main.Controls.UI
         private LabelControl _bmdMetricsLabel;    // New label for BMD buffer metrics
         private LabelControl _batchSortingLabel;   // NEW: Batch sorting status
         private LabelControl _instancingStatusLabel;
+        private LabelControl _monsterInstancingStatusLabel;
+        private LabelControl _modelDrawCallsLabel;
+        private LabelControl _fieryAuraBatchLabel;
         private LabelControl _lightingStatusLabel; // NEW: Lighting mode status
         private LabelControl _gpuSkinningStatusLabel;
         private double _fastUpdateTimer = 0;
@@ -33,7 +37,7 @@ namespace Client.Main.Controls.UI
             Align = ControlAlign.Top | ControlAlign.Right;
             Margin = new Margin { Top = 10, Right = 10 };
             Padding = new Margin { Top = 15, Left = 15 };
-            ControlSize = new Point(400, 345); // Increased size for lighting + pooling metrics
+            ControlSize = new Point(500, 405); // Increased size for lighting + batching metrics
             BackgroundColor = Color.Black * 0.6f;
             BorderColor = Color.White * 0.3f;
             BorderThickness = 2;
@@ -55,6 +59,9 @@ namespace Client.Main.Controls.UI
             Controls.Add(_bmdMetricsLabel = new LabelControl { Text = "BMD: {0}", TextColor = Color.LightSkyBlue, X = posX, Y = posY += labelHeight });
             Controls.Add(_batchSortingLabel = new LabelControl { Text = "Batch: {0}", TextColor = Color.Magenta, X = posX, Y = posY += labelHeight });
             Controls.Add(_instancingStatusLabel = new LabelControl { Text = "Instancing: {0}", TextColor = Color.LightPink, X = posX, Y = posY += labelHeight });
+            Controls.Add(_monsterInstancingStatusLabel = new LabelControl { Text = "Monster Instancing: {0}", TextColor = Color.LightSalmon, X = posX, Y = posY += labelHeight });
+            Controls.Add(_modelDrawCallsLabel = new LabelControl { Text = "Model DC: {0}", TextColor = Color.LightSteelBlue, X = posX, Y = posY += labelHeight });
+            Controls.Add(_fieryAuraBatchLabel = new LabelControl { Text = "Fiery Aura: {0}", TextColor = Color.Orange, X = posX, Y = posY += labelHeight });
         }
 
         public override void Update(GameTime gameTime)
@@ -110,6 +117,9 @@ namespace Client.Main.Controls.UI
                 _lightingStatusLabel.Visible = true;
                 _gpuSkinningStatusLabel.Visible = true;
                 _instancingStatusLabel.Visible = true;
+                _monsterInstancingStatusLabel.Visible = true;
+                _modelDrawCallsLabel.Visible = true;
+                _fieryAuraBatchLabel.Visible = true;
 
                 if (shouldRunFastUpdate)
                 {
@@ -216,6 +226,51 @@ namespace Client.Main.Controls.UI
                       .Append(" FB:")
                       .Append(ModelObject.LastFrameStaticMapInstancingFallbacks);
                     SetLabelTextIfChanged(_instancingStatusLabel, _sb.ToString());
+
+                    _sb.Clear()
+                      .Append("Monster Inst: BK:")
+                      .Append(ModelObject.IsMonsterCrowdInstancingBackendSupported ? "OK" : "N/A")
+                      .Append(" | Obj:")
+                      .Append(ModelObject.LastFrameMonsterCrowdInstancedObjects)
+                      .Append(" Inst:")
+                      .Append(ModelObject.LastFrameMonsterCrowdInstancedMeshInstances)
+                      .Append(" B:")
+                      .Append(ModelObject.LastFrameMonsterCrowdInstancedBatches)
+                      .Append(" DC:")
+                      .Append(ModelObject.LastFrameMonsterCrowdInstancedDrawCalls)
+                      .Append(" Share:")
+                      .Append(ModelObject.LastFrameMonsterCrowdPoseSharedObjects)
+                      .Append(" FB:")
+                      .Append(ModelObject.LastFrameMonsterCrowdInstancingFallbacks)
+                      .Append(" Rej:")
+                      .Append(ModelObject.LastFrameMonsterCrowdInstancingRejects);
+                    SetLabelTextIfChanged(_monsterInstancingStatusLabel, _sb.ToString());
+
+                    _sb.Clear()
+                      .Append("Model DC: Total:")
+                      .Append(ModelObject.LastFrameModelDrawCalls)
+                      .Append(" Inst:")
+                      .Append(ModelObject.LastFrameModelInstancedDrawCalls)
+                      .Append(" Fallback:")
+                      .Append(ModelObject.LastFrameModelFallbackDrawCalls);
+                    SetLabelTextIfChanged(_modelDrawCallsLabel, _sb.ToString());
+
+                    _sb.Clear()
+                      .Append("Fiery Aura: Obj:")
+                      .Append(FieryAuraEffect.LastFrameBatchedAuras)
+                      .Append(" Flush:")
+                      .Append(FieryAuraEffect.LastFrameBatchFlushes)
+                      .Append(" DC:")
+                      .Append(FieryAuraEffect.LastFrameBatchDrawCalls)
+                      .Append(" Q:")
+                      .Append(FieryAuraEffect.LastFrameBatchQuads)
+                      .Append(" Den:")
+                      .Append(FieryAuraEffect.LastFrameDensityFull)
+                      .Append("/")
+                      .Append(FieryAuraEffect.LastFrameDensityReduced)
+                      .Append("/")
+                      .Append(FieryAuraEffect.LastFrameDensityCulled);
+                    SetLabelTextIfChanged(_fieryAuraBatchLabel, _sb.ToString());
                 }
             }
             else
@@ -229,6 +284,9 @@ namespace Client.Main.Controls.UI
                 _lightingStatusLabel.Visible = false;
                 _gpuSkinningStatusLabel.Visible = false;
                 _instancingStatusLabel.Visible = false;
+                _monsterInstancingStatusLabel.Visible = false;
+                _modelDrawCallsLabel.Visible = false;
+                _fieryAuraBatchLabel.Visible = false;
             }
         }
 

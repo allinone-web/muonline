@@ -291,7 +291,7 @@ namespace Client.Main.Objects
             DrawBoundingBox3D();
             SetDrawShaderTimeSeconds((float)gameTime.TotalGameTime.TotalSeconds);
 
-            if (Model?.Meshes != null && _boneVertexBuffers != null)
+            if (Model?.Meshes != null)
             {
                 var view = Camera.Instance.View;
                 var projection = Camera.Instance.Projection;
@@ -305,10 +305,25 @@ namespace Client.Main.Objects
                 if (RenderShadow && !LowQuality && !useShadowMap && !isNight)
                     doShadow = TryGetShadowMatrix(out shadowMatrix);
 
-                if (doShadow)
+                bool highlightAllowed = !LowQuality &&
+                                        IsMouseHover &&
+                                        !(this is MonsterObject monster && monster.IsDead);
+                Matrix highlightMatrix = Matrix.Identity;
+                Vector3 highlightColor = Vector3.One;
+                if (highlightAllowed)
+                {
+                    const float scaleHighlight = 0.015f;
+                    const float scaleFactor = 1f + scaleHighlight;
+                    highlightMatrix = Matrix.CreateScale(scaleFactor) *
+                        Matrix.CreateTranslation(-scaleHighlight, -scaleHighlight, -scaleHighlight) *
+                        worldPos;
+                    highlightColor = this is MonsterObject ? _redHighlight : _greenHighlight;
+                }
+
+                if (doShadow || highlightAllowed)
                 {
                     float shadowOpacity = ShadowOpacity;
-                    if (World?.Terrain != null)
+                    if (doShadow && World?.Terrain != null)
                     {
                         var dyn = World.Terrain.EvaluateDynamicLight(new Vector2(worldPos.Translation.X, worldPos.Translation.Y));
                         float lum = (0.2126f * dyn.X + 0.7152f * dyn.Y + 0.0722f * dyn.Z) / 255f;
@@ -333,6 +348,9 @@ namespace Client.Main.Objects
                                 projection,
                                 shadowOpacity,
                                 ref drewBlobShadow);
+
+                            if (highlightAllowed)
+                                DrawMeshesHighlight(kvp.Value, highlightMatrix, highlightColor);
                         }
                     }
                     finally
@@ -545,6 +563,7 @@ namespace Client.Main.Objects
             gd.Indices = _boneIndexBuffers[mesh];
             int primitiveCount = gd.Indices.IndexCount / 3;
             gd.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, primitiveCount);
+            RegisterModelFallbackDrawCall();
         }
 
         private void GroupMeshesByState(bool isAfterDraw)
@@ -760,6 +779,7 @@ namespace Client.Main.Objects
                         {
                             passes[p].Apply();
                             gd.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, primitiveCount);
+                            RegisterModelFallbackDrawCall();
                         }
 
                         alphaEffect.Alpha = prevAlpha;
@@ -871,6 +891,7 @@ namespace Client.Main.Objects
                     {
                         pass.Apply();
                         gd.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, primitiveCount);
+                        RegisterModelFallbackDrawCall();
                     }
 
                     gd.BlendState = prevBlend;
@@ -975,6 +996,7 @@ namespace Client.Main.Objects
                     {
                         pass.Apply();
                         gd.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, primitiveCount);
+                        RegisterModelFallbackDrawCall();
                     }
 
                     gd.BlendState = prevBlend;
@@ -1095,6 +1117,7 @@ namespace Client.Main.Objects
                     {
                         pass.Apply();
                         gd.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, primitiveCount);
+                        RegisterModelFallbackDrawCall();
                     }
 
                     gd.BlendState = prevBlend;
@@ -1160,6 +1183,7 @@ namespace Client.Main.Objects
                 GraphicsDevice.SetVertexBuffer(vertexBuffer);
                 GraphicsDevice.Indices = indexBuffer;
                 GraphicsDevice.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, primitiveCount);
+                RegisterModelFallbackDrawCall();
             }
 
             alphaTestEffect.Alpha = prevAlpha;

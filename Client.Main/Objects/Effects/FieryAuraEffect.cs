@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Client.Main.Content;
 using Client.Main.Controllers;
@@ -35,6 +36,14 @@ namespace Client.Main.Objects.Effects
         private const float WorldBoundsMargin = 320f;
         private const float WorldMinZ = -1500f;
         private const float WorldMaxZ = 8000f;
+        private const float AttachedModelDepthOffset = 65f;
+        private const int BatchInitialQuads = 512;
+        private const int BatchMaxVertices = short.MaxValue - 4;
+        private const int DensityFullAurasPerTile = 1;
+        private const int DensityReducedAurasPerTile = 2;
+        private const float DensityReducedParticleFactor = 0.08f;
+        private const float DensityReducedSpawnMultiplier = 0.06f;
+        private const float DensityReducedAlphaScale = 0.25f;
 
         private const float SpawnRate = 52f;
         private const float LifeMin = 0.72f;
@@ -69,6 +78,8 @@ namespace Client.Main.Objects.Effects
         private float _lightScale = 1f;
         private float _cameraDistSq = float.MaxValue;
         private bool _skipDrawing;
+        private bool _densityCulled;
+        private float _densityAlphaScale = 1f;
         private int _lowLodFrameGate;
         private Vector3 _lastWorldPosition;
         private bool _hasLastWorldPosition;
@@ -82,6 +93,27 @@ namespace Client.Main.Objects.Effects
         private readonly DynamicLight _auraLight;
         private bool _lightAdded;
 
+        private static readonly BatchGeometry PrimaryBatch = new(BatchInitialQuads);
+        private static readonly BatchGeometry SecondaryBatch = new(BatchInitialQuads);
+        private static readonly BatchGeometry GlowBatch = new(BatchInitialQuads / 4);
+        private static int _batchedAurasThisFrame;
+        private static int _batchFlushesThisFrame;
+        private static int _batchDrawCallsThisFrame;
+        private static int _batchQuadsThisFrame;
+        private static readonly Dictionary<long, int> DensityTileCounts = new(128);
+        private static long _densityUpdateTicks = -1;
+        private static int _densityFullThisTick;
+        private static int _densityReducedThisTick;
+        private static int _densityCulledThisTick;
+
+        public static int LastFrameBatchedAuras { get; private set; }
+        public static int LastFrameBatchFlushes { get; private set; }
+        public static int LastFrameBatchDrawCalls { get; private set; }
+        public static int LastFrameBatchQuads { get; private set; }
+        public static int LastFrameDensityFull { get; private set; }
+        public static int LastFrameDensityReduced { get; private set; }
+        public static int LastFrameDensityCulled { get; private set; }
+
         private struct FireParticle
         {
             public Vector3 Position;
@@ -92,6 +124,49 @@ namespace Client.Main.Objects.Effects
             public float Height;
             public float Phase;
             public byte TextureVariant;
+        }
+
+        private sealed class BatchGeometry
+        {
+            public VertexPositionColorTexture[] Vertices;
+            public short[] Indices;
+            public int VertexCount;
+            public int IndexCount;
+            public Texture2D? Texture;
+
+            public BatchGeometry(int initialQuads)
+            {
+                int quads = Math.Max(1, initialQuads);
+                Vertices = new VertexPositionColorTexture[quads * 4];
+                Indices = new short[quads * 6];
+            }
+
+            public bool HasGeometry => IndexCount > 0;
+
+            public bool NeedsFlush(Texture2D texture, int quadCount)
+            {
+                if (quadCount <= 0)
+                    return false;
+
+                return (Texture != null && !ReferenceEquals(Texture, texture)) ||
+                       VertexCount + quadCount * 4 > BatchMaxVertices;
+            }
+
+            public void EnsureCapacity(int vertexCount, int indexCount)
+            {
+                if (Vertices.Length < vertexCount)
+                    Array.Resize(ref Vertices, Math.Max(vertexCount, Vertices.Length * 2));
+
+                if (Indices.Length < indexCount)
+                    Array.Resize(ref Indices, Math.Max(indexCount, Indices.Length * 2));
+            }
+
+            public void Clear()
+            {
+                VertexCount = 0;
+                IndexCount = 0;
+                Texture = null;
+            }
         }
 
         public FieryAuraEffect(float qualityScale = 1f, bool enableDynamicLight = true)
@@ -216,7 +291,7 @@ namespace Client.Main.Objects.Effects
             float lerpFactor = MathHelper.Clamp(dt * 7f, 0f, 1f);
             _fade = MathHelper.Lerp(_fade, targetFade, lerpFactor);
 
-            UpdateLodSettings();
+            UpdateLodSettings(gameTime);
 
             if (_active)
                 SpawnParticles(dt * _spawnMultiplier);
@@ -250,53 +325,194 @@ namespace Client.Main.Objects.Effects
         {
             base.Draw(gameTime);
 
-            if (!Visible || (_particleCount == 0 && _fade <= 0.01f))
-                return;
-
-            if (_skipDrawing)
-                return;
-
-            if (_suppressDrawFrames > 0)
-                return;
-
-            if (_stableFrameCount < MinStableFramesToDraw)
-                return;
-
-            if (_primaryTexture == null || _glowTexture == null)
+            if (!CanDrawAuraGeometry())
                 return;
 
             DrawAura();
+        }
+
+        public static bool HasPendingBatches =>
+            PrimaryBatch.HasGeometry ||
+            SecondaryBatch.HasGeometry ||
+            GlowBatch.HasGeometry;
+
+        public static void BeginFrameBatchMetrics()
+        {
+            LastFrameBatchedAuras = _batchedAurasThisFrame;
+            LastFrameBatchFlushes = _batchFlushesThisFrame;
+            LastFrameBatchDrawCalls = _batchDrawCallsThisFrame;
+            LastFrameBatchQuads = _batchQuadsThisFrame;
+            LastFrameDensityFull = _densityFullThisTick;
+            LastFrameDensityReduced = _densityReducedThisTick;
+            LastFrameDensityCulled = _densityCulledThisTick;
+            _batchedAurasThisFrame = 0;
+            _batchFlushesThisFrame = 0;
+            _batchDrawCallsThisFrame = 0;
+            _batchQuadsThisFrame = 0;
+        }
+
+        public static bool TryQueueForBatch(FieryAuraEffect aura)
+        {
+            if (aura == null || Constants.DRAW_BOUNDING_BOXES)
+                return false;
+
+            if (!aura.CanDrawAuraGeometry())
+                return true;
+
+            if (!aura.TryBuildAuraGeometry(
+                    out int primaryCount,
+                    out int secondaryStart,
+                    out int secondaryCount,
+                    out int glowStart,
+                    out int glowCount,
+                    out int totalQuads))
+            {
+                return true;
+            }
+
+            if (totalQuads <= 0)
+                return true;
+
+            if (PrimaryBatch.NeedsFlush(aura._primaryTexture, primaryCount) ||
+                SecondaryBatch.NeedsFlush(aura._secondaryTexture, secondaryCount) ||
+                GlowBatch.NeedsFlush(aura._glowTexture, glowCount))
+            {
+                FlushBatches();
+            }
+
+            aura.AppendBatchRange(PrimaryBatch, aura._primaryTexture, 0, primaryCount);
+            aura.AppendBatchRange(SecondaryBatch, aura._secondaryTexture, secondaryStart, secondaryCount);
+            aura.AppendBatchRange(GlowBatch, aura._glowTexture, glowStart, glowCount);
+            _batchedAurasThisFrame++;
+            _batchQuadsThisFrame += totalQuads;
+            return true;
+        }
+
+        public static void FlushBatches()
+        {
+            if (!HasPendingBatches)
+                return;
+
+            var gd = GraphicsManager.Instance.GraphicsDevice;
+            var effect = GraphicsManager.Instance.BasicEffect3D;
+            var camera = Camera.Instance;
+            if (effect == null || camera == null)
+            {
+                ClearBatches();
+                return;
+            }
+
+            var prevBlend = gd.BlendState;
+            var prevDepth = gd.DepthStencilState;
+            var prevRaster = gd.RasterizerState;
+            var prevSampler = gd.SamplerStates[0];
+
+            bool prevTexEnabled = effect.TextureEnabled;
+            bool prevVcEnabled = effect.VertexColorEnabled;
+            bool prevLightEnabled = effect.LightingEnabled;
+            var prevTex = effect.Texture;
+            Matrix prevWorld = effect.World;
+            Matrix prevView = effect.View;
+            Matrix prevProj = effect.Projection;
+
+            gd.BlendState = BlendState.Additive;
+            gd.DepthStencilState = DepthStencilState.DepthRead;
+            gd.RasterizerState = RasterizerState.CullNone;
+            gd.SamplerStates[0] = SamplerState.LinearClamp;
+
+            effect.TextureEnabled = true;
+            effect.VertexColorEnabled = true;
+            effect.LightingEnabled = false;
+            effect.World = Matrix.Identity;
+            effect.View = camera.View;
+            effect.Projection = camera.Projection;
+
+            DrawBatchGroup(gd, effect, PrimaryBatch);
+            DrawBatchGroup(gd, effect, SecondaryBatch);
+            DrawBatchGroup(gd, effect, GlowBatch);
+            _batchFlushesThisFrame++;
+
+            effect.TextureEnabled = prevTexEnabled;
+            effect.VertexColorEnabled = prevVcEnabled;
+            effect.LightingEnabled = prevLightEnabled;
+            effect.Texture = prevTex;
+            effect.World = prevWorld;
+            effect.View = prevView;
+            effect.Projection = prevProj;
+
+            gd.BlendState = prevBlend;
+            gd.DepthStencilState = prevDepth;
+            gd.RasterizerState = prevRaster;
+            gd.SamplerStates[0] = prevSampler;
+
+            ClearBatches();
+        }
+
+        private static void DrawBatchGroup(GraphicsDevice gd, BasicEffect effect, BatchGeometry batch)
+        {
+            if (!batch.HasGeometry || batch.Texture == null)
+                return;
+
+            effect.Texture = batch.Texture;
+            foreach (var pass in effect.CurrentTechnique.Passes)
+            {
+                pass.Apply();
+                gd.DrawUserIndexedPrimitives(
+                    PrimitiveType.TriangleList,
+                    batch.Vertices,
+                    0,
+                    batch.VertexCount,
+                    batch.Indices,
+                    0,
+                    batch.IndexCount / 3);
+                _batchDrawCallsThisFrame++;
+            }
+        }
+
+        private static void ClearBatches()
+        {
+            PrimaryBatch.Clear();
+            SecondaryBatch.Clear();
+            GlowBatch.Clear();
+        }
+
+        private bool CanDrawAuraGeometry()
+        {
+            if (!Visible || (_particleCount == 0 && _fade <= 0.01f))
+                return false;
+
+            if (_skipDrawing || _densityCulled)
+                return false;
+
+            if (_suppressDrawFrames > 0)
+                return false;
+
+            if (_stableFrameCount < MinStableFramesToDraw)
+                return false;
+
+            return _primaryTexture != null && _glowTexture != null;
         }
 
         private void DrawAura()
         {
             var gd = GraphicsManager.Instance.GraphicsDevice;
             var effect = GraphicsManager.Instance.BasicEffect3D;
-            var camera = Camera.Instance;
-            if (effect == null || camera == null)
+            if (effect == null || Camera.Instance == null)
                 return;
 
-            if (!IsFinite(WorldPosition) || !IsFinite(WorldPosition.Translation))
+            if (!TryBuildAuraGeometry(
+                    out int primaryCount,
+                    out int secondaryStart,
+                    out int secondaryCount,
+                    out int glowStart,
+                    out int glowCount,
+                    out int totalQuads))
+            {
                 return;
+            }
 
-            Matrix worldInverse = Matrix.Invert(WorldPosition);
-            Vector3 localCameraPosition = Vector3.Transform(camera.Position, worldInverse);
-            if (!IsFinite(localCameraPosition))
+            if (totalQuads <= 0)
                 return;
-
-            // Compute shared billboard basis once per frame instead of per particle.
-            Vector3 toCameraDir = localCameraPosition;
-            if (toCameraDir.LengthSquared() < 0.001f)
-                toCameraDir = Vector3.UnitY;
-            toCameraDir.Normalize();
-
-            Vector3 sharedRight = Vector3.Cross(Vector3.UnitZ, toCameraDir);
-            if (sharedRight.LengthSquared() < 0.001f)
-                sharedRight = Vector3.UnitX;
-            sharedRight.Normalize();
-
-            Vector3 sharedUp = Vector3.Cross(toCameraDir, sharedRight);
-            sharedUp.Normalize();
 
             var prevBlend = gd.BlendState;
             var prevDepth = gd.DepthStencilState;
@@ -320,27 +536,8 @@ namespace Client.Main.Objects.Effects
             effect.VertexColorEnabled = true;
             effect.LightingEnabled = false;
             effect.World = WorldPosition;
-            effect.View = camera.View;
-            effect.Projection = camera.Projection;
-
-            int quadIndex = 0;
-
-            BuildParticles(sharedRight, sharedUp, 0, _particleStride, ref quadIndex);
-            int primaryCount = quadIndex;
-
-            int secondaryStart = quadIndex;
-            int secondaryCount = 0;
-            if (_drawSecondary)
-            {
-                BuildParticles(sharedRight, sharedUp, 1, _particleStride, ref quadIndex);
-                secondaryCount = quadIndex - secondaryStart;
-            }
-
-            int glowStart = quadIndex;
-            BuildCoreCloud(sharedRight, sharedUp, ref quadIndex);
-            int glowCount = quadIndex - glowStart;
-
-            int totalQuads = quadIndex;
+            effect.View = Camera.Instance.View;
+            effect.Projection = Camera.Instance.Projection;
 
             if (primaryCount > 0)
             {
@@ -395,7 +592,103 @@ namespace Client.Main.Objects.Effects
             gd.SamplerStates[0] = prevSampler;
         }
 
-        private void BuildParticles(Vector3 sharedRight, Vector3 sharedUp, byte variant, int stride, ref int quadIndex)
+        private bool TryBuildAuraGeometry(
+            out int primaryCount,
+            out int secondaryStart,
+            out int secondaryCount,
+            out int glowStart,
+            out int glowCount,
+            out int totalQuads)
+        {
+            primaryCount = 0;
+            secondaryStart = 0;
+            secondaryCount = 0;
+            glowStart = 0;
+            glowCount = 0;
+            totalQuads = 0;
+
+            var camera = Camera.Instance;
+            if (camera == null)
+                return false;
+
+            if (!IsFinite(WorldPosition) || !IsFinite(WorldPosition.Translation))
+                return false;
+
+            Matrix worldInverse = Matrix.Invert(WorldPosition);
+            Vector3 localCameraPosition = Vector3.Transform(camera.Position, worldInverse);
+            if (!IsFinite(localCameraPosition))
+                return false;
+
+            Vector3 toCameraDir = localCameraPosition;
+            if (toCameraDir.LengthSquared() < 0.001f)
+                toCameraDir = Vector3.UnitY;
+            toCameraDir.Normalize();
+
+            Vector3 sharedRight = Vector3.Cross(Vector3.UnitZ, toCameraDir);
+            if (sharedRight.LengthSquared() < 0.001f)
+                sharedRight = Vector3.UnitX;
+            sharedRight.Normalize();
+
+            Vector3 sharedUp = Vector3.Cross(toCameraDir, sharedRight);
+            sharedUp.Normalize();
+            Vector3 selfOcclusionOffset = Parent is ModelObject ? toCameraDir * AttachedModelDepthOffset : Vector3.Zero;
+
+            int quadIndex = 0;
+
+            BuildParticles(sharedRight, sharedUp, selfOcclusionOffset, 0, _particleStride, ref quadIndex);
+            primaryCount = quadIndex;
+
+            secondaryStart = quadIndex;
+            if (_drawSecondary)
+            {
+                BuildParticles(sharedRight, sharedUp, selfOcclusionOffset, 1, _particleStride, ref quadIndex);
+                secondaryCount = quadIndex - secondaryStart;
+            }
+
+            glowStart = quadIndex;
+            BuildCoreCloud(sharedRight, sharedUp, selfOcclusionOffset, ref quadIndex);
+            glowCount = quadIndex - glowStart;
+            totalQuads = quadIndex;
+            return true;
+        }
+
+        private void AppendBatchRange(BatchGeometry batch, Texture2D texture, int startQuad, int quadCount)
+        {
+            if (quadCount <= 0)
+                return;
+
+            if (batch.Texture == null)
+                batch.Texture = texture;
+
+            int requiredVertices = batch.VertexCount + quadCount * 4;
+            int requiredIndices = batch.IndexCount + quadCount * 6;
+            batch.EnsureCapacity(requiredVertices, requiredIndices);
+
+            Matrix world = WorldPosition;
+            for (int q = 0; q < quadCount; q++)
+            {
+                int sourceVertex = (startQuad + q) * 4;
+                short baseIndex = (short)batch.VertexCount;
+
+                for (int i = 0; i < 4; i++)
+                {
+                    var vertex = _vertices[sourceVertex + i];
+                    vertex.Position = Vector3.Transform(vertex.Position, world);
+                    batch.Vertices[batch.VertexCount + i] = vertex;
+                }
+
+                batch.VertexCount += 4;
+
+                batch.Indices[batch.IndexCount++] = baseIndex;
+                batch.Indices[batch.IndexCount++] = (short)(baseIndex + 1);
+                batch.Indices[batch.IndexCount++] = (short)(baseIndex + 2);
+                batch.Indices[batch.IndexCount++] = baseIndex;
+                batch.Indices[batch.IndexCount++] = (short)(baseIndex + 2);
+                batch.Indices[batch.IndexCount++] = (short)(baseIndex + 3);
+            }
+        }
+
+        private void BuildParticles(Vector3 sharedRight, Vector3 sharedUp, Vector3 selfOcclusionOffset, byte variant, int stride, ref int quadIndex)
         {
             int sampleStride = Math.Max(1, stride);
             for (int i = 0; i < _particleCount; i += sampleStride)
@@ -416,7 +709,7 @@ namespace Client.Main.Objects.Effects
 
                 float fadeIn = MathHelper.Clamp(particle.Age / 0.1f, 0f, 1f);
                 float fadeOut = 1f - lifeT;
-                float alpha = fadeIn * fadeOut * _fade * TotalAlpha;
+                float alpha = fadeIn * fadeOut * _fade * TotalAlpha * _densityAlphaScale;
                 if (alpha <= 0.01f)
                     continue;
 
@@ -433,7 +726,7 @@ namespace Client.Main.Objects.Effects
                 var color = new Color(r * alpha, g * alpha, b * alpha, alpha);
 
                 BuildBillboard(
-                    particle.Position,
+                    particle.Position + selfOcclusionOffset,
                     sharedRight,
                     sharedUp,
                     width,
@@ -444,13 +737,13 @@ namespace Client.Main.Objects.Effects
             }
         }
 
-        private void BuildCoreCloud(Vector3 sharedRight, Vector3 sharedUp, ref int quadIndex)
+        private void BuildCoreCloud(Vector3 sharedRight, Vector3 sharedUp, Vector3 selfOcclusionOffset, ref int quadIndex)
         {
             for (int i = 0; i < CoreCloudQuads; i++)
             {
                 float phase = _time * (1.05f + i * 0.17f) + i * 1.9f;
                 float pulse = 0.84f + 0.16f * (0.5f + 0.5f * MathF.Sin(phase));
-                float alpha = (0.22f + 0.14f * pulse) * _fade * TotalAlpha;
+                float alpha = (0.22f + 0.14f * pulse) * _fade * TotalAlpha * _densityAlphaScale;
                 if (alpha <= 0.01f)
                     continue;
 
@@ -464,7 +757,7 @@ namespace Client.Main.Objects.Effects
                     82f + i * 14f + 5f * MathF.Sin(phase * 1.2f));
 
                 var color = new Color(alpha, alpha * 0.45f, alpha * 0.16f, alpha);
-                BuildBillboard(localPosition, sharedRight, sharedUp, width, height, phase, color, ref quadIndex);
+                BuildBillboard(localPosition + selfOcclusionOffset, sharedRight, sharedUp, width, height, phase, color, ref quadIndex);
             }
         }
 
@@ -611,7 +904,7 @@ namespace Client.Main.Objects.Effects
             _auraLight.Radius = 215f + 12f * MathF.Sin(_time * 4.2f);
         }
 
-        private void UpdateLodSettings()
+        private void UpdateLodSettings(GameTime gameTime)
         {
             _cameraDistSq = float.MaxValue;
             var camera = Camera.Instance;
@@ -656,6 +949,65 @@ namespace Client.Main.Objects.Effects
                 _lightScale = 0f;
 
             _skipDrawing = LowQuality && _cameraDistSq > cullSq;
+
+            int densitySlot = RegisterDensitySlot(gameTime, WorldPosition.Translation);
+            _densityCulled = densitySlot >= DensityReducedAurasPerTile;
+            _densityAlphaScale = 1f;
+
+            if (_densityCulled)
+            {
+                _particleTarget = 0;
+                _spawnMultiplier = 0f;
+                _particleStride = 8;
+                _drawSecondary = false;
+                _lightScale = 0f;
+                _skipDrawing = true;
+                return;
+            }
+
+            if (densitySlot >= DensityFullAurasPerTile)
+            {
+                _particleTarget = Math.Min(
+                    _particleTarget,
+                    Math.Max(2, (int)(_maxConfiguredParticles * DensityReducedParticleFactor)));
+                _spawnMultiplier = Math.Min(_spawnMultiplier, DensityReducedSpawnMultiplier);
+                _particleStride = Math.Max(_particleStride, 12);
+                _drawSecondary = false;
+                _lightScale = 0f;
+                _densityAlphaScale = DensityReducedAlphaScale;
+            }
+        }
+
+        private static int RegisterDensitySlot(GameTime gameTime, Vector3 worldPosition)
+        {
+            long ticks = gameTime.TotalGameTime.Ticks;
+            if (_densityUpdateTicks != ticks)
+            {
+                LastFrameDensityFull = _densityFullThisTick;
+                LastFrameDensityReduced = _densityReducedThisTick;
+                LastFrameDensityCulled = _densityCulledThisTick;
+                _densityFullThisTick = 0;
+                _densityReducedThisTick = 0;
+                _densityCulledThisTick = 0;
+                DensityTileCounts.Clear();
+                _densityUpdateTicks = ticks;
+            }
+
+            int tileX = (int)MathF.Floor(worldPosition.X / Constants.TERRAIN_SCALE);
+            int tileY = (int)MathF.Floor(worldPosition.Y / Constants.TERRAIN_SCALE);
+            long key = ((long)tileX << 32) ^ (uint)tileY;
+
+            DensityTileCounts.TryGetValue(key, out int slot);
+            DensityTileCounts[key] = slot + 1;
+
+            if (slot < DensityFullAurasPerTile)
+                _densityFullThisTick++;
+            else if (slot < DensityReducedAurasPerTile)
+                _densityReducedThisTick++;
+            else
+                _densityCulledThisTick++;
+
+            return slot;
         }
 
         private void ResetParticles()

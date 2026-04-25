@@ -70,7 +70,8 @@ namespace Client.Main.Objects
                 int actionIndex,
                 int frame0,
                 int frame1,
-                int interpolationBucket)
+                int interpolationBucket,
+                int poseInstanceKey)
             {
                 Model = model;
                 MeshIndex = meshIndex;
@@ -80,6 +81,7 @@ namespace Client.Main.Objects
                 Frame0 = frame0;
                 Frame1 = frame1;
                 InterpolationBucket = interpolationBucket;
+                PoseInstanceKey = poseInstanceKey;
             }
 
             public BMD Model { get; }
@@ -90,6 +92,7 @@ namespace Client.Main.Objects
             public int Frame0 { get; }
             public int Frame1 { get; }
             public int InterpolationBucket { get; }
+            public int PoseInstanceKey { get; }
 
             public bool Equals(MonsterCrowdInstancingBatchKey other)
             {
@@ -100,7 +103,8 @@ namespace Client.Main.Objects
                     && ActionIndex == other.ActionIndex
                     && Frame0 == other.Frame0
                     && Frame1 == other.Frame1
-                    && InterpolationBucket == other.InterpolationBucket;
+                    && InterpolationBucket == other.InterpolationBucket
+                    && PoseInstanceKey == other.PoseInstanceKey;
             }
 
             public override bool Equals(object obj) => obj is MonsterCrowdInstancingBatchKey other && Equals(other);
@@ -118,6 +122,7 @@ namespace Client.Main.Objects
                     hash = (hash * 31) + Frame0;
                     hash = (hash * 31) + Frame1;
                     hash = (hash * 31) + InterpolationBucket;
+                    hash = (hash * 31) + PoseInstanceKey;
                     return hash;
                 }
             }
@@ -178,6 +183,7 @@ namespace Client.Main.Objects
         private static readonly DynamicLightGpuUploader _staticInstancingLightUploader = new(32);
         private static readonly Dictionary<MonsterCrowdInstancingBatchKey, MonsterCrowdInstancingBatch> _monsterCrowdInstancingBatches = new Dictionary<MonsterCrowdInstancingBatchKey, MonsterCrowdInstancingBatch>(128);
         private static readonly List<MonsterCrowdInstancingBatch> _monsterCrowdInstancingActiveBatches = new List<MonsterCrowdInstancingBatch>(128);
+        private static readonly List<(ModelObject Owner, int MeshIndex)> _monsterCrowdPendingNonInstancedDraws = new(128);
         private static bool _staticMapInstancingFailed = false;
         private static EffectTechnique _cachedStaticMapInstancingTechnique;
         private static readonly Matrix _identity = Matrix.Identity;
@@ -187,14 +193,32 @@ namespace Client.Main.Objects
         private static int _staticMapInstancedBatchesThisFrame = 0;
         private static int _staticMapInstancedDrawCallsThisFrame = 0;
         private static int _staticMapInstancingFallbacksThisFrame = 0;
+        private static int _monsterCrowdInstancedObjectsThisFrame = 0;
+        private static int _monsterCrowdInstancedMeshInstancesThisFrame = 0;
+        private static int _monsterCrowdInstancedBatchesThisFrame = 0;
+        private static int _monsterCrowdInstancedDrawCallsThisFrame = 0;
+        private static int _monsterCrowdInstancingFallbacksThisFrame = 0;
+        private static int _monsterCrowdPoseSharedThisFrame = 0;
+        private static int _monsterCrowdRejectUnsupportedThisFrame = 0;
+        private static int _monsterCrowdRejectActorThisFrame = 0;
+        private static int _monsterCrowdRejectStateThisFrame = 0;
+        private static int _monsterCrowdRejectMeshThisFrame = 0;
 
         public static int LastFrameStaticMapInstancedObjects { get; private set; }
         public static int LastFrameStaticMapInstancedMeshInstances { get; private set; }
         public static int LastFrameStaticMapInstancedBatches { get; private set; }
         public static int LastFrameStaticMapInstancedDrawCalls { get; private set; }
         public static int LastFrameStaticMapInstancingFallbacks { get; private set; }
+        public static int LastFrameMonsterCrowdInstancedObjects { get; private set; }
+        public static int LastFrameMonsterCrowdInstancedMeshInstances { get; private set; }
+        public static int LastFrameMonsterCrowdInstancedBatches { get; private set; }
+        public static int LastFrameMonsterCrowdInstancedDrawCalls { get; private set; }
+        public static int LastFrameMonsterCrowdInstancingFallbacks { get; private set; }
+        public static int LastFrameMonsterCrowdPoseSharedObjects { get; private set; }
+        public static string LastFrameMonsterCrowdInstancingRejects { get; private set; } = "U:0 A:0 S:0 M:0";
         public static bool IsStaticMapInstancingBackendSupported => SupportsGpuDynamicSkinning;
         public static bool IsStaticMapInstancingRuntimeDisabled => _staticMapInstancingFailed;
+        public static bool IsMonsterCrowdInstancingBackendSupported => IsMonsterCrowdInstancingSupported();
 
         private static void BeginFrameStaticMapInstancingMetrics()
         {
@@ -203,17 +227,42 @@ namespace Client.Main.Objects
             LastFrameStaticMapInstancedBatches = _staticMapInstancedBatchesThisFrame;
             LastFrameStaticMapInstancedDrawCalls = _staticMapInstancedDrawCallsThisFrame;
             LastFrameStaticMapInstancingFallbacks = _staticMapInstancingFallbacksThisFrame;
+            LastFrameMonsterCrowdInstancedObjects = _monsterCrowdInstancedObjectsThisFrame;
+            LastFrameMonsterCrowdInstancedMeshInstances = _monsterCrowdInstancedMeshInstancesThisFrame;
+            LastFrameMonsterCrowdInstancedBatches = _monsterCrowdInstancedBatchesThisFrame;
+            LastFrameMonsterCrowdInstancedDrawCalls = _monsterCrowdInstancedDrawCallsThisFrame;
+            LastFrameMonsterCrowdInstancingFallbacks = _monsterCrowdInstancingFallbacksThisFrame;
+            LastFrameMonsterCrowdPoseSharedObjects = _monsterCrowdPoseSharedThisFrame;
+            LastFrameMonsterCrowdInstancingRejects =
+                $"U:{_monsterCrowdRejectUnsupportedThisFrame} A:{_monsterCrowdRejectActorThisFrame} S:{_monsterCrowdRejectStateThisFrame} M:{_monsterCrowdRejectMeshThisFrame}";
+            LastFrameModelInstancedDrawCalls = LastFrameStaticMapInstancedDrawCalls + LastFrameMonsterCrowdInstancedDrawCalls;
+            LastFrameModelDrawCalls = LastFrameModelFallbackDrawCalls + LastFrameModelInstancedDrawCalls;
 
             _staticMapInstancedObjectsThisFrame = 0;
             _staticMapInstancedMeshInstancesThisFrame = 0;
             _staticMapInstancedBatchesThisFrame = 0;
             _staticMapInstancedDrawCallsThisFrame = 0;
             _staticMapInstancingFallbacksThisFrame = 0;
+            _monsterCrowdInstancedObjectsThisFrame = 0;
+            _monsterCrowdInstancedMeshInstancesThisFrame = 0;
+            _monsterCrowdInstancedBatchesThisFrame = 0;
+            _monsterCrowdInstancedDrawCallsThisFrame = 0;
+            _monsterCrowdInstancingFallbacksThisFrame = 0;
+            _monsterCrowdPoseSharedThisFrame = 0;
+            _monsterCrowdRejectUnsupportedThisFrame = 0;
+            _monsterCrowdRejectActorThisFrame = 0;
+            _monsterCrowdRejectStateThisFrame = 0;
+            _monsterCrowdRejectMeshThisFrame = 0;
         }
 
         internal static void RegisterStaticMapInstancingFallback()
         {
             _staticMapInstancingFallbacksThisFrame++;
+        }
+
+        internal static void RegisterMonsterCrowdInstancingFallback()
+        {
+            _monsterCrowdInstancingFallbacksThisFrame++;
         }
 
         internal static bool IsStaticMapInstancingPathAvailable()
@@ -233,6 +282,11 @@ namespace Client.Main.Objects
         {
             if (obj is not ModelObject modelObject)
                 return false;
+
+            if (modelObject is not WalkerObject || modelObject is Player.PlayerObject)
+            {
+                return false;
+            }
 
             return modelObject.TryQueueMonsterCrowdForInstancing();
         }
@@ -331,11 +385,15 @@ namespace Client.Main.Objects
         internal static void FlushMonsterCrowdInstancingBatches(WorldControl world)
         {
             if (_monsterCrowdInstancingActiveBatches.Count == 0)
+            {
+                _monsterCrowdPendingNonInstancedDraws.Clear();
                 return;
+            }
 
             if (_staticMapInstancingFailed || !IsMonsterCrowdInstancingSupported())
             {
                 ClearMonsterCrowdInstancingQueues();
+                _monsterCrowdPendingNonInstancedDraws.Clear();
                 return;
             }
 
@@ -344,6 +402,7 @@ namespace Client.Main.Objects
             if (effect == null || _cachedStaticMapInstancingTechnique == null)
             {
                 ClearMonsterCrowdInstancingQueues();
+                _monsterCrowdPendingNonInstancedDraws.Clear();
                 return;
             }
 
@@ -391,9 +450,11 @@ namespace Client.Main.Objects
                     gd.Indices = batch.GeometryIndexBuffer;
 
                     int passCount = effect.CurrentTechnique.Passes.Count;
+                    _monsterCrowdInstancedBatchesThisFrame++;
                     for (int p = 0; p < passCount; p++)
                     {
                         effect.CurrentTechnique.Passes[p].Apply();
+                        _monsterCrowdInstancedDrawCallsThisFrame++;
                         gd.DrawInstancedPrimitives(
                             PrimitiveType.TriangleList,
                             0,
@@ -415,6 +476,41 @@ namespace Client.Main.Objects
                 gd.SamplerStates[0] = prevSampler;
                 ClearMonsterCrowdInstancingQueues();
             }
+
+            DrainMonsterCrowdPendingNonInstancedDraws();
+        }
+
+        private static void DrainMonsterCrowdPendingNonInstancedDraws()
+        {
+            int count = _monsterCrowdPendingNonInstancedDraws.Count;
+            if (count == 0)
+                return;
+
+            for (int i = 0; i < count; i++)
+            {
+                var entry = _monsterCrowdPendingNonInstancedDraws[i];
+                var owner = entry.Owner;
+                int meshIndex = entry.MeshIndex;
+                if (owner == null || !owner.Visible)
+                    continue;
+                if (owner.Model?.Meshes == null || (uint)meshIndex >= (uint)owner.Model.Meshes.Length)
+                    continue;
+
+                // Force PrepareDynamicLightingEffect to re-bind per-monster shader state on the
+                // upcoming DrawMesh — the instanced pass left effect parameters bound to shared
+                // pose/instance values that don't match this monster's individual bones.
+                owner._drawModelInvocationId = ++_drawModelInvocationCounter;
+                try
+                {
+                    owner.DrawMesh(meshIndex);
+                }
+                catch
+                {
+                    // DrawMesh logs internally; swallow to keep the loop alive for remaining monsters.
+                }
+            }
+
+            _monsterCrowdPendingNonInstancedDraws.Clear();
         }
 
         internal static bool HasPendingStaticMapInstancingBatches() => _staticMapInstancingActiveBatches.Count > 0;
@@ -612,6 +708,7 @@ namespace Client.Main.Objects
 
             int meshCount = Model.Meshes.Length;
             var instanceData = new StaticModelInstanceData(WorldPosition, GetCrowdInstancingBodyColor());
+            bool shareDenseCrowdPose = TryGetDenseMonsterCrowdPoseKey(out int denseCrowdPoseKey);
             bool queuedAnyMesh = false;
 
             for (int meshIndex = 0; meshIndex < meshCount; meshIndex++)
@@ -620,13 +717,19 @@ namespace Client.Main.Objects
                     continue;
 
                 if (!CanUseMonsterCrowdMeshForInstancing(meshIndex))
+                {
+                    _monsterCrowdRejectMeshThisFrame++;
                     return false;
+                }
 
                 queuedAnyMesh = true;
             }
 
             if (!queuedAnyMesh)
+            {
+                _monsterCrowdRejectMeshThisFrame++;
                 return false;
+            }
 
             for (int meshIndex = 0; meshIndex < meshCount; meshIndex++)
             {
@@ -640,6 +743,7 @@ namespace Client.Main.Objects
                     out _,
                     out _))
                 {
+                    _monsterCrowdRejectMeshThisFrame++;
                     return false;
                 }
             }
@@ -661,15 +765,25 @@ namespace Client.Main.Objects
 
                 bool twoSided = IsMeshTwoSided(meshIndex, false);
                 Texture2D texture = _boneTextures[meshIndex];
+                bool isolatePose = _isBlending ||
+                                   (!shareDenseCrowdPose && this is MonsterObject && this is WalkerObject monsterWalker && monsterWalker.IsOneShotPlaying);
+                int actionIndex = shareDenseCrowdPose ? _animationSampleActionIndex : _animationSampleActionIndex;
+                int frame0 = shareDenseCrowdPose ? 0 : _animationSampleFrame0;
+                int frame1 = shareDenseCrowdPose ? 0 : _animationSampleFrame1;
+                int interpolationBucket = shareDenseCrowdPose ? 0 : _animationSampleInterpolationBucket;
+                int poseInstanceKey = shareDenseCrowdPose
+                    ? denseCrowdPoseKey
+                    : isolatePose ? RuntimeHelpers.GetHashCode(this) : 0;
                 var key = new MonsterCrowdInstancingBatchKey(
                     Model,
                     meshIndex,
                     texture,
                     twoSided,
-                    _animationSampleActionIndex,
-                    _animationSampleFrame0,
-                    _animationSampleFrame1,
-                    _animationSampleInterpolationBucket);
+                    actionIndex,
+                    frame0,
+                    frame1,
+                    interpolationBucket,
+                    poseInstanceKey);
 
                 if (!_monsterCrowdInstancingBatches.TryGetValue(key, out var batch))
                 {
@@ -691,8 +805,50 @@ namespace Client.Main.Objects
                 }
 
                 batch.Instances.Add(instanceData);
+                _monsterCrowdInstancedMeshInstancesThisFrame++;
             }
 
+            _monsterCrowdInstancedObjectsThisFrame++;
+            if (shareDenseCrowdPose)
+                _monsterCrowdPoseSharedThisFrame++;
+
+            EnqueueMonsterCrowdNonInstancedMeshes(meshCount);
+
+            return true;
+        }
+
+        private void EnqueueMonsterCrowdNonInstancedMeshes(int meshCount)
+        {
+            // Meshes that ShouldQueueMonsterCrowdMesh excludes (BlendMesh, RGBA-textured) are not part of
+            // the opaque instanced batch but still need to render. Queue them for a per-instance draw
+            // that runs after FlushMonsterCrowdInstancingBatches so transparent passes follow the opaque
+            // pass in the correct draw order.
+            for (int meshIndex = 0; meshIndex < meshCount; meshIndex++)
+            {
+                if (IsHiddenMesh(meshIndex))
+                    continue;
+                if (ShouldQueueMonsterCrowdMesh(meshIndex))
+                    continue;
+                _monsterCrowdPendingNonInstancedDraws.Add((this, meshIndex));
+            }
+        }
+
+        private bool TryGetDenseMonsterCrowdPoseKey(out int poseKey)
+        {
+            poseKey = 0;
+
+            if (this is not MonsterObject || Model == null || _isBlending || _animationSampleActionIndex < 0)
+                return false;
+
+            if (CurrentAction == (int)Client.Main.Models.MonsterActionType.Die)
+                return false;
+
+            // Collapse all monster instances of the same (Model, Action) into one shared-pose batch
+            // regardless of position. The first monster encountered each frame becomes the pose source;
+            // others render with that bone palette. Trade-off: same-type monsters animate in lockstep
+            // (acceptable for crowds) but 10 instances now hit a single instanced draw call instead of
+            // ~10 1-instance batches, each of which would force its own bone matrix upload + Apply().
+            poseKey = unchecked((RuntimeHelpers.GetHashCode(Model) * 397) ^ _animationSampleActionIndex);
             return true;
         }
 
@@ -728,40 +884,67 @@ namespace Client.Main.Objects
         private bool CanUseMonsterCrowdInstancing()
         {
             if (!IsMonsterCrowdInstancingSupported())
+            {
+                _monsterCrowdRejectUnsupportedThisFrame++;
                 return false;
+            }
 
             // Allow any WalkerObject crowd member. Player characters intentionally excluded:
             // they carry per-instance equipment children, weapon glow, and frequent action cancels
             // that would either break the shared bone palette or split every player into its own batch.
             if (this is not WalkerObject walker)
+            {
+                _monsterCrowdRejectActorThisFrame++;
                 return false;
+            }
 
             if (walker is Player.PlayerObject)
+            {
+                _monsterCrowdRejectActorThisFrame++;
                 return false;
-
-            if (walker is MonsterObject)
-                return false;
+            }
 
             if (UsesMutableMeshData)
+            {
+                _monsterCrowdRejectStateThisFrame++;
                 return false;
+            }
 
-            if (!Visible || IsMouseHover || Model?.Meshes == null || Model.Meshes.Length == 0)
+            if (!Visible || Model?.Meshes == null || Model.Meshes.Length == 0)
+            {
+                _monsterCrowdRejectStateThisFrame++;
                 return false;
+            }
 
-            if (LinkParentAnimation || ParentBoneLink >= 0 || ContinuousAnimation || _isBlending || !_animationSampleValid)
+            if (LinkParentAnimation || ParentBoneLink >= 0 || ContinuousAnimation || !_animationSampleValid)
+            {
+                _monsterCrowdRejectStateThisFrame++;
                 return false;
+            }
 
-            // Death/one-shot animations cancel pose sharing: keep them on the per-instance path.
-            if (walker is MonsterObject monster && (monster.IsDead || monster.IsOneShotPlaying))
+            if (walker is MonsterObject monster &&
+                (monster.IsDead || CurrentAction == (int)Client.Main.Models.MonsterActionType.Die))
+            {
+                _monsterCrowdRejectStateThisFrame++;
                 return false;
+            }
             if (walker is not MonsterObject && walker.IsOneShotPlaying)
+            {
+                _monsterCrowdRejectStateThisFrame++;
                 return false;
+            }
 
             if (TotalAlpha < 0.999f || EnableCustomShader)
+            {
+                _monsterCrowdRejectStateThisFrame++;
                 return false;
+            }
 
             if (_animationSampleActionIndex < 0)
+            {
+                _monsterCrowdRejectStateThisFrame++;
                 return false;
+            }
 
             return true;
         }

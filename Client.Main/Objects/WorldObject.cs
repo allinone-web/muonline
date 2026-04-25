@@ -31,6 +31,7 @@ namespace Client.Main.Objects
         private bool _isTransformDirty = true;
         private bool _hidden = false;
         private GameControlStatus _status = GameControlStatus.NonInitialized;
+        private int _transparentDescendantCount;
 
         private ILogger _logger = ModelObject.AppLoggerFactory?.CreateLogger<WorldObject>();
 
@@ -114,6 +115,7 @@ namespace Client.Main.Objects
         /// </summary>
         public bool LowQuality { get; private set; }
         internal int UpdateOffset => _updateOffset;
+        internal bool HasTransparentDescendants => _transparentDescendantCount > 0;
         public bool Visible => Status == GameControlStatus.Ready && !Hidden;
         public WorldControl World { get => _world; set { if (_world != value) { var prev = _world; _world = value; OnWorldChanged(value, prev); } } }
         public short Type { get; set; }
@@ -131,6 +133,7 @@ namespace Client.Main.Objects
         {
             Children = new ChildrenCollection<WorldObject>(this);
             Children.ControlAdded += Children_ControlAdded;
+            Children.ControlRemoved += Children_ControlRemoved;
 
             _font = GraphicsManager.Instance.Font;
 
@@ -157,6 +160,28 @@ namespace Client.Main.Objects
         private void Children_ControlAdded(object sender, ChildrenEventArgs<WorldObject> e)
         {
             e.Control.World = World;
+
+            int transparentCount = e.Control.GetTransparentSubtreeCount();
+            if (transparentCount > 0)
+                AddTransparentDescendantCount(transparentCount);
+        }
+
+        private void Children_ControlRemoved(object sender, ChildrenEventArgs<WorldObject> e)
+        {
+            int transparentCount = e.Control.GetTransparentSubtreeCount();
+            if (transparentCount > 0)
+                AddTransparentDescendantCount(-transparentCount);
+        }
+
+        private int GetTransparentSubtreeCount()
+        {
+            return (IsTransparent ? 1 : 0) + _transparentDescendantCount;
+        }
+
+        private void AddTransparentDescendantCount(int count)
+        {
+            _transparentDescendantCount += count;
+            Parent?.AddTransparentDescendantCount(count);
         }
 
         protected virtual void OnWorldChanged(WorldControl newWorld, WorldControl prevWorld)
@@ -316,7 +341,10 @@ namespace Client.Main.Objects
 
             var objects = Children;
             for (int i = 0; i < objects.Count; i++)
-                objects[i].Draw(gameTime);
+            {
+                if (!objects[i].IsTransparent)
+                    objects[i].Draw(gameTime);
+            }
         }
 
         /// <summary>

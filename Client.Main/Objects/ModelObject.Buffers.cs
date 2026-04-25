@@ -37,7 +37,11 @@ namespace Client.Main.Objects
 
         private void SetDynamicBuffers()
         {
-            if (_invalidatedBufferFlags == 0 || Model?.Meshes == null)
+            if (Model?.Meshes == null)
+                return;
+
+            bool cpuSidePassBuffersMissing = RequiresCpuSidePassBuffers() && HasMissingCpuSidePassBuffers();
+            if (_invalidatedBufferFlags == 0 && !cpuSidePassBuffersMissing)
                 return;
 
             try
@@ -55,7 +59,7 @@ namespace Client.Main.Objects
                 uint currentFrame = (uint)(MuGame.Instance.GameTime.TotalGameTime.TotalMilliseconds / 16.67f);
 
                 // If we only have transform updates we can skip heavy CPU skinning work.
-                if ((_invalidatedBufferFlags & ~BUFFER_FLAG_TRANSFORM) == 0)
+                if ((_invalidatedBufferFlags & ~BUFFER_FLAG_TRANSFORM) == 0 && !cpuSidePassBuffersMissing)
                 {
                     _invalidatedBufferFlags &= ~BUFFER_FLAG_TRANSFORM;
                     return;
@@ -131,12 +135,12 @@ namespace Client.Main.Objects
                 bool hasVertexDeformer = vertexDeformer != null;
                 bool usesMutableMeshData = UsesMutableMeshData;
                 bool skipSharedMeshCache = hasVertexDeformer || usesMutableMeshData;
-                bool projectedShadowCpuBuffersRequired = RequiresCpuProjectedShadowBuffers();
+                bool sidePassCpuBuffersRequired = RequiresCpuSidePassBuffers();
                 bool canUseStaticMapCpuSkip = !usesMutableMeshData &&
-                                              !projectedShadowCpuBuffersRequired &&
+                                              !sidePassCpuBuffersRequired &&
                                               CanUseStaticMapInstancing();
                 bool canUseMonsterCrowdCpuSkip = !usesMutableMeshData &&
-                                                 !projectedShadowCpuBuffersRequired &&
+                                                 !sidePassCpuBuffersRequired &&
                                                  CanFullyUseMonsterCrowdInstancingForCpuSkip();
 
                 // Calculate lighting only once if lighting flags are set
@@ -176,7 +180,6 @@ namespace Client.Main.Objects
 
                         bool canUseGpuSkinning = SupportsGpuDynamicSkinning &&
                                                  Constants.ENABLE_GPU_SKINNING &&
-                                                 this is not MonsterObject &&
                                                  !usesMutableMeshData &&
                                                  !hasVertexDeformer &&
                                                  DetermineShaderForMesh(meshIndex).UseDynamicLighting;
@@ -195,7 +198,9 @@ namespace Client.Main.Objects
                                             (uint)meshIndex < (uint)_gpuSkinBoneCounts.Length &&
                                             _gpuSkinBoneCounts[meshIndex] > 0;
 
-                        if (canUseGpuSkinning && (!gpuSkinReady && TryEnableGpuSkinnedMesh(meshIndex, mesh) || gpuSkinReady))
+                        bool gpuSkinActive = canUseGpuSkinning &&
+                                             ((!gpuSkinReady && TryEnableGpuSkinnedMesh(meshIndex, mesh)) || gpuSkinReady);
+                        if (gpuSkinActive)
                         {
                             bool gpuTextureReady = EnsureMeshTextureLoaded(meshIndex, mesh, allowLazyLoad: textureDirty);
                             if (!gpuTextureReady)
@@ -203,11 +208,23 @@ namespace Client.Main.Objects
                                 hasPendingTextureResources = true;
                             }
 
-                            cache.IsValid = false; // CPU cache path is bypassed for GPU-skinned mesh.
-                            continue;
-                        }
+                            if (!sidePassCpuBuffersRequired)
+                            {
+                                cache.IsValid = false; // CPU cache path is bypassed for GPU-skinned mesh.
+                                continue;
+                            }
 
-                        if (_gpuSkinMeshEnabled != null && (uint)meshIndex < (uint)_gpuSkinMeshEnabled.Length)
+                            if (_boneVertexBuffers == null ||
+                                _boneIndexBuffers == null ||
+                                (uint)meshIndex >= (uint)_boneVertexBuffers.Length ||
+                                (uint)meshIndex >= (uint)_boneIndexBuffers.Length ||
+                                _boneVertexBuffers[meshIndex] == null ||
+                                _boneIndexBuffers[meshIndex] == null)
+                            {
+                                cache.IsValid = false;
+                            }
+                        }
+                        else if (_gpuSkinMeshEnabled != null && (uint)meshIndex < (uint)_gpuSkinMeshEnabled.Length)
                         {
                             _gpuSkinMeshEnabled[meshIndex] = false;
                         }
@@ -312,6 +329,45 @@ namespace Client.Main.Objects
                                 GraphicsManager.Instance.ShadowMapRenderer?.IsReady == true;
             bool isNight = Constants.ENABLE_DAY_NIGHT_CYCLE && SunCycleManager.IsNight;
             return RenderShadow && !LowQuality && !useShadowMap && !isNight;
+        }
+
+        private bool RequiresCpuHoverHighlightBuffers()
+        {
+            return this is MonsterObject monster &&
+                   !monster.IsDead &&
+                   Visible &&
+                   IsMouseHover &&
+                   !LowQuality &&
+                   Model?.Meshes != null;
+        }
+
+        private bool RequiresCpuSidePassBuffers()
+        {
+            return RequiresCpuProjectedShadowBuffers() || RequiresCpuHoverHighlightBuffers();
+        }
+
+        private bool HasMissingCpuSidePassBuffers()
+        {
+            if (Model?.Meshes == null)
+                return false;
+
+            for (int meshIndex = 0; meshIndex < Model.Meshes.Length; meshIndex++)
+            {
+                if (!ShouldQueueMonsterCrowdMesh(meshIndex))
+                    continue;
+
+                if (_boneVertexBuffers == null ||
+                    _boneIndexBuffers == null ||
+                    (uint)meshIndex >= (uint)_boneVertexBuffers.Length ||
+                    (uint)meshIndex >= (uint)_boneIndexBuffers.Length ||
+                    _boneVertexBuffers[meshIndex] == null ||
+                    _boneIndexBuffers[meshIndex] == null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private bool CanFullyUseMonsterCrowdInstancingForCpuSkip()
