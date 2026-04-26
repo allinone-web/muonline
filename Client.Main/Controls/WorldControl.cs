@@ -164,6 +164,7 @@ namespace Client.Main.Controls
     {
         // --- Fields & Constants ---
         private int _renderCounter;
+        private int _lastRenderMetricsLogFrame = -10000;
         private DepthStencilState _currentDepthState = DepthStencilState.Default;
         private static readonly DepthStencilState DepthStateDefault = DepthStencilState.Default;
         private static readonly DepthStencilState DepthStateDepthRead = DepthStencilState.DepthRead;
@@ -221,6 +222,7 @@ namespace Client.Main.Controls
         public string AmbientSoundPath { get; set; }
 
         public TerrainControl Terrain { get; }
+        public WorldFrameMetrics FrameMetrics { get; } = new();
 
         public short WorldIndex { get; private set; }
         public bool IsSunWorld { get; protected set; } = true;
@@ -386,6 +388,10 @@ namespace Client.Main.Controls
             base.Update(time);
 
             if (Status != GameControlStatus.Ready) return;
+            FrameMetrics.Reset();
+            FrameMetrics.CullCandidates = LastCullCandidateCount;
+            FrameMetrics.VisibleObjects = LastCullVisibleCount;
+            FrameMetrics.CullMs = LastCullRebuildMs;
             LastCullWasRebuild = false;
 
             if (_objectsToInitialize.Count > 0)
@@ -413,7 +419,7 @@ namespace Client.Main.Controls
             ulong cameraVersion = Camera.Instance.StateVersion;
             bool needsFullRebuild =
                 _dirtyVisibleObjects ||
-                _spatialObjectSectors.Count != Objects.Count ||
+                (Constants.ENABLE_CROWD_SPATIAL_CULLING && _spatialObjectSectors.Count != Objects.Count) ||
                 _lastCulledCameraVersion != cameraVersion ||
                 !_hasVisibilitySnapshot;
 
@@ -773,6 +779,10 @@ namespace Client.Main.Controls
                     CollectTransparentChildren(obj);
             }
 
+            FrameMetrics.SolidBehindObjects = _solidBehind.Count;
+            FrameMetrics.SolidInFrontObjects = _solidInFront.Count;
+            FrameMetrics.TransparentObjects = _transparentObjects.Count;
+
             // Sort lists
             if (_solidBehind.Count > 1)
             {
@@ -805,6 +815,34 @@ namespace Client.Main.Controls
             DrawAfterPass(_transparentObjects, DepthStateDepthRead, time);
 
             OverheadNameplateRenderer.FlushQueuedNameplates(GraphicsManager.Instance.Sprite);
+            LogRenderMetricsIfEnabled();
+        }
+
+        private void LogRenderMetricsIfEnabled()
+        {
+            if (Constants.RENDER_METRICS_LEVEL < 2)
+                return;
+
+            int frame = MuGame.FrameIndex;
+            if (frame - _lastRenderMetricsLogFrame < 180)
+                return;
+
+            _lastRenderMetricsLogFrame = frame;
+            _logger?.LogInformation(
+                "World perf W:{WorldIndex} Cull:{CullMode} C:{CullCandidates} V:{Visible} Ms:{CullMs:F2} Lists:{Behind}/{Front}/{Transparent} DrawObj S:{SpriteObjects} M:{ModelObjects} Anim U:{AnimUpdates} Skip:{AnimSkips} LQ:{LowQuality}",
+                WorldIndex,
+                LastCullWasRebuild ? "R" : "I",
+                FrameMetrics.CullCandidates,
+                FrameMetrics.VisibleObjects,
+                FrameMetrics.CullMs,
+                FrameMetrics.SolidBehindObjects,
+                FrameMetrics.SolidInFrontObjects,
+                FrameMetrics.TransparentObjects,
+                FrameMetrics.SpriteBatchObjects,
+                FrameMetrics.ModelObjects,
+                FrameMetrics.AnimationUpdates,
+                FrameMetrics.AnimationSkips,
+                FrameMetrics.LowQualityObjects);
         }
 
         private void CollectTransparentChildren(WorldObject obj)
@@ -875,7 +913,7 @@ namespace Client.Main.Controls
 
             SetDepthState(depthState);
             bool canUseMapInstancing = depthState == DepthStateDefault && Constants.ENABLE_MAP_OBJECT_INSTANCING;
-            bool canUseMonsterCrowdInstancing = depthState == DepthStateDefault;
+            bool canUseMonsterCrowdInstancing = depthState == DepthStateDefault && Constants.ENABLE_MONSTER_CROWD_INSTANCING;
 
             var spriteBatch = GraphicsManager.Instance.Sprite;
             Helpers.SpriteBatchScope? scope = null;
@@ -922,6 +960,8 @@ namespace Client.Main.Controls
 
                 if (usesSpriteBatch)
                 {
+                    FrameMetrics.SpriteBatchObjects++;
+
                     if (canUseMonsterCrowdInstancing && ModelObject.HasPendingMonsterCrowdInstancingBatches())
                         ModelObject.FlushMonsterCrowdInstancingBatches(this);
 
@@ -965,6 +1005,9 @@ namespace Client.Main.Controls
                 }
                 else
                 {
+                    if (obj is ModelObject)
+                        FrameMetrics.ModelObjects++;
+
                     scope?.Dispose();
                     scope = null;
                     currentBlend = null;
@@ -1293,14 +1336,23 @@ namespace Client.Main.Controls
             float maxViewDistance = camera.ViewFar + Constants.MAX_CAMERA_DISTANCE + 250f;
             float maxDistSq = maxViewDistance * maxViewDistance;
             var frustum = camera.Frustum;
-            if (_spatialObjectSectors.Count != Objects.Count)
+            IReadOnlyList<WorldObject> snapshot;
+            if (Constants.ENABLE_CROWD_SPATIAL_CULLING)
             {
-                RebuildSpatialGridFromSnapshot();
+                if (_spatialObjectSectors.Count != Objects.Count)
+                {
+                    RebuildSpatialGridFromSnapshot();
+                }
+
+                var focus = camera.Target;
+                BuildSpatialCandidates(new Vector2(focus.X, focus.Y), maxViewDistance);
+                snapshot = _spatialCandidates;
+            }
+            else
+            {
+                snapshot = Objects.GetSnapshot();
             }
 
-            var focus = camera.Target;
-            BuildSpatialCandidates(new Vector2(focus.X, focus.Y), maxViewDistance);
-            var snapshot = _spatialCandidates;
             LastCullCandidateCount = snapshot.Count;
             bool useParallel = Environment.ProcessorCount > 1 &&
                                snapshot.Count >= ParallelVisibleRebuildThreshold;
@@ -1359,6 +1411,10 @@ namespace Client.Main.Controls
             LastCullVisibleCount = _visibleObjects.Count;
             LastCullRebuildMs = (float)_cullingStopwatch.Elapsed.TotalMilliseconds;
             LastCullWasRebuild = true;
+            FrameMetrics.CullCandidates = LastCullCandidateCount;
+            FrameMetrics.VisibleObjects = LastCullVisibleCount;
+            FrameMetrics.CullMs = LastCullRebuildMs;
+            FrameMetrics.CullWasRebuild = true;
         }
 
         private void RefreshDirtyVisibleObjects()
@@ -1366,6 +1422,7 @@ namespace Client.Main.Controls
             if (_positionDirtyObjects.Count == 0)
                 return;
 
+            _cullingStopwatch.Restart();
             var camera = Camera.Instance;
             var camPos = camera.Position;
             var cam2 = new Vector2(camPos.X, camPos.Y);
@@ -1444,6 +1501,16 @@ namespace Client.Main.Controls
                         RemoveVisibleObject(obj);
                 }
             }
+
+            _cullingStopwatch.Stop();
+            LastCullCandidateCount = dirtySnapshot.Length;
+            LastCullVisibleCount = _visibleObjects.Count;
+            LastCullRebuildMs = (float)_cullingStopwatch.Elapsed.TotalMilliseconds;
+            LastCullWasRebuild = false;
+            FrameMetrics.CullCandidates = LastCullCandidateCount;
+            FrameMetrics.VisibleObjects = LastCullVisibleCount;
+            FrameMetrics.CullMs = LastCullRebuildMs;
+            FrameMetrics.CullWasRebuild = false;
         }
 
         private void UpdateVisibleObjects(GameTime time)
@@ -1472,6 +1539,7 @@ namespace Client.Main.Controls
                 if (ShouldAlwaysUpdate(obj))
                 {
                     obj.SetLowQuality(false);
+                    FrameMetrics.AnimationUpdates++;
                     obj.Update(time);
                     continue;
                 }
@@ -1481,12 +1549,22 @@ namespace Client.Main.Controls
                 float dy = camY - pos.Y;
                 float distSq = dx * dx + dy * dy;
 
-                int stride = ResolveUpdateStride(distSq);
+                int stride = Constants.ENABLE_ANIMATION_THROTTLING
+                    ? ResolveUpdateStride(distSq)
+                    : 1;
                 obj.SetLowQuality(stride > 1);
 
                 if (stride > 1 && ((frame + obj.UpdateOffset) % stride) != 0)
+                {
+                    FrameMetrics.LowQualityObjects++;
+                    FrameMetrics.AnimationSkips++;
                     continue;
+                }
 
+                if (stride > 1)
+                    FrameMetrics.LowQualityObjects++;
+
+                FrameMetrics.AnimationUpdates++;
                 obj.Update(time);
             }
         }

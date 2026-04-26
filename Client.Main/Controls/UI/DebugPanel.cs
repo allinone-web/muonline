@@ -183,10 +183,10 @@ namespace Client.Main.Controls.UI
                        .Append($"Tri:{terrainMetrics.DrawnTriangles} ")
                        .Append($"Blk:{terrainMetrics.DrawnBlocks} ")
                        .Append($"Cel:{terrainMetrics.DrawnCells} ")
-                       .Append($"| Cull:{(walkableWorld.LastCullWasRebuild ? "R" : "-")} ")
-                       .Append($"C:{walkableWorld.LastCullCandidateCount} ")
-                       .Append($"V:{walkableWorld.LastCullVisibleCount} ")
-                       .Append($"Ms:{walkableWorld.LastCullRebuildMs:F2} ")
+                       .Append($"| Cull:{(Constants.ENABLE_CROWD_SPATIAL_CULLING ? "S" : "F")}{(walkableWorld.FrameMetrics.CullWasRebuild ? "R" : "-")} ")
+                       .Append($"C:{walkableWorld.FrameMetrics.CullCandidates} ")
+                       .Append($"V:{walkableWorld.FrameMetrics.VisibleObjects} ")
+                       .Append($"Ms:{walkableWorld.FrameMetrics.CullMs:F2} ")
                        .Append($"CamV:{walkableWorld.LastCullCameraVersion} ")
                        .Append($"| Sim:{simulationSteps} ")
                        .Append($"MT:{processedMainThreadActions}/{queuedMainThreadActions} ")
@@ -204,7 +204,8 @@ namespace Client.Main.Controls.UI
                     // Update batch sorting status
                     _sb.Clear()
                       .Append($"Batch Sort: {(Constants.ENABLE_BATCH_OPTIMIZED_SORTING ? "ON" : "OFF")} ")
-                      .Append($"(Model grouping for state reduction)");
+                      .Append($"Spatial:{(Constants.ENABLE_CROWD_SPATIAL_CULLING ? "ON" : "OFF")} ")
+                      .Append($"AnimThr:{(Constants.ENABLE_ANIMATION_THROTTLING ? "ON" : "OFF")}");
                     SetLabelTextIfChanged(_batchSortingLabel, _sb.ToString());
                     _batchSortingLabel.Visible = true;
 
@@ -228,7 +229,9 @@ namespace Client.Main.Controls.UI
                     SetLabelTextIfChanged(_instancingStatusLabel, _sb.ToString());
 
                     _sb.Clear()
-                      .Append("Monster Inst: BK:")
+                      .Append("Monster Inst: ")
+                      .Append(Constants.ENABLE_MONSTER_CROWD_INSTANCING ? "ON" : "OFF")
+                      .Append(" | BK:")
                       .Append(ModelObject.IsMonsterCrowdInstancingBackendSupported ? "OK" : "N/A")
                       .Append(" | Obj:")
                       .Append(ModelObject.LastFrameMonsterCrowdInstancedObjects)
@@ -252,7 +255,13 @@ namespace Client.Main.Controls.UI
                       .Append(" Inst:")
                       .Append(ModelObject.LastFrameModelInstancedDrawCalls)
                       .Append(" Fallback:")
-                      .Append(ModelObject.LastFrameModelFallbackDrawCalls);
+                      .Append(ModelObject.LastFrameModelFallbackDrawCalls)
+                      .Append(" | Anim:")
+                      .Append(walkableWorld.FrameMetrics.AnimationUpdates)
+                      .Append("/")
+                      .Append(walkableWorld.FrameMetrics.AnimationSkips)
+                      .Append(" LQ:")
+                      .Append(walkableWorld.FrameMetrics.LowQualityObjects);
                     SetLabelTextIfChanged(_modelDrawCallsLabel, _sb.ToString());
 
                     _sb.Clear()

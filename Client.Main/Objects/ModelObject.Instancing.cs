@@ -608,6 +608,7 @@ namespace Client.Main.Objects
         private static bool IsMonsterCrowdInstancingSupported()
         {
             if (_staticMapInstancingFailed ||
+                !Constants.ENABLE_MONSTER_CROWD_INSTANCING ||
                 !Constants.ENABLE_GPU_SKINNING ||
                 !SupportsGpuDynamicSkinning)
             {

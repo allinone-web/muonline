@@ -76,9 +76,13 @@ namespace Client.Main
         public static bool ENABLE_WEAPON_TRAIL;
         public static bool ENABLE_BATCH_OPTIMIZED_SORTING;
         public static bool ENABLE_MAP_OBJECT_INSTANCING;
+        public static bool ENABLE_MONSTER_CROWD_INSTANCING;
+        public static bool ENABLE_CROWD_SPATIAL_CULLING;
+        public static bool ENABLE_ANIMATION_THROTTLING;
         public static bool ENABLE_STATIC_CHUNK_CACHING;
         public static bool ENABLE_ITEM_MATERIAL_ANIMATION;
         public static bool ENABLE_DYNAMIC_BUFFER_POOL;
+        public static int RENDER_METRICS_LEVEL;
         public static float RENDER_SCALE;
         public static bool HIGH_QUALITY_TEXTURES;
         public static bool DISABLE_VSYNC;
@@ -237,9 +241,13 @@ namespace Client.Main
             ENABLE_WEAPON_TRAIL = true;
             ENABLE_BATCH_OPTIMIZED_SORTING = true;
             ENABLE_MAP_OBJECT_INSTANCING = true;
+            ENABLE_MONSTER_CROWD_INSTANCING = true;
+            ENABLE_CROWD_SPATIAL_CULLING = true;
+            ENABLE_ANIMATION_THROTTLING = true;
             ENABLE_STATIC_CHUNK_CACHING = true;
             ENABLE_ITEM_MATERIAL_ANIMATION = false;
             ENABLE_DYNAMIC_BUFFER_POOL = true;
+            RENDER_METRICS_LEVEL = 1;
             RENDER_SCALE = 1.0f;
             HIGH_QUALITY_TEXTURES = true;
             DISABLE_VSYNC = true;

@@ -222,6 +222,10 @@ namespace Client.Main
 
             Constants.DYNAMIC_LIGHT_UPDATE_FPS = dynamicLightUpdateFps;
             Constants.ANIMATION_UPDATE_FPS = animationUpdateFps;
+            Constants.ENABLE_CROWD_SPATIAL_CULLING = graphics.EnableCrowdSpatialCulling;
+            Constants.ENABLE_MONSTER_CROWD_INSTANCING = graphics.EnableMonsterCrowdInstancing;
+            Constants.ENABLE_ANIMATION_THROTTLING = graphics.EnableAnimationThrottling;
+            Constants.RENDER_METRICS_LEVEL = Math.Clamp(graphics.RenderMetricsLevel, 0, 2);
         }
 
         public static void DisposeInstance()
