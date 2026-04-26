@@ -188,8 +188,12 @@ namespace Client.Main.Objects
 
                 float constBias = 1f / (1 << 24);
 
-                // PERFORMANCE: Use cached RasterizerState to avoid per-mesh allocation
-                RasterizerState ShadowRasterizer = GraphicsManager.GetCachedRasterizerState(constBias * -20, CullMode.None);
+                // Cull back faces for opaque casters (halves rasterization). Two-sided meshes
+                // (transparent textures, blend modes) keep CullNone to avoid disappearing one side.
+                bool isTwoSided = IsMeshTwoSided(mesh, IsBlendMesh(mesh));
+                RasterizerState ShadowRasterizer = GraphicsManager.GetCachedRasterizerState(
+                    constBias * -20,
+                    isTwoSided ? CullMode.None : CullMode.CullClockwiseFace);
 
                 GraphicsDevice.BlendState = Blendings.ShadowBlend;
                 GraphicsDevice.DepthStencilState = DepthStencilState.DepthRead;

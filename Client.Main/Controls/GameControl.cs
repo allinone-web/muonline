@@ -298,6 +298,7 @@ namespace Client.Main.Controls
             DrawBorder();
 
             GraphicsDevice.SamplerStates[0] = SamplerState.LinearWrap;
+            // CullNone: UI quads have no consistent winding contract; child controls expect both faces.
             GraphicsDevice.RasterizerState = RasterizerState.CullNone;
             GraphicsDevice.DepthStencilState = DepthStencilState.Default;
             GraphicsDevice.BlendState = BlendState.Opaque; // Usually AlphaBlend for UI

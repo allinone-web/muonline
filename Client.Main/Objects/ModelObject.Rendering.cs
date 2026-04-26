@@ -157,19 +157,15 @@ namespace Client.Main.Objects
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool IsMeshTwoSided(int mesh, bool isBlendMesh)
         {
-            if (_meshIsRGBA == null || mesh < 0 || mesh >= _meshIsRGBA.Length)
-                return false;
-
-            if (_meshIsRGBA[mesh] || isBlendMesh)
+            if (isBlendMesh)
                 return true;
 
-            if (Model?.Meshes != null && mesh < Model.Meshes.Length)
-            {
-                var meshConf = Model.Meshes[mesh];
-                return meshConf.BlendingMode != null && meshConf.BlendingMode != "Opaque";
-            }
+            var rgba = _meshIsRGBA;
+            if (rgba != null && (uint)mesh < (uint)rgba.Length && rgba[mesh])
+                return true;
 
-            return false;
+            var blendCache = _meshHasNonOpaqueBlend;
+            return blendCache != null && (uint)mesh < (uint)blendCache.Length && blendCache[mesh];
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

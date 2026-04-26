@@ -263,6 +263,7 @@ namespace Client.Main.Objects.Effects
 
             gd.BlendState = BlendState.Additive;
             gd.DepthStencilState = DepthStencilState.DepthRead;
+            // CullNone: trail strip winding flips with swing direction; both sides must render.
             gd.RasterizerState = RasterizerState.CullNone;
 
             effect.TextureEnabled = false;

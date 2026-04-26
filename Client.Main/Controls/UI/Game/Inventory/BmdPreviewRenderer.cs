@@ -446,6 +446,8 @@ namespace Client.Main.Controls.UI.Game.Inventory
 
                 gd.BlendState = BlendState.AlphaBlend;
                 gd.DepthStencilState = DepthStencilState.Default;
+                // CullNone: inventory preview at small resolution, infrequent draws — culling
+                // gain is negligible and avoids accidental face hides when items rotate.
                 gd.RasterizerState = RasterizerState.CullNone;
                 gd.SamplerStates[0] = GraphicsManager.GetQualityLinearSamplerState();
 

@@ -306,6 +306,7 @@ namespace Client.Main.Controls.Terrain
 
             dev.BlendState = BlendState.AlphaBlend;
             dev.DepthStencilState = DepthStencilState.Default;
+            // CullNone: grass blades are two-sided sprite quads, viewable from both sides.
             dev.RasterizerState = RasterizerState.CullNone;
             dev.SamplerStates[0] = SamplerState.PointClamp;
 

@@ -417,6 +417,7 @@ namespace Client.Main.Objects.Effects
 
             gd.BlendState = BlendState.Additive;
             gd.DepthStencilState = DepthStencilState.DepthRead;
+            // CullNone: billboard quads flip winding when the camera crosses their plane.
             gd.RasterizerState = RasterizerState.CullNone;
             gd.SamplerStates[0] = SamplerState.LinearClamp;
 
@@ -529,6 +530,7 @@ namespace Client.Main.Objects.Effects
 
             gd.BlendState = BlendState.Additive;
             gd.DepthStencilState = DepthState;
+            // CullNone: billboard quads flip winding when the camera crosses their plane.
             gd.RasterizerState = RasterizerState.CullNone;
             gd.SamplerStates[0] = SamplerState.LinearClamp;
 
