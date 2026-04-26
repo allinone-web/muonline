@@ -24,7 +24,10 @@
       "Bash(rtk read *)",
       "Bash(git -C /mnt/d/nowe/muonline checkout -- .claude/settings.local.json Client.Data/BMD/BMDBoneMatrix.cs Client.Data/BMD/BMDReader.cs Client.Data/BinaryReaderExtensions.cs Client.Main/Configuration/MuOnlineSettings.cs Client.Main/Content/BMDLoader.cs Client.Main/Content/PlayerIdlePoseProvider.cs Client.Main/Controls/UI/DebugPanel.cs Client.Main/Controls/UI/Game/Inventory/BmdPreviewRenderer.cs Client.Main/MGContent/ItemMaterial.fx Client.Main/Objects/ModelObject.Animation.cs Client.Main/Objects/ModelObject.Buffers.cs Client.Main/Objects/ModelObject.Lighting.cs Client.Main/Objects/ModelObject.Rendering.cs Client.Main/Objects/ModelObject.Shadow.cs Client.Main/Objects/ModelObject.cs Client.Main/Objects/Player/WeaponObject.cs Client.Main/appsettings.json)",
       "Bash(git -C /mnt/d/nowe/muonline checkout -- Client.Main/Objects/ModelObject.Instancing.cs)",
-      "Bash(rtk wc *)"
+      "Bash(rtk wc *)",
+      "mcp__plugin_context-mode_context-mode__ctx_batch_execute",
+      "mcp__plugin_context-mode_context-mode__ctx_search",
+      "mcp__plugin_context-mode_context-mode__ctx_execute"
     ],
     "deny": []
   }

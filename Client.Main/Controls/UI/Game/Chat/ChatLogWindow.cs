@@ -107,14 +107,11 @@ namespace Client.Main.Controls.UI
         // --- Loading Resources ---
         public override async Task Load()
         {
-            _font = GraphicsManager.Instance.Font; // Use default font
-            // TODO: Load the bold font if available
-            // _fontBold = MuGame.Instance.Content.Load<SpriteFont>("Fonts/YourBoldFont");
-            _fontBold = _font; // Fallback to default
+            _font = GraphicsManager.Instance.Font;
+            _fontBold = _font;
 
-            CalculateLineHeight(); // Calculate line height after loading font
+            CalculateLineHeight();
 
-            // --- Loading Textures ---
             try
             {
                 TextureLoader tl = TextureLoader.Instance;
@@ -125,15 +122,12 @@ namespace Client.Main.Controls.UI
                 _texScrollThumb = await tl.PrepareAndGetTexture("Interface/newui_scroll_on.tga") ?? GraphicsManager.Instance.Pixel;
                 _texResizeHandle = await tl.PrepareAndGetTexture("Interface/newui_scrollbar_stretch.jpg") ?? GraphicsManager.Instance.Pixel;
             }
-            catch (Exception ex)
+            catch
             {
-                Console.WriteLine($"[ChatLogWindow] Error loading textures: {ex.Message}");
-                // Use default pixel as fallback
                 _texScrollTop = _texScrollMiddle = _texScrollBottom = _texScrollThumb = _texResizeHandle = GraphicsManager.Instance.Pixel;
             }
-            // --- End of Texture Loading ---
 
-            UpdateLayout(); // Recalculate layout after resources are loaded
+            UpdateLayout();
             await base.Load();
         }
 
@@ -147,11 +141,7 @@ namespace Client.Main.Controls.UI
             if (string.IsNullOrEmpty(text) && string.IsNullOrEmpty(senderId)) return;
             if (!_messages.ContainsKey(type)) return; // Ignore unknown types
 
-            // TODO: In future, filtering logic will go here (CheckFilterText)
-            // C++ plays whisper sound for incoming chat messages that match a filter.
-            // For now, we'll play it for incoming whisper messages if the option is enabled.
-            // Adjust this logic if you implement filters and want the C++ behavior.
-            if (type == MessageType.Whisper) // && (MuGame.Instance.GameOptions?.IsWhisperSoundEnabled ?? false)) // Assuming GameOptions exists and has this property
+            if (type == MessageType.Whisper)
             {
                 SoundController.Instance.PlayBuffer("Sound/iWhisper.wav");
             }
@@ -434,12 +424,11 @@ namespace Client.Main.Controls.UI
                     // Hover effect (only when frame is visible)
                     if (_showFrame && i == _hoveredMessageGlobalIndex)
                     {
-                        // Always draw hover highlight (for testing)
                         var hoverRect = new Rectangle(
                             (int)startX, (int)y,
                             (int)clientWidth, (int)_lineHeight);
                         spriteBatch.Draw(GraphicsManager.Instance.Pixel, hoverRect, new Color(30, 30, 30, 180));
-                        txtCol = new Color(255, 128, 255); // Hover text color
+                        txtCol = new Color(255, 128, 255);
                     }
 
                     // Draw text
@@ -467,7 +456,7 @@ namespace Client.Main.Controls.UI
             }
             else
             {
-                _lineHeight = LINE_HEIGHT_FALLBACK; // Fallback value
+                _lineHeight = LINE_HEIGHT_FALLBACK;
             }
         }
 
@@ -617,27 +606,19 @@ namespace Client.Main.Controls.UI
 
         private void UpdateLayout()
         {
-            CalculateLineHeight(); // Ensure line height is up to date
-            if (_lineHeight <= 0) return; // Cannot layout without line height
+            CalculateLineHeight();
+            if (_lineHeight <= 0) return;
 
-            // --- CHANGE: Remember old height ---
             int oldHeight = ViewSize.Y;
 
-            // Calculate new size based on number of lines
             int newHeight = (int)(_lineHeight * _showingLines) + WND_TOP_BOTTOM_EDGE * 2;
             ViewSize = new Point(Width, newHeight);
-            ControlSize = ViewSize; // Sync ControlSize
+            ControlSize = ViewSize;
 
-            // --- CHANGE: Calculate height difference ---
             int deltaHeight = newHeight - oldHeight;
 
-            // --- CHANGE: Adjust Y so bottom edge remains fixed ---
-            // If height increased (deltaHeight > 0), move Y up (decrease Y)
-            // If height decreased (deltaHeight < 0), move Y down (increase Y)
-            Y -= deltaHeight; // Adjust upper-edge Y
-
-            // --- Update interactive areas (Scrollbar, Resize Handle) ---
-            // These calculations already use the updated DisplayRectangle (which accounts for new Y and ViewSize)
+            // Subtract delta so the bottom edge stays fixed as height grows/shrinks.
+            Y -= deltaHeight;
             if (_showFrame)
             {
                 int scrollX = DisplayRectangle.X + Width - WND_LEFT_RIGHT_EDGE - SCROLL_BAR_WIDTH;

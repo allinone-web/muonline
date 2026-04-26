@@ -438,25 +438,23 @@ namespace Client.Main.Objects
 
         public virtual void Dispose()
         {
+            while (Status == GameControlStatus.Initializing)
+                Thread.Sleep(100);
+
             if (Status == GameControlStatus.Disposed)
                 return;
-
-            if (Status == GameControlStatus.Initializing)
-            {
-                Thread.Sleep(100);
-                Dispose();
-            }
 
             Status = GameControlStatus.Disposed;
 
             // Centralized safeguard: detach any terrain dynamic lights owned by this object.
             World?.Terrain?.RemoveDynamicLightsByOwner(this);
 
+            Children.ControlAdded -= Children_ControlAdded;
+            Children.ControlRemoved -= Children_ControlRemoved;
+
             var children = Children.ToArray();
             for (int i = 0; i < children.Length; i++)
-            {
                 children[i].Dispose();
-            }
             Children.Clear();
 
             Parent?.Children.Remove(this);

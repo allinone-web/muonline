@@ -132,7 +132,7 @@ namespace Client.Main.Controls.UI.Login
         /// </summary>
         public void FocusUsername()
         {
-            MuGame.ScheduleOnMainThread(() => // Ensure it's on the main thread
+            MuGame.ScheduleOnMainThread(() =>
             {
                 _userInput?.OnFocus();
                 _passwordInput?.OnBlur();

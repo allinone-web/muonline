@@ -288,9 +288,9 @@ namespace Client.Main.Controls.Terrain
 
         public void Draw(bool after)
         {
-            if (_graphicsDevice == null) return; // Added null check for _graphicsDevice
+            if (_graphicsDevice == null) return;
             if (_data.HeightMap == null) return;
-            if (Camera.Instance == null) return; // Added null check for Camera.Instance
+            if (Camera.Instance == null) return;
             if (!after)
             {
                 ResetMetrics();
@@ -783,7 +783,7 @@ namespace Client.Main.Controls.Terrain
 
         private void RenderTerrainTile(int xi, int yi, float lodFactor, int lodInt, bool after, byte edgeMask = 0)
         {
-            if (after || _data.Attributes == null || _data.Attributes.TerrainWall == null) return; // Added null check for TerrainWall
+            if (after || _data.Attributes == null || _data.Attributes.TerrainWall == null) return;
             DrawnCells++;
 
             if (!HasAnyGroundInTile(xi, yi, lodInt))
@@ -1491,13 +1491,13 @@ namespace Client.Main.Controls.Terrain
 
             var batch = GetTileBatchBuffer(texIndex, alphaLayer);
             var texture = _data.Textures[texIndex];
-            if (texture == null) return; // Added null check for texture
+            if (texture == null) return;
             var blendState = alphaLayer ? BlendState.NonPremultiplied : BlendState.Opaque;
 
             if (_useDynamicLightingShader)
             {
                 var effect = GraphicsManager.Instance.DynamicLightingEffect;
-                if (effect == null || effect.CurrentTechnique == null) return; // Added null checks for effect and effect.CurrentTechnique
+                if (effect == null || effect.CurrentTechnique == null) return;
 
                 int triCount = vertCount / 3;
                 // Avoid unnecessary state changes
@@ -1552,7 +1552,7 @@ namespace Client.Main.Controls.Terrain
             else
             {
                 var effect = GraphicsManager.Instance.BasicEffect3D;
-                if (effect == null || effect.CurrentTechnique == null) return; // Added null checks for effect and effect.CurrentTechnique
+                if (effect == null || effect.CurrentTechnique == null) return;
 
                 // Avoid unnecessary state changes
                 if (_lastBoundTexture != texture)
