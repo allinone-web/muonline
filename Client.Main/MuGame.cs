@@ -225,6 +225,9 @@ namespace Client.Main
             Constants.ENABLE_CROWD_SPATIAL_CULLING = graphics.EnableCrowdSpatialCulling;
             Constants.ENABLE_MONSTER_CROWD_INSTANCING = graphics.EnableMonsterCrowdInstancing;
             Constants.ENABLE_ANIMATION_THROTTLING = graphics.EnableAnimationThrottling;
+            Constants.ENABLE_SHARED_ANIMATION_PALETTES = graphics.EnableSharedAnimationPalettes;
+            Constants.ENABLE_BMD_MESH_BATCHING = graphics.EnableBmdMeshBatching;
+            Constants.ENABLE_EFFECT_POOLING = graphics.EnableEffectPooling;
             Constants.RENDER_METRICS_LEVEL = Math.Clamp(graphics.RenderMetricsLevel, 0, 2);
         }
 

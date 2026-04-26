@@ -79,6 +79,9 @@ namespace Client.Main
         public static bool ENABLE_MONSTER_CROWD_INSTANCING;
         public static bool ENABLE_CROWD_SPATIAL_CULLING;
         public static bool ENABLE_ANIMATION_THROTTLING;
+        public static bool ENABLE_SHARED_ANIMATION_PALETTES;
+        public static bool ENABLE_BMD_MESH_BATCHING;
+        public static bool ENABLE_EFFECT_POOLING;
         public static bool ENABLE_STATIC_CHUNK_CACHING;
         public static bool ENABLE_ITEM_MATERIAL_ANIMATION;
         public static bool ENABLE_DYNAMIC_BUFFER_POOL;
@@ -244,6 +247,9 @@ namespace Client.Main
             ENABLE_MONSTER_CROWD_INSTANCING = true;
             ENABLE_CROWD_SPATIAL_CULLING = true;
             ENABLE_ANIMATION_THROTTLING = true;
+            ENABLE_SHARED_ANIMATION_PALETTES = true;
+            ENABLE_BMD_MESH_BATCHING = true;
+            ENABLE_EFFECT_POOLING = true;
             ENABLE_STATIC_CHUNK_CACHING = true;
             ENABLE_ITEM_MATERIAL_ANIMATION = false;
             ENABLE_DYNAMIC_BUFFER_POOL = true;

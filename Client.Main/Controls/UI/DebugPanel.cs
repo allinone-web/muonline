@@ -1,6 +1,7 @@
 ﻿using System.Text;
 using Client.Main.Controllers;
 using Client.Main.Content;
+using Client.Main.Helpers;
 using Client.Main.Models;
 using Client.Main.Objects;
 using Client.Main.Objects.Effects;
@@ -198,7 +199,8 @@ namespace Client.Main.Controls.UI
                     _sb.Clear()
                       .Append($"BMD: VB:{bmd.LastFrameVBUpdates} IB:{bmd.LastFrameIBUploads} ")
                       .Append($"Vtx:{bmd.LastFrameVerticesTransformed} Mesh:{bmd.LastFrameMeshesProcessed} ")
-                      .Append($"Cache:{bmd.LastFrameCacheHits}/{bmd.LastFrameCacheMisses}");
+                      .Append($"Cache:{bmd.LastFrameCacheHits}/{bmd.LastFrameCacheMisses} ")
+                      .Append($"Batch:{bmd.LastFrameMeshBatchBuilds}/{bmd.LastFrameMeshBatchMeshes}");
                     SetLabelTextIfChanged(_bmdMetricsLabel, _sb.ToString());
 
                     // Update batch sorting status
@@ -261,7 +263,11 @@ namespace Client.Main.Controls.UI
                       .Append("/")
                       .Append(walkableWorld.FrameMetrics.AnimationSkips)
                       .Append(" LQ:")
-                      .Append(walkableWorld.FrameMetrics.LowQualityObjects);
+                      .Append(walkableWorld.FrameMetrics.LowQualityObjects)
+                      .Append(" Pal:")
+                      .Append(ModelObject.LastFrameSharedAnimationPaletteHits)
+                      .Append("/")
+                      .Append(ModelObject.LastFrameSharedAnimationPaletteMisses);
                     SetLabelTextIfChanged(_modelDrawCallsLabel, _sb.ToString());
 
                     _sb.Clear()
@@ -278,7 +284,11 @@ namespace Client.Main.Controls.UI
                       .Append("/")
                       .Append(FieryAuraEffect.LastFrameDensityReduced)
                       .Append("/")
-                      .Append(FieryAuraEffect.LastFrameDensityCulled);
+                      .Append(FieryAuraEffect.LastFrameDensityCulled)
+                      .Append(" DmgPool:")
+                      .Append(DamageTextObject.PoolCount)
+                      .Append(" NP:")
+                      .Append(OverheadNameplateRenderer.LastFrameQueuedNameplates);
                     SetLabelTextIfChanged(_fieryAuraBatchLabel, _sb.ToString());
                 }
             }

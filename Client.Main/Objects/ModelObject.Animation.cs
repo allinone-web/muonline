@@ -7,6 +7,7 @@ using Client.Main.Objects.Wings;
 using Microsoft.Xna.Framework;
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
@@ -33,6 +34,48 @@ namespace Client.Main.Objects
             public override bool Equals(object obj) => obj is LocalAnimationState other && Equals(other);
             public override int GetHashCode() => HashCode.Combine(ActionIndex, Frame0, Frame1, InterpolationFactor);
         }
+
+        private readonly struct SharedAnimationPaletteKey : IEquatable<SharedAnimationPaletteKey>
+        {
+            public SharedAnimationPaletteKey(BMD model, int actionIndex, int frame0, int frame1, int interpolationBucket, int bodyHeightBucket)
+            {
+                ModelId = RuntimeHelpers.GetHashCode(model);
+                ActionIndex = actionIndex;
+                Frame0 = frame0;
+                Frame1 = frame1;
+                InterpolationBucket = interpolationBucket;
+                BodyHeightBucket = bodyHeightBucket;
+            }
+
+            private int ModelId { get; }
+            private int ActionIndex { get; }
+            private int Frame0 { get; }
+            private int Frame1 { get; }
+            private int InterpolationBucket { get; }
+            private int BodyHeightBucket { get; }
+
+            public bool Equals(SharedAnimationPaletteKey other) =>
+                ModelId == other.ModelId &&
+                ActionIndex == other.ActionIndex &&
+                Frame0 == other.Frame0 &&
+                Frame1 == other.Frame1 &&
+                InterpolationBucket == other.InterpolationBucket &&
+                BodyHeightBucket == other.BodyHeightBucket;
+
+            public override bool Equals(object obj) => obj is SharedAnimationPaletteKey other && Equals(other);
+
+            public override int GetHashCode() => HashCode.Combine(ModelId, ActionIndex, Frame0, Frame1, InterpolationBucket, BodyHeightBucket);
+        }
+
+        private sealed class SharedAnimationPaletteEntry
+        {
+            public Matrix[] Bones;
+            public int LastFrame;
+        }
+
+        private const int MaxSharedAnimationPaletteEntries = 512;
+        private const int SharedAnimationPaletteMaxIdleFrames = 180;
+        private static readonly Dictionary<SharedAnimationPaletteKey, SharedAnimationPaletteEntry> _sharedAnimationPalettes = new(256);
 
         private void Animation(GameTime gameTime)
         {
@@ -238,6 +281,8 @@ namespace Client.Main.Objects
                                    !LinkParentAnimation &&
                                    ParentBoneLink < 0 &&
                                    action.NumAnimationKeys > 1; // Only cache non-critical animated objects
+            bool canUseSharedPalette = CanUseSharedAnimationPalette(actionIdx);
+            SharedAnimationPaletteKey sharedPaletteKey = default;
 
             if (shouldCheckCache)
             {
@@ -257,6 +302,22 @@ namespace Client.Main.Objects
                     // Animation state hasn't changed - no need to recalculate
                     return;
                 }
+            }
+
+            if (canUseSharedPalette)
+            {
+                sharedPaletteKey = new SharedAnimationPaletteKey(
+                    Model,
+                    actionIdx,
+                    frame0,
+                    frame1,
+                    _animationSampleInterpolationBucket,
+                    (int)MathF.Round(BodyHeight));
+
+                if (TryApplySharedAnimationPalette(sharedPaletteKey, bones.Length, shouldCheckCache, currentAnimState))
+                    return;
+
+                RegisterSharedAnimationPaletteMiss();
             }
 
             // Initialize or resize bone transform array if needed
@@ -381,6 +442,9 @@ namespace Client.Main.Objects
                     InvalidateBuffers(BUFFER_FLAG_ANIMATION);
                 }
 
+                if (canUseSharedPalette)
+                    StoreSharedAnimationPalette(sharedPaletteKey, BoneTransform, bones.Length);
+
                 // Always update cache for objects that should use it
                 if (shouldCheckCache)
                 {
@@ -398,6 +462,123 @@ namespace Client.Main.Objects
                 // CRITICAL: Always return rented array to pool to prevent memory leaks
                 // clearArray: false because we don't need to zero out Matrix structs (performance)
                 _matrixArrayPool.Return(tempBoneTransforms, clearArray: false);
+            }
+        }
+
+        private bool CanUseSharedAnimationPalette(int actionIdx)
+        {
+            if (!Constants.ENABLE_SHARED_ANIMATION_PALETTES ||
+                this is not MonsterObject ||
+                Model == null ||
+                _isBlending ||
+                RequiresPerFrameAnimation ||
+                LinkParentAnimation ||
+                ParentBoneLink >= 0 ||
+                ContinuousAnimation ||
+                ItemDefinition != null)
+            {
+                return false;
+            }
+
+            if (actionIdx == (int)Client.Main.Models.MonsterActionType.Die)
+                return false;
+
+            if (this is WalkerObject walker && walker.IsOneShotPlaying)
+                return false;
+
+            return true;
+        }
+
+        private bool TryApplySharedAnimationPalette(
+            SharedAnimationPaletteKey key,
+            int boneCount,
+            bool shouldCheckCache,
+            LocalAnimationState currentAnimState)
+        {
+            if (!_sharedAnimationPalettes.TryGetValue(key, out var entry) ||
+                entry.Bones == null ||
+                entry.Bones.Length != boneCount)
+            {
+                return false;
+            }
+
+            if (BoneTransform == null || BoneTransform.Length != boneCount)
+                BoneTransform = new Matrix[boneCount];
+
+            bool changed = false;
+            for (int i = 0; i < boneCount; i++)
+            {
+                if (BoneTransform[i] != entry.Bones[i])
+                    changed = true;
+
+                BoneTransform[i] = entry.Bones[i];
+            }
+
+            entry.LastFrame = MuGame.FrameIndex;
+            if (changed)
+            {
+                _animationPoseVersion++;
+                InvalidateBuffers(BUFFER_FLAG_ANIMATION);
+            }
+
+            if (shouldCheckCache)
+            {
+                _lastAnimationState = currentAnimState;
+                _animationStateValid = true;
+            }
+
+            RegisterSharedAnimationPaletteHit();
+            return true;
+        }
+
+        private static void StoreSharedAnimationPalette(SharedAnimationPaletteKey key, Matrix[] bones, int boneCount)
+        {
+            if (bones == null || boneCount <= 0)
+                return;
+
+            if (!_sharedAnimationPalettes.TryGetValue(key, out var entry) ||
+                entry.Bones == null ||
+                entry.Bones.Length != boneCount)
+            {
+                entry = new SharedAnimationPaletteEntry
+                {
+                    Bones = new Matrix[boneCount]
+                };
+                _sharedAnimationPalettes[key] = entry;
+            }
+
+            Array.Copy(bones, entry.Bones, boneCount);
+            entry.LastFrame = MuGame.FrameIndex;
+        }
+
+        private static void PruneSharedAnimationPaletteCache(int frame)
+        {
+            if (_sharedAnimationPalettes.Count == 0 ||
+                (frame % 120 != 0 && _sharedAnimationPalettes.Count <= MaxSharedAnimationPaletteEntries))
+            {
+                return;
+            }
+
+            var staleKeys = new List<SharedAnimationPaletteKey>(64);
+            try
+            {
+                foreach (var pair in _sharedAnimationPalettes)
+                {
+                    if (_sharedAnimationPalettes.Count - staleKeys.Count <= MaxSharedAnimationPaletteEntries &&
+                        frame - pair.Value.LastFrame <= SharedAnimationPaletteMaxIdleFrames)
+                    {
+                        continue;
+                    }
+
+                    staleKeys.Add(pair.Key);
+                }
+
+                for (int i = 0; i < staleKeys.Count; i++)
+                    _sharedAnimationPalettes.Remove(staleKeys[i]);
+            }
+            finally
+            {
+                staleKeys.Clear();
             }
         }
 

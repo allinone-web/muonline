@@ -9,6 +9,7 @@ using Client.Main.Models;
 using Client.Main.Objects.Player;
 using Client.Main.Scenes;
 using Client.Main.Controls;
+using System.Threading;
 
 namespace Client.Main.Objects.Effects
 {
@@ -62,7 +63,10 @@ namespace Client.Main.Objects.Effects
         private const float GlowAlphaMul = 0.15f;  // was 0.30–0.60
         private const float HighlightAlphaMul = 0.075f; // was 0.15
 
+        private const int MaxPoolSize = 256;
         private static readonly System.Collections.Concurrent.ConcurrentBag<DamageTextObject> _pool = new();
+        private static int _poolCount;
+        public static int PoolCount => Volatile.Read(ref _poolCount);
 
         // ---------------------------------------------------------------------
 
@@ -73,8 +77,9 @@ namespace Client.Main.Objects.Effects
 
         public static DamageTextObject Rent(string text, ushort targetId, Color color)
         {
-            if (_pool.TryTake(out var obj))
+            if (Constants.ENABLE_EFFECT_POOLING && _pool.TryTake(out var obj))
             {
+                Interlocked.Decrement(ref _poolCount);
                 obj.Reset(text, targetId, color);
                 return obj;
             }
@@ -89,7 +94,15 @@ namespace Client.Main.Objects.Effects
             }
             finally
             {
-                _pool.Add(this);
+                if (Constants.ENABLE_EFFECT_POOLING &&
+                    Interlocked.Increment(ref _poolCount) <= MaxPoolSize)
+                {
+                    _pool.Add(this);
+                }
+                else
+                {
+                    Interlocked.Decrement(ref _poolCount);
+                }
             }
         }
 

@@ -25,6 +25,9 @@ namespace Client.Main.Configuration
         public bool EnableCrowdSpatialCulling { get; set; } = true;
         public bool EnableMonsterCrowdInstancing { get; set; } = true;
         public bool EnableAnimationThrottling { get; set; } = true;
+        public bool EnableSharedAnimationPalettes { get; set; } = true;
+        public bool EnableBmdMeshBatching { get; set; } = true;
+        public bool EnableEffectPooling { get; set; } = true;
         public int RenderMetricsLevel { get; set; } = 1;
     }
 

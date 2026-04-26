@@ -74,6 +74,8 @@ namespace Client.Main.Content
         public int FrameMeshesProcessed { get; private set; }
         public int FrameCacheHits { get; private set; }
         public int FrameCacheMisses { get; private set; }
+        public int FrameMeshBatchBuilds { get; private set; }
+        public int FrameMeshBatchMeshes { get; private set; }
 
         // Snapshot of previous frame (stable for UI)
         public int LastFrameVBUpdates { get; private set; }
@@ -82,6 +84,8 @@ namespace Client.Main.Content
         public int LastFrameMeshesProcessed { get; private set; }
         public int LastFrameCacheHits { get; private set; }
         public int LastFrameCacheMisses { get; private set; }
+        public int LastFrameMeshBatchBuilds { get; private set; }
+        public int LastFrameMeshBatchMeshes { get; private set; }
 
         private struct BufferCacheEntry
         {
@@ -186,6 +190,8 @@ namespace Client.Main.Content
             LastFrameMeshesProcessed = FrameMeshesProcessed;
             LastFrameCacheHits = FrameCacheHits;
             LastFrameCacheMisses = FrameCacheMisses;
+            LastFrameMeshBatchBuilds = FrameMeshBatchBuilds;
+            LastFrameMeshBatchMeshes = FrameMeshBatchMeshes;
 
             // Reset counters for the new frame
             FrameVBUpdates = 0;
@@ -194,6 +200,8 @@ namespace Client.Main.Content
             FrameMeshesProcessed = 0;
             FrameCacheHits = 0;
             FrameCacheMisses = 0;
+            FrameMeshBatchBuilds = 0;
+            FrameMeshBatchMeshes = 0;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -706,6 +714,165 @@ namespace Client.Main.Content
                 {
                     ArrayPool<int>.Shared.Return(triangleOffsets, clearArray: false);
                 }
+            }
+        }
+
+        public bool GetModelBatchBuffers(
+            BMD asset,
+            IReadOnlyList<int> meshIndices,
+            Color color,
+            Matrix[] boneMatrix,
+            ref DynamicVertexBuffer vertexBuffer,
+            ref DynamicIndexBuffer indexBuffer,
+            ref bool indexBufferIs16Bit)
+        {
+            if (asset?.Meshes == null || meshIndices == null || meshIndices.Count <= 1 || boneMatrix == null || _graphicsDevice == null)
+                return false;
+
+            int totalVertices = 0;
+            for (int i = 0; i < meshIndices.Count; i++)
+            {
+                int meshIndex = meshIndices[i];
+                if ((uint)meshIndex >= (uint)asset.Meshes.Length)
+                    return false;
+
+                var mesh = asset.Meshes[meshIndex];
+                if (mesh?.Triangles == null || mesh.Vertices == null || mesh.Normals == null || mesh.TexCoords == null)
+                    return false;
+
+                var tris = mesh.Triangles;
+                for (int t = 0; t < tris.Length; t++)
+                    totalVertices += tris[t].Polygon;
+            }
+
+            if (totalVertices <= 0)
+                return false;
+
+            bool prefer16Bit = totalVertices <= ushort.MaxValue;
+
+            if (vertexBuffer != null && vertexBuffer.IsDisposed)
+                vertexBuffer = null;
+
+            if (vertexBuffer == null || vertexBuffer.VertexCount < totalVertices)
+            {
+                DynamicBufferPool.ReturnVertexBuffer(vertexBuffer);
+                vertexBuffer = DynamicBufferPool.RentVertexBuffer(totalVertices)
+                    ?? new DynamicVertexBuffer(
+                        _graphicsDevice,
+                        VertexPositionColorNormalTexture.VertexDeclaration,
+                        totalVertices,
+                        BufferUsage.WriteOnly);
+            }
+
+            if (indexBuffer != null && indexBuffer.IsDisposed)
+                indexBuffer = null;
+
+            bool rebuildIndex = indexBuffer == null ||
+                                indexBuffer.IndexCount < totalVertices ||
+                                indexBufferIs16Bit != prefer16Bit;
+            if (rebuildIndex)
+            {
+                DynamicBufferPool.ReturnIndexBuffer(indexBuffer);
+                indexBuffer = DynamicBufferPool.RentIndexBuffer(totalVertices, prefer16Bit)
+                    ?? new DynamicIndexBuffer(
+                        _graphicsDevice,
+                        prefer16Bit ? IndexElementSize.SixteenBits : IndexElementSize.ThirtyTwoBits,
+                        totalVertices,
+                        BufferUsage.WriteOnly);
+                indexBufferIs16Bit = prefer16Bit;
+            }
+
+            var vertices = ArrayPool<VertexPositionColorNormalTexture>.Shared.Rent(totalVertices);
+            try
+            {
+                int v = 0;
+                int uniqueTransformed = 0;
+                for (int groupIndex = 0; groupIndex < meshIndices.Count; groupIndex++)
+                {
+                    var mesh = asset.Meshes[meshIndices[groupIndex]];
+                    var tris = mesh.Triangles;
+                    for (int triIndex = 0; triIndex < tris.Length; triIndex++)
+                    {
+                        var tri = tris[triIndex];
+                        for (int j = 0; j < tri.Polygon; j++)
+                        {
+                            int vi = tri.VertexIndex[j];
+                            int ni = tri.NormalIndex[j];
+                            int ti = tri.TexCoordIndex[j];
+
+                            var vert = mesh.Vertices[vi];
+                            Vector3 position = vert.Node >= 0 && vert.Node < boneMatrix.Length
+                                ? FastTransformPosition(in boneMatrix[vert.Node], in vert.Position)
+                                : new Vector3(vert.Position.X, vert.Position.Y, vert.Position.Z);
+
+                            Vector3 normal;
+                            if (TryResolveNormalBoneIndex(mesh, ni, out int normalBoneIndex) &&
+                                (uint)normalBoneIndex < (uint)boneMatrix.Length)
+                            {
+                                normal = FastTransformNormal(in boneMatrix[normalBoneIndex], in mesh.Normals[ni].Normal);
+                            }
+                            else
+                            {
+                                var srcNormal = mesh.Normals[ni].Normal;
+                                normal = new Vector3(srcNormal.X, srcNormal.Y, srcNormal.Z);
+                            }
+
+                            var uv = mesh.TexCoords[ti];
+                            vertices[v++] = new VertexPositionColorNormalTexture(
+                                position,
+                                color,
+                                normal,
+                                new Vector2(uv.U, uv.V));
+                            uniqueTransformed++;
+                        }
+                    }
+                }
+
+                vertexBuffer.SetData(vertices, 0, totalVertices, SetDataOptions.Discard);
+                FrameVBUpdates++;
+                FrameVerticesTransformed += uniqueTransformed;
+
+                if (rebuildIndex)
+                {
+                    if (prefer16Bit)
+                    {
+                        var indices16 = ArrayPool<ushort>.Shared.Rent(totalVertices);
+                        try
+                        {
+                            for (int i = 0; i < totalVertices; i++)
+                                indices16[i] = (ushort)i;
+                            indexBuffer.SetData(indices16, 0, totalVertices, SetDataOptions.Discard);
+                        }
+                        finally
+                        {
+                            ArrayPool<ushort>.Shared.Return(indices16, clearArray: true);
+                        }
+                    }
+                    else
+                    {
+                        var indices32 = ArrayPool<int>.Shared.Rent(totalVertices);
+                        try
+                        {
+                            for (int i = 0; i < totalVertices; i++)
+                                indices32[i] = i;
+                            indexBuffer.SetData(indices32, 0, totalVertices, SetDataOptions.Discard);
+                        }
+                        finally
+                        {
+                            ArrayPool<int>.Shared.Return(indices32, clearArray: true);
+                        }
+                    }
+
+                    FrameIBUploads++;
+                }
+
+                FrameMeshBatchBuilds++;
+                FrameMeshBatchMeshes += meshIndices.Count;
+                return true;
+            }
+            finally
+            {
+                ArrayPool<VertexPositionColorNormalTexture>.Shared.Return(vertices);
             }
         }
 

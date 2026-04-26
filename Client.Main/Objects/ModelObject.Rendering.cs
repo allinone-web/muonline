@@ -1,3 +1,4 @@
+using Client.Main.Content;
 using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Graphics;
@@ -65,8 +66,21 @@ namespace Client.Main.Objects
             }
         }
 
+        private sealed class FastMeshBatchBuffer
+        {
+            public DynamicVertexBuffer VertexBuffer;
+            public DynamicIndexBuffer IndexBuffer;
+            public bool IndexBufferIs16Bit;
+            public int PrimitiveCount;
+            public int MeshHash;
+            public Color Color;
+            public uint PoseVersion;
+            public bool IsValid;
+        }
+
         // Reuse for grouping to avoid allocations
         private readonly Dictionary<MeshStateKey, List<int>> _meshGroups = new Dictionary<MeshStateKey, List<int>>(32);
+        private readonly Dictionary<MeshStateKey, FastMeshBatchBuffer> _fastMeshBatchBuffers = new Dictionary<MeshStateKey, FastMeshBatchBuffer>(16);
         private readonly Stack<List<int>> _meshGroupPool = new Stack<List<int>>(32);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -506,6 +520,12 @@ namespace Client.Main.Objects
                     // to ensure proper DepthStencilState handling and BasicEffect usage for alpha blending
                     bool forcePerMeshTransparency = !Constants.ENABLE_DYNAMIC_LIGHTING_SHADER &&
                                                     stateKey.BlendState != BlendState.Opaque;
+                    if (!forcePerMeshTransparency &&
+                        TryDrawFastAlphaMeshBatch(stateKey, meshIndices, isAfterDraw))
+                    {
+                        continue;
+                    }
+
                     for (int n = 0; n < meshIndices.Count; n++)
                     {
                         int mi = meshIndices[n];
@@ -534,6 +554,135 @@ namespace Client.Main.Objects
                 // Drop state groups promptly to avoid retaining stale texture references between frames/passes.
                 ReleaseMeshGroups();
             }
+        }
+
+        private bool TryDrawFastAlphaMeshBatch(MeshStateKey stateKey, List<int> meshIndices, bool isAfterDraw)
+        {
+            if (!Constants.ENABLE_BMD_MESH_BATCHING ||
+                isAfterDraw ||
+                meshIndices == null ||
+                meshIndices.Count <= 1 ||
+                Model?.Meshes == null ||
+                GetVertexDeformer() != null ||
+                UsesMutableMeshData)
+            {
+                return false;
+            }
+
+            if (!CanBatchFastAlphaMeshes(stateKey, meshIndices))
+                return false;
+
+            Matrix[] bones = GetCachedBoneTransforms();
+            bones = GetRenderBoneTransforms(bones) ?? bones;
+            if (bones == null || bones.Length == 0)
+                return false;
+
+            if (!TryResolveOpaqueBodyColor(out Color bodyColor))
+                return false;
+
+            int meshHash = CalculateMeshListHash(meshIndices);
+            if (!_fastMeshBatchBuffers.TryGetValue(stateKey, out var batch))
+            {
+                batch = new FastMeshBatchBuffer();
+                _fastMeshBatchBuffers[stateKey] = batch;
+            }
+
+            if (!batch.IsValid ||
+                batch.MeshHash != meshHash ||
+                batch.PoseVersion != _animationPoseVersion ||
+                batch.Color.PackedValue != bodyColor.PackedValue ||
+                batch.VertexBuffer == null ||
+                batch.VertexBuffer.IsDisposed ||
+                batch.IndexBuffer == null ||
+                batch.IndexBuffer.IsDisposed)
+            {
+                if (!BMDLoader.Instance.GetModelBatchBuffers(
+                    Model,
+                    meshIndices,
+                    bodyColor,
+                    bones,
+                    ref batch.VertexBuffer,
+                    ref batch.IndexBuffer,
+                    ref batch.IndexBufferIs16Bit))
+                {
+                    batch.IsValid = false;
+                    return false;
+                }
+
+                batch.PrimitiveCount = batch.IndexBuffer.IndexCount / 3;
+                batch.MeshHash = meshHash;
+                batch.PoseVersion = _animationPoseVersion;
+                batch.Color = bodyColor;
+                batch.IsValid = true;
+            }
+
+            var gd = GraphicsDevice;
+            gd.SetVertexBuffer(batch.VertexBuffer);
+            gd.Indices = batch.IndexBuffer;
+            gd.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, batch.PrimitiveCount);
+            RegisterModelFallbackDrawCall();
+            return true;
+        }
+
+        private bool CanBatchFastAlphaMeshes(MeshStateKey stateKey, List<int> meshIndices)
+        {
+            for (int i = 0; i < meshIndices.Count; i++)
+            {
+                int meshIndex = meshIndices[i];
+                if ((uint)meshIndex >= (uint)Model.Meshes.Length ||
+                    IsHiddenMesh(meshIndex) ||
+                    IsStaticMapMeshQueuedForInstancing(meshIndex) ||
+                    IsBlendMesh(meshIndex) ||
+                    NeedsSpecialShaderForMesh(meshIndex) ||
+                    _meshIsRGBA != null && (uint)meshIndex < (uint)_meshIsRGBA.Length && _meshIsRGBA[meshIndex] ||
+                    _boneTextures == null ||
+                    (uint)meshIndex >= (uint)_boneTextures.Length ||
+                    !ReferenceEquals(_boneTextures[meshIndex], stateKey.Texture))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private bool TryResolveOpaqueBodyColor(out Color bodyColor)
+        {
+            Vector3 meshLight = Light;
+            Vector3 worldTranslation = WorldPosition.Translation;
+            if (LightEnabled && World?.Terrain != null)
+                meshLight = World.Terrain.EvaluateTerrainLight(worldTranslation.X, worldTranslation.Y) + Light;
+
+            float r = MathF.Min(Color.R * (meshLight.X * TotalAlpha), 255f);
+            float g = MathF.Min(Color.G * (meshLight.Y * TotalAlpha), 255f);
+            float b = MathF.Min(Color.B * (meshLight.Z * TotalAlpha), 255f);
+            bodyColor = new Color((byte)r, (byte)g, (byte)b);
+            return true;
+        }
+
+        private static int CalculateMeshListHash(List<int> meshIndices)
+        {
+            unchecked
+            {
+                int hash = 17;
+                for (int i = 0; i < meshIndices.Count; i++)
+                    hash = hash * 31 + meshIndices[i];
+                return hash;
+            }
+        }
+
+        private void ReleaseFastMeshBatchBuffers()
+        {
+            foreach (var batch in _fastMeshBatchBuffers.Values)
+            {
+                DynamicBufferPool.ReturnVertexBuffer(batch.VertexBuffer);
+                DynamicBufferPool.ReturnIndexBuffer(batch.IndexBuffer);
+                batch.VertexBuffer = null;
+                batch.IndexBuffer = null;
+                batch.IsValid = false;
+            }
+
+            _fastMeshBatchBuffers.Clear();
         }
 
         // Fast path draw for standard alpha-tested meshes (no special shaders)

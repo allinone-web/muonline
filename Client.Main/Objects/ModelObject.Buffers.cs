@@ -728,6 +728,8 @@ namespace Client.Main.Objects
                 }
             }
 
+            ReleaseFastMeshBatchBuffers();
+
             var meshCache = _meshBufferCache;
             if (meshCache != null)
             {

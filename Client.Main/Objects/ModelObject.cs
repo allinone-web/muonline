@@ -54,6 +54,8 @@ namespace Client.Main.Objects
         private static int _animationStrideSeed = 0;
         private static int _gpuSkinnedMeshesDrawnThisFrame = 0;
         private static int _modelFallbackDrawCallsThisFrame = 0;
+        private static int _sharedAnimationPaletteHitsThisFrame = 0;
+        private static int _sharedAnimationPaletteMissesThisFrame = 0;
 
         // Track per-pass preparation to avoid re-uploading shared effect parameters per mesh
         private static int _drawModelInvocationCounter = 0;
@@ -61,14 +63,21 @@ namespace Client.Main.Objects
         public static int LastFrameModelDrawCalls { get; private set; }
         public static int LastFrameModelFallbackDrawCalls { get; private set; }
         public static int LastFrameModelInstancedDrawCalls { get; private set; }
+        public static int LastFrameSharedAnimationPaletteHits { get; private set; }
+        public static int LastFrameSharedAnimationPaletteMisses { get; private set; }
         public static bool IsGpuSkinningBackendSupported => SupportsGpuDynamicSkinning;
 
         public static void BeginFrameGpuSkinningMetrics()
         {
             LastFrameGpuSkinnedMeshesDrawn = _gpuSkinnedMeshesDrawnThisFrame;
             LastFrameModelFallbackDrawCalls = _modelFallbackDrawCallsThisFrame;
+            LastFrameSharedAnimationPaletteHits = _sharedAnimationPaletteHitsThisFrame;
+            LastFrameSharedAnimationPaletteMisses = _sharedAnimationPaletteMissesThisFrame;
             _gpuSkinnedMeshesDrawnThisFrame = 0;
             _modelFallbackDrawCallsThisFrame = 0;
+            _sharedAnimationPaletteHitsThisFrame = 0;
+            _sharedAnimationPaletteMissesThisFrame = 0;
+            PruneSharedAnimationPaletteCache(MuGame.FrameIndex);
             BeginFrameStaticMapInstancingMetrics();
         }
 
@@ -80,6 +89,16 @@ namespace Client.Main.Objects
         private static void RegisterModelFallbackDrawCall()
         {
             _modelFallbackDrawCallsThisFrame++;
+        }
+
+        private static void RegisterSharedAnimationPaletteHit()
+        {
+            _sharedAnimationPaletteHitsThisFrame++;
+        }
+
+        private static void RegisterSharedAnimationPaletteMiss()
+        {
+            _sharedAnimationPaletteMissesThisFrame++;
         }
 
         public static ILoggerFactory AppLoggerFactory { get; private set; }
@@ -654,6 +673,7 @@ namespace Client.Main.Objects
             _lastLinkedParentPoseVersion = uint.MaxValue;
             _lastLinkedParentModel = null;
 
+            ReleaseFastMeshBatchBuffers();
             ReleaseMeshGroups();
             _meshGroupPool.Clear();
         }
