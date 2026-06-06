@@ -11,6 +11,7 @@ using Client.Main.Objects.Player;
 using Microsoft.Extensions.Logging;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
+using MUnique.OpenMU.Network.Packets;
 
 namespace Client.Main.Scenes
 {
@@ -734,7 +735,7 @@ namespace Client.Main.Scenes
             if (!TryConsumeSkillDelay(skill.SkillId))
                 return false;
 
-            // Check if player has enough mana and AG to use the skill
+            // Check player resources and stat requirements (mirrors SourceMain CSkillManager checks)
             var characterState = MuGame.Network?.GetCharacterState();
             if (characterState != null)
             {
@@ -754,6 +755,57 @@ namespace Client.Main.Scenes
                         skill.SkillId, agCost, characterState.CurrentAbility);
                     return false;
                 }
+
+                // Stat requirement check (SourceMain: DemendConditionCheckSkill)
+                var def = SkillDatabase.GetSkillDefinition(skill.SkillId);
+                if (def != null)
+                {
+                    if (def.RequiredLevel > 0 && characterState.Level < def.RequiredLevel)
+                    {
+                        _logger?.LogDebug("Level too low for skill {SkillId}. Required: {Required}, Current: {Current}",
+                            skill.SkillId, def.RequiredLevel, characterState.Level);
+                        return false;
+                    }
+
+                    if (def.RequiredStrength > 0 && characterState.TotalStrength < def.RequiredStrength)
+                    {
+                        _logger?.LogDebug("Not enough Strength for skill {SkillId}. Required: {Required}, Current: {Current}",
+                            skill.SkillId, def.RequiredStrength, characterState.TotalStrength);
+                        return false;
+                    }
+
+                    if (def.RequiredDexterity > 0 && characterState.TotalAgility < def.RequiredDexterity)
+                    {
+                        _logger?.LogDebug("Not enough Dexterity for skill {SkillId}. Required: {Required}, Current: {Current}",
+                            skill.SkillId, def.RequiredDexterity, characterState.TotalAgility);
+                        return false;
+                    }
+
+                    // SourceMain energy formula: 20 + (Energy * Level * 4 / 100)
+                    // For Knight class: 10 + (Energy * Level * 4 / 100)
+                    if (def.RequiredEnergy > 0)
+                    {
+                        var baseEnergy = (characterState.Class == CharacterClassNumber.DarkKnight ||
+                                          characterState.Class == CharacterClassNumber.BladeKnight ||
+                                          characterState.Class == CharacterClassNumber.BladeMaster) ? 10 : 20;
+                        int level = def.RequiredLevel > 0 ? def.RequiredLevel : 1;
+                        int requiredEnergy = baseEnergy + (def.RequiredEnergy * level * 4 / 100);
+
+                        if (characterState.TotalEnergy < requiredEnergy)
+                        {
+                            _logger?.LogDebug("Not enough Energy for skill {SkillId}. Required: {Required}, Current: {Current}",
+                                skill.SkillId, requiredEnergy, characterState.TotalEnergy);
+                            return false;
+                        }
+                    }
+
+                    if (def.RequiredLeadership > 0 && characterState.TotalLeadership < def.RequiredLeadership)
+                    {
+                        _logger?.LogDebug("Not enough Leadership for skill {SkillId}. Required: {Required}, Current: {Current}",
+                            skill.SkillId, def.RequiredLeadership, characterState.TotalLeadership);
+                        return false;
+                    }
+                }
             }
 
             bool isInSafeZone = false;
@@ -771,13 +823,14 @@ namespace Client.Main.Scenes
 
         private bool TryConsumeSkillDelay(ushort skillId)
         {
+            double now = GetNowMs();
+            if (!Core.Client.SkillCooldownTracker.TryConsume(skillId, now))
+                return false;
+
+            // Mirror to local tracking for backward compat
             int delayMs = SkillDatabase.GetSkillCooldown(skillId);
             if (delayMs <= 0)
                 return true;
-
-            double now = GetNowMs();
-            if (_nextSkillAllowedMs.TryGetValue(skillId, out double nextAllowed) && now < nextAllowed)
-                return false;
 
             _nextSkillAllowedMs[skillId] = now + delayMs;
             return true;

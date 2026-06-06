@@ -27,19 +27,22 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         private readonly NetworkManager _networkManager;
         private readonly TargetProtocolVersion _targetVersion;
         private readonly ElfBuffEffectManager _elfBuffEffectManager;
+        private readonly Core.Client.BuffManager _buffManager;
 
         // ───────────────────────── Constructors ─────────────────────────
         public CharacterDataHandler(
             ILoggerFactory loggerFactory,
             CharacterState characterState,
             NetworkManager networkManager,
-            TargetProtocolVersion targetVersion)
+            TargetProtocolVersion targetVersion,
+            Core.Client.BuffManager buffManager)
         {
             _logger = loggerFactory.CreateLogger<CharacterDataHandler>();
             _characterState = characterState;
             _networkManager = networkManager;
             _targetVersion = targetVersion;
             _elfBuffEffectManager = new ElfBuffEffectManager();
+            _buffManager = buffManager;
         }
 
         // ───────────────────────── Packet Handlers ─────────────────────────
@@ -74,10 +77,14 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                             }
                         });
                     }
+
+                    // Notify BuffManager for visual effects
+                    _buffManager.ProcessMagicEffectStatus(playerId, effectId, true);
                 }
                 else
                 {
                     _characterState.DeactivateBuff(effectId, playerId);
+                    _buffManager.ProcessMagicEffectStatus(playerId, effectId, false);
                 }
 
                 HandleElfBuffVisual(effectId, playerId, isActive);
@@ -108,6 +115,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 // This mapping may need to be adjusted based on actual game data
                 byte effectId = (byte)(skillId & 0xFF);
                 _characterState.DeactivateBuff(effectId, targetId);
+                _buffManager.ProcessMagicEffectStatus(targetId, effectId, false);
                 HandleElfBuffVisual(effectId, targetId, false);
 
                 return Task.CompletedTask;

@@ -802,13 +802,19 @@ namespace Client.Main.Controls
 
             // Draws
             DrawListWithSpriteBatchGrouping(_solidBehind, DepthStateDefault, time);
-            DrawListWithSpriteBatchGrouping(_transparentObjects, DepthStateDepthRead, time);
+
+            // Behind objects should contribute color, but must not keep terrain/grass/map
+            // depth that blocks later transparent sprites. Front solids rebuild depth below.
+            GraphicsDevice.Clear(ClearOptions.DepthBuffer, Color.Transparent, 1f, 0);
+            _currentDepthState = null;
+
             DrawListWithSpriteBatchGrouping(_solidInFront, DepthStateDefault, time);
+            DrawListWithSpriteBatchGrouping(_transparentObjects, DepthStateDepthRead, time);
 
             // Draw post-pass (DrawAfter)
             DrawAfterPass(_solidBehind, DepthStateDefault, time);
-            DrawAfterPass(_transparentObjects, DepthStateDepthRead, time);
             DrawAfterPass(_solidInFront, DepthStateDefault, time);
+            DrawAfterPass(_transparentObjects, DepthStateDepthRead, time);
 
             OverheadNameplateRenderer.FlushQueuedNameplates(GraphicsManager.Instance.Sprite);
             LogRenderMetricsIfEnabled();
@@ -934,12 +940,12 @@ namespace Client.Main.Controls
                     }
                     // Elf buff orb is rendered in solid-in-front pass for proper owner ordering,
                     // but as additive sprite it must not write depth (quad-shaped occlusion artifacts).
-                    var batchDepth =
-                        obj is WaterMistParticleSystem ||
-                        obj is ElfBuffOrbTrail ||
-                        obj is ElfBuffOrbitingLight
-                            ? DepthStencilState.DepthRead
-                            : depthState;
+                var batchDepth =
+                    obj is WaterMistParticleSystem ||
+                    obj is ElfBuffOrbTrail ||
+                    obj is ElfBuffOrbitingLight
+                        ? DepthStencilState.DepthRead
+                        : depthState;
 
                     if (scope == null ||
                         !ReferenceEquals(blend, currentBlend) ||

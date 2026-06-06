@@ -3,8 +3,8 @@
 - Apply `karpathy-guidelines` first for all code edits: small, surgical, verified.
 - Use context-mode for exploration and analysis: `ctx_batch_execute`, `ctx_search`, `ctx_execute`; avoid raw large output.
 - Headroom is configured as the repo MCP in `.codex/config.toml`; provider settings stay in `/root/.codex/config.toml`.
-- Caveman is available as project skills under `.agents/skills`; keep responses short when active.
-- For any MonoGame/client/rendering/performance work, MUST use `.agents/skills/monogame/SKILL.md` plus relevant MuOnline skills.
+- Caveman mode active via Claude Code plugin; or is available as project skills under `.agents/skills`; keep responses short when active.
+- For any MonoGame/client/rendering/performance work, MUST use `.codex/skills/monogame/SKILL.md` or `.agents/skills/monogame/SKILL.md` plus relevant MuOnline skills.
 - Verify changes with the narrowest useful check:
   `dotnet build ./MuWinGL/MuWinGL.csproj -c Debug -p:MonoGameFramework=MonoGame.Framework.DesktopGL --nologo`
 
