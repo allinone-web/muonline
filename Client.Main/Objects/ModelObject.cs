@@ -127,9 +127,6 @@ namespace Client.Main.Objects
         private bool _sortTextureHintDirty = true;
 
         private bool[] _meshIsRGBA;
-        // Static (load-time) flag: true if Model.Meshes[i].BlendingMode is set to a non-"Opaque" value.
-        // Cached to avoid the string compare in the per-frame IsMeshTwoSided hot path.
-        private bool[] _meshHasNonOpaqueBlend;
         private bool[] _meshHiddenByScript;
         private bool[] _meshBlendByScript;
         private string[] _meshTexturePath;
@@ -417,7 +414,6 @@ namespace Client.Main.Objects
             UpdateWorldPosition();
 
             _meshIsRGBA = new bool[meshCount];
-            _meshHasNonOpaqueBlend = new bool[meshCount];
             _meshHiddenByScript = new bool[meshCount];
             _meshBlendByScript = new bool[meshCount];
             _meshTexturePath = new string[meshCount];
@@ -455,8 +451,6 @@ namespace Client.Main.Objects
                 _dataTextures[meshIndex] = TextureLoader.Instance.Get(texturePath);
 
                 _meshIsRGBA[meshIndex] = _dataTextures[meshIndex]?.Components == 4;
-                var meshConf = Model.Meshes[meshIndex];
-                _meshHasNonOpaqueBlend[meshIndex] = meshConf.BlendingMode != null && meshConf.BlendingMode != "Opaque";
                 _meshHiddenByScript[meshIndex] = _scriptTextures[meshIndex]?.HiddenMesh ?? false;
                 _meshBlendByScript[meshIndex] = _scriptTextures[meshIndex]?.Bright ?? false;
             }
@@ -654,7 +648,6 @@ namespace Client.Main.Objects
             _scriptTextures = null;
             _dataTextures = null;
             _meshIsRGBA = null;
-            _meshHasNonOpaqueBlend = null;
             _meshHiddenByScript = null;
             _meshBlendByScript = null;
             _meshTexturePath = null;

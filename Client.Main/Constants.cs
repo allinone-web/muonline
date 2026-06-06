@@ -68,9 +68,6 @@ namespace Client.Main
         public static bool ENABLE_TERRAIN_GPU_LIGHTING;
         public static bool OPTIMIZE_FOR_INTEGRATED_GPU;
         public static bool DEBUG_LIGHTING_AREAS;
-        // Diagnostic: forces every cached rasterizer state to CullMode.None. Use to identify
-        // meshes incorrectly tagged single-sided (which would appear hollow when culling is on).
-        public static bool DEBUG_FORCE_CULL_NONE;
         public static bool ENABLE_ITEM_MATERIAL_SHADER;
         public static bool ENABLE_MONSTER_MATERIAL_SHADER;
         public static bool ENABLE_WEAPON_TRAIL;
@@ -238,7 +235,6 @@ namespace Client.Main
             ENABLE_TERRAIN_GPU_LIGHTING = true;
             OPTIMIZE_FOR_INTEGRATED_GPU = false;
             DEBUG_LIGHTING_AREAS = false;
-            DEBUG_FORCE_CULL_NONE = false;
             ENABLE_ITEM_MATERIAL_SHADER = true;
             ENABLE_MONSTER_MATERIAL_SHADER = true;
             ENABLE_WEAPON_TRAIL = true;

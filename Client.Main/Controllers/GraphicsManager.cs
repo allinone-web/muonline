@@ -263,11 +263,8 @@ namespace Client.Main.Controllers
         /// </summary>
         public static RasterizerState GetCachedRasterizerState(float depthBias, CullMode cullMode, RasterizerState template = null)
         {
-            if (Constants.DEBUG_FORCE_CULL_NONE)
-                cullMode = CullMode.None;
-
             // Normalize depth bias to common values to improve cache hit rate
-            float normalizedBias = depthBias == 0f ? 0f :
+            float normalizedBias = depthBias == 0f ? 0f : 
                                  Math.Abs(depthBias) < 0.00001f ? -0.00002f : depthBias;
             
             var key = (normalizedBias, cullMode);

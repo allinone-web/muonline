@@ -104,7 +104,6 @@ namespace Client.Main.Objects
                     _scriptTextures?.Length != meshCount ||
                     _dataTextures?.Length != meshCount ||
                     _meshIsRGBA?.Length != meshCount ||
-                    _meshHasNonOpaqueBlend?.Length != meshCount ||
                     _meshHiddenByScript?.Length != meshCount ||
                     _meshBlendByScript?.Length != meshCount ||
                     _meshTexturePath?.Length != meshCount ||
@@ -122,23 +121,11 @@ namespace Client.Main.Objects
                     EnsureArraySize(ref _scriptTextures, meshCount);
                     EnsureArraySize(ref _dataTextures, meshCount);
                     EnsureArraySize(ref _meshIsRGBA, meshCount);
-                    EnsureArraySize(ref _meshHasNonOpaqueBlend, meshCount);
                     EnsureArraySize(ref _meshHiddenByScript, meshCount);
                     EnsureArraySize(ref _meshBlendByScript, meshCount);
                     EnsureArraySize(ref _meshTexturePath, meshCount);
                     EnsureArraySize(ref _blendMeshIndicesScratch, meshCount);
                     EnsureArraySize(ref _meshBufferCache, meshCount);
-
-                    var modelMeshes = Model?.Meshes;
-                    if (modelMeshes != null)
-                    {
-                        int blendCount = Math.Min(modelMeshes.Length, _meshHasNonOpaqueBlend.Length);
-                        for (int i = 0; i < blendCount; i++)
-                        {
-                            var bm = modelMeshes[i].BlendingMode;
-                            _meshHasNonOpaqueBlend[i] = bm != null && bm != "Opaque";
-                        }
-                    }
                 }
 
                 // Bone transforms are expensive to prepare. Delay until a mesh actually needs CPU skinning.
