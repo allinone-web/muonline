@@ -20,3 +20,15 @@
 - Network handlers can run off the render thread; scene/UI/world mutations should go through `MuGame.ScheduleOnMainThread`.
 - SpriteBatch state should be managed with `SpriteBatchScope` when nesting or restoring graphics state.
 - For visual/effect parity, verify against `SourceMain5.2` evidence before inventing MonoGame approximations.
+
+# Architecture Facts (updated 2026-06-06)
+
+- `ModelObject.Position` is Vector3 (world units). `WalkerObject.Location` is Vector2 (tile coords). Convert: `tile * TERRAIN_SCALE + TERRAIN_SCALE / 2f`.
+- `GameSceneSkillController` — handles all skill usage: right-click, area skills, teleport, Nova charging. Cooldowns tracked via `SkillCooldownTracker` static class.
+- `SkillDatabase` — static utility loading `skill.bmd`. Returns `SkillBMD` with mana cost, damage, range, requirements, delay, mastery type.
+- `BuffManager` — central buff state via `ProcessMagicEffectStatus(playerId, effectId, isActive)`. Fires `BuffStateChanged` event consumed by `BuffEffectController` for visual effects.
+- `BuffEffectController` — subscribes to BuffManager, applies Swell (scale ×1.25) via `WalkerObject.Scale`, aura colors for Damage/Defense/ManaShield/Poison/Ice.
+- `PacketRouter` — manually instantiates handlers with dependencies. BuffManager and PetManager created here; add new managers here and pass to relevant handlers.
+- `CharacterState.Class` is `CharacterClassNumber` enum (DarkKnight=16, DarkWizard=0, FairyElf=32, etc.). Knight classes: DarkKnight, BladeKnight, BladeMaster.
+- SourceMain energy formula for skills: `20 + (RequiredEnergy * Level * 4 / 100)`. Knight gets `10 + ...`. Summon Explosion/Requiem: `20 + (Energy * Level * 3 / 100)`.
+- Pet system: `PetObject` extends `ModelObject`, follows owner using `TilePosition` (Vector2 from WorldPosition). `PetManager` tracks per-owner via `_activePets` dict.
