@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using Client.Data.BMD;
 using Client.Main.Core.Utilities;
 using Microsoft.Extensions.Logging;
+using MUnique.OpenMU.Network.Packets;
 
 namespace Client.Main.Core.Client
 {
@@ -74,7 +75,7 @@ namespace Client.Main.Core.Client
                 return (false, $"Requires level {def.RequiredLevel}");
 
             // --- Stat requirements ---
-            var req = GetSkillRequirements(skillId);
+            var req = GetSkillRequirements(skillId, state.Class);
             if (req == null)
                 return (true, null); // no requirements = always usable
 
@@ -165,22 +166,13 @@ namespace Client.Main.Core.Client
         /// For Knight: 10 + (Energy * Level * 4 / 100).
         /// For Summon Explosion/Requiem: 20 + (Energy * Level * 3 / 100).
         /// </summary>
-        public SkillRequirements? GetSkillRequirements(int skillId)
+        public SkillRequirements? GetSkillRequirements(int skillId, CharacterClassNumber? characterClass = null)
         {
             var def = SkillDatabase.GetSkillDefinition(skillId);
             if (def == null) return null;
 
             // SourceMain energy formula
-            int energyCost = def.RequiredEnergy;
-            int baseEnergy = 20;
-            float energyMultiplier = 4f / 100f;
-            // Summon special case
-            if (def.SkillBrand == 257 || def.SkillBrand == 258) // Summon Explosion / Requiem
-                energyMultiplier = 3f / 100f;
-
-            int calculatedEnergy = energyCost > 0
-                ? baseEnergy + (int)(energyCost * (def.RequiredLevel > 0 ? def.RequiredLevel : 1) * energyMultiplier)
-                : 0;
+            int calculatedEnergy = CalculateRequiredEnergy(def, characterClass);
 
             // Knight class has lower energy requirements
             // We don't know class here, but the State passes TotalEnergy so it's just the threshold.
@@ -195,6 +187,23 @@ namespace Client.Main.Core.Client
                 RequiredLevel = def.RequiredLevel,
                 MasteryType = def.MasteryType,
             };
+        }
+
+        private static bool IsKnightClass(CharacterClassNumber? characterClass) =>
+            characterClass is CharacterClassNumber.DarkKnight
+                or CharacterClassNumber.BladeKnight
+                or CharacterClassNumber.BladeMaster;
+
+        public static int CalculateRequiredEnergy(SkillBMD def, CharacterClassNumber? characterClass = null)
+        {
+            if (def.RequiredEnergy <= 0)
+                return 0;
+
+            int baseEnergy = IsKnightClass(characterClass) ? 10 : 20;
+            int skillLevel = def.RequiredLevel > 0 ? def.RequiredLevel : 1;
+            int multiplier = def.SkillBrand is 257 or 258 ? 3 : 4;
+
+            return baseEnergy + (def.RequiredEnergy * skillLevel * multiplier / 100);
         }
 
         /// <summary>

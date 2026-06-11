@@ -132,9 +132,36 @@ namespace Client.Main.Controls.UI.Game.Inventory
             if (!Visible) return;
 
             // Close on ESC
-            var kb = Microsoft.Xna.Framework.Input.Keyboard.GetState();
-            if (kb.IsKeyDown(Microsoft.Xna.Framework.Input.Keys.Escape))
+            var kb = MuGame.Instance.Keyboard;
+            var prev = MuGame.Instance.PrevKeyboard;
+            if (kb.IsKeyDown(Microsoft.Xna.Framework.Input.Keys.Escape) && prev.IsKeyUp(Microsoft.Xna.Framework.Input.Keys.Escape))
                 CloseShop();
+
+            bool leftJustPressed = MuGame.Instance.UiMouseState.LeftButton == Microsoft.Xna.Framework.Input.ButtonState.Pressed &&
+                                   MuGame.Instance.PrevMouseState.LeftButton == Microsoft.Xna.Framework.Input.ButtonState.Released;
+            if (!leftJustPressed)
+                return;
+
+            Point mousePos = MuGame.Instance.UiMouseState.Position;
+            Rectangle rect = DisplayRectangle;
+            int gridX = rect.X + 12;
+            int gridY = rect.Y + TitleHeight;
+            for (int i = 0; i < _items.Count; i++)
+            {
+                int col = i % GridCols;
+                int row = i / GridCols;
+                var itemRect = new Rectangle(
+                    gridX + col * ItemSlotSize,
+                    gridY + row * ItemSlotSize,
+                    ItemSlotSize - 2,
+                    ItemSlotSize - 2);
+
+                if (itemRect.Contains(mousePos))
+                {
+                    BuyRequested?.Invoke(_ownerId, _ownerName, _items[i].Slot);
+                    return;
+                }
+            }
         }
 
         private class ShopItemEntry

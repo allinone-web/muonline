@@ -19,7 +19,6 @@ namespace Client.Main.Controls.UI.Game.Skills
     public class MasterSkillTreeControl : UIControl
     {
         private SpriteFont? _font;
-        private int _selectedTreeIndex;
         private readonly List<MasterSkillNode> _nodes = new();
 
         private const int NodeSize = 52;
@@ -112,8 +111,25 @@ namespace Client.Main.Controls.UI.Game.Skills
         {
             base.Update(gameTime);
             if (!Visible) return;
-            if (Microsoft.Xna.Framework.Input.Keyboard.GetState().IsKeyDown(Microsoft.Xna.Framework.Input.Keys.Escape))
+            if (MuGame.Instance.Keyboard.IsKeyDown(Microsoft.Xna.Framework.Input.Keys.Escape) &&
+                MuGame.Instance.PrevKeyboard.IsKeyUp(Microsoft.Xna.Framework.Input.Keys.Escape))
                 Visible = false;
+
+            bool leftJustPressed = MuGame.Instance.UiMouseState.LeftButton == Microsoft.Xna.Framework.Input.ButtonState.Pressed &&
+                                   MuGame.Instance.PrevMouseState.LeftButton == Microsoft.Xna.Framework.Input.ButtonState.Released;
+            if (!leftJustPressed)
+                return;
+
+            Point mousePos = MuGame.Instance.UiMouseState.Position;
+            Rectangle rect = DisplayRectangle;
+            foreach (var node in _nodes)
+            {
+                if (GetNodeRect(rect, node).Contains(mousePos))
+                {
+                    SkillNodeClicked?.Invoke(node.SkillId);
+                    return;
+                }
+            }
         }
 
         private class MasterSkillNode

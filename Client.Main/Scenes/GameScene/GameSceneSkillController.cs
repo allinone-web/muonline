@@ -781,15 +781,9 @@ namespace Client.Main.Scenes
                         return false;
                     }
 
-                    // SourceMain energy formula: 20 + (Energy * Level * 4 / 100)
-                    // For Knight class: 10 + (Energy * Level * 4 / 100)
                     if (def.RequiredEnergy > 0)
                     {
-                        var baseEnergy = (characterState.Class == CharacterClassNumber.DarkKnight ||
-                                          characterState.Class == CharacterClassNumber.BladeKnight ||
-                                          characterState.Class == CharacterClassNumber.BladeMaster) ? 10 : 20;
-                        int level = def.RequiredLevel > 0 ? def.RequiredLevel : 1;
-                        int requiredEnergy = baseEnergy + (def.RequiredEnergy * level * 4 / 100);
+                        int requiredEnergy = Core.Client.SkillManager.CalculateRequiredEnergy(def, characterState.Class);
 
                         if (characterState.TotalEnergy < requiredEnergy)
                         {

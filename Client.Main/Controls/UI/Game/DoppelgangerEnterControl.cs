@@ -15,8 +15,6 @@ namespace Client.Main.Controls.UI.Game
     public class DoppelgangerEnterControl : UIControl
     {
         private SpriteFont? _font;
-        private bool _enterClicked;
-
         public event Action? EnterRequested;
         public event Action? CloseRequested;
 
@@ -80,8 +78,11 @@ namespace Client.Main.Controls.UI.Game
         {
             base.Update(gameTime);
             if (!Visible) return;
-            var kb = Microsoft.Xna.Framework.Input.Keyboard.GetState();
-            if (kb.IsKeyDown(Microsoft.Xna.Framework.Input.Keys.Escape))
+            var kb = MuGame.Instance.Keyboard;
+            var prev = MuGame.Instance.PrevKeyboard;
+            if (kb.IsKeyDown(Microsoft.Xna.Framework.Input.Keys.Enter) && prev.IsKeyUp(Microsoft.Xna.Framework.Input.Keys.Enter))
+                EnterRequested?.Invoke();
+            if (kb.IsKeyDown(Microsoft.Xna.Framework.Input.Keys.Escape) && prev.IsKeyUp(Microsoft.Xna.Framework.Input.Keys.Escape))
                 CloseRequested?.Invoke();
         }
     }

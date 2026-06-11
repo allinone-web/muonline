@@ -72,7 +72,11 @@ namespace Client.Main.Controls.UI.Game
         {
             base.Update(gameTime);
             if (!Visible) return;
-            if (Microsoft.Xna.Framework.Input.Keyboard.GetState().IsKeyDown(Microsoft.Xna.Framework.Input.Keys.Escape))
+            var kb = MuGame.Instance.Keyboard;
+            var prev = MuGame.Instance.PrevKeyboard;
+            if (kb.IsKeyDown(Microsoft.Xna.Framework.Input.Keys.Enter) && prev.IsKeyUp(Microsoft.Xna.Framework.Input.Keys.Enter))
+                EnterRequested?.Invoke();
+            if (kb.IsKeyDown(Microsoft.Xna.Framework.Input.Keys.Escape) && prev.IsKeyUp(Microsoft.Xna.Framework.Input.Keys.Escape))
                 CloseRequested?.Invoke();
         }
     }
