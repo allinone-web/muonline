@@ -126,12 +126,13 @@ namespace Client.Main.Controls.UI.Game.Buffs
             if (spriteBatch == null || pixel == null || font == null)
                 return;
 
-            string name = BuffManager.GetBuffName((BuffEffectId)_buff.EffectId);
-            var elapsed = DateTime.UtcNow - _buff.ActivatedAt;
-            string timeText = elapsed.TotalSeconds < 60
-                ? $"{(int)elapsed.TotalSeconds}s ago"
-                : $"{(int)elapsed.TotalMinutes}m ago";
-            string tooltip = $"{name}\n{timeText}";
+            string name = string.IsNullOrEmpty(_buff.Name)
+                ? BuffManager.GetBuffName((BuffEffectId)_buff.EffectId)
+                : _buff.Name;
+            string timeText = FormatBuffTime(_buff);
+            string tooltip = string.IsNullOrWhiteSpace(_buff.ValueText)
+                ? $"{name}\n{timeText}"
+                : $"{name}\n{_buff.ValueText}\n{timeText}";
 
             float scale = 0.52f;
             Vector2 textSize = font.MeasureString(tooltip) * scale;
@@ -198,6 +199,23 @@ namespace Client.Main.Controls.UI.Game.Buffs
         /// Draws a thin colored bar at the bottom of the slot showing buff age.
         /// Full = just applied, shrinking = aging.
         /// </summary>
+        private static string FormatBuffTime(ActiveBuffState buff)
+        {
+            var remaining = buff.GetRemainingTime(DateTime.UtcNow);
+            if (remaining.HasValue)
+            {
+                var value = remaining.Value;
+                return value.TotalSeconds < 60
+                    ? $"{Math.Ceiling(value.TotalSeconds)}s remaining"
+                    : $"{Math.Ceiling(value.TotalMinutes)}m remaining";
+            }
+
+            var elapsed = DateTime.UtcNow - buff.ActivatedAt;
+            return elapsed.TotalSeconds < 60
+                ? $"{(int)elapsed.TotalSeconds}s active"
+                : $"{(int)elapsed.TotalMinutes}m active";
+        }
+
         private void DrawTimeBar(SpriteBatch spriteBatch)
         {
             var pixel = GraphicsManager.Instance.Pixel;
@@ -222,8 +240,14 @@ namespace Client.Main.Controls.UI.Game.Buffs
             };
 
             spriteBatch.Draw(pixel, barRect, ModernHudTheme.BorderOuter * Alpha);
+            float ratio = 1f;
+            var remaining = _buff.GetRemainingTime(DateTime.UtcNow);
+            if (remaining.HasValue && _buff.Duration.HasValue && _buff.Duration.Value.TotalSeconds > 0)
+                ratio = MathHelper.Clamp((float)(remaining.Value.TotalSeconds / _buff.Duration.Value.TotalSeconds), 0f, 1f);
+
+            int innerWidth = Math.Max(1, (int)MathF.Round((barRect.Width - 2) * ratio));
             var innerBar = new Rectangle(barRect.X + 1, barRect.Y + 1,
-                Math.Max(1, barRect.Width - 2), Math.Max(1, barRect.Height - 2));
+                innerWidth, Math.Max(1, barRect.Height - 2));
             spriteBatch.Draw(pixel, innerBar, barColor * Alpha);
         }
 

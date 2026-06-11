@@ -535,6 +535,8 @@ namespace Client.Main.Scenes
             var previousKeyboardState = MuGame.Instance.PrevKeyboard;
 
             base.Update(gameTime);
+            MuGame.Network?.UpdateBuffs();
+            MuGame.Network?.GetCharacterState()?.ExpireActiveBuffs();
             _hotkeys?.HandleGlobal(currentKeyboardState, previousKeyboardState);
 
             _notificationManager?.Update(gameTime);

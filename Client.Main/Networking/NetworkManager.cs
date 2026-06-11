@@ -70,6 +70,7 @@ namespace Client.Main.Networking
         public ClientConnectionState CurrentState => _currentState;
         public bool IsConnected => _connectionManager.IsConnected;
         public CharacterState GetCharacterState() => _characterState;
+        public void UpdateBuffs() => _packetRouter.UpdateBuffs();
         public Task SendClientReadyAfterMapChangeAsync()
             => _characterService.SendClientReadyAfterMapChangeAsync();
 

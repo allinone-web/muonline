@@ -51,6 +51,8 @@ namespace Client.Main.Networking.PacketHandling
         // ───────────────────────── Properties ─────────────────────────
         public TargetProtocolVersion TargetVersion { get; }
 
+        public void UpdateBuffs() => _buffManager.Update();
+
         // ───────────────────────── Constructors ─────────────────────────
         public PacketRouter(
             ILoggerFactory loggerFactory,

@@ -6,11 +6,10 @@ using Microsoft.Extensions.Logging;
 namespace Client.Main.Core.Client
 {
     /// <summary>
-    /// Buff effect identifiers matching SourceMain MagicEffect packet effect IDs.
+    /// Buff identifiers matching SourceMain MagicEffect packet IDs.
     /// </summary>
     public enum BuffEffectId : byte
     {
-        // Attack/Defense buffs
         GreaterDamage = 0,
         GreaterDefense = 1,
         ManaShield = 2,
@@ -19,28 +18,22 @@ namespace Client.Main.Core.Client
         CriticalDamage = 5,
         HealOverTime = 6,
 
-        // Debuffs
         Poison = 8,
         Ice = 9,
         Slow = 10,
         Weaken = 11,
 
-        // Status effects
         Invisible = 12,
         Invincible = 13,
         Berserk = 14,
         Reflection = 15,
         Transform = 16,
 
-        // Elf buffs
         ElfAttack = 20,
         ElfDefense = 21,
         ElfHeal = 22,
     }
 
-    /// <summary>
-    /// Event args for buff activation/deactivation on a specific player/monster.
-    /// </summary>
     public class BuffStateChangedEventArgs : EventArgs
     {
         public ushort PlayerId { get; init; }
@@ -48,18 +41,35 @@ namespace Client.Main.Core.Client
         public bool IsActive { get; init; }
     }
 
+    public sealed class BuffRuntimeState
+    {
+        public BuffEffectId EffectId { get; init; }
+        public ushort PlayerId { get; init; }
+        public bool IsActive { get; init; }
+        public DateTime ActivatedAt { get; init; }
+        public TimeSpan? Duration { get; init; }
+        public DateTime? ExpiresAt { get; init; }
+        public string Name { get; init; } = string.Empty;
+        public string? ValueText { get; init; }
+
+        public TimeSpan? GetRemainingTime(DateTime now)
+        {
+            if (!ExpiresAt.HasValue)
+                return null;
+
+            var remaining = ExpiresAt.Value - now;
+            return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+        }
+    }
+
     /// <summary>
-    /// Central buff manager — handles buff state and fires events for visual effects.
-    /// Integrates with CharacterDataHandler for MagicEffectStatus packets.
+    /// Central buff manager - handles active buff state and fires visual-effect events.
     /// </summary>
     public class BuffManager
     {
         private readonly ILogger<BuffManager> _logger;
-
-        /// <summary>Per-entity buff state: (PlayerId, EffectId) → IsActive.</summary>
         private readonly Dictionary<(ushort PlayerId, BuffEffectId EffectId), ActiveBuffState> _states = new();
 
-        /// <summary>Fired when any entity's buff state changes. Used by visual effect controllers.</summary>
         public event EventHandler<BuffStateChangedEventArgs>? BuffStateChanged;
 
         public BuffManager(ILoggerFactory loggerFactory)
@@ -67,118 +77,149 @@ namespace Client.Main.Core.Client
             _logger = loggerFactory.CreateLogger<BuffManager>();
         }
 
-        /// <summary>
-        /// Processes a MagicEffectStatus from the server.
-        /// </summary>
         public void ProcessMagicEffectStatus(ushort playerId, byte effectId, bool isActive)
         {
-            var key = (playerId, (BuffEffectId)effectId);
+            var typedEffectId = (BuffEffectId)effectId;
+            var key = (playerId, typedEffectId);
 
             if (isActive)
             {
-                if (!_states.TryGetValue(key, out var state))
+                bool wasActive = _states.TryGetValue(key, out var state) && state.IsActive;
+                var definition = BuffDefinitionRegistry.Get(typedEffectId);
+                var activatedAt = DateTime.UtcNow;
+
+                _states[key] = new ActiveBuffState
                 {
-                    state = new ActiveBuffState();
-                    _states[key] = state;
-                }
-                state.ActivatedAt = DateTime.UtcNow;
-                state.IsActive = true;
-                state.RawEffectId = effectId;
-                _logger?.LogDebug("Buff activated: Player={PlayerId}, Effect={EffectId}", (playerId & 0x7FFF), effectId);
-            }
-            else
-            {
-                if (_states.TryGetValue(key, out var state))
-                {
-                    state.IsActive = false;
-                }
-                _logger?.LogDebug("Buff deactivated: Player={PlayerId}, Effect={EffectId}", (playerId & 0x7FFF), effectId);
+                    IsActive = true,
+                    ActivatedAt = activatedAt,
+                    RawEffectId = effectId,
+                    Definition = definition,
+                    ExpiresAt = definition.Duration.HasValue ? activatedAt + definition.Duration.Value : null,
+                };
+
+                _logger.LogDebug("Buff activated: Player={PlayerId}, Effect={EffectId}", playerId & 0x7FFF, effectId);
+
+                if (!wasActive)
+                    RaiseBuffChanged(playerId, typedEffectId, isActive: true);
+
+                return;
             }
 
-            BuffStateChanged?.Invoke(this, new BuffStateChangedEventArgs
+            if (_states.TryGetValue(key, out var existing) && existing.IsActive)
             {
-                PlayerId = playerId,
-                EffectId = (BuffEffectId)effectId,
-                IsActive = isActive
-            });
+                existing.IsActive = false;
+                _logger.LogDebug("Buff deactivated: Player={PlayerId}, Effect={EffectId}", playerId & 0x7FFF, effectId);
+                RaiseBuffChanged(playerId, typedEffectId, isActive: false);
+            }
         }
 
-        /// <summary>
-        /// Checks if a player has a specific buff active.
-        /// </summary>
-        public bool HasBuff(ushort playerId, BuffEffectId effectId)
+        public void Update()
         {
-            return _states.TryGetValue((playerId, effectId), out var s) && s.IsActive;
+            if (_states.Count == 0)
+                return;
+
+            DateTime now = DateTime.UtcNow;
+            List<(ushort PlayerId, BuffEffectId EffectId)>? expired = null;
+
+            foreach (var kv in _states)
+            {
+                var state = kv.Value;
+                if (!state.IsActive || !state.ExpiresAt.HasValue || state.ExpiresAt.Value > now)
+                    continue;
+
+                expired ??= new List<(ushort PlayerId, BuffEffectId EffectId)>();
+                expired.Add(kv.Key);
+            }
+
+            if (expired == null)
+                return;
+
+            foreach (var key in expired)
+            {
+                if (!_states.TryGetValue(key, out var state) || !state.IsActive)
+                    continue;
+
+                state.IsActive = false;
+                RaiseBuffChanged(key.PlayerId, key.EffectId, isActive: false);
+            }
         }
 
-        /// <summary>
-        /// Gets all active buffs for a player.
-        /// </summary>
+        public bool HasBuff(ushort playerId, BuffEffectId effectId) =>
+            _states.TryGetValue((playerId, effectId), out var state) && state.IsActive;
+
+        public BuffRuntimeState? GetBuffState(ushort playerId, BuffEffectId effectId)
+        {
+            if (!_states.TryGetValue((playerId, effectId), out var state) || !state.IsActive)
+                return null;
+
+            return state.ToRuntimeState(playerId, effectId);
+        }
+
+        public TimeSpan? GetRemainingTime(ushort playerId, BuffEffectId effectId) =>
+            GetBuffState(playerId, effectId)?.GetRemainingTime(DateTime.UtcNow);
+
         public IEnumerable<BuffEffectId> GetActiveBuffs(ushort playerId)
         {
             foreach (var kv in _states)
             {
                 if (kv.Key.PlayerId == playerId && kv.Value.IsActive)
-                    yield return kv.Key.Item2;
+                    yield return kv.Key.EffectId;
             }
         }
 
-        /// <summary>
-        /// Clears all buffs for a player (e.g., on death or disconnect).
-        /// </summary>
         public void ClearPlayerBuffs(ushort playerId)
         {
-            var toRemove = new List<(ushort, BuffEffectId)>();
+            List<BuffEffectId>? changed = null;
+
             foreach (var kv in _states)
             {
-                if (kv.Key.PlayerId == playerId)
-                    toRemove.Add(kv.Key);
+                if (kv.Key.PlayerId != playerId || !kv.Value.IsActive)
+                    continue;
+
+                kv.Value.IsActive = false;
+                changed ??= new List<BuffEffectId>();
+                changed.Add(kv.Key.EffectId);
             }
 
-            foreach (var key in toRemove)
-            {
-                _states[key].IsActive = false;
-                BuffStateChanged?.Invoke(this, new BuffStateChangedEventArgs
-                {
-                    PlayerId = playerId,
-                    EffectId = key.Item2,
-                    IsActive = false
-                });
-            }
+            if (changed == null)
+                return;
+
+            foreach (var effectId in changed)
+                RaiseBuffChanged(playerId, effectId, isActive: false);
         }
 
-        /// <summary>
-        /// Maps buff effect ID to descriptive name.
-        /// </summary>
-        public static string GetBuffName(BuffEffectId effectId) => effectId switch
-        {
-            BuffEffectId.GreaterDamage => "Greater Damage",
-            BuffEffectId.GreaterDefense => "Greater Defense",
-            BuffEffectId.ManaShield => "Mana Shield",
-            BuffEffectId.ElfSoldier => "Elf Guardian",
-            BuffEffectId.SwellLife => "Swell Life",
-            BuffEffectId.CriticalDamage => "Critical Damage",
-            BuffEffectId.HealOverTime => "Heal",
-            BuffEffectId.Poison => "Poison",
-            BuffEffectId.Ice => "Ice",
-            BuffEffectId.Slow => "Slow",
-            BuffEffectId.Weaken => "Weaken",
-            BuffEffectId.Invisible => "Invisible",
-            BuffEffectId.Invincible => "Invincible",
-            BuffEffectId.Berserk => "Berserk",
-            BuffEffectId.Reflection => "Reflection",
-            BuffEffectId.Transform => "Transform",
-            BuffEffectId.ElfAttack => "Elf Attack Buff",
-            BuffEffectId.ElfDefense => "Elf Defense Buff",
-            BuffEffectId.ElfHeal => "Elf Heal",
-            _ => $"Unknown Buff ({effectId})"
-        };
+        public static string GetBuffName(BuffEffectId effectId) => BuffDefinitionRegistry.GetName(effectId);
 
-        private class ActiveBuffState
+        private void RaiseBuffChanged(ushort playerId, BuffEffectId effectId, bool isActive)
+        {
+            BuffStateChanged?.Invoke(this, new BuffStateChangedEventArgs
+            {
+                PlayerId = playerId,
+                EffectId = effectId,
+                IsActive = isActive,
+            });
+        }
+
+        private sealed class ActiveBuffState
         {
             public bool IsActive;
             public DateTime ActivatedAt;
             public byte RawEffectId;
+            public BuffDefinition Definition = BuffDefinitionRegistry.Get(0);
+            public DateTime? ExpiresAt;
+
+            public BuffRuntimeState ToRuntimeState(ushort playerId, BuffEffectId effectId) =>
+                new()
+                {
+                    EffectId = effectId,
+                    PlayerId = playerId,
+                    IsActive = IsActive,
+                    ActivatedAt = ActivatedAt,
+                    Duration = Definition.Duration,
+                    ExpiresAt = ExpiresAt,
+                    Name = Definition.Name,
+                    ValueText = Definition.ValueText,
+                };
         }
     }
 }
