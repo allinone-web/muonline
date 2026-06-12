@@ -59,12 +59,14 @@ namespace Client.Main.Objects
         private Color _labelColor;
         private readonly List<ModelObject> _coinModels = new List<ModelObject>(); // Multiple coins for money piles
         private DroppedItemShineEffect _shineEffect;
-        private bool _renderVisualsThisFrame = true;
-        private uint _cachedFrameId;
-        private int _cachedTileKey;
+private bool _renderVisualsThisFrame = true;
+private uint _cachedFrameId;
+private int _cachedTileKey;
+private int _loadGeneration;
 
         // ─────────────────── public helpers
-        public ushort RawId => _scope?.RawId ?? 0;
+public ushort RawId => _scope?.RawId ?? 0;
+internal int LoadGeneration => _loadGeneration;
         public new string DisplayName { get; private set; }
 
         // Pool
@@ -84,11 +86,12 @@ namespace Client.Main.Objects
             return new DroppedItemObject(scope, mainPlayerId, charSvc, logger);
         }
 
-        public void Recycle()
-        {
-            try
-            {
-                Dispose();
+public void Recycle()
+{
+_loadGeneration++;
+try
+{
+Dispose();
             }
             finally
             {
@@ -112,8 +115,9 @@ namespace Client.Main.Objects
             CharacterService charSvc,
             ILogger<DroppedItemObject> logger)
         {
-            _scope = scope ?? throw new ArgumentNullException(nameof(scope));
-            _mainPlayerId = mainPlayerId;
+_scope = scope ?? throw new ArgumentNullException(nameof(scope));
+_loadGeneration++;
+_mainPlayerId = mainPlayerId;
             _charSvc = charSvc ?? throw new ArgumentNullException(nameof(charSvc));
             _log = logger ?? ModelObject.AppLoggerFactory?.CreateLogger<DroppedItemObject>() ?? NullLogger<DroppedItemObject>.Instance;
 
@@ -157,13 +161,17 @@ namespace Client.Main.Objects
         }
 
         // =====================================================================
-        public override async Task Load()
-        {
-            await base.Load();
+public override async Task Load()
+{
+var loadGeneration = _loadGeneration;
+await base.Load();
+var world = World;
+if (Status != GameControlStatus.Ready || !CanContinueLoad(world, loadGeneration))
+return;
 
             if (World != null)
             {
-                float z = World.Terrain.RequestTerrainHeight(Position.X, Position.Y);
+float z = world.Terrain.RequestTerrainHeight(Position.X, Position.Y);
                 Position = new(Position.X, Position.Y, z + HeightOffset);
             }
 
@@ -174,7 +182,9 @@ namespace Client.Main.Objects
             {
                 try
                 {
-                    var bmd = await BMDLoader.Instance.Prepare("Item\\Gold01.bmd");
+var bmd = await BMDLoader.Instance.Prepare("Item\\Gold01.bmd");
+if (!CanContinueLoad(world, loadGeneration))
+return;
                     if (bmd == null)
                     {
                         _log.LogWarning("Gold coin BMD model is null after loading");
@@ -215,9 +225,9 @@ namespace Client.Main.Objects
                         model.Scale = 0.8f;
                         model.LightEnabled = true;
 
-                        Children.Add(model);
-                        await model.Load();
-                        _coinModels.Add(model);
+if (!await TryLoadChildModel(model, world, loadGeneration))
+return;
+_coinModels.Add(model);
                     }
 
                     RecenterCoinsAndFitBoundingBox();
@@ -238,8 +248,10 @@ namespace Client.Main.Objects
                 {
                     try
                     {
-                        var bmd = await BMDLoader.Instance.Prepare(_definition.TexturePath);
-                        var model = new DroppedItemModel();
+var bmd = await BMDLoader.Instance.Prepare(_definition.TexturePath);
+if (!CanContinueLoad(world, loadGeneration))
+return;
+var model = new DroppedItemModel();
                         model.Model = bmd;
                         model.ItemDefinition = _definition;
 
@@ -256,9 +268,9 @@ namespace Client.Main.Objects
                         model.Scale = 0.6f;
                         model.LightEnabled = true;
 
-                        Children.Add(model);
-                        await model.Load();
-                        _modelObj = model;
+if (!await TryLoadChildModel(model, world, loadGeneration))
+return;
+_modelObj = model;
 
                         // Position model so its bottom touches the ground
                         PositionModelOnGround(model);
@@ -277,6 +289,29 @@ namespace Client.Main.Objects
         }
 
         // =====================================================================
+        private bool CanContinueLoad(Client.Main.Controls.WorldControl expectedWorld, int loadGeneration)
+        {
+            return expectedWorld != null
+                && ReferenceEquals(World, expectedWorld)
+                && _loadGeneration == loadGeneration
+                && Status != GameControlStatus.Disposed;
+        }
+
+        private async Task<bool> TryLoadChildModel(ModelObject model, Client.Main.Controls.WorldControl expectedWorld, int loadGeneration)
+        {
+            if (model == null || !CanContinueLoad(expectedWorld, loadGeneration))
+                return false;
+
+            Children.Add(model);
+            model.World = expectedWorld;
+
+            if (!CanContinueLoad(expectedWorld, loadGeneration))
+                return false;
+
+            await model.Load();
+            return model.Status == GameControlStatus.Ready && CanContinueLoad(expectedWorld, loadGeneration);
+        }
+
         /// <summary>
         /// Positions the model so its lowest vertex touches the ground (parent's Z=0 in local space).
         /// Calculates bounding box directly from model geometry.

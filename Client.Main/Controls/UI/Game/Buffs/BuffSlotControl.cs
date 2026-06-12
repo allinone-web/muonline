@@ -6,6 +6,7 @@ using Client.Main.Controls.UI.Common;
 using Client.Main.Controls.UI.Game.Common;
 using Client.Main.Core.Client;
 using Client.Main.Controllers;
+using Client.Main.Helpers;
 using Client.Main.Models;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
@@ -145,6 +146,35 @@ namespace Client.Main.Controls.UI.Game.Buffs
             int y = Math.Clamp(mouse.Y + 12, 2, Math.Max(2, UiScaler.VirtualSize.Y - tooltipHeight - 2));
 
             var tooltipRect = new Rectangle(x, y, tooltipWidth, tooltipHeight);
+            if (SpriteBatchScope.BatchIsBegun)
+            {
+                DrawTooltip(spriteBatch, pixel, font, tooltipRect, tooltip, padding, scale);
+            }
+            else
+            {
+                using (new SpriteBatchScope(
+                    spriteBatch,
+                    SpriteSortMode.Deferred,
+                    BlendState.AlphaBlend,
+                    SamplerState.LinearClamp,
+                    DepthStencilState.None,
+                    RasterizerState.CullNone,
+                    transform: UiScaler.SpriteTransform))
+                {
+                    DrawTooltip(spriteBatch, pixel, font, tooltipRect, tooltip, padding, scale);
+                }
+            }
+        }
+
+        private static void DrawTooltip(
+            SpriteBatch spriteBatch,
+            Texture2D pixel,
+            SpriteFont font,
+            Rectangle tooltipRect,
+            string tooltip,
+            int padding,
+            float scale)
+        {
             spriteBatch.Draw(pixel, tooltipRect, ModernHudTheme.BorderOuter);
             var inner = new Rectangle(tooltipRect.X + 1, tooltipRect.Y + 1,
                 Math.Max(1, tooltipRect.Width - 2), Math.Max(1, tooltipRect.Height - 2));

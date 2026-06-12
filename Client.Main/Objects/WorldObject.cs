@@ -181,7 +181,11 @@ namespace Client.Main.Objects
             {
                 Status = GameControlStatus.Initializing;
 
-                if (World == null) throw new ApplicationException("World is not assigned to object");
+                if (World == null)
+                {
+                    Status = GameControlStatus.NonInitialized;
+                    return;
+                }
 
                 var tasks = new Task[Children.Count + 1];
 
@@ -193,6 +197,12 @@ namespace Client.Main.Objects
                     tasks[i + 1] = snapshot[i].Load();
 
                 await Task.WhenAll(tasks);
+
+                if (World == null)
+                {
+                    Status = GameControlStatus.NonInitialized;
+                    return;
+                }
 
                 RecalculateWorldPosition();
                 UpdateWorldBoundingBox();
@@ -216,8 +226,8 @@ namespace Client.Main.Objects
             if (Status == GameControlStatus.NonInitialized)
             {
                 // World objects are initialized by WorldControl's budgeted queue.
-                // Keep the legacy fallback for detached/child objects.
-                if (World == null || Parent != null)
+                // Do not load until World is assigned; Load() requires it.
+                if (World != null)
                     Load().ConfigureAwait(false);
 
                 return;

@@ -116,6 +116,7 @@ namespace Client.Main.Scenes
 
                     obj.World = w;
                     w.Objects.Add(obj);
+                    var loadGeneration = obj.LoadGeneration;
 
                     _activeItemIds.Add(s.Id);
 
@@ -123,7 +124,19 @@ namespace Client.Main.Scenes
                     {
                         try
                         {
+                            if (obj.World != w || obj.LoadGeneration != loadGeneration)
+                            {
+                                _activeItemIds.Remove(s.Id);
+                                return;
+                            }
+
                             await obj.Load();
+
+                            if (obj.World != w || obj.LoadGeneration != loadGeneration)
+                            {
+                                _activeItemIds.Remove(s.Id);
+                                return;
+                            }
                         }
                         catch (Exception ex)
                         {

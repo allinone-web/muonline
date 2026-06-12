@@ -132,6 +132,15 @@ namespace Client.Main.Controls
                 return WorldObjectDepthAsc.Instance.Compare(a, b);
             }
 
+            int depthCmp = CompareDepth(ka.Depth, kb.Depth);
+            if (depthCmp != 0) return depthCmp;
+
+            int idCmp = ka.NetworkId.CompareTo(kb.NetworkId);
+            if (idCmp != 0) return idCmp;
+
+            int ordinalCmp = ka.Ordinal.CompareTo(kb.Ordinal);
+            if (ordinalCmp != 0) return ordinalCmp;
+
             if (ka.IsModel && kb.IsModel)
             {
                 int texCmp = ka.TextureKey.CompareTo(kb.TextureKey);
@@ -143,15 +152,6 @@ namespace Client.Main.Controls
                 int modelCmp = ka.ModelKey.CompareTo(kb.ModelKey);
                 if (modelCmp != 0) return modelCmp;
             }
-
-            int depthCmp = CompareDepth(ka.Depth, kb.Depth);
-            if (depthCmp != 0) return depthCmp;
-
-            int idCmp = ka.NetworkId.CompareTo(kb.NetworkId);
-            if (idCmp != 0) return idCmp;
-
-            int ordinalCmp = ka.Ordinal.CompareTo(kb.Ordinal);
-            if (ordinalCmp != 0) return ordinalCmp;
 
             return ComparerHelper.CompareRefs(a, b);
         }
@@ -757,21 +757,13 @@ namespace Client.Main.Controls
                 if (!obj.Visible)
                     continue;
 
-                if (obj is WalkerObject)
-                {
-                    _solidInFront.Add(obj);
-                }
-                else if (obj.IsTransparent)
+                if (obj.IsTransparent)
                 {
                     _transparentObjects.Add(obj);
                 }
-                else if (obj.AffectedByTransparency)
-                {
-                    _solidBehind.Add(obj);
-                }
                 else
                 {
-                    _solidInFront.Add(obj);
+                    _solidBehind.Add(obj);
                 }
             }
 
@@ -800,15 +792,7 @@ namespace Client.Main.Controls
             }
 
 
-            // Draws
             DrawListWithSpriteBatchGrouping(_solidBehind, DepthStateDefault, time);
-
-            // Behind objects should contribute color, but must not keep terrain/grass/map
-            // depth that blocks later transparent sprites. Front solids rebuild depth below.
-            GraphicsDevice.Clear(ClearOptions.DepthBuffer, Color.Transparent, 1f, 0);
-            _currentDepthState = null;
-
-            DrawListWithSpriteBatchGrouping(_solidInFront, DepthStateDefault, time);
             DrawListWithSpriteBatchGrouping(_transparentObjects, DepthStateDepthRead, time);
 
             // Draw post-pass (DrawAfter)

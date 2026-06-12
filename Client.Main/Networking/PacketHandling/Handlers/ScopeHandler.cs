@@ -2335,13 +2335,26 @@ namespace Client.Main.Networking.PacketHandling.Handlers
 
                 // Add to world so World.Scene is available
                 world.Objects.Add(obj);
+                var loadGeneration = obj.LoadGeneration;
 
                 // Queue load to avoid long stalls on the main thread
                 bool enqueued = MuGame.TaskScheduler.QueueTask(async () =>
                 {
                     try
                     {
+                        if (obj.World != world || obj.LoadGeneration != loadGeneration)
+                        {
+                            tcs.TrySetResult(false);
+                            return;
+                        }
+
                         await obj.Load();
+
+                        if (obj.World != world || obj.LoadGeneration != loadGeneration)
+                        {
+                            tcs.TrySetResult(false);
+                            return;
+                        }
                     }
                     catch (Exception ex)
                     {
