@@ -86,7 +86,13 @@ namespace Client.Main.Objects
             if (action == null) return; // Skip animation if action is null
 
             int totalFrames = Math.Max(action.LockPositions ? action.NumAnimationKeys - 1 : action.NumAnimationKeys, 1);
-            float frameDelta = (float)gameTime.ElapsedGameTime.TotalSeconds;
+            float frameDelta;
+            double totalSeconds = gameTime.TotalGameTime.TotalSeconds;
+            if (_lastAnimationTotalSeconds > 0)
+                frameDelta = (float)(totalSeconds - _lastAnimationTotalSeconds);
+            else
+                frameDelta = (float)gameTime.ElapsedGameTime.TotalSeconds;
+            _lastAnimationTotalSeconds = totalSeconds;
             bool actionChanged = _priorActionIndex != currentActionIndex;
 
             // Detect death action for walkers to clamp on second-to-last key

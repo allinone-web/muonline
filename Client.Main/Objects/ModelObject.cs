@@ -200,6 +200,7 @@ namespace Client.Main.Objects
         #region Instance Fields - Cached State
 
         private float _animationStepAccumulatorSeconds = 0f;
+        private double _lastAnimationTotalSeconds; // TotalGameTime at last Animation() call — used to compute true elapsed when throttled
         private uint _animationPoseVersion = 0;
         private uint _lastLinkedParentPoseVersion = uint.MaxValue;
         private ModelObject _lastLinkedParentModel = null;

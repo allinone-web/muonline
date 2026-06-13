@@ -58,14 +58,17 @@ internal sealed class MainPlayerCameraController
 
         _previousScrollValue = mouse.ScrollWheelValue;
 
-        _isRotating = keyboard.IsKeyDown(Keys.LeftAlt) && mouse.RightButton == ButtonState.Pressed;
+        _isRotating = mouse.MiddleButton == ButtonState.Pressed;
         if (_isRotating)
         {
             int deltaX = mouse.X - prevMouse.X;
             int deltaY = mouse.Y - prevMouse.Y;
             _cameraYaw -= deltaX * Constants.ROTATION_SENSITIVITY;
-            _cameraPitch += deltaY * Constants.ROTATION_SENSITIVITY;
-            _cameraPitch = MathHelper.Clamp(_cameraPitch, -1.2f, -0.1f);
+            _cameraPitch = MathHelper.Clamp(
+                _cameraPitch - deltaY * Constants.ROTATION_SENSITIVITY,
+                Constants.MIN_PITCH,
+                Constants.MAX_PITCH);
+            _cameraYaw = MathHelper.WrapAngle(_cameraYaw);
         }
 
         if (_wasRotating && !_isRotating)

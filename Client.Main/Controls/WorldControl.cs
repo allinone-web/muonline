@@ -898,8 +898,6 @@ namespace Client.Main.Controls
                 if (obj == null)
                     continue;
 
-                obj.DepthState = depthState;
-
                 bool usesSpriteBatch =
                     obj is SpriteObject ||
                     obj is WaterMistParticleSystem ||
@@ -929,12 +927,13 @@ namespace Client.Main.Controls
                     }
                     // Elf buff orb is rendered in solid-in-front pass for proper owner ordering,
                     // but as additive sprite it must not write depth (quad-shaped occlusion artifacts).
-                var batchDepth =
-                    obj is WaterMistParticleSystem ||
-                    obj is ElfBuffOrbTrail ||
-                    obj is ElfBuffOrbitingLight
-                        ? DepthStencilState.DepthRead
-                        : depthState;
+                    var objectDepthState = ResolveObjectDepthState(obj, depthState);
+                    var batchDepth =
+                        obj is WaterMistParticleSystem ||
+                        obj is ElfBuffOrbTrail ||
+                        obj is ElfBuffOrbitingLight
+                            ? DepthStencilState.DepthRead
+                            : objectDepthState;
 
                     if (scope == null ||
                         !ReferenceEquals(blend, currentBlend) ||
@@ -1297,6 +1296,14 @@ namespace Client.Main.Controls
 
             for (int i = 0; i < _spatialOffGridObjects.Count; i++)
                 AddSpatialCandidate(_spatialOffGridObjects[i]);
+
+            var snapshot = Objects.GetSnapshot();
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                var obj = snapshot[i];
+                if (ShouldForceVisible(obj))
+                    AddSpatialCandidate(obj);
+            }
         }
 
         private void RebuildVisibleObjects()

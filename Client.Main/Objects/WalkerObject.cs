@@ -89,6 +89,7 @@ namespace Client.Main.Objects
 
         // Public Methods
         protected readonly AnimationController _animationController;
+        private double _lastAnimControllerTotalSeconds; // TotalGameTime at last AnimationController update
 
         public bool IsOneShotPlaying => _animationController?.IsOneShotPlaying ?? false;
 
@@ -168,7 +169,16 @@ namespace Client.Main.Objects
         {
             UpdateDebuffTint();
             base.Update(gameTime);
-            _animationController?.Update((float)gameTime.ElapsedGameTime.TotalSeconds);
+
+            float controllerDelta;
+            double totalSeconds = gameTime.TotalGameTime.TotalSeconds;
+            if (_lastAnimControllerTotalSeconds > 0)
+                controllerDelta = (float)(totalSeconds - _lastAnimControllerTotalSeconds);
+            else
+                controllerDelta = (float)gameTime.ElapsedGameTime.TotalSeconds;
+            _lastAnimControllerTotalSeconds = totalSeconds;
+
+            _animationController?.Update(controllerDelta);
 
             // --- animation test ---
             // if (IsMainWalker)

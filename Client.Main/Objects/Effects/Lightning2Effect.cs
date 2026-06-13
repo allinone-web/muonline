@@ -10,7 +10,7 @@ namespace Client.Main.Objects.Effects
         public Lightning2Effect()
         {
             BlendState = BlendState.Additive;
-            DepthState = DepthStencilState.None;
+            DepthState = DepthStencilState.DepthRead;
             IsTransparent = true;
             AffectedByTransparency = true;
             LightEnabled = true;
