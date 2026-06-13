@@ -1070,16 +1070,18 @@ namespace Client.Main.Controls
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool ShouldForceVisible(WorldObject obj)
         {
-        if (obj is EffectObject
-            || obj is ElfBuffOrbitingLight
-            || obj?.ForceVisibleInWorld == true
-            || (obj is WalkerObject walker && walker.IsMainWalker))
+            if (obj == null)
+                return false;
+
+            var policy = obj.RenderPolicy;
+
+            if (policy.ForceVisible || (obj is WalkerObject walker && walker.IsMainWalker))
         {
             return true;
         }
 
-        return obj?.World?.WorldIndex == 95
-            && (obj is SpriteObject || obj is ParticleSystem || HasForceVisibleEffectChild(obj));
+            return obj.World?.WorldIndex == 95
+                && (policy.ForceVisibleInLoginWorld || HasForceVisibleEffectChild(obj));
         }
 
         private static bool HasForceVisibleEffectChild(WorldObject obj)
@@ -1091,7 +1093,7 @@ namespace Client.Main.Controls
             for (int i = 0; i < children.Count; i++)
             {
                 var child = children[i];
-                if (child is EffectObject || child is SpriteObject || child is ParticleSystem || child is ElfBuffOrbitingLight)
+                if (child?.RenderPolicy.ForceVisible == true || child?.RenderPolicy.ForceVisibleInLoginWorld == true)
                     return true;
             }
 
@@ -1541,18 +1543,15 @@ namespace Client.Main.Controls
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool ShouldAlwaysUpdate(WorldObject obj)
         {
-            if (obj is WalkerObject walker && walker.IsMainWalker)
+            if (obj == null)
+                return false;
+
+            if (obj.RenderPolicy.AlwaysUpdate)
                 return true;
 
-            if (obj is MonsterObject monster)
-                return monster.IsOneShotPlaying;
-
             return (obj.Interactive && obj is not MonsterObject)
-                || obj is EffectObject
-                || obj is ElfBuffOrbitingLight
-                || obj is ParticleSystem
                 || obj is DroppedItemObject
-                || (obj is ModelObject mo && mo.RequiresPerFrameWorldUpdate);
+                || (obj is MonsterObject monster && monster.IsOneShotPlaying);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

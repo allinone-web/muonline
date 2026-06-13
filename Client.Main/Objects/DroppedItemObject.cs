@@ -303,7 +303,6 @@ _modelObj = model;
                 return false;
 
             Children.Add(model);
-            model.World = expectedWorld;
 
             if (!CanContinueLoad(expectedWorld, loadGeneration))
                 return false;

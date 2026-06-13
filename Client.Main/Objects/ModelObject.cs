@@ -363,6 +363,9 @@ namespace Client.Main.Objects
         protected virtual bool UsesMutableMeshData => false;
         protected virtual bool PreserveBlendMeshesInLowQuality => false;
         protected virtual bool FreezeDynamicBuffersAfterFirstBuild => false;
+        public override WorldObjectRenderPolicy RenderPolicy => base.RenderPolicy.With(
+            alwaysUpdate: RequiresPerFrameWorldUpdate,
+            preserveBlendMeshesInLowQuality: PreserveBlendMeshesInLowQuality);
         internal uint AnimationPoseVersion => _animationPoseVersion;
 
         #endregion

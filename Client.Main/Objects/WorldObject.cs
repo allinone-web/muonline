@@ -114,9 +114,13 @@ namespace Client.Main.Objects
         /// </summary>
         public bool LowQuality { get; private set; }
         public virtual bool ForceVisibleInWorld => false;
+        public virtual WorldObjectRenderPolicy RenderPolicy =>
+            ForceVisibleInWorld
+                ? WorldObjectRenderPolicy.Default.With(forceVisible: true)
+                : WorldObjectRenderPolicy.Default;
         internal int UpdateOffset => _updateOffset;
         public bool Visible => Status == GameControlStatus.Ready && !Hidden;
-        public WorldControl World { get => _world; set { if (_world != value) { var prev = _world; _world = value; OnWorldChanged(value, prev); } } }
+        public WorldControl World { get => _world; set { if (_world != value) { var prev = _world; _world = value; OnWorldChanged(value, prev); PropagateWorldToChildren(value); } } }
         public short Type { get; set; }
         public bool IsMapPlacementObject { get; set; }
         public Color BoundingBoxColor { get; set; } = Color.GreenYellow;
@@ -473,9 +477,17 @@ namespace Client.Main.Objects
             if (current != null)
             {
                 current.MatrixChanged += OnParentMatrixChanged;
+                World = current.World;
             }
             MarkTransformDirty();
             RecalculateWorldPosition();
+        }
+
+        private void PropagateWorldToChildren(WorldControl world)
+        {
+            var children = Children.ToArray();
+            for (int i = 0; i < children.Length; i++)
+                children[i].World = world;
         }
 
 

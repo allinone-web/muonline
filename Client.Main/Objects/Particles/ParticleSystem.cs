@@ -8,6 +8,10 @@ namespace Client.Main.Objects.Particles
 {
     public class ParticleSystem : WorldObject
     {
+        public override WorldObjectRenderPolicy RenderPolicy => base.RenderPolicy.With(
+            forceVisibleInLoginWorld: true,
+            alwaysUpdate: true);
+
         private readonly List<ParticleSystemRegister> _particles = [];
 
         private int _maxParticles = 100;

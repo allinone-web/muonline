@@ -25,7 +25,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
     /// <summary>
     /// Handles packets related to objects entering or leaving scope, moving, and dying.
     /// </summary>
-    public class ScopeHandler : IGamePacketHandler
+    public partial class ScopeHandler : IGamePacketHandler
     {
         private static readonly string[] _recentHitPackets = new string[12];
         private static int _recentHitPacketIndex = -1;
@@ -51,11 +51,9 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         private static readonly HashSet<ushort> _pendingPlayerIds = new();
         private static readonly ConcurrentQueue<NpcSpawnRequest> _npcSpawnQueue = new();
         private static readonly ConcurrentQueue<PlayerSpawnRequest> _playerSpawnQueue = new();
-        private static readonly ConcurrentQueue<DroppedItemWorkItem> _droppedItemQueue = new();
         private static readonly ConcurrentDictionary<ushort, int> _npcSpawnGenerations = new();
         private static int _npcSpawnsInFlight;
         private static int _playerSpawnWorkerRunning;
-        private static int _droppedItemWorkerRunning;
         private const int MaxNpcSpawnsPerFrame = 8;
         private const int MaxConcurrentNpcSpawns = 8;
         private static ScopeHandler _activeInstance;
@@ -729,8 +727,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 if (world.WalkerObjectsById.TryGetValue(maskedId, out WalkerObject existingWalker))
                 {
                     _logger.LogWarning("[Spawn] Stale object for {Name} found. Removing before adding new.", name);
-                    world.Objects.Remove(existingWalker);
-                    existingWalker.Dispose();
+                    WorldMutationQueue.RemoveAndDispose(world, existingWalker);
                 }
 
                 if (world.FindPlayerById(maskedId) != null)
@@ -1107,20 +1104,6 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             public ReadOnlyMemory<byte> AppearanceData { get; }
         }
 
-        private readonly struct DroppedItemWorkItem
-        {
-            public DroppedItemWorkItem(ScopeObject dropObj, ushort maskedId, string soundPath)
-            {
-                DropObject = dropObj;
-                MaskedId = maskedId;
-                SoundPath = soundPath;
-            }
-
-            public ScopeObject DropObject { get; }
-            public ushort MaskedId { get; }
-            public string SoundPath { get; }
-        }
-
         [PacketHandler(0x25, PacketRouter.NoSubCode)]
         public async Task HandleAppearanceChangedAsync(Memory<byte> packet)
         {
@@ -1481,7 +1464,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                         maskedId,
                         dmgColor
                     );
-                    world.Objects.Add(txt);
+            WorldMutationQueue.Add(world, txt);
                     _logger.LogDebug("Spawned DamageTextObject '{Text}' for {Id:X4}", txt.Text, maskedId);
                 });
 
@@ -1755,15 +1738,14 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             // Remove objects on main thread in one batched action.
             MuGame.ScheduleOnMainThread(() =>
             {
-                if (MuGame.Instance.ActiveScene?.World is not WalkableWorldControl world) return;
+                if (!TryGetActiveWalkableWorld(out var world)) return;
 
                 foreach (var masked in objectsToRemove)
                 {
                     var obj = world.FindDroppedItemById(masked);
                     if (obj != null)
                     {
-                        world.Objects.Remove(obj);
-                        obj.Recycle();
+                        WorldMutationQueue.RemoveAndRecycle(world, obj);
                         _logger.LogDebug("Removed DroppedItemObject {Id:X4} from world (scope gone).", masked);
                     }
                 }
@@ -1823,7 +1805,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             // Remove objects on main thread in one batched action.
             MuGame.ScheduleOnMainThread(() =>
             {
-                if (MuGame.Instance.ActiveScene?.World is not WalkableWorldControl world) return;
+                if (!TryGetActiveWalkableWorld(out var world)) return;
                 var localWalker = world.Walker;
 
                 foreach (var masked in objectsToRemove)
@@ -1844,8 +1826,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                             continue;
                         }
 
-                        world.Objects.Remove(player);
-                        player.Dispose();
+                        WorldMutationQueue.RemoveAndDispose(world, player);
                         continue;
                     }
 
@@ -1859,8 +1840,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                             continue;
                         }
 
-                        world.Objects.Remove(walker);
-                        walker.Dispose();
+                        WorldMutationQueue.RemoveAndDispose(world, walker);
                         continue;
                     }
 
@@ -1868,8 +1848,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     var drop = world.FindDroppedItemById(masked);
                     if (drop != null)
                     {
-                        world.Objects.Remove(drop);
-                        drop.Dispose();
+                        WorldMutationQueue.RemoveAndDispose(world, drop);
                     }
                 }
             });
@@ -1963,7 +1942,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
 
             MuGame.ScheduleOnMainThread(() =>
             {
-                if (MuGame.Instance.ActiveScene?.World is not WalkableWorldControl world)
+                if (!TryGetActiveWalkableWorld(out var world))
                     return;
 
                 // ────────────────────────────────────────────────
@@ -2132,12 +2111,11 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                             {
                                 MuGame.ScheduleOnMainThread(() =>
                                 {
-                                    if (world.Objects.Contains(walker))
-                                    {
-                                        world.Objects.Remove(walker);
-                                        walker.Dispose();
-                                        _logger.LogDebug("💀 Removed dead remote player {Name} after animation",
-                                                        remotePlayer.Name);
+                                if (world.Objects.Contains(walker))
+                                {
+                                    WorldMutationQueue.RemoveAndDispose(world, walker);
+                                    _logger.LogDebug("💀 Removed dead remote player {Name} after animation",
+                                        remotePlayer.Name);
                                     }
                                 });
                             });
@@ -2366,7 +2344,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         {
             try
             {
-                if (MuGame.Instance.ActiveScene?.World is not WalkableWorldControl world)
+                if (!TryGetActiveWalkableWorld(out var world))
                 {
                     tcs.SetResult(false);
                     return;
@@ -2376,17 +2354,13 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 var existing = world.FindDroppedItemById(maskedId);
                 if (existing != null)
                 {
-                    world.Objects.Remove(existing);
-                    existing.Recycle();
+                    WorldMutationQueue.RemoveAndRecycle(world, existing);
                 }
 
                 var obj = DroppedItemObject.Rent(dropObj, _characterState.Id, _networkManager.GetCharacterService(), _loggerFactory.CreateLogger<DroppedItemObject>());
 
-                // Set World property before adding to world objects
-                obj.World = world;
-
-                // Add to world so World.Scene is available
-                world.Objects.Add(obj);
+                // WorldControl.OnObjectAdded assigns World before Load runs.
+                WorldMutationQueue.Add(world, obj);
                 var loadGeneration = obj.LoadGeneration;
 
                 // Queue load to avoid long stalls on the main thread
@@ -2411,9 +2385,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     catch (Exception ex)
                     {
                         _logger.LogError(ex, "Error loading dropped item assets for {MaskedId:X4}", maskedId);
-                        world.Objects.Remove(obj);
-                        obj.Recycle();
-                        tcs.TrySetResult(false);
+                        WorldMutationQueue.ScheduleRemoveAndRecycle(world, obj, () => tcs.TrySetResult(false));
                         return;
                     }
 
@@ -2436,8 +2408,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 if (!enqueued)
                 {
                     _logger.LogWarning("Failed to queue dropped item load task for {Id:X4} – scheduler at capacity.", maskedId);
-                    world.Objects.Remove(obj);
-                    obj.Recycle();
+                    WorldMutationQueue.RemoveAndRecycle(world, obj);
                     tcs.TrySetResult(false);
                 }
             }

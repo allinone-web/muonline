@@ -14,6 +14,10 @@ namespace Client.Main.Objects.Effects
     /// </summary>
     public class ElfBuffOrbitingLight : SpriteObject
     {
+        public override WorldObjectRenderPolicy RenderPolicy => base.RenderPolicy.With(
+            forceVisible: true,
+            alwaysUpdate: true);
+
         private readonly PlayerObject _owner;
         private readonly ElfBuffOrbTrail _trail;
         private readonly float _baseRadius;

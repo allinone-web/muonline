@@ -19,6 +19,9 @@ namespace Client.Main.Objects
 
         public abstract string TexturePath { get; }
 
+        public override WorldObjectRenderPolicy RenderPolicy => base.RenderPolicy.With(
+            forceVisibleInLoginWorld: true);
+
         public SpriteObject()
         {
             BoundingBoxColor = Color.Red;
