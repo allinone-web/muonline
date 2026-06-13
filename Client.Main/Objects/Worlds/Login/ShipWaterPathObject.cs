@@ -1,4 +1,5 @@
 ﻿using Client.Main.Content;
+using Microsoft.Extensions.Logging;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System;
@@ -26,6 +27,8 @@ namespace Client.Main.Objects.Worlds.Login
             // Load the model for ship water path
             var idx = (Type + 1).ToString().PadLeft(2, '0');
             Model = await BMDLoader.Instance.Prepare($"Object95/Object{idx}.bmd");
+            if (Model == null)
+                _logger?.LogWarning("ShipWaterPathObject model not found for Type {Type}: Object95/Object{Index}.bmd", Type, idx);
             await base.Load();
 
             Position = new Vector3(Position.X,Position.Y,Position.Z + 15f);

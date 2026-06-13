@@ -44,6 +44,33 @@ namespace Client.Main.Objects.NPCS
             _ligh1.Angle = new Vector3(rotation1, rotation1, rotation1);
             _ligh2.Angle = new Vector3(rotation2, rotation2, rotation2);
         }
+        public override void Draw(GameTime gameTime)
+        {
+            var ligh1Hidden = _ligh1.Hidden;
+            var ligh2Hidden = _ligh2.Hidden;
+            _ligh1.Hidden = true;
+            _ligh2.Hidden = true;
+
+            try
+            {
+                base.Draw(gameTime);
+            }
+            finally
+            {
+                _ligh1.Hidden = ligh1Hidden;
+                _ligh2.Hidden = ligh2Hidden;
+            }
+        }
+
+        public override void DrawAfter(GameTime gameTime)
+        {
+            if (!Visible) return;
+
+            base.DrawAfter(gameTime);
+            _ligh1.Draw(gameTime);
+            _ligh2.Draw(gameTime);
+        }
+
         protected override void HandleClick()
         {
             var svc = MuGame.Network?.GetCharacterService();

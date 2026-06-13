@@ -7,6 +7,10 @@ namespace Client.Main.Objects.Worlds.Login
 {
     public class BlendedObjects : ModelObject
     {
+        public override bool ForceVisibleInWorld => true;
+        protected override bool RequiresPerFrameAnimation => true;
+        protected override bool PreserveBlendMeshesInLowQuality => true;
+
         public override async Task Load()
         {
             var idx = (Type + 1).ToString().PadLeft(2, '0');

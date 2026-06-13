@@ -715,7 +715,7 @@ namespace Client.Main.Objects
                 bool isRGBA = _meshIsRGBA != null && i < _meshIsRGBA.Length && _meshIsRGBA[i];
 
                 // Skip based on pass and low quality settings
-                if (LowQuality && isBlend) continue;
+                if (LowQuality && isBlend && !PreserveBlendMeshesInLowQuality) continue;
                 bool shouldDraw = isAfterDraw ? (isRGBA || isBlend) : (!isRGBA && !isBlend);
                 if (!shouldDraw) continue;
 

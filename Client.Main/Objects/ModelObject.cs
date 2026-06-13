@@ -355,12 +355,13 @@ namespace Client.Main.Objects
 
         public int AnimationUpdateStride { get; private set; } = 1;
         protected virtual bool RequiresPerFrameAnimation => false;
-        public bool RequiresPerFrameWorldUpdate => RequiresPerFrameAnimation;
+        public bool RequiresPerFrameWorldUpdate => RequiresPerFrameAnimation || UsesMutableMeshData;
         protected virtual bool AllowAnimationUpdates => true;
         protected virtual bool AllowLightingUpdates => true;
         protected virtual bool AllowDynamicLightingShader => true;
         protected virtual bool AllowMapObjectInstancing => true;
         protected virtual bool UsesMutableMeshData => false;
+        protected virtual bool PreserveBlendMeshesInLowQuality => false;
         protected virtual bool FreezeDynamicBuffersAfterFirstBuild => false;
         internal uint AnimationPoseVersion => _animationPoseVersion;
 

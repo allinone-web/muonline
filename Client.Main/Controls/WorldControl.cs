@@ -979,6 +979,7 @@ namespace Client.Main.Controls
                         mapModel.IsMapPlacementObject)
                         ModelObject.RegisterStaticMapInstancingFallback();
 
+                    SetDepthState(ResolveObjectDepthState(obj, depthState));
                     obj.Draw(time);
                 }
 
@@ -1011,6 +1012,7 @@ namespace Client.Main.Controls
                     damageCount++;
                     continue;
                 }
+                SetDepthState(ResolveObjectDepthState(obj, state));
                 obj.DrawAfter(time);
             }
 
@@ -1046,6 +1048,14 @@ namespace Client.Main.Controls
             }
         }
 
+        private static DepthStencilState ResolveObjectDepthState(WorldObject obj, DepthStencilState passState)
+        {
+            if (obj?.DepthState != null && !ReferenceEquals(obj.DepthState, DepthStateDefault))
+                return obj.DepthState;
+
+            return passState;
+        }
+
         // Fast path for loops where camera info is already cached
         private static bool IsObjectInView(WorldObject obj, Vector2 cam2, float maxDistSq, BoundingFrustum frustum)
         {
@@ -1060,9 +1070,32 @@ namespace Client.Main.Controls
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool ShouldForceVisible(WorldObject obj)
         {
-            return obj is EffectObject
-                || obj is ElfBuffOrbitingLight
-                || (obj is WalkerObject walker && walker.IsMainWalker);
+        if (obj is EffectObject
+            || obj is ElfBuffOrbitingLight
+            || obj?.ForceVisibleInWorld == true
+            || (obj is WalkerObject walker && walker.IsMainWalker))
+        {
+            return true;
+        }
+
+        return obj?.World?.WorldIndex == 95
+            && (obj is SpriteObject || obj is ParticleSystem || HasForceVisibleEffectChild(obj));
+        }
+
+        private static bool HasForceVisibleEffectChild(WorldObject obj)
+        {
+            if (obj == null)
+                return false;
+
+            var children = obj.Children;
+            for (int i = 0; i < children.Count; i++)
+            {
+                var child = children[i];
+                if (child is EffectObject || child is SpriteObject || child is ParticleSystem || child is ElfBuffOrbitingLight)
+                    return true;
+            }
+
+            return false;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -190,6 +190,55 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         }
 
         // ───────────────────── Internal API ────────────────────────
+        private void EnsureNearbyScopedNpcsMaterialized(WalkableWorldControl world)
+        {
+            if (world?.Walker == null || _scopeManager == null)
+                return;
+
+            const int nearbyTileRange = 12;
+            const int nearbyTileRangeSq = nearbyTileRange * nearbyTileRange;
+            int queued = 0;
+
+            foreach (var scopeObject in _scopeManager.GetScopeItems(ScopeObjectType.Npc))
+            {
+                if (scopeObject is not NpcScopeObject npc)
+                    continue;
+
+                int dx = npc.PositionX - _characterState.PositionX;
+                int dy = npc.PositionY - _characterState.PositionY;
+                if ((dx * dx) + (dy * dy) > nearbyTileRangeSq)
+                    continue;
+
+                ushort maskedId = (ushort)(npc.Id & 0x7FFF);
+                if (world.TryGetWalkerById(maskedId, out var existing))
+                {
+                    if (existing.Hidden)
+                        existing.Hidden = false;
+                    continue;
+                }
+
+                int spawnGeneration = BumpNpcSpawnGeneration(maskedId);
+                byte serverDirection = MapClientDirectionToServer(npc.Direction);
+                _npcSpawnQueue.Enqueue(new NpcSpawnRequest(
+                    maskedId,
+                    npc.RawId,
+                    npc.PositionX,
+                    npc.PositionY,
+                    serverDirection,
+                    npc.TypeNumber,
+                    npc.Name,
+                    _characterState.MapId,
+                    spawnGeneration));
+                queued++;
+            }
+
+            if (queued > 0)
+            {
+                _logger.LogDebug("Queued {Count} nearby scoped NPC/monster spawns after local damage packet.", queued);
+                PumpNpcSpawnQueue(world, 32);
+            }
+        }
+
         /// <summary>
         /// Retrieves and clears pending player spawns.
         /// </summary>
@@ -1356,6 +1405,9 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                         _logger.LogWarning("Cannot show damage text: Active world is not ready.");
                         return;
                     }
+
+                    if (maskedId == _characterState.Id && world is WalkableWorldControl localWorld)
+                        EnsureNearbyScopedNpcsMaterialized(localWorld);
 
                     WalkerObject target = null;
                     if (maskedId == _characterState.Id && world is WalkableWorldControl walkable)

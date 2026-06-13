@@ -15,6 +15,8 @@ namespace Client.Main.Objects.Effects
         public Flare01Effect()
         {
             BlendState = BlendState.Additive;
+            DepthState = DepthStencilState.None;
+            IsTransparent = true;
             LightEnabled = true;
             Light = new Vector3(1f, 0.2f, 0f);
         }
