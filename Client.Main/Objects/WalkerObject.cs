@@ -25,35 +25,13 @@ namespace Client.Main.Objects
         protected Queue<Vector2> _currentPath;   // FIFO – cheaper removal than List.RemoveAt(0)
         private uint _moveRequestVersion;
 
-        // Camera control
-        private float _currentCameraDistance = Constants.DEFAULT_CAMERA_DISTANCE;
-        private float _targetCameraDistance = Constants.DEFAULT_CAMERA_DISTANCE;
-        private const float _minCameraDistance = Constants.MIN_CAMERA_DISTANCE;
-        private const float _maxCameraDistance = Constants.MAX_CAMERA_DISTANCE;
-        private const float _zoomSpeed = Constants.ZOOM_SPEED;
-        private int _previousScrollValue;
-        bool _mouseScroolToZoom = true;
-        public bool MouseScroolToZoom
-        {
-            get => _mouseScroolToZoom;
-            set => _mouseScroolToZoom = value;
-        }
+    private readonly MainPlayerCameraController _mainPlayerCameraController = new();
+    public bool MouseScrollToZoom
+    {
+        get => _mainPlayerCameraController.MouseScrollToZoom;
+        set => _mainPlayerCameraController.MouseScrollToZoom = value;
+    }
 
-        // Camera rotation
-        private float _cameraYaw = Constants.CAMERA_YAW;
-        private float _cameraPitch = Constants.CAMERA_PITCH;
-        private const float _rotationSensitivity = Constants.ROTATION_SENSITIVITY;
-        private bool _isRotating;
-        private bool _wasRotating;
-
-        // Default camera angles
-        private const float _defaultCameraDistance = Constants.DEFAULT_CAMERA_DISTANCE;
-        private static readonly float _defaultCameraPitch = Constants.DEFAULT_CAMERA_PITCH;
-        private static readonly float _defaultCameraYaw = Constants.DEFAULT_CAMERA_YAW;
-
-        // Rotation limits
-        private static readonly float _maxPitch = Constants.MAX_PITCH;
-        private static readonly float _minPitch = Constants.MIN_PITCH;
 
         private const float RotationSpeed = 10f;
         private int _previousActionForSound = -1;
@@ -139,9 +117,7 @@ namespace Client.Main.Objects
         public new virtual async Task Load()
         {
             MoveTargetPosition = Vector3.Zero;
-            _previousScrollValue = MuGame.Instance.Mouse.ScrollWheelValue;
-            _cameraYaw = _defaultCameraYaw;
-            _cameraPitch = _defaultCameraPitch;
+        _mainPlayerCameraController.Initialize();
 
             await base.Load();
         }
@@ -423,11 +399,6 @@ namespace Client.Main.Objects
             if (oldLocation == Vector2.Zero)
                 return;
 
-            var oldX = oldLocation.X;
-            var oldY = oldLocation.Y;
-            var newX = newLocation.X;
-            var newY = newLocation.Y;
-
             // Use helper that already maps delta → Direction enum
             Direction = DirectionExtensions.GetDirectionFromMovementDelta(
                             (int)(newLocation.X - oldLocation.X),
@@ -443,14 +414,6 @@ namespace Client.Main.Objects
 
             float worldExtraHeight = walkableWorld.ExtraHeight;
             float deltaTime = (float)gameTime.ElapsedGameTime.TotalSeconds;
-            _currentCameraDistance = MathHelper.Lerp(
-                _currentCameraDistance,
-                _targetCameraDistance,
-                _zoomSpeed * deltaTime);
-            _currentCameraDistance = MathHelper.Clamp(
-                _currentCameraDistance,
-                _minCameraDistance,
-                _maxCameraDistance);
 
             if (_targetAngle != Angle)
             {
@@ -517,17 +480,10 @@ namespace Client.Main.Objects
         private void UpdateCameraPosition(Vector3 position)
         {
             MoveTargetPosition = position;
-            if (!IsMainWalker) return;
+            if (!IsMainWalker)
+                return;
 
-            float x = _currentCameraDistance * (float)Math.Cos(_cameraPitch) * (float)Math.Sin(_cameraYaw);
-            float y = _currentCameraDistance * (float)Math.Cos(_cameraPitch) * (float)Math.Cos(_cameraYaw);
-            float z = _currentCameraDistance * (float)Math.Sin(_cameraPitch);
-            var cameraOffset = new Vector3(x, y, z);
-            var cameraPosition = position + cameraOffset;
-
-            Camera.Instance.FOV = 35 * Constants.FOV_SCALE;
-            Camera.Instance.Position = cameraPosition;
-            Camera.Instance.Target = position;
+            _mainPlayerCameraController.Apply(position);
         }
 
         private void UpdateDebuffTint()
@@ -636,50 +592,7 @@ namespace Client.Main.Objects
 
         private void HandleMouseInput()
         {
-            var mouseState = MuGame.Instance.Mouse;
-            int currentScroll = mouseState.ScrollWheelValue;
-            int scrollDiff = currentScroll - _previousScrollValue;
-            if (scrollDiff != 0 && _mouseScroolToZoom)
-            {
-                float zoomChange = scrollDiff / 120f * 100f;
-                _targetCameraDistance = MathHelper.Clamp(
-                    _targetCameraDistance - zoomChange,
-                    _minCameraDistance,
-                    _maxCameraDistance);
-            }
-            _previousScrollValue = currentScroll;
-
-            if (mouseState.MiddleButton == ButtonState.Pressed)
-            {
-                if (!_isRotating)
-                {
-                    _isRotating = true;
-                    _wasRotating = false;
-                }
-                else
-                {
-                    var delta = (mouseState.Position - MuGame.Instance.PrevMouseState.Position).ToVector2();
-                    if (delta.LengthSquared() > 0)
-                    {
-                        _cameraYaw -= delta.X * _rotationSensitivity;
-                        _cameraPitch = MathHelper.Clamp(_cameraPitch - delta.Y * _rotationSensitivity, _minPitch, _maxPitch);
-                        _cameraYaw = MathHelper.WrapAngle(_cameraYaw);
-                        _wasRotating = true;
-                    }
-                }
-            }
-            else if (mouseState.MiddleButton == ButtonState.Released &&
-                     MuGame.Instance.PrevMouseState.MiddleButton == ButtonState.Pressed)
-            {
-                if (!_wasRotating)
-                {
-                    _targetCameraDistance = _defaultCameraDistance;
-                    _cameraYaw = _defaultCameraYaw;
-                    _cameraPitch = _defaultCameraPitch;
-                }
-                _isRotating = false;
-                _wasRotating = false;
-            }
+            _mainPlayerCameraController.Update(MuGame.Instance.GameTime);
         }
 
         /// <summary>

@@ -34,16 +34,10 @@ namespace Client.Main.Objects
         private const int LabelPixelGap = 20;
         private const float BoundingPadding = 2f; // Small padding for interaction
         private const int MaxCoinModels = 30;
-        private const int RenderCullStartCount = 80;
-        private const int MaxRenderedModelsPerFrame = 220;
-        private const double FrameTimeMs = 1000.0 / 60.0; // ~16.67ms at 60 FPS, used for frame ID generation
         private const float LabelVisibilityDistSq = 2000f * 2000f; // Squared distance for label visibility check
 
-        // Per-tile stable selection to avoid flicker when many drops stack on the same tile.
-        private static readonly Dictionary<int, ushort> _tileSelectedRawId = new(512);
-        private static uint _cullFrameId = uint.MaxValue;
-        private static uint _strideFrameId = uint.MaxValue;
-        private static int _globalStride = 1;
+        internal int TileKey => HashCode.Combine(_scope.PositionX, _scope.PositionY);
+        internal bool RenderVisuals { get; set; } = true;
 
         // ─────────────────── deps / state
         private ScopeObject _scope;
@@ -58,10 +52,7 @@ namespace Client.Main.Objects
         private bool _isMoney;
         private Color _labelColor;
         private readonly List<ModelObject> _coinModels = new List<ModelObject>(); // Multiple coins for money piles
-        private DroppedItemShineEffect _shineEffect;
-private bool _renderVisualsThisFrame = true;
-private uint _cachedFrameId;
-private int _cachedTileKey;
+        private readonly DroppedItemVisual _visual = new();
 private int _loadGeneration;
 
         // ─────────────────── public helpers
@@ -130,8 +121,8 @@ _mainPlayerId = mainPlayerId;
             _definition = null;
             _isMoney = false;
             _coinModels.Clear();
-            _shineEffect = null;
-            _renderVisualsThisFrame = true;
+            _visual.Reset();
+            RenderVisuals = true;
 
             // Initialize position at ground level (will be adjusted in Load() after terrain height is known)
             Position = new(
@@ -447,11 +438,6 @@ _modelObj = model;
         public override void Update(GameTime gameTime)
         {
             base.Update(gameTime);
-
-            if (!Visible)
-                return;
-
-            UpdateCullSelection(gameTime);
         }
 
         // =====================================================================
@@ -461,15 +447,14 @@ _modelObj = model;
 
             DrawBoundingBox3D();
 
-            _renderVisualsThisFrame = ShouldRenderVisualsThisFrame();
-            if (!_renderVisualsThisFrame)
+            if (!RenderVisuals)
                 return;
 
             var objects = Children;
             for (int i = 0; i < objects.Count; i++)
             {
                 var child = objects[i];
-                if (ReferenceEquals(child, _shineEffect))
+                if (_visual.IsShineEffect(child))
                     continue;
 
                 child.Draw(gameTime);
@@ -481,14 +466,14 @@ _modelObj = model;
         {
             if (!Visible) return;
 
-            if (!_renderVisualsThisFrame)
+            if (!RenderVisuals)
                 return;
 
             var objects = Children;
             for (int i = 0; i < objects.Count; i++)
             {
                 var child = objects[i];
-                if (ReferenceEquals(child, _shineEffect))
+                if (_visual.IsShineEffect(child))
                     continue;
 
                 child.DrawAfter(gameTime);
@@ -591,66 +576,33 @@ _modelObj = model;
 
         public override void DrawHoverName()
         {
-            if (_pickedUp || Hidden)
-                return;
-
             if (_font == null)
                 _font = GraphicsManager.Instance.Font;
-            if (_font == null || GraphicsDevice == null || Camera.Instance == null)
-                return;
 
             bool near = false;
             if (World is Controls.WalkableWorldControl w && w.Walker != null)
                 near = Vector3.DistanceSquared(w.Walker.Position, Position) <= LabelVisibilityDistSq;
+
             if (!near || World?.Scene?.Status != GameControlStatus.Ready)
                 return;
 
-            // CONTRACT: Dropped item labels are batched in BaseScene.Draw() with a single
-            // SpriteBatch Begin/End. Callers MUST ensure a SpriteBatch is active before calling.
-            // This avoids expensive per-item Begin/End overhead when many items are on screen.
+            // Dropped item labels are batched in BaseScene.Draw() with a single
+            // Begin/End. Callers ensure a SpriteBatch is active before calling.
             if (!SpriteBatchScope.BatchIsBegun)
                 return;
 
-            string text = DisplayName;
-            float baseScale = 10f / Client.Main.Constants.BASE_FONT_SIZE;
-            float scale = baseScale * UiScaler.Scale * Constants.RENDER_SCALE;
-            var color = _labelColor;
-
             Vector3 anchor = new(Position.X, Position.Y, BoundingBoxWorld.Max.Z + LabelOffsetZ);
-            Vector3 screen = GraphicsDevice.Viewport.Project(
+            WorldLabelRenderer.DrawWorldLabel(
+                GraphicsManager.Instance.Sprite,
+                GraphicsDevice,
+                _font,
+                DisplayName,
                 anchor,
+                _labelColor,
+                Color.Black * 0.55f,
                 Camera.Instance.Projection,
                 Camera.Instance.View,
-                Matrix.Identity);
-
-            if (screen.Z < 0f || screen.Z > 1f)
-                return;
-
-            var sb = GraphicsManager.Instance.Sprite;
-            Vector2 textSize = _font.MeasureString(text) * scale;
-            int padX = 4, padY = 2;
-            int width = (int)(textSize.X) + padX * 2;
-            int height = (int)(textSize.Y) + padY * 2;
-            var rect = new Rectangle(
-                (int)(screen.X - width / 2f),
-                (int)(screen.Y - height - LabelPixelGap),
-                width, height);
-            float layer = 0f;
-            sb.Draw(GraphicsManager.Instance.Pixel, rect, null, new Color(0, 0, 0, 160), 0f, Vector2.Zero, SpriteEffects.None, layer);
-            sb.Draw(GraphicsManager.Instance.Pixel, new Rectangle(rect.X, rect.Y, rect.Width, 1), null, Color.White * 0.3f, 0f, Vector2.Zero, SpriteEffects.None, layer);
-            sb.Draw(GraphicsManager.Instance.Pixel, new Rectangle(rect.X, rect.Bottom - 1, rect.Width, 1), null, Color.White * 0.3f, 0f, Vector2.Zero, SpriteEffects.None, layer);
-            sb.Draw(GraphicsManager.Instance.Pixel, new Rectangle(rect.X, rect.Y, 1, rect.Height), null, Color.White * 0.3f, 0f, Vector2.Zero, SpriteEffects.None, layer);
-            sb.Draw(GraphicsManager.Instance.Pixel, new Rectangle(rect.Right - 1, rect.Y, 1, rect.Height), null, Color.White * 0.3f, 0f, Vector2.Zero, SpriteEffects.None, layer);
-            sb.DrawString(
-                _font,
-                text,
-                new Vector2(rect.X + padX, rect.Y + padY),
-                color,
-                0f,
-                Vector2.Zero,
-                scale,
-                SpriteEffects.None,
-                layer);
+                10f / Constants.BASE_FONT_SIZE * UiScaler.Scale * Constants.RENDER_SCALE);
         }
 
         public void ResetPickupState()
@@ -660,84 +612,14 @@ _modelObj = model;
 
         private void AttachShineEffect()
         {
-            if (_shineEffect != null)
-                return;
-
-            _shineEffect = new DroppedItemShineEffect();
-            Children.Add(_shineEffect);
-            _ = _shineEffect.Load();
+            _visual.AttachShineEffect(this);
         }
 
         internal void DrawShineEffect(GameTime gameTime)
         {
-            if (!Visible || _pickedUp)
-                return;
-
-            if (Camera.Instance?.Frustum != null && !Camera.Instance.Frustum.Intersects(BoundingBoxWorld))
-                return;
-
-            if (!_renderVisualsThisFrame)
-                return;
-
-            _shineEffect?.Draw(gameTime);
+            _visual.DrawShineEffect(this, gameTime, _pickedUp, RenderVisuals);
         }
 
-        private void UpdateCullSelection(GameTime gameTime)
-        {
-            if (World is not Controls.WorldControl worldControl)
-                return;
-
-            if (worldControl.DroppedItems.Count < RenderCullStartCount)
-                return;
-
-            _cachedFrameId = (uint)(gameTime.TotalGameTime.TotalMilliseconds / FrameTimeMs);
-            if (_cullFrameId != _cachedFrameId)
-            {
-                _cullFrameId = _cachedFrameId;
-                _tileSelectedRawId.Clear();
-                _strideFrameId = uint.MaxValue;
-                _globalStride = 1;
-            }
-
-            _cachedTileKey = HashCode.Combine(_scope.PositionX, _scope.PositionY);
-            if (_tileSelectedRawId.TryGetValue(_cachedTileKey, out ushort selected))
-            {
-                if (RawId < selected)
-                    _tileSelectedRawId[_cachedTileKey] = RawId;
-            }
-            else
-            {
-                _tileSelectedRawId[_cachedTileKey] = RawId;
-            }
-        }
-
-        private bool ShouldRenderVisualsThisFrame()
-        {
-            if (World is not Controls.WorldControl worldControl)
-                return true;
-
-            // Only start culling when drops are numerous enough to impact FPS.
-            if (worldControl.DroppedItems.Count < RenderCullStartCount)
-                return true;
-
-            // Use cached values from UpdateCullSelection; fallback if Update didn't run.
-            if (_cullFrameId != _cachedFrameId)
-                return true;
-
-            if (!_tileSelectedRawId.TryGetValue(_cachedTileKey, out ushort selected) || selected != RawId)
-                return false;
-
-            if (_strideFrameId != _cachedFrameId)
-            {
-                int tileCount = _tileSelectedRawId.Count;
-                _globalStride = tileCount > MaxRenderedModelsPerFrame
-                    ? (int)MathF.Ceiling(tileCount / (float)MaxRenderedModelsPerFrame)
-                    : 1;
-                _strideFrameId = _cachedFrameId;
-            }
-
-            return _globalStride <= 1 || (RawId % _globalStride) == 0;
-        }
     }
 
     // Minimal model subclass used for dropped items

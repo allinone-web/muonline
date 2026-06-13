@@ -113,12 +113,12 @@ namespace Client.Main.Objects
             _sortTextureHintDirty = false;
             _sortTextureHint = null;
 
-            if (_boneTextures == null)
+            if (_meshes == null)
                 return null;
 
-            for (int i = 0; i < _boneTextures.Length; i++)
+            for (int i = 0; i < _meshes.Length; i++)
             {
-                var tex = _boneTextures[i];
+                var tex = _meshes[i].Texture;
                 if (tex != null && !IsHiddenMesh(i))
                 {
                     _sortTextureHint = tex;
@@ -171,10 +171,10 @@ namespace Client.Main.Objects
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool IsMeshTwoSided(int mesh, bool isBlendMesh)
         {
-            if (_meshIsRGBA == null || mesh < 0 || mesh >= _meshIsRGBA.Length)
+            if (_meshes == null || mesh < 0 || mesh >= _meshes.Length)
                 return false;
 
-            if (_meshIsRGBA[mesh] || isBlendMesh)
+            if (_meshes[mesh].IsRgba || isBlendMesh)
                 return true;
 
             if (Model?.Meshes != null && mesh < Model.Meshes.Length)
@@ -192,25 +192,25 @@ namespace Client.Main.Objects
             if (isBlendMesh)
                 return true;
 
-            return _meshIsRGBA != null && (uint)mesh < (uint)_meshIsRGBA.Length && _meshIsRGBA[mesh];
+            return _meshes != null && (uint)mesh < (uint)_meshes.Length && _meshes[mesh].IsRgba;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool IsHiddenMesh(int mesh)
         {
-            if (_meshHiddenByScript == null || (uint)mesh >= (uint)_meshHiddenByScript.Length)
+            if (_meshes == null || (uint)mesh >= (uint)_meshes.Length)
                 return false;
 
-            return HiddenMesh == mesh || HiddenMesh == -2 || _meshHiddenByScript[mesh];
+            return HiddenMesh == mesh || HiddenMesh == -2 || _meshes[mesh].HiddenByScript;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         protected virtual bool IsBlendMesh(int mesh)
         {
-            if (_meshBlendByScript == null || (uint)mesh >= (uint)_meshBlendByScript.Length)
+            if (_meshes == null || (uint)mesh >= (uint)_meshes.Length)
                 return false;
 
-            return BlendMesh == mesh || BlendMesh == -2 || _meshBlendByScript[mesh];
+            return BlendMesh == mesh || BlendMesh == -2 || _meshes[mesh].BlendByScript;
         }
 
         /// <summary>
@@ -305,7 +305,7 @@ namespace Client.Main.Objects
             DrawBoundingBox3D();
             SetDrawShaderTimeSeconds((float)gameTime.TotalGameTime.TotalSeconds);
 
-            if (Model?.Meshes != null && _boneVertexBuffers != null)
+            if (Model?.Meshes != null && _meshes != null)
             {
                 var view = Camera.Instance.View;
                 var projection = Camera.Instance.Projection;
@@ -361,7 +361,7 @@ namespace Client.Main.Objects
 
         public override void Draw(GameTime gameTime)
         {
-            if (!Visible || _boneIndexBuffers == null) return;
+            if (!Visible || _meshes == null) return;
 
             SetDrawShaderTimeSeconds((float)gameTime.TotalGameTime.TotalSeconds);
 
@@ -381,7 +381,7 @@ namespace Client.Main.Objects
 
         public virtual void DrawModel(bool isAfterDraw)
         {
-            if (Model?.Meshes == null || _boneVertexBuffers == null)
+            if (Model?.Meshes == null || _meshes == null)
             {
                 ReleaseMeshGroups();
                 return;
@@ -620,10 +620,10 @@ namespace Client.Main.Objects
                     IsStaticMapMeshQueuedForInstancing(meshIndex) ||
                     IsBlendMesh(meshIndex) ||
                     NeedsSpecialShaderForMesh(meshIndex) ||
-                    _meshIsRGBA != null && (uint)meshIndex < (uint)_meshIsRGBA.Length && _meshIsRGBA[meshIndex] ||
-                    _boneTextures == null ||
-                    (uint)meshIndex >= (uint)_boneTextures.Length ||
-                    !ReferenceEquals(_boneTextures[meshIndex], stateKey.Texture))
+                    _meshes != null && (uint)meshIndex < (uint)_meshes.Length && _meshes[meshIndex].IsRgba ||
+                    _meshes == null ||
+                    (uint)meshIndex >= (uint)_meshes.Length ||
+                    !ReferenceEquals(_meshes[meshIndex].Texture, stateKey.Texture))
                 {
                     return false;
                 }
@@ -674,15 +674,11 @@ namespace Client.Main.Objects
         // Fast path draw for standard alpha-tested meshes (no special shaders)
         private void DrawMeshFastAlpha(int mesh)
         {
-            if (_boneVertexBuffers == null || _boneIndexBuffers == null || _boneTextures == null)
+            if (_meshes == null || mesh >= _meshes.Length)
                 return;
-            if (mesh < 0 ||
-                mesh >= _boneVertexBuffers.Length ||
-                mesh >= _boneIndexBuffers.Length ||
-                mesh >= _boneTextures.Length ||
-                _boneVertexBuffers[mesh] == null ||
-                _boneIndexBuffers[mesh] == null ||
-                _boneTextures[mesh] == null ||
+            if (_meshes[mesh].CpuVertexBuffer == null ||
+                _meshes[mesh].CpuIndexBuffer == null ||
+                _meshes[mesh].Texture == null ||
                 IsHiddenMesh(mesh))
                 return;
 
@@ -690,8 +686,8 @@ namespace Client.Main.Objects
                 return;
 
             var gd = GraphicsDevice;
-            gd.SetVertexBuffer(_boneVertexBuffers[mesh]);
-            gd.Indices = _boneIndexBuffers[mesh];
+            gd.SetVertexBuffer(_meshes[mesh].CpuVertexBuffer);
+            gd.Indices = _meshes[mesh].CpuIndexBuffer;
             int primitiveCount = gd.Indices.IndexCount / 3;
             gd.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, primitiveCount);
         }
@@ -712,17 +708,17 @@ namespace Client.Main.Objects
                 if (!isAfterDraw && IsStaticMapMeshQueuedForInstancing(i)) continue;
 
                 bool isBlend = IsBlendMesh(i);
-                bool isRGBA = _meshIsRGBA != null && i < _meshIsRGBA.Length && _meshIsRGBA[i];
+                bool isRGBA = _meshes != null && i < _meshes.Length && _meshes[i].IsRgba;
 
                 // Skip based on pass and low quality settings
                 if (LowQuality && isBlend && !RenderPolicy.PreserveBlendMeshesInLowQuality) continue;
                 bool shouldDraw = isAfterDraw ? (isRGBA || isBlend) : (!isRGBA && !isBlend);
                 if (!shouldDraw) continue;
 
-                if (_boneTextures == null || i >= _boneTextures.Length)
+                if (_meshes == null || i >= _meshes.Length)
                     continue;
 
-                var tex = _boneTextures[i];
+                var tex = _meshes[i].Texture;
                 bool twoSided = IsMeshTwoSided(i, isBlend);
                 BlendState blend = GetMeshBlendState(i, isBlend);
 
@@ -763,12 +759,9 @@ namespace Client.Main.Objects
             for (int n = 0; n < meshIndices.Count; n++)
             {
                 int mi = meshIndices[n];
-                if (_boneVertexBuffers == null || _boneIndexBuffers == null || _boneTextures == null)
+                if (_meshes == null || mi >= _meshes.Length)
                     return;
-                if (mi < 0 ||
-                    mi >= _boneVertexBuffers.Length ||
-                    mi >= _boneIndexBuffers.Length ||
-                    mi >= _boneTextures.Length)
+                if (mi < 0)
                 {
                     continue;
                 }
@@ -780,22 +773,22 @@ namespace Client.Main.Objects
         {
             if (Model?.Meshes == null || mesh < 0 || mesh >= Model.Meshes.Length)
                 return;
-            if (_boneTextures?[mesh] == null || IsHiddenMesh(mesh))
+            if (_meshes?[mesh]?.Texture == null || IsHiddenMesh(mesh))
                 return;
 
             if (IsStaticMapMeshQueuedForInstancing(mesh))
                 return;
 
-            bool hasCpuBuffers = _boneVertexBuffers?[mesh] != null && _boneIndexBuffers?[mesh] != null;
-            bool hasGpuDynamicBuffers = _gpuSkinMeshEnabled != null &&
-                                        (uint)mesh < (uint)_gpuSkinMeshEnabled.Length &&
-                                        _gpuSkinMeshEnabled[mesh] &&
-                                        _gpuSkinVertexBuffers != null &&
-                                        (uint)mesh < (uint)_gpuSkinVertexBuffers.Length &&
-                                        _gpuSkinVertexBuffers[mesh] != null &&
-                                        _gpuSkinIndexBuffers != null &&
-                                        (uint)mesh < (uint)_gpuSkinIndexBuffers.Length &&
-                                        _gpuSkinIndexBuffers[mesh] != null;
+            bool hasCpuBuffers = _meshes?[mesh]?.CpuVertexBuffer != null && _meshes?[mesh]?.CpuIndexBuffer != null;
+            bool hasGpuDynamicBuffers = _meshes != null &&
+                                        (uint)mesh < (uint)_meshes.Length &&
+                                        _meshes[mesh].GpuSkinEnabled &&
+                                        _meshes != null &&
+                                        (uint)mesh < (uint)_meshes.Length &&
+                                        _meshes[mesh].GpuVertexBuffer != null &&
+                                        _meshes != null &&
+                                        (uint)mesh < (uint)_meshes.Length &&
+                                        _meshes[mesh].GpuIndexBuffer != null;
 
             var shaderSelection = DetermineShaderForMesh(mesh);
 
@@ -854,9 +847,9 @@ namespace Client.Main.Objects
                     // Always use AlphaTestEffect - it has ReferenceAlpha=2 which discards very low alpha
                     // pixels similar to DynamicLightingEffect's clip(finalAlpha - 0.01), preventing
                     // black outlines and depth buffer issues with semi-transparent meshes
-                    var vertexBuffer = _boneVertexBuffers[mesh];
-                    var indexBuffer = _boneIndexBuffers[mesh];
-                    var texture = _boneTextures[mesh];
+                    var vertexBuffer = _meshes[mesh].CpuVertexBuffer;
+                    var indexBuffer = _meshes[mesh].CpuIndexBuffer;
+                    var texture = _meshes[mesh].Texture;
 
                     // Batch state changes - save current states
                     var originalRasterizer = gd.RasterizerState;
@@ -933,9 +926,9 @@ namespace Client.Main.Objects
         {
             if (Model?.Meshes == null || mesh < 0 || mesh >= Model.Meshes.Length)
                 return;
-            if (_boneVertexBuffers?[mesh] == null ||
-                _boneIndexBuffers?[mesh] == null ||
-                _boneTextures?[mesh] == null ||
+            if (_meshes?[mesh]?.CpuVertexBuffer == null ||
+                _meshes?[mesh]?.CpuIndexBuffer == null ||
+                _meshes?[mesh]?.Texture == null ||
                 IsHiddenMesh(mesh))
                 return;
 
@@ -959,9 +952,9 @@ namespace Client.Main.Objects
                 try
                 {
                     bool isBlendMesh = IsBlendMesh(mesh);
-                    var vertexBuffer = _boneVertexBuffers[mesh];
-                    var indexBuffer = _boneIndexBuffers[mesh];
-                    var texture = _boneTextures[mesh];
+                    var vertexBuffer = _meshes[mesh].CpuVertexBuffer;
+                    var indexBuffer = _meshes[mesh].CpuIndexBuffer;
+                    var texture = _meshes[mesh].Texture;
 
                     var prevCull = gd.RasterizerState;
                     var prevBlend = gd.BlendState;
@@ -1042,9 +1035,9 @@ namespace Client.Main.Objects
         {
             if (Model?.Meshes == null || mesh < 0 || mesh >= Model.Meshes.Length)
                 return;
-            if (_boneVertexBuffers?[mesh] == null ||
-                _boneIndexBuffers?[mesh] == null ||
-                _boneTextures?[mesh] == null ||
+            if (_meshes?[mesh]?.CpuVertexBuffer == null ||
+                _meshes?[mesh]?.CpuIndexBuffer == null ||
+                _meshes?[mesh]?.Texture == null ||
                 IsHiddenMesh(mesh))
                 return;
 
@@ -1068,9 +1061,9 @@ namespace Client.Main.Objects
                 try
                 {
                     bool isBlendMesh = IsBlendMesh(mesh);
-                    var vertexBuffer = _boneVertexBuffers[mesh];
-                    var indexBuffer = _boneIndexBuffers[mesh];
-                    var texture = _boneTextures[mesh];
+                    var vertexBuffer = _meshes[mesh].CpuVertexBuffer;
+                    var indexBuffer = _meshes[mesh].CpuIndexBuffer;
+                    var texture = _meshes[mesh].Texture;
 
                     var prevCull = gd.RasterizerState;
                     var prevBlend = gd.BlendState;
@@ -1146,7 +1139,7 @@ namespace Client.Main.Objects
         {
             if (Model?.Meshes == null || mesh < 0 || mesh >= Model.Meshes.Length)
                 return;
-            if (_boneTextures?[mesh] == null || IsHiddenMesh(mesh))
+            if (_meshes?[mesh]?.Texture == null || IsHiddenMesh(mesh))
                 return;
 
             try
@@ -1166,19 +1159,19 @@ namespace Client.Main.Objects
                 try
                 {
                     bool isBlendMesh = IsBlendMesh(mesh);
-                    var texture = _boneTextures[mesh];
-                    bool useGpuSkinning = _gpuSkinMeshEnabled != null &&
-                                          (uint)mesh < (uint)_gpuSkinMeshEnabled.Length &&
-                                          _gpuSkinMeshEnabled[mesh] &&
-                                          _gpuSkinVertexBuffers != null &&
-                                          (uint)mesh < (uint)_gpuSkinVertexBuffers.Length &&
-                                          _gpuSkinVertexBuffers[mesh] != null &&
-                                          _gpuSkinIndexBuffers != null &&
-                                          (uint)mesh < (uint)_gpuSkinIndexBuffers.Length &&
-                                          _gpuSkinIndexBuffers[mesh] != null;
+                    var texture = _meshes[mesh].Texture;
+                    bool useGpuSkinning = _meshes != null &&
+                                          (uint)mesh < (uint)_meshes.Length &&
+                                          _meshes[mesh].GpuSkinEnabled &&
+                                          _meshes != null &&
+                                          (uint)mesh < (uint)_meshes.Length &&
+                                          _meshes[mesh].GpuVertexBuffer != null &&
+                                          _meshes != null &&
+                                          (uint)mesh < (uint)_meshes.Length &&
+                                          _meshes[mesh].GpuIndexBuffer != null;
 
-                    VertexBuffer vertexBuffer = useGpuSkinning ? _gpuSkinVertexBuffers[mesh] : _boneVertexBuffers?[mesh];
-                    IndexBuffer indexBuffer = useGpuSkinning ? _gpuSkinIndexBuffers[mesh] : _boneIndexBuffers?[mesh];
+                    VertexBuffer vertexBuffer = useGpuSkinning ? _meshes[mesh].GpuVertexBuffer : _meshes?[mesh]?.CpuVertexBuffer;
+                    IndexBuffer indexBuffer = useGpuSkinning ? _meshes[mesh].GpuIndexBuffer : _meshes?[mesh]?.CpuIndexBuffer;
                     if (vertexBuffer == null || indexBuffer == null)
                         return;
 
@@ -1200,9 +1193,9 @@ namespace Client.Main.Objects
                     gd.BlendState = blendState;
 
                     int requiredBoneCount = useGpuSkinning &&
-                                            _gpuSkinBoneCounts != null &&
-                                            (uint)mesh < (uint)_gpuSkinBoneCounts.Length
-                        ? _gpuSkinBoneCounts[mesh]
+                                            _meshes != null &&
+                                            (uint)mesh < (uint)_meshes.Length
+                        ? _meshes[mesh].GpuBoneCount
                         : 0;
 
                     bool needsGpuBoneRefresh = useGpuSkinning &&
@@ -1222,8 +1215,8 @@ namespace Client.Main.Objects
                     {
                         _dynamicLightingPreparedWithGpuSkinning = false;
                         _dynamicLightingPreparedGpuBoneCount = 0;
-                        vertexBuffer = _boneVertexBuffers?[mesh];
-                        indexBuffer = _boneIndexBuffers?[mesh];
+                        vertexBuffer = _meshes?[mesh]?.CpuVertexBuffer;
+                        indexBuffer = _meshes?[mesh]?.CpuIndexBuffer;
                         if (vertexBuffer == null || indexBuffer == null)
                             return;
                         useGpuSkinning = false;
@@ -1264,20 +1257,17 @@ namespace Client.Main.Objects
 
         public virtual void DrawMeshHighlight(int mesh, Matrix highlightMatrix, Vector3 highlightColor)
         {
-            if (IsHiddenMesh(mesh) || _boneVertexBuffers == null || _boneIndexBuffers == null || _boneTextures == null)
+            if (IsHiddenMesh(mesh) || _meshes == null || mesh >= _meshes.Length)
                 return;
 
-            // Defensive range checks to avoid races when buffers are swapped during async loads
             if (mesh < 0 ||
-                mesh >= _boneVertexBuffers.Length ||
-                mesh >= _boneIndexBuffers.Length ||
-                mesh >= _boneTextures.Length)
+                mesh >= _meshes.Length)
             {
                 return;
             }
 
-            VertexBuffer vertexBuffer = _boneVertexBuffers[mesh];
-            IndexBuffer indexBuffer = _boneIndexBuffers[mesh];
+            VertexBuffer vertexBuffer = _meshes[mesh].CpuVertexBuffer;
+            IndexBuffer indexBuffer = _meshes[mesh].CpuIndexBuffer;
 
             if (vertexBuffer == null || indexBuffer == null)
                 return;
@@ -1294,7 +1284,7 @@ namespace Client.Main.Objects
             float prevAlpha = alphaTestEffect.Alpha;
 
             alphaTestEffect.World = highlightMatrix;
-            alphaTestEffect.Texture = _boneTextures[mesh];
+            alphaTestEffect.Texture = _meshes[mesh].Texture;
             alphaTestEffect.DiffuseColor = highlightColor;
             alphaTestEffect.Alpha = 1f;
 

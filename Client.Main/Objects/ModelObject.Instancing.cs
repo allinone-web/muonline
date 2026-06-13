@@ -60,9 +60,9 @@ namespace Client.Main.Objects
             }
         }
 
-        private readonly struct MonsterCrowdInstancingBatchKey : IEquatable<MonsterCrowdInstancingBatchKey>
+        private readonly struct WalkerCrowdInstancingBatchKey : IEquatable<WalkerCrowdInstancingBatchKey>
         {
-            public MonsterCrowdInstancingBatchKey(
+            public WalkerCrowdInstancingBatchKey(
                 BMD model,
                 int meshIndex,
                 Texture2D texture,
@@ -91,7 +91,7 @@ namespace Client.Main.Objects
             public int Frame1 { get; }
             public int InterpolationBucket { get; }
 
-            public bool Equals(MonsterCrowdInstancingBatchKey other)
+            public bool Equals(WalkerCrowdInstancingBatchKey other)
             {
                 return ReferenceEquals(Model, other.Model)
                     && MeshIndex == other.MeshIndex
@@ -103,7 +103,7 @@ namespace Client.Main.Objects
                     && InterpolationBucket == other.InterpolationBucket;
             }
 
-            public override bool Equals(object obj) => obj is MonsterCrowdInstancingBatchKey other && Equals(other);
+            public override bool Equals(object obj) => obj is WalkerCrowdInstancingBatchKey other && Equals(other);
 
             public override int GetHashCode()
             {
@@ -148,7 +148,7 @@ namespace Client.Main.Objects
             }
         }
 
-        private sealed class MonsterCrowdInstancingBatch : IDisposable
+        private sealed class WalkerCrowdInstancingBatch : IDisposable
         {
             public VertexBuffer GeometryVertexBuffer;
             public IndexBuffer GeometryIndexBuffer;
@@ -176,9 +176,10 @@ namespace Client.Main.Objects
         private static readonly Dictionary<StaticMapInstancingBatchKey, StaticMapInstancingBatch> _staticMapInstancingBatches = new Dictionary<StaticMapInstancingBatchKey, StaticMapInstancingBatch>(128);
         private static readonly List<StaticMapInstancingBatch> _staticMapInstancingActiveBatches = new List<StaticMapInstancingBatch>(128);
         private static readonly DynamicLightGpuUploader _staticInstancingLightUploader = new(32);
-        private static readonly Dictionary<MonsterCrowdInstancingBatchKey, MonsterCrowdInstancingBatch> _monsterCrowdInstancingBatches = new Dictionary<MonsterCrowdInstancingBatchKey, MonsterCrowdInstancingBatch>(128);
-        private static readonly List<MonsterCrowdInstancingBatch> _monsterCrowdInstancingActiveBatches = new List<MonsterCrowdInstancingBatch>(128);
-        private static bool _staticMapInstancingFailed = false;
+        private static readonly Dictionary<WalkerCrowdInstancingBatchKey, WalkerCrowdInstancingBatch> _walkerCrowdInstancingBatches = new Dictionary<WalkerCrowdInstancingBatchKey, WalkerCrowdInstancingBatch>(128);
+        private static readonly List<WalkerCrowdInstancingBatch> _walkerCrowdInstancingActiveBatches = new List<WalkerCrowdInstancingBatch>(128);
+        private static bool _staticMapInstancingFailed;
+        private static bool _walkerCrowdInstancingFailed;
         private static EffectTechnique _cachedStaticMapInstancingTechnique;
         private static readonly Matrix _identity = Matrix.Identity;
 
@@ -194,7 +195,7 @@ namespace Client.Main.Objects
         public static int LastFrameStaticMapInstancedDrawCalls { get; private set; }
         public static int LastFrameStaticMapInstancingFallbacks { get; private set; }
         public static bool IsStaticMapInstancingBackendSupported => SupportsGpuDynamicSkinning;
-        public static bool IsStaticMapInstancingRuntimeDisabled => _staticMapInstancingFailed;
+        public static bool IsStaticMapInstancingRuntimeDisabled => _staticMapInstancingFailed || _walkerCrowdInstancingFailed;
 
         private static void BeginFrameStaticMapInstancingMetrics()
         {
@@ -229,12 +230,12 @@ namespace Client.Main.Objects
             return modelObject.TryQueueStaticMapObjectForInstancing();
         }
 
-        internal static bool TryQueueMonsterCrowdForInstancing(WorldObject obj)
+        internal static bool TryQueueWalkerCrowdForInstancing(WorldObject obj)
         {
             if (obj is not ModelObject modelObject)
                 return false;
 
-            return modelObject.TryQueueMonsterCrowdForInstancing();
+            return modelObject.TryQueueWalkerCrowdForInstancing();
         }
 
         internal static void FlushStaticMapInstancingBatches(WorldControl world)
@@ -328,14 +329,14 @@ namespace Client.Main.Objects
             }
         }
 
-        internal static void FlushMonsterCrowdInstancingBatches(WorldControl world)
+        internal static void FlushWalkerCrowdInstancingBatches(WorldControl world)
         {
-            if (_monsterCrowdInstancingActiveBatches.Count == 0)
+            if (_walkerCrowdInstancingActiveBatches.Count == 0)
                 return;
 
-            if (_staticMapInstancingFailed || !IsMonsterCrowdInstancingSupported())
+            if (_walkerCrowdInstancingFailed || !IsWalkerCrowdInstancingSupported())
             {
-                ClearMonsterCrowdInstancingQueues();
+                ClearWalkerCrowdInstancingQueues();
                 return;
             }
 
@@ -343,7 +344,7 @@ namespace Client.Main.Objects
             var effect = graphicsManager.DynamicLightingEffect;
             if (effect == null || _cachedStaticMapInstancingTechnique == null)
             {
-                ClearMonsterCrowdInstancingQueues();
+                ClearWalkerCrowdInstancingQueues();
                 return;
             }
 
@@ -359,9 +360,9 @@ namespace Client.Main.Objects
                 gd.BlendState = BlendState.Opaque;
                 gd.SamplerStates[0] = GraphicsManager.GetQualityLinearSamplerState();
 
-                for (int i = 0; i < _monsterCrowdInstancingActiveBatches.Count; i++)
+                for (int i = 0; i < _walkerCrowdInstancingActiveBatches.Count; i++)
                 {
-                    var batch = _monsterCrowdInstancingActiveBatches[i];
+                    var batch = _walkerCrowdInstancingActiveBatches[i];
                     int instanceCount = batch.Instances.Count;
                     if (instanceCount <= 0 ||
                         batch.GeometryVertexBuffer == null ||
@@ -405,20 +406,20 @@ namespace Client.Main.Objects
             }
             catch (Exception ex)
             {
-                _staticMapInstancingFailed = true;
-                MuGame.AppLoggerFactory?.CreateLogger<ModelObject>()?.LogWarning(ex, "Monster crowd hardware instancing disabled after runtime failure.");
+                _walkerCrowdInstancingFailed = true;
+                MuGame.AppLoggerFactory?.CreateLogger<ModelObject>()?.LogWarning(ex, "Walker crowd hardware instancing disabled after runtime failure.");
             }
             finally
             {
                 gd.BlendState = prevBlend;
                 gd.RasterizerState = prevRaster;
                 gd.SamplerStates[0] = prevSampler;
-                ClearMonsterCrowdInstancingQueues();
+                ClearWalkerCrowdInstancingQueues();
             }
         }
 
         internal static bool HasPendingStaticMapInstancingBatches() => _staticMapInstancingActiveBatches.Count > 0;
-        internal static bool HasPendingMonsterCrowdInstancingBatches() => _monsterCrowdInstancingActiveBatches.Count > 0;
+        internal static bool HasPendingWalkerCrowdInstancingBatches() => _walkerCrowdInstancingActiveBatches.Count > 0;
 
         private static void EnsureInstanceUploadBuffer(StaticMapInstancingBatch batch, int instanceCount)
         {
@@ -448,7 +449,7 @@ namespace Client.Main.Objects
             batch.InstanceBufferCapacity = capacity;
         }
 
-        private static void EnsureInstanceUploadBuffer(MonsterCrowdInstancingBatch batch, int instanceCount)
+        private static void EnsureInstanceUploadBuffer(WalkerCrowdInstancingBatch batch, int instanceCount)
         {
             if (batch.UploadBuffer.Length >= instanceCount)
                 return;
@@ -457,7 +458,7 @@ namespace Client.Main.Objects
             batch.UploadBuffer = new StaticModelInstanceData[newSize];
         }
 
-        private static void EnsureInstanceVertexBuffer(GraphicsDevice gd, MonsterCrowdInstancingBatch batch, int instanceCount)
+        private static void EnsureInstanceVertexBuffer(GraphicsDevice gd, WalkerCrowdInstancingBatch batch, int instanceCount)
         {
             if (batch.InstanceBuffer != null &&
                 !batch.InstanceBuffer.IsDisposed &&
@@ -484,12 +485,12 @@ namespace Client.Main.Objects
             _staticMapInstancingActiveBatches.Clear();
         }
 
-        private static void ClearMonsterCrowdInstancingQueues()
+        private static void ClearWalkerCrowdInstancingQueues()
         {
-            for (int i = 0; i < _monsterCrowdInstancingActiveBatches.Count; i++)
-                _monsterCrowdInstancingActiveBatches[i].Instances.Clear();
+            for (int i = 0; i < _walkerCrowdInstancingActiveBatches.Count; i++)
+                _walkerCrowdInstancingActiveBatches[i].Instances.Clear();
 
-            _monsterCrowdInstancingActiveBatches.Clear();
+            _walkerCrowdInstancingActiveBatches.Clear();
         }
 
         private static bool IsStaticMapInstancingSupported()
@@ -509,10 +510,10 @@ namespace Client.Main.Objects
             return _cachedStaticMapInstancingTechnique != null;
         }
 
-        private static bool IsMonsterCrowdInstancingSupported()
+        private static bool IsWalkerCrowdInstancingSupported()
         {
-            if (_staticMapInstancingFailed ||
-                !Constants.ENABLE_MONSTER_CROWD_INSTANCING ||
+            if (_walkerCrowdInstancingFailed ||
+                !Constants.ENABLE_WALKER_CROWD_INSTANCING ||
                 !Constants.ENABLE_GPU_SKINNING ||
                 !SupportsGpuDynamicSkinning)
             {
@@ -532,7 +533,7 @@ namespace Client.Main.Objects
             if (!CanUseStaticMapInstancing())
                 return StaticMapInstancingQueueResult.None;
 
-            if (Model?.Meshes == null || _boneTextures == null)
+            if (Model?.Meshes == null || _meshes == null)
                 return StaticMapInstancingQueueResult.None;
 
             int meshCount = Model.Meshes.Length;
@@ -564,7 +565,7 @@ namespace Client.Main.Objects
                 }
 
                 bool twoSided = IsMeshTwoSided(meshIndex, false);
-                Texture2D texture = _boneTextures[meshIndex];
+                Texture2D texture = _meshes[meshIndex].Texture;
                 var key = new StaticMapInstancingBatchKey(Model, meshIndex, texture, twoSided);
                 if (!_staticMapInstancingBatches.TryGetValue(key, out var batch))
                 {
@@ -603,12 +604,12 @@ namespace Client.Main.Objects
                 : StaticMapInstancingQueueResult.Partial;
         }
 
-        private bool TryQueueMonsterCrowdForInstancing()
+        private bool TryQueueWalkerCrowdForInstancing()
         {
-            if (!CanUseMonsterCrowdInstancing())
+            if (!CanUseWalkerCrowdInstancing())
                 return false;
 
-            if (Model?.Meshes == null || _boneTextures == null)
+            if (Model?.Meshes == null || _meshes == null)
                 return false;
 
             int meshCount = Model.Meshes.Length;
@@ -617,10 +618,10 @@ namespace Client.Main.Objects
 
             for (int meshIndex = 0; meshIndex < meshCount; meshIndex++)
             {
-                if (!ShouldQueueMonsterCrowdMesh(meshIndex))
+                if (!ShouldQueueWalkerCrowdMesh(meshIndex))
                     continue;
 
-                if (!CanUseMonsterCrowdMeshForInstancing(meshIndex))
+                if (!CanUseWalkerCrowdMeshForInstancing(meshIndex))
                     return false;
 
                 queuedAnyMesh = true;
@@ -631,7 +632,7 @@ namespace Client.Main.Objects
 
             for (int meshIndex = 0; meshIndex < meshCount; meshIndex++)
             {
-                if (!ShouldQueueMonsterCrowdMesh(meshIndex))
+                if (!ShouldQueueWalkerCrowdMesh(meshIndex))
                     continue;
 
                 if (!BMDLoader.Instance.TryGetGpuSkinnedMeshBuffers(
@@ -647,7 +648,7 @@ namespace Client.Main.Objects
 
             for (int meshIndex = 0; meshIndex < meshCount; meshIndex++)
             {
-                if (!ShouldQueueMonsterCrowdMesh(meshIndex))
+                if (!ShouldQueueWalkerCrowdMesh(meshIndex))
                     continue;
 
                 if (!BMDLoader.Instance.TryGetGpuSkinnedMeshBuffers(
@@ -661,8 +662,8 @@ namespace Client.Main.Objects
                 }
 
                 bool twoSided = IsMeshTwoSided(meshIndex, false);
-                Texture2D texture = _boneTextures[meshIndex];
-                var key = new MonsterCrowdInstancingBatchKey(
+                Texture2D texture = _meshes[meshIndex].Texture;
+                var key = new WalkerCrowdInstancingBatchKey(
                     Model,
                     meshIndex,
                     texture,
@@ -672,10 +673,10 @@ namespace Client.Main.Objects
                     _animationSampleFrame1,
                     _animationSampleInterpolationBucket);
 
-                if (!_monsterCrowdInstancingBatches.TryGetValue(key, out var batch))
+                if (!_walkerCrowdInstancingBatches.TryGetValue(key, out var batch))
                 {
-                    batch = new MonsterCrowdInstancingBatch();
-                    _monsterCrowdInstancingBatches[key] = batch;
+                    batch = new WalkerCrowdInstancingBatch();
+                    _walkerCrowdInstancingBatches[key] = batch;
                 }
 
                 batch.GeometryVertexBuffer = geometryVB;
@@ -688,7 +689,7 @@ namespace Client.Main.Objects
                 if (batch.Instances.Count == 0)
                 {
                     batch.PoseSource = this;
-                    _monsterCrowdInstancingActiveBatches.Add(batch);
+                    _walkerCrowdInstancingActiveBatches.Add(batch);
                 }
 
                 batch.Instances.Add(instanceData);
@@ -726,9 +727,9 @@ namespace Client.Main.Objects
             return true;
         }
 
-        private bool CanUseMonsterCrowdInstancing()
+        private bool CanUseWalkerCrowdInstancing()
         {
-            if (!IsMonsterCrowdInstancingSupported())
+            if (!IsWalkerCrowdInstancingSupported())
                 return false;
 
             // Allow any WalkerObject crowd member. Player characters intentionally excluded:
@@ -753,9 +754,7 @@ namespace Client.Main.Objects
                 return false;
 
             // Death/one-shot animations cancel pose sharing: keep them on the per-instance path.
-            if (walker is MonsterObject monster && (monster.IsDead || monster.IsOneShotPlaying))
-                return false;
-            if (walker is not MonsterObject && walker.IsOneShotPlaying)
+            if (walker.IsOneShotPlaying)
                 return false;
 
             if (TotalAlpha < 0.999f || EnableCustomShader)
@@ -782,7 +781,7 @@ namespace Client.Main.Objects
             if (!ShouldQueueStaticMapMesh(meshIndex))
                 return false;
 
-            if (_boneTextures == null || meshIndex >= _boneTextures.Length || _boneTextures[meshIndex] == null)
+            if (_meshes == null || meshIndex >= _meshes.Length || _meshes[meshIndex].Texture == null)
                 return false;
 
             var shaderSelection = DetermineShaderForMesh(meshIndex);
@@ -792,12 +791,12 @@ namespace Client.Main.Objects
             return shaderSelection.UseDynamicLighting;
         }
 
-        private bool CanUseMonsterCrowdMeshForInstancing(int meshIndex)
+        private bool CanUseWalkerCrowdMeshForInstancing(int meshIndex)
         {
             if (Model?.Meshes == null || meshIndex < 0 || meshIndex >= Model.Meshes.Length)
                 return false;
 
-            if (_boneTextures == null || meshIndex >= _boneTextures.Length || _boneTextures[meshIndex] == null)
+            if (_meshes == null || meshIndex >= _meshes.Length || _meshes[meshIndex].Texture == null)
                 return false;
 
             var shaderSelection = DetermineShaderForMesh(meshIndex);
@@ -828,9 +827,9 @@ namespace Client.Main.Objects
                 return false;
 
             bool isBlend = IsBlendMesh(meshIndex);
-            bool isRGBA = _meshIsRGBA != null &&
-                          (uint)meshIndex < (uint)_meshIsRGBA.Length &&
-                          _meshIsRGBA[meshIndex];
+            bool isRGBA = _meshes != null &&
+                          (uint)meshIndex < (uint)_meshes.Length &&
+                          _meshes[meshIndex].IsRgba;
 
             if (isBlend || isRGBA)
                 return false;
@@ -851,9 +850,9 @@ namespace Client.Main.Objects
                     continue;
 
                 bool isBlend = IsBlendMesh(meshIndex);
-                bool isRGBA = _meshIsRGBA != null &&
-                              (uint)meshIndex < (uint)_meshIsRGBA.Length &&
-                              _meshIsRGBA[meshIndex];
+                bool isRGBA = _meshes != null &&
+                              (uint)meshIndex < (uint)_meshes.Length &&
+                              _meshes[meshIndex].IsRgba;
 
                 if (isBlend || isRGBA)
                     return true;
@@ -867,7 +866,7 @@ namespace Client.Main.Objects
             return false;
         }
 
-        private bool ShouldQueueMonsterCrowdMesh(int meshIndex)
+        private bool ShouldQueueWalkerCrowdMesh(int meshIndex)
         {
             if (Model?.Meshes == null || meshIndex < 0 || meshIndex >= Model.Meshes.Length)
                 return false;
@@ -876,9 +875,9 @@ namespace Client.Main.Objects
                 return false;
 
             bool isBlend = IsBlendMesh(meshIndex);
-            bool isRGBA = _meshIsRGBA != null &&
-                          (uint)meshIndex < (uint)_meshIsRGBA.Length &&
-                          _meshIsRGBA[meshIndex];
+            bool isRGBA = _meshes != null &&
+                          (uint)meshIndex < (uint)_meshes.Length &&
+                          _meshes[meshIndex].IsRgba;
 
             return !isRGBA && !isBlend;
         }

@@ -115,7 +115,7 @@ namespace Client.Main.Objects
                 {
                     GenerateBoneMatrix(currentActionIndex, 0, 0, 0);
                     _priorActionIndex = currentActionIndex;
-                    InvalidateBuffers(BUFFER_FLAG_ANIMATION);
+                    InvalidateBuffers(MeshDirtyFlags.Animation);
                 }
                 CurrentFrame = 0;
                 return;
@@ -202,7 +202,7 @@ namespace Client.Main.Objects
                     _blendFromAction = -1;
                 }
 
-                InvalidateBuffers(BUFFER_FLAG_ANIMATION);
+                InvalidateBuffers(MeshDirtyFlags.Animation);
             }
 
             _priorActionIndex = currentActionIndex;
@@ -439,7 +439,7 @@ namespace Client.Main.Objects
                 {
                     Array.Copy(tempBoneTransforms, BoneTransform, bones.Length);
                     _animationPoseVersion++;
-                    InvalidateBuffers(BUFFER_FLAG_ANIMATION);
+                    InvalidateBuffers(MeshDirtyFlags.Animation);
                 }
 
                 if (canUseSharedPalette)
@@ -518,7 +518,7 @@ namespace Client.Main.Objects
             if (changed)
             {
                 _animationPoseVersion++;
-                InvalidateBuffers(BUFFER_FLAG_ANIMATION);
+                InvalidateBuffers(MeshDirtyFlags.Animation);
             }
 
             if (shouldCheckCache)
@@ -704,7 +704,7 @@ namespace Client.Main.Objects
                     : BuildBoneFromBmd(bones[i], BoneTransform);
             }
 
-            InvalidateBuffers(BUFFER_FLAG_ANIMATION);
+            InvalidateBuffers(MeshDirtyFlags.Animation);
             return true;
         }
 

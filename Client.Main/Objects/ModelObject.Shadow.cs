@@ -166,7 +166,7 @@ namespace Client.Main.Objects
                 if (MuGame.Instance.ActiveScene?.World is WorldControl world && !world.EnableShadows)
                     return;
 
-                if (IsHiddenMesh(mesh) || _boneVertexBuffers == null)
+                if (IsHiddenMesh(mesh) || _meshes == null)
                     return;
 
                 if (!ValidateWorldMatrix(WorldPosition))
@@ -175,8 +175,8 @@ namespace Client.Main.Objects
                     return;
                 }
 
-                VertexBuffer vertexBuffer = _boneVertexBuffers[mesh];
-                IndexBuffer indexBuffer = _boneIndexBuffers[mesh];
+                VertexBuffer vertexBuffer = _meshes[mesh].CpuVertexBuffer;
+                IndexBuffer indexBuffer = _meshes[mesh].CpuIndexBuffer;
                 if (vertexBuffer == null || indexBuffer == null)
                     return;
 
@@ -198,13 +198,13 @@ namespace Client.Main.Objects
                 try
                 {
                     var effect = GraphicsManager.Instance.ShadowEffect;
-                    if (effect == null || _boneTextures?[mesh] == null)
+                    if (effect == null || _meshes?[mesh]?.Texture == null)
                         return;
 
                     effect.Parameters["World"]?.SetValue(shadowWorld);
                     effect.Parameters["ViewProjection"]?.SetValue(view * projection);
                     effect.Parameters["ShadowTint"]?.SetValue(new Vector4(0, 0, 0, shadowOpacity));
-                    effect.Parameters["ShadowTexture"]?.SetValue(_boneTextures[mesh]);
+                    effect.Parameters["ShadowTexture"]?.SetValue(_meshes[mesh].Texture);
 
                     foreach (var pass in effect.CurrentTechnique.Passes)
                     {
@@ -275,7 +275,7 @@ namespace Client.Main.Objects
             Vector2 shadowTexel = new Vector2(1f / shadowSize, 1f / shadowSize);
 
             // Draw own meshes if available
-            if (Model?.Meshes != null && _boneTextures != null)
+            if (Model?.Meshes != null && _meshes != null)
             {
                 try
                 {
@@ -312,26 +312,26 @@ namespace Client.Main.Objects
                             continue;
 
                         bool useGpuSkinning = shadowCasterSkinnedTechnique != null &&
-                                              _gpuSkinMeshEnabled != null &&
-                                              (uint)i < (uint)_gpuSkinMeshEnabled.Length &&
-                                              _gpuSkinMeshEnabled[i] &&
-                                              _gpuSkinVertexBuffers != null &&
-                                              (uint)i < (uint)_gpuSkinVertexBuffers.Length &&
-                                              _gpuSkinVertexBuffers[i] != null &&
-                                              _gpuSkinIndexBuffers != null &&
-                                              (uint)i < (uint)_gpuSkinIndexBuffers.Length &&
-                                              _gpuSkinIndexBuffers[i] != null;
+                                              _meshes != null &&
+                                              (uint)i < (uint)_meshes.Length &&
+                                              _meshes[i].GpuSkinEnabled &&
+                                              _meshes != null &&
+                                              (uint)i < (uint)_meshes.Length &&
+                                              _meshes[i].GpuVertexBuffer != null &&
+                                              _meshes != null &&
+                                              (uint)i < (uint)_meshes.Length &&
+                                              _meshes[i].GpuIndexBuffer != null;
 
-                        VertexBuffer vb = useGpuSkinning ? _gpuSkinVertexBuffers[i] : _boneVertexBuffers?[i];
-                        IndexBuffer ib = useGpuSkinning ? _gpuSkinIndexBuffers[i] : _boneIndexBuffers?[i];
-                        var tex = _boneTextures[i];
+                        VertexBuffer vb = useGpuSkinning ? _meshes[i].GpuVertexBuffer : _meshes?[i]?.CpuVertexBuffer;
+                        IndexBuffer ib = useGpuSkinning ? _meshes[i].GpuIndexBuffer : _meshes?[i]?.CpuIndexBuffer;
+                        var tex = _meshes[i].Texture;
                         if (vb == null || ib == null || tex == null)
                             continue;
 
                         if (useGpuSkinning)
                         {
-                            int requiredBoneCount = _gpuSkinBoneCounts != null && (uint)i < (uint)_gpuSkinBoneCounts.Length
-                                ? _gpuSkinBoneCounts[i]
+                            int requiredBoneCount = _meshes != null && (uint)i < (uint)_meshes.Length
+                                ? _meshes[i].GpuBoneCount
                                 : 0;
 
                             if (requiredBoneCount > uploadedSkinnedBoneCount)
@@ -339,8 +339,8 @@ namespace Client.Main.Objects
                                 if (!TryUploadGpuSkinBoneMatrices(shadowEffect, requiredBoneCount))
                                 {
                                     useGpuSkinning = false;
-                                    vb = _boneVertexBuffers?[i];
-                                    ib = _boneIndexBuffers?[i];
+                                    vb = _meshes?[i]?.CpuVertexBuffer;
+                                    ib = _meshes?[i]?.CpuIndexBuffer;
                                     if (vb == null || ib == null)
                                         continue;
                                 }

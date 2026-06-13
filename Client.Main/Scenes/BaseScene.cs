@@ -217,7 +217,7 @@ namespace Client.Main.Scenes
 
             if (World is WalkableWorldControl walkableWorld)
             {
-                walkableWorld.Walker.MouseScroolToZoom = World == MouseHoverControl;
+                walkableWorld.Walker.MouseScrollToZoom = World == MouseHoverControl;
             }
 
             base.Update(gameTime);

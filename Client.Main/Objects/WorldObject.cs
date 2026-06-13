@@ -62,26 +62,7 @@ namespace Client.Main.Objects
         private readonly Vector3[] _bboxCorners = new Vector3[8];
         private readonly StringBuilder _bboxInfoBuilder = new(256);
 
-        // Static frame counter for staggered updates
-        private static int _globalFrameCounter = 0;
         private readonly int _updateOffset; // Unique offset for each object to stagger updates
-        private const int HoverChecksPerFrame = 32;
-        private static int _hoverFrame = -1;
-        private static int _hoverChecksThisFrame = 0;
-
-        // Debug counters
-        public static int TotalSkippedUpdates { get; private set; } = 0;
-        public static int TotalUpdatesPerformed { get; private set; } = 0;
-        private static int _lastResetTime = Environment.TickCount;
-
-        public static string GetOptimizationStats()
-        {
-            int total = TotalSkippedUpdates + TotalUpdatesPerformed;
-            if (total == 0) return "No updates tracked yet";
-
-            float skipPercentage = (TotalSkippedUpdates / (float)total) * 100f;
-            return $"Updates: {TotalUpdatesPerformed}, Skipped: {TotalSkippedUpdates} ({skipPercentage:F1}%)";
-        }
 
         public bool LinkParentAnimation { get; set; }
         public ChildrenCollection<WorldObject> Children { get; private set; }
@@ -99,11 +80,11 @@ namespace Client.Main.Objects
         public BlendState BlendState { get; set; } = BlendState.Opaque;
         public float Alpha { get; set; } = 1f;
         public float TotalAlpha { get => (Parent?.TotalAlpha ?? 1f) * Alpha; }
-        public Vector3 Position { get => _position; set { if (_position != value) { if (_position != value) { _position = value; OnPositionChanged(); } } } }
-        public Vector3 Angle { get => _angle; set { if (_angle != value) { if (_angle != value) { _angle = value; OnAngleChanged(); } } } }
+        public Vector3 Position { get => _position; set { if (_position != value) { _position = value; OnPositionChanged(); } } }
+        public Vector3 Angle { get => _angle; set { if (_angle != value) { _angle = value; OnAngleChanged(); } } }
         public Vector3 TotalAngle { get => (Parent?.TotalAngle ?? Vector3.Zero) + Angle; }
 
-        public float Scale { get => _scale; set { if (_scale != value) { if (_scale != value) { _scale = value; OnScaleChanged(); } } } }
+        public float Scale { get => _scale; set { if (_scale != value) { _scale = value; OnScaleChanged(); } } }
         public float TotalScale { get => (Parent?.Scale ?? 1f) * Scale; }
         public Matrix WorldPosition { get => _worldPosition; set { if (_worldPosition != value) { _worldPosition = value; OnWorldPositionChanged(); } } }
         public bool Interactive { get => _interactive; set { _interactive = value; } }
@@ -120,14 +101,14 @@ namespace Client.Main.Objects
                 : WorldObjectRenderPolicy.Default;
         internal int UpdateOffset => _updateOffset;
         public bool Visible => Status == GameControlStatus.Ready && !Hidden;
-        public WorldControl World { get => _world; set { if (_world != value) { var prev = _world; _world = value; OnWorldChanged(value, prev); PropagateWorldToChildren(value); } } }
+        public WorldControl World { get => _world; set { if (_world != value) { var prev = _world; _world = value; OnWorldChanged(value, prev); } } }
         public short Type { get; set; }
         public bool IsMapPlacementObject { get; set; }
         public Color BoundingBoxColor { get; set; } = Color.GreenYellow;
         protected GraphicsDevice GraphicsDevice => MuGame.Instance.GraphicsDevice;
 
         public event EventHandler MatrixChanged;
-        public bool IsMouseHover { get; private set; }
+        public bool IsMouseHover { get; internal set; }
         public float DebugFontSize { get; set; } = 12f;
 
         public event EventHandler Click;
@@ -168,7 +149,7 @@ namespace Client.Main.Objects
         {
             var children = Children.ToArray();
             for (var i = 0; i < children.Length; i++)
-                Children[i].World = newWorld;
+                children[i].World = newWorld;
 
             if (newWorld is WalkableWorldControl && this is WalkerObject walker)
                 walker.OnDirectionChanged();
@@ -239,64 +220,7 @@ namespace Client.Main.Objects
             }
             if (Status != GameControlStatus.Ready) return;
 
-            // Increment once per *frame time*, not per object update
-            _globalFrameCounter = (int)(gameTime.TotalGameTime.TotalSeconds * 60.0);
-
-            if (Constants.SHOW_DEBUG_PANEL)
-            {
-                TotalUpdatesPerformed++;
-
-                if (Environment.TickCount - _lastResetTime > 5000)
-                {
-                    _lastResetTime = Environment.TickCount;
-                    TotalSkippedUpdates = 0;
-                    TotalUpdatesPerformed = 0;
-                }
-            }
-
-            var scene = World?.Scene;
-            if ((Interactive || Constants.DRAW_BOUNDING_BOXES) && scene != null)
-            {
-                bool uiBlockingHover = scene.MouseHoverControl is not null && scene.MouseHoverControl != scene.World;
-                bool objectBlockingHover = scene.MouseHoverObject is not null;
-
-                if (!uiBlockingHover && !objectBlockingHover)
-                {
-                    bool parentIsMouseHover = Parent?.IsMouseHover ?? false;
-
-                    bool wouldBeMouseHover = parentIsMouseHover;
-                    if (!parentIsMouseHover)
-                    {
-                        bool isImportantHoverCheck = this is WalkerObject;
-                        if (TryBeginHoverCheck(isImportantHoverCheck))
-                        {
-                            float? intersectionDistance = MuGame.Instance.MouseRay.Intersects(BoundingBoxWorld);
-                            ContainmentType contains = BoundingBoxWorld.Contains(MuGame.Instance.MouseRay.Position);
-                            wouldBeMouseHover = intersectionDistance.HasValue || contains == ContainmentType.Contains;
-                        }
-                        else
-                        {
-                            if (Constants.SHOW_DEBUG_PANEL)
-                                TotalSkippedUpdates++;
-
-                            wouldBeMouseHover = false;
-                        }
-                    }
-
-                    IsMouseHover = wouldBeMouseHover;
-
-                    if (!parentIsMouseHover && IsMouseHover && scene.MouseHoverObject is null)
-                        scene.MouseHoverObject = this;
-                }
-                else
-                {
-                    IsMouseHover = false;
-                }
-            }
-            else
-            {
-                IsMouseHover = false;
-            }
+            // Hover picking is handled by WorldHoverSystem, called from WorldControl.RenderObjects.
 
             var objects = Children;
             for (int i = objects.Count - 1; i >= 0; i--)
@@ -483,14 +407,6 @@ namespace Client.Main.Objects
             RecalculateWorldPosition();
         }
 
-        private void PropagateWorldToChildren(WorldControl world)
-        {
-            var children = Children.ToArray();
-            for (int i = 0; i < children.Length; i++)
-                children[i].World = world;
-        }
-
-
         protected virtual void OnBoundingBoxLocalChanged() => UpdateWorldBoundingBox();
 
         private void OnParentMatrixChanged(Object s, EventArgs e)
@@ -662,22 +578,6 @@ namespace Client.Main.Objects
 
             // Draw background on top of border
             spriteBatch.Draw(_whiteTexture, rect, null, color, 0f, Vector2.Zero, SpriteEffects.None, layerDepth);
-        }
-
-        private static bool TryBeginHoverCheck(bool isImportant)
-        {
-            int frame = _globalFrameCounter;
-            if (_hoverFrame != frame)
-            {
-                _hoverFrame = frame;
-                _hoverChecksThisFrame = 0;
-            }
-
-            if (!isImportant && _hoverChecksThisFrame >= HoverChecksPerFrame)
-                return false;
-
-            _hoverChecksThisFrame++;
-            return true;
         }
 
         internal void SetLowQuality(bool value)

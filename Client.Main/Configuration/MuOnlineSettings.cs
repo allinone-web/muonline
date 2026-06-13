@@ -23,7 +23,7 @@ namespace Client.Main.Configuration
         public int DynamicLightUpdateFps { get; set; } = 23;
         public int AnimationUpdateFps { get; set; } = 23;
         public bool EnableCrowdSpatialCulling { get; set; } = true;
-        public bool EnableMonsterCrowdInstancing { get; set; } = true;
+        public bool EnableWalkerCrowdInstancing { get; set; } = true;
         public bool EnableAnimationThrottling { get; set; } = true;
         public bool EnableSharedAnimationPalettes { get; set; } = true;
         public bool EnableBmdMeshBatching { get; set; } = true;

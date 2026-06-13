@@ -223,7 +223,7 @@ namespace Client.Main
             Constants.DYNAMIC_LIGHT_UPDATE_FPS = dynamicLightUpdateFps;
             Constants.ANIMATION_UPDATE_FPS = animationUpdateFps;
             Constants.ENABLE_CROWD_SPATIAL_CULLING = graphics.EnableCrowdSpatialCulling;
-            Constants.ENABLE_MONSTER_CROWD_INSTANCING = graphics.EnableMonsterCrowdInstancing;
+            Constants.ENABLE_WALKER_CROWD_INSTANCING = graphics.EnableWalkerCrowdInstancing;
             Constants.ENABLE_ANIMATION_THROTTLING = graphics.EnableAnimationThrottling;
             Constants.ENABLE_SHARED_ANIMATION_PALETTES = graphics.EnableSharedAnimationPalettes;
             Constants.ENABLE_BMD_MESH_BATCHING = graphics.EnableBmdMeshBatching;

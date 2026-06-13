@@ -179,6 +179,7 @@ namespace Client.Main.Controls
         private readonly List<PlayerObject> _players = [];
         private readonly List<MonsterObject> _monsters = [];
         private readonly List<DroppedItemObject> _droppedItems = [];
+        private readonly DroppedItemRenderSelector _droppedItemSelector = new();
         private readonly Queue<WorldObject> _objectsToInitialize = [];
         private readonly List<WorldObject> _visibleObjects = [];
 
@@ -433,6 +434,8 @@ namespace Client.Main.Controls
             {
                 RefreshDirtyVisibleObjects();
             }
+
+            WorldHoverSystem.UpdateHover(_visibleObjects, Scene);
         }
 
         private void QueueObjectInitialization(WorldObject obj)
@@ -743,6 +746,8 @@ namespace Client.Main.Controls
 
         private void RenderObjects(GameTime time)
         {
+            _droppedItemSelector.SelectRenderableItems(_droppedItems, time);
+
             _renderCounter = 0;
             _solidBehind.Clear();
             _transparentObjects.Clear();
@@ -879,7 +884,7 @@ namespace Client.Main.Controls
 
             SetDepthState(depthState);
             bool canUseMapInstancing = depthState == DepthStateDefault && Constants.ENABLE_MAP_OBJECT_INSTANCING;
-            bool canUseMonsterCrowdInstancing = depthState == DepthStateDefault && Constants.ENABLE_MONSTER_CROWD_INSTANCING;
+            bool canUseWalkerCrowdInstancing = depthState == DepthStateDefault && Constants.ENABLE_WALKER_CROWD_INSTANCING;
 
             var spriteBatch = GraphicsManager.Instance.Sprite;
             Helpers.SpriteBatchScope? scope = null;
@@ -904,8 +909,8 @@ namespace Client.Main.Controls
                 {
                     FrameMetrics.SpriteBatchObjects++;
 
-                    if (canUseMonsterCrowdInstancing && ModelObject.HasPendingMonsterCrowdInstancingBatches())
-                        ModelObject.FlushMonsterCrowdInstancingBatches(this);
+                    if (canUseWalkerCrowdInstancing && ModelObject.HasPendingWalkerCrowdInstancingBatches())
+                        ModelObject.FlushWalkerCrowdInstancingBatches(this);
 
                     if (canUseMapInstancing && ModelObject.HasPendingStaticMapInstancingBatches())
                         ModelObject.FlushStaticMapInstancingBatches(this);
@@ -956,7 +961,7 @@ namespace Client.Main.Controls
                     currentSampler = null;
                     currentBatchDepth = null;
 
-                    if (canUseMonsterCrowdInstancing && ModelObject.TryQueueMonsterCrowdForInstancing(obj))
+                    if (canUseWalkerCrowdInstancing && ModelObject.TryQueueWalkerCrowdForInstancing(obj))
                     {
                         if (obj is ModelObject queuedMonster)
                             queuedMonster.DrawQueuedCrowdInstancingSidePasses(time);
@@ -969,8 +974,8 @@ namespace Client.Main.Controls
                         ? ModelObject.TryQueueStaticMapObjectForInstancing(obj)
                         : ModelObject.StaticMapInstancingQueueResult.None;
 
-                    if (canUseMonsterCrowdInstancing && ModelObject.HasPendingMonsterCrowdInstancingBatches())
-                        ModelObject.FlushMonsterCrowdInstancingBatches(this);
+                    if (canUseWalkerCrowdInstancing && ModelObject.HasPendingWalkerCrowdInstancingBatches())
+                        ModelObject.FlushWalkerCrowdInstancingBatches(this);
 
                     if (canUseMapInstancing &&
                         staticMapQueueResult == ModelObject.StaticMapInstancingQueueResult.None &&
@@ -988,8 +993,8 @@ namespace Client.Main.Controls
 
             scope?.Dispose();
 
-            if (canUseMonsterCrowdInstancing && ModelObject.HasPendingMonsterCrowdInstancingBatches())
-                ModelObject.FlushMonsterCrowdInstancingBatches(this);
+            if (canUseWalkerCrowdInstancing && ModelObject.HasPendingWalkerCrowdInstancingBatches())
+                ModelObject.FlushWalkerCrowdInstancingBatches(this);
 
             if (canUseMapInstancing && ModelObject.HasPendingStaticMapInstancingBatches())
                 ModelObject.FlushStaticMapInstancingBatches(this);

@@ -73,7 +73,7 @@ namespace Client.Main
         public static bool ENABLE_WEAPON_TRAIL;
         public static bool ENABLE_BATCH_OPTIMIZED_SORTING;
         public static bool ENABLE_MAP_OBJECT_INSTANCING;
-        public static bool ENABLE_MONSTER_CROWD_INSTANCING;
+        public static bool ENABLE_WALKER_CROWD_INSTANCING;
         public static bool ENABLE_CROWD_SPATIAL_CULLING;
         public static bool ENABLE_ANIMATION_THROTTLING;
         public static bool ENABLE_SHARED_ANIMATION_PALETTES;
@@ -240,7 +240,7 @@ namespace Client.Main
             ENABLE_WEAPON_TRAIL = true;
             ENABLE_BATCH_OPTIMIZED_SORTING = true;
             ENABLE_MAP_OBJECT_INSTANCING = true;
-            ENABLE_MONSTER_CROWD_INSTANCING = true;
+            ENABLE_WALKER_CROWD_INSTANCING = true;
             ENABLE_CROWD_SPATIAL_CULLING = true;
             ENABLE_ANIMATION_THROTTLING = true;
             ENABLE_SHARED_ANIMATION_PALETTES = true;

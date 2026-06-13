@@ -112,26 +112,14 @@ namespace Client.Main.Objects
 
         #region Instance Fields - Graphics Resources
 
-        private DynamicVertexBuffer[] _boneVertexBuffers;
-        private DynamicIndexBuffer[] _boneIndexBuffers;
-        private VertexBuffer[] _gpuSkinVertexBuffers;
-        private IndexBuffer[] _gpuSkinIndexBuffers;
-        private int[] _gpuSkinBoneCounts;
-        private bool[] _gpuSkinMeshEnabled;
-        private Texture2D[] _boneTextures;
-        private TextureScript[] _scriptTextures;
-        private TextureData[] _dataTextures;
+        // Per-mesh consolidated state replaces 15 parallel arrays.
+        private MeshRuntimeState[] _meshes;
 
         // Cached hint for world-level batching/sorting (avoids scanning mesh textures during Sort comparisons)
         private Texture2D _sortTextureHint;
         private bool _sortTextureHintDirty = true;
 
-        private bool[] _meshIsRGBA;
-        private bool[] _meshHiddenByScript;
-        private bool[] _meshBlendByScript;
-        private string[] _meshTexturePath;
         private int[] _staticMapInstancedMeshFrameTags;
-
         private int[] _blendMeshIndicesScratch;
 
         #endregion
@@ -156,27 +144,18 @@ namespace Client.Main.Objects
         #region Instance Fields - Buffer State
 
         private bool _renderShadow = false;
-        private uint _invalidatedBufferFlags = uint.MaxValue; // Start with all flags set
+        private MeshDirtyFlags _invalidatedBufferFlags = MeshDirtyFlags.All;
         private float _blendMeshLight = 1f;
         private bool _contentLoaded = false;
         private bool _boundingComputed = false;
         private bool _dynamicBuffersFrozen = false;
 
-        // Buffer invalidation flags
-        private const uint BUFFER_FLAG_ANIMATION = 1u << 0;      // Animation/bones changed
-        private const uint BUFFER_FLAG_LIGHTING = 1u << 1;       // Lighting changed
-        private const uint BUFFER_FLAG_TRANSFORM = 1u << 2;      // World transform changed
-        private const uint BUFFER_FLAG_MATERIAL = 1u << 3;       // Material properties changed
-        private const uint BUFFER_FLAG_TEXTURE = 1u << 4;        // Texture changed
-        private const uint BUFFER_FLAG_ALL = uint.MaxValue;      // Force full rebuild
-
-        // Exposed equivalents for derived classes (to avoid magic numbers)
-        protected const uint BufferFlagAnimation = BUFFER_FLAG_ANIMATION;
-        protected const uint BufferFlagLighting = BUFFER_FLAG_LIGHTING;
-        protected const uint BufferFlagTransform = BUFFER_FLAG_TRANSFORM;
-        protected const uint BufferFlagMaterial = BUFFER_FLAG_MATERIAL;
-        protected const uint BufferFlagTexture = BUFFER_FLAG_TEXTURE;
-        protected const uint BufferFlagAll = BUFFER_FLAG_ALL;
+        protected const MeshDirtyFlags BufferFlagAnimation = MeshDirtyFlags.Animation;
+        protected const MeshDirtyFlags BufferFlagLighting = MeshDirtyFlags.Lighting;
+        protected const MeshDirtyFlags BufferFlagTransform = MeshDirtyFlags.Transform;
+        protected const MeshDirtyFlags BufferFlagMaterial = MeshDirtyFlags.Material;
+        protected const MeshDirtyFlags BufferFlagTexture = MeshDirtyFlags.Texture;
+        protected const MeshDirtyFlags BufferFlagAll = MeshDirtyFlags.All;
 
         // Bounding box update optimization
         private int _boundingFrameCounter = BoundingUpdateInterval;
@@ -188,7 +167,6 @@ namespace Client.Main.Objects
         private float _lastCachedAnimTime = -1;
         private bool _boneMatrixCacheValid = false;
 
-        private MeshBufferCache[] _meshBufferCache;
         private const int MaxGpuSkinBones = 256;
 #if WINDOWS_DX
         private const bool SupportsGpuDynamicSkinning = true;
@@ -316,7 +294,7 @@ namespace Client.Main.Objects
             set
             {
                 _blendMeshLight = value;
-                InvalidateBuffers(BUFFER_FLAG_MATERIAL);
+                InvalidateBuffers(MeshDirtyFlags.Material);
             }
         }
 
@@ -375,7 +353,7 @@ namespace Client.Main.Objects
         public ModelObject()
         {
             _logger = AppLoggerFactory?.CreateLogger(GetType());
-            MatrixChanged += (_s, _e) => UpdateWorldPosition();
+            // MatrixChanged subscription removed - UpdateWorldPosition was a no-op
             _animationStrideOffset = Interlocked.Increment(ref _animationStrideSeed) & 31;
         }
 
@@ -393,11 +371,7 @@ namespace Client.Main.Objects
             {
                 // This is a valid state, e.g., when an item is unequipped.
                 // Clear out graphics resources to ensure it becomes invisible.
-                _boneVertexBuffers = null;
-                _boneIndexBuffers = null;
-                _boneTextures = null;
-                _scriptTextures = null;
-                _dataTextures = null;
+                _meshes = null;
                 _logger?.LogDebug("Model is null for {ObjectName}. Clearing buffers. This is likely an unequip action.", ObjectName);
                 // Set to Ready because it's a valid, though non-renderable, state.
                 Status = GameControlStatus.Ready;
@@ -405,22 +379,9 @@ namespace Client.Main.Objects
             }
 
             int meshCount = Model.Meshes.Length;
-            _boneVertexBuffers = new DynamicVertexBuffer[meshCount];
-            _boneIndexBuffers = new DynamicIndexBuffer[meshCount];
-            _gpuSkinVertexBuffers = new VertexBuffer[meshCount];
-            _gpuSkinIndexBuffers = new IndexBuffer[meshCount];
-            _gpuSkinBoneCounts = new int[meshCount];
-            _gpuSkinMeshEnabled = new bool[meshCount];
-            _boneTextures = new Texture2D[meshCount];
-            _scriptTextures = new TextureScript[meshCount];
-            _dataTextures = new TextureData[meshCount];
-
-            UpdateWorldPosition();
-
-            _meshIsRGBA = new bool[meshCount];
-            _meshHiddenByScript = new bool[meshCount];
-            _meshBlendByScript = new bool[meshCount];
-            _meshTexturePath = new string[meshCount];
+            _meshes = new MeshRuntimeState[meshCount];
+            for (int i = 0; i < meshCount; i++)
+                _meshes[i] = new MeshRuntimeState { BufferCache = new MeshBufferCache { IsValid = false } };
 
             // PERFORMANCE: Preload all textures during LoadContent to avoid SetData during gameplay
             var texturePreloadTasks = new List<Task>();
@@ -430,33 +391,23 @@ namespace Client.Main.Objects
                 var mesh = Model.Meshes[meshIndex];
                 string texturePath = BMDLoader.Instance.GetTexturePath(Model, mesh.TexturePath);
 
-                _meshTexturePath[meshIndex] = texturePath;
+                _meshes[meshIndex].TexturePath = texturePath;
 
-                // Preload texture data asynchronously to avoid lazy loading during render
                 if (!string.IsNullOrEmpty(texturePath))
-                {
                     texturePreloadTasks.Add(TextureLoader.Instance.Prepare(texturePath));
-                }
-
-                // Materialize Texture2D later in main-thread render/update path (SetDynamicBuffers).
-                _boneTextures[meshIndex] = null;
             }
 
-            // Wait for all textures to be preloaded
             if (texturePreloadTasks.Count > 0)
-            {
                 await Task.WhenAll(texturePreloadTasks);
-            }
 
             for (int meshIndex = 0; meshIndex < meshCount; meshIndex++)
             {
-                string texturePath = _meshTexturePath[meshIndex];
-                _scriptTextures[meshIndex] = TextureLoader.Instance.GetScript(texturePath);
-                _dataTextures[meshIndex] = TextureLoader.Instance.Get(texturePath);
-
-                _meshIsRGBA[meshIndex] = _dataTextures[meshIndex]?.Components == 4;
-                _meshHiddenByScript[meshIndex] = _scriptTextures[meshIndex]?.HiddenMesh ?? false;
-                _meshBlendByScript[meshIndex] = _scriptTextures[meshIndex]?.Bright ?? false;
+                string texturePath = _meshes[meshIndex].TexturePath;
+                _meshes[meshIndex].Script = TextureLoader.Instance.GetScript(texturePath);
+                _meshes[meshIndex].Data = TextureLoader.Instance.Get(texturePath);
+                _meshes[meshIndex].IsRgba = _meshes[meshIndex].Data?.Components == 4;
+                _meshes[meshIndex].HiddenByScript = _meshes[meshIndex].Script?.HiddenMesh ?? false;
+                _meshes[meshIndex].BlendByScript = _meshes[meshIndex].Script?.Bright ?? false;
             }
 
             _sortTextureHintDirty = true;
@@ -465,14 +416,7 @@ namespace Client.Main.Objects
             _blendMeshIndicesScratch = new int[meshCount];
             _staticMapInstancedMeshFrameTags = new int[meshCount];
 
-            // Initialize mesh buffer cache
-            _meshBufferCache = new MeshBufferCache[meshCount];
-            for (int i = 0; i < meshCount; i++)
-            {
-                _meshBufferCache[i] = new MeshBufferCache { IsValid = false };
-            }
-
-            InvalidateBuffers(BUFFER_FLAG_ALL);
+            InvalidateBuffers(MeshDirtyFlags.All);
             _dynamicBuffersFrozen = false;
             _contentLoaded = true;
 
@@ -530,7 +474,7 @@ namespace Client.Main.Objects
                 uint parentPoseVersion = parent.AnimationPoseVersion;
                 if (_lastLinkedParentPoseVersion != parentPoseVersion)
                 {
-                    InvalidateBuffers(BUFFER_FLAG_ANIMATION);
+                    InvalidateBuffers(MeshDirtyFlags.Animation);
                     _lastLinkedParentPoseVersion = parentPoseVersion;
                 }
             }
@@ -609,7 +553,7 @@ namespace Client.Main.Objects
                         bool lightChanged = Vector3.DistanceSquared(currentLight, _lastFrameLight) > lightThreshold;
                         if (lightChanged)
                         {
-                            InvalidateBuffers(BUFFER_FLAG_LIGHTING);
+                            InvalidateBuffers(MeshDirtyFlags.Lighting);
                             _lastFrameLight = currentLight;
                         }
                         _lastLightUpdateTime = currentTime;
@@ -638,32 +582,17 @@ namespace Client.Main.Objects
 
             Model = null;
             BoneTransform = null;
-            _invalidatedBufferFlags = 0;
+            _invalidatedBufferFlags = MeshDirtyFlags.None;
             ReleaseDynamicBuffers();
 
-            // Release graphics resources and mark content as unloaded
-            _boneVertexBuffers = null;
-            _boneIndexBuffers = null;
-            _gpuSkinVertexBuffers = null;
-            _gpuSkinIndexBuffers = null;
-            _gpuSkinBoneCounts = null;
-            _gpuSkinMeshEnabled = null;
-            _boneTextures = null;
-            _scriptTextures = null;
-            _dataTextures = null;
-            _meshIsRGBA = null;
-            _meshHiddenByScript = null;
-            _meshBlendByScript = null;
-            _meshTexturePath = null;
+            _meshes = null;
             _staticMapInstancedMeshFrameTags = null;
             _blendMeshIndicesScratch = null;
             _contentLoaded = false;
             _boundingComputed = false;
 
-            // Clear cache references
             _cachedBoneMatrix = null;
             _boneMatrixCacheValid = false;
-            _meshBufferCache = null;
             _animationStateValid = false;
             _animationStepAccumulatorSeconds = 0f;
             _animationPoseVersion = 0;
@@ -728,12 +657,6 @@ namespace Client.Main.Objects
                 if (obj is ModelObject modelObj && modelObj.LinkParentAnimation)
                     modelObj.RenderShadow = RenderShadow;
             }
-        }
-
-        private void UpdateWorldPosition()
-        {
-            // World transformation changes no longer force buffer rebuilds.
-            // Lighting updates will trigger invalidation when needed.
         }
 
         private void UpdateBoundings()
@@ -814,7 +737,7 @@ namespace Client.Main.Objects
             if (WorldPosition != newWorldPosition)
             {
                 WorldPosition = newWorldPosition;
-                InvalidateBuffers(BUFFER_FLAG_TRANSFORM);
+                InvalidateBuffers(MeshDirtyFlags.Transform);
             }
         }
 
