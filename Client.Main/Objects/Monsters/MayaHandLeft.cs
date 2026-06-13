@@ -1,17 +1,19 @@
 using Client.Main.Content;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using Client.Main.Objects.Effects;
+using Microsoft.Xna.Framework;
 
 namespace Client.Main.Objects.Monsters
 {
     [NpcInfo(362, "Maya Hand Left")]
     public class MayaHandLeft : MonsterObject
     {
+        private GlowingEyesEffect _eyeGlow;
+
         public MayaHandLeft()
         {
+            // Primary eyes: bones 5,11 (original MoveEye also has 17,29,23 — secondary magical nodes)
+            _eyeGlow = new GlowingEyesEffect { LeftEyeBone = 11, RightEyeBone = 5, GlowColor = new Color(30, 100, 255) };
+            Children.Add(_eyeGlow);
         }
 
         public override async Task Load()

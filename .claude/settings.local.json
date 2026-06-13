@@ -29,7 +29,13 @@
       "mcp__plugin_context-mode_context-mode__ctx_search",
       "mcp__plugin_context-mode_context-mode__ctx_execute",
       "Bash(python3 *)",
-      "Bash(git checkout *)"
+      "Bash(git checkout *)",
+      "Bash(rg -n \"MONSTER_EMPIRE\" /mnt/d/nowe/muonline/SourceMain5.2/source/ --include=\"*.h\" --include=\"*.cpp\")",
+      "Bash(rg -rn \"Bone\\\\[2\\\\]\\\\|Bone\\\\[3\\\\]\\\\|eye.*2.*3\\\\|bones.*2.*3\" /mnt/d/nowe/muonline/SourceMain5.2/source/ --include=\"*.cpp\" --include=\"*.h\")",
+      "Bash(rg -n -B5 -A5 \"MONSTER_EMPIREGUARDIAN\\\\|EMPIREGUARDIAN_BOSS\\\\|EMPIREGUARDIANBOSS\" /mnt/d/nowe/muonline/SourceMain5.2/source/ --include=\"*.h\" --include=\"*.cpp\")",
+      "Bash(rg -n \"MONSTER_EMPIRE|MONSTER_FRED\" /mnt/d/nowe/muonline/SourceMain5.2/source/ --include=\"*.h\")",
+      "Bash(rg -rn \"MONSTER_EMPIRE|MONSTER_FRED|MONSTER_DEATH_BEAM\" /mnt/d/nowe/muonline/SourceMain5.2/ --include=\"*.h\" --include=\"*.cpp\" --include=\"*.cs\")",
+      "Bash(rg *)"
     ],
     "deny": []
   }

@@ -1,21 +1,22 @@
 ﻿using Client.Main.Content;
 using Client.Main.Controllers;
 using Client.Main.Controls;
+using Client.Main.Objects.Effects;
 using Microsoft.Xna.Framework;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Client.Main.Objects.Monsters
 {
     [NpcInfo(62, "Mutant")]
     public class Mutant : MonsterObject
     {
+        private GlowingEyesEffect _eyeGlow;
+
         public Mutant()
         {
             Scale = 1.5f;
+
+            _eyeGlow = new GlowingEyesEffect { LeftEyeBone = 9, RightEyeBone = 8, GlowColor = new Color(50, 140, 255) };
+            Children.Add(_eyeGlow);
         }
 
         public override async Task Load()

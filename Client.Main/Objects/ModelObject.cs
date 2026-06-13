@@ -135,6 +135,16 @@ namespace Client.Main.Objects
 
         protected int _priorActionIndex = 0;
         protected double _animTime = 0.0;
+        public double GetAnimationTime() => _animTime;
+        public double GetLoopedAnimationTime()
+        {
+            if (Model == null || Model.Actions == null || CurrentAction >= Model.Actions.Length)
+                return _animTime;
+            var action = Model.Actions[CurrentAction];
+            if (action == null || action.NumAnimationKeys <= 0)
+                return _animTime;
+            return _animTime % action.NumAnimationKeys;
+        }
 
         private LocalAnimationState _lastAnimationState;
         private bool _animationStateValid = false;
