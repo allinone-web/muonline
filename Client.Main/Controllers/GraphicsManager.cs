@@ -1,4 +1,4 @@
-using Client.Main.Content;
+﻿using Client.Main.Content;
 using Client.Main.Graphics;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Content;
@@ -11,8 +11,6 @@ namespace Client.Main.Controllers
         private GraphicsDevice _graphicsDevice;
         private ContentManager _contentManager;
 
-        private Texture2D _pixelTexture;
-
         public static GraphicsManager Instance { get; private set; } = new GraphicsManager();
 
         public GraphicsDevice GraphicsDevice => _graphicsDevice;
@@ -22,7 +20,6 @@ namespace Client.Main.Controllers
 
         public SpriteBatch Sprite { get; private set; }
         public SpriteFont Font { get; private set; }
-        public RenderTarget2D EffectRenderTarget { get; private set; }
         public Texture2D Pixel { get; private set; }
         public AlphaTestEffect AlphaTestEffectUI { get; private set; }
         public AlphaTestEffect AlphaTestEffect3D { get; private set; }
@@ -126,7 +123,6 @@ namespace Client.Main.Controllers
             MainRenderTarget?.Dispose();
             TempTarget1?.Dispose();
             TempTarget2?.Dispose();
-            EffectRenderTarget?.Dispose();
 
             // Recreate with new scale
             InitializeRenderTargets();
@@ -195,11 +191,6 @@ namespace Client.Main.Controllers
                 SurfaceFormat.Color, DepthFormat.None);
             TempTarget2 = new RenderTarget2D(_graphicsDevice, targetWidth, targetHeight, false,
                 SurfaceFormat.Color, DepthFormat.None);
-
-            EffectRenderTarget = new RenderTarget2D(_graphicsDevice, targetWidth, targetHeight, false,
-                renderTargetFormat, DepthFormat.Depth24,
-                Constants.MSAA_ENABLED ? pp.MultiSampleCount : 0,
-                RenderTargetUsage.DiscardContents);
         }
 
         private Effect LoadEffect(string effectName)
@@ -221,23 +212,11 @@ namespace Client.Main.Controllers
             destination = (destination == TempTarget1) ? TempTarget2 : TempTarget1;
         }
 
-        public Texture2D GetPixelTexture()
-        {
-            if (_pixelTexture == null)
-            {
-                _pixelTexture = new Texture2D(GraphicsDevice, 1, 1);
-                _pixelTexture.SetData(new[] { Color.White });
-            }
-
-            return _pixelTexture;
-        }
-
         public void Dispose()
         {
             MainRenderTarget?.Dispose();
             TempTarget1?.Dispose();
             TempTarget2?.Dispose();
-            EffectRenderTarget?.Dispose();
             Pixel?.Dispose();
             ShadowMapRenderer?.Dispose();
 

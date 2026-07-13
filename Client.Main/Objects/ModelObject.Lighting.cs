@@ -4,47 +4,177 @@ using Client.Main.Graphics;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
 namespace Client.Main.Objects
 {
     public abstract partial class ModelObject
     {
-        private static EffectTechnique TryGetTechnique(Effect effect, string name)
+        private sealed class ModelEffectBindings
         {
-            if (effect == null || string.IsNullOrEmpty(name))
-                return null;
+            private readonly Effect _effect;
+            private readonly Dictionary<string, EffectTechnique> _techniques = new(StringComparer.Ordinal);
 
-            var techniques = effect.Techniques;
-            int count = techniques.Count;
-            for (int i = 0; i < count; i++)
+            public ModelEffectBindings(Effect effect)
             {
-                var technique = techniques[i];
-                if (string.Equals(technique.Name, name, StringComparison.Ordinal))
-                    return technique;
+                _effect = effect;
+                BoneMatrices = effect.Parameters["BoneMatrices"];
+                World = effect.Parameters["World"];
+                View = effect.Parameters["View"];
+                Projection = effect.Parameters["Projection"];
+                WorldViewProjection = effect.Parameters["WorldViewProjection"];
+                ViewProjection = effect.Parameters["ViewProjection"];
+                EyePosition = effect.Parameters["EyePosition"];
+                SunDirection = effect.Parameters["SunDirection"];
+                LightDirection = effect.Parameters["LightDirection"];
+                SunColor = effect.Parameters["SunColor"];
+                SunStrength = effect.Parameters["SunStrength"];
+                ShadowStrength = effect.Parameters["ShadowStrength"];
+                Alpha = effect.Parameters["Alpha"];
+                TerrainDynamicIntensityScale = effect.Parameters["TerrainDynamicIntensityScale"];
+                AmbientLight = effect.Parameters["AmbientLight"];
+                DebugLightingAreas = effect.Parameters["DebugLightingAreas"];
+                TerrainLight = effect.Parameters["TerrainLight"];
+                DiffuseTexture = effect.Parameters["DiffuseTexture"];
+                ItemOptions = effect.Parameters["ItemOptions"];
+                Time = effect.Parameters["Time"];
+                IsAncient = effect.Parameters["IsAncient"];
+                IsExcellent = effect.Parameters["IsExcellent"];
+                GlowColor = effect.Parameters["GlowColor"];
+                GlowIntensity = effect.Parameters["GlowIntensity"];
+                EnableGlow = effect.Parameters["EnableGlow"];
+                SimpleColorMode = effect.Parameters["SimpleColorMode"];
+                HighlightColor = effect.Parameters["HighlightColor"];
+                ShadowTint = effect.Parameters["ShadowTint"];
+                ShadowTexture = effect.Parameters["ShadowTexture"];
+                LightViewProjection = effect.Parameters["LightViewProjection"];
+                ShadowMapTexelSize = effect.Parameters["ShadowMapTexelSize"];
+                ShadowBias = effect.Parameters["ShadowBias"];
+                ShadowNormalBias = effect.Parameters["ShadowNormalBias"];
+                UseProceduralTerrainUv = effect.Parameters["UseProceduralTerrainUV"];
+                IsWaterTexture = effect.Parameters["IsWaterTexture"];
             }
 
-            return null;
+            public EffectParameter BoneMatrices { get; }
+            public EffectParameter World { get; }
+            public EffectParameter View { get; }
+            public EffectParameter Projection { get; }
+            public EffectParameter WorldViewProjection { get; }
+            public EffectParameter ViewProjection { get; }
+            public EffectParameter EyePosition { get; }
+            public EffectParameter SunDirection { get; }
+            public EffectParameter LightDirection { get; }
+            public EffectParameter SunColor { get; }
+            public EffectParameter SunStrength { get; }
+            public EffectParameter ShadowStrength { get; }
+            public EffectParameter Alpha { get; }
+            public EffectParameter TerrainDynamicIntensityScale { get; }
+            public EffectParameter AmbientLight { get; }
+            public EffectParameter DebugLightingAreas { get; }
+            public EffectParameter TerrainLight { get; }
+            public EffectParameter DiffuseTexture { get; }
+            public EffectParameter ItemOptions { get; }
+            public EffectParameter Time { get; }
+            public EffectParameter IsAncient { get; }
+            public EffectParameter IsExcellent { get; }
+            public EffectParameter GlowColor { get; }
+            public EffectParameter GlowIntensity { get; }
+            public EffectParameter EnableGlow { get; }
+            public EffectParameter SimpleColorMode { get; }
+            public EffectParameter HighlightColor { get; }
+            public EffectParameter ShadowTint { get; }
+            public EffectParameter ShadowTexture { get; }
+            public EffectParameter LightViewProjection { get; }
+            public EffectParameter ShadowMapTexelSize { get; }
+            public EffectParameter ShadowBias { get; }
+            public EffectParameter ShadowNormalBias { get; }
+            public EffectParameter UseProceduralTerrainUv { get; }
+            public EffectParameter IsWaterTexture { get; }
+
+            public EffectTechnique GetTechnique(string name)
+            {
+                if (string.IsNullOrEmpty(name))
+                    return null;
+
+                if (_techniques.TryGetValue(name, out EffectTechnique cached))
+                    return cached;
+
+                EffectTechnique resolved = null;
+                var techniques = _effect.Techniques;
+                for (int i = 0; i < techniques.Count; i++)
+                {
+                    EffectTechnique technique = techniques[i];
+                    if (string.Equals(technique.Name, name, StringComparison.Ordinal))
+                    {
+                        resolved = technique;
+                        break;
+                    }
+                }
+
+                _techniques[name] = resolved;
+                return resolved;
+            }
         }
+
+        private static readonly ConditionalWeakTable<Effect, ModelEffectBindings> _modelEffectBindings = new();
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static ModelEffectBindings GetModelEffectBindings(Effect effect) =>
+            effect == null ? null : _modelEffectBindings.GetValue(effect, static value => new ModelEffectBindings(value));
+
+        private static EffectTechnique TryGetTechnique(Effect effect, string name) =>
+            GetModelEffectBindings(effect)?.GetTechnique(name);
 
         private bool TryUploadGpuSkinBoneMatrices(Effect effect, int requiredBoneCount)
         {
-            if (effect == null || requiredBoneCount <= 0 || requiredBoneCount > MaxGpuSkinBones)
-                return false;
+            ModelEffectBindings bindings = GetModelEffectBindings(effect);
+            return bindings != null && TryUploadGpuSkinBoneMatrices(effect, bindings, requiredBoneCount);
+        }
 
-            Matrix[] bones = GetCachedBoneTransforms();
+        private bool TryUploadGpuSkinBoneMatrices(Effect effect, ModelEffectBindings bindings, int requiredBoneCount)
+        {
+            if (effect == null || bindings?.BoneMatrices == null ||
+                requiredBoneCount <= 0 || requiredBoneCount > MaxGpuSkinBones)
+            {
+                return false;
+            }
+
+            Matrix[] bones = (LinkParentAnimation && Parent is ModelObject parentModel && parentModel.BoneTransform != null)
+                ? parentModel.BoneTransform
+                : BoneTransform;
             bones = GetRenderBoneTransforms(bones) ?? bones;
-            if (bones == null || bones.Length == 0)
-                return false;
 
-            int copyCount = Math.Min(requiredBoneCount, Math.Min(bones.Length, MaxGpuSkinBones));
-            if (copyCount <= 0)
-                return false;
+            // HLSL declares BoneMatrices[256]. Uploading arrays whose length changed
+            // between meshes/actions was backend-dependent and could fail or leave stale
+            // values. Keep one fixed-size palette and always upload the full declaration.
+            if (_gpuSkinBoneUploadBuffer == null || _gpuSkinBoneUploadBuffer.Length != MaxGpuSkinBones)
+            {
+                _gpuSkinBoneUploadBuffer = new Matrix[MaxGpuSkinBones];
+                for (int i = 0; i < MaxGpuSkinBones; i++)
+                    _gpuSkinBoneUploadBuffer[i] = Matrix.Identity;
+                _gpuSkinBoneUploadCount = 0;
+            }
 
-            if (_gpuSkinBoneUploadBuffer == null || _gpuSkinBoneUploadBuffer.Length != copyCount)
-                _gpuSkinBoneUploadBuffer = new Matrix[copyCount];
+            if (bones != null && bones.Length > 0)
+            {
+                int copyCount = Math.Min(MaxGpuSkinBones, bones.Length);
+                Array.Copy(bones, 0, _gpuSkinBoneUploadBuffer, 0, copyCount);
 
-            Array.Copy(bones, 0, _gpuSkinBoneUploadBuffer, 0, copyCount);
-            effect.Parameters["BoneMatrices"]?.SetValue(_gpuSkinBoneUploadBuffer);
+                int clearFrom = Math.Max(copyCount, _gpuSkinBoneUploadCount);
+                for (int i = copyCount; i < clearFrom && i < MaxGpuSkinBones; i++)
+                    _gpuSkinBoneUploadBuffer[i] = Matrix.Identity;
+
+                _gpuSkinBoneUploadCount = copyCount;
+            }
+            else if (_gpuSkinBoneUploadCount == 0)
+            {
+                // Before the first animation sample, identity is a valid deterministic
+                // palette and keeps the geometry on the GPU instead of changing paths.
+                _gpuSkinBoneUploadCount = requiredBoneCount;
+            }
+
+            bindings.BoneMatrices.SetValue(_gpuSkinBoneUploadBuffer);
             return true;
         }
 
@@ -53,13 +183,14 @@ namespace Client.Main.Objects
             if (effect == null)
                 return;
 
-            var dynamicLightingTechnique = TryGetTechnique(effect, "DynamicLighting");
+            ModelEffectBindings bindings = GetModelEffectBindings(effect);
+            var dynamicLightingTechnique = bindings.GetTechnique("DynamicLighting");
             if (dynamicLightingTechnique == null)
                 return;
 
-            var skinnedTechnique = useGpuSkinning ? TryGetTechnique(effect, "DynamicLighting_Skinned") : null;
+            var skinnedTechnique = useGpuSkinning ? bindings.GetTechnique("DynamicLighting_Skinned") : null;
             bool usingSkinnedTechnique = skinnedTechnique != null &&
-                                         TryUploadGpuSkinBoneMatrices(effect, requiredBoneCount);
+                                         TryUploadGpuSkinBoneMatrices(effect, bindings, requiredBoneCount);
 
             effect.CurrentTechnique = usingSkinnedTechnique ? skinnedTechnique : dynamicLightingTechnique;
             GraphicsManager.Instance.ShadowMapRenderer?.ApplyShadowParameters(effect);
@@ -68,11 +199,11 @@ namespace Client.Main.Objects
             if (camera == null)
                 return;
 
-            effect.Parameters["World"]?.SetValue(WorldPosition);
-            effect.Parameters["View"]?.SetValue(camera.View);
-            effect.Parameters["Projection"]?.SetValue(camera.Projection);
-            effect.Parameters["WorldViewProjection"]?.SetValue(WorldPosition * camera.View * camera.Projection);
-            effect.Parameters["EyePosition"]?.SetValue(camera.Position);
+            bindings.World?.SetValue(WorldPosition);
+            bindings.View?.SetValue(camera.View);
+            bindings.Projection?.SetValue(camera.Projection);
+            bindings.WorldViewProjection?.SetValue(WorldPosition * camera.View * camera.Projection);
+            bindings.EyePosition?.SetValue(camera.Position);
 
             Vector3 sunDir = GraphicsManager.Instance.ShadowMapRenderer?.LightDirection ?? Constants.SUN_DIRECTION;
             if (sunDir.LengthSquared() < 0.0001f)
@@ -82,15 +213,15 @@ namespace Client.Main.Objects
             bool worldAllowsSun = World is WorldControl wc ? wc.IsSunWorld : true;
             bool sunEnabled = Constants.SUN_ENABLED && worldAllowsSun && UseSunLight && !HasWalkerAncestor();
 
-            effect.Parameters["SunDirection"]?.SetValue(sunDir);
-            effect.Parameters["SunColor"]?.SetValue(_sunColor);
-            effect.Parameters["SunStrength"]?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveSunStrength() : 0f);
-            effect.Parameters["ShadowStrength"]?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
+            bindings.SunDirection?.SetValue(sunDir);
+            bindings.SunColor?.SetValue(_sunColor);
+            bindings.SunStrength?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveSunStrength() : 0f);
+            bindings.ShadowStrength?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
 
-            effect.Parameters["Alpha"]?.SetValue(TotalAlpha);
-            effect.Parameters["TerrainDynamicIntensityScale"]?.SetValue(1.5f);
-            effect.Parameters["AmbientLight"]?.SetValue(_ambientLightVector * SunCycleManager.AmbientMultiplier);
-            effect.Parameters["DebugLightingAreas"]?.SetValue(Constants.DEBUG_LIGHTING_AREAS ? 1.0f : 0.0f);
+            bindings.Alpha?.SetValue(TotalAlpha);
+            bindings.TerrainDynamicIntensityScale?.SetValue(1.5f);
+            bindings.AmbientLight?.SetValue(_ambientLightVector * SunCycleManager.AmbientMultiplier);
+            bindings.DebugLightingAreas?.SetValue(Constants.DEBUG_LIGHTING_AREAS ? 1.0f : 0.0f);
 
             Vector3 worldTranslation = WorldPosition.Translation;
             Vector3 terrainLight = Vector3.One;
@@ -99,7 +230,7 @@ namespace Client.Main.Objects
             // EvaluateTerrainLight is already normalized to 0..1. Dynamic lights
             // are uploaded separately below and must not be baked into this value.
             terrainLight = Vector3.Clamp(terrainLight, Vector3.Zero, Vector3.One);
-            effect.Parameters["TerrainLight"]?.SetValue(terrainLight);
+            bindings.TerrainLight?.SetValue(terrainLight);
 
             if (!Constants.ENABLE_DYNAMIC_LIGHTS)
             {

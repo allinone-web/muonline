@@ -56,7 +56,7 @@ namespace Client.Main.Controls.UI
         {
             if (Status == GameControlStatus.Ready || Status == GameControlStatus.Initializing)
             {
-                Task.Run(async () => await LoadTexture());
+                _ = LoadTexture();
             }
         }
 
@@ -69,8 +69,7 @@ namespace Client.Main.Controls.UI
                 return; // Do not attempt to load if path is invalid
             }
 
-            await TextureLoader.Instance.Prepare(TexturePath);
-            Texture = TextureLoader.Instance.GetTexture2D(TexturePath);
+            Texture = await TextureLoader.Instance.PrepareAndGetTexture(TexturePath);
 
             if (Texture == null)
             {

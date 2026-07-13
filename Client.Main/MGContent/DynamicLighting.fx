@@ -1,4 +1,4 @@
-// DynamicLighting.fx - Dynamic lighting shader
+﻿// DynamicLighting.fx - Dynamic lighting shader
 
 #if OPENGL
     #define VS_SHADERMODEL vs_3_0
@@ -34,6 +34,7 @@ sampler2D SamplerState0 = sampler_state
 // Lighting parameters  
 float3 AmbientLight = float3(0.8, 0.8, 0.8);
 float Alpha = 1.0;
+float3 HighlightColor = float3(1.0, 0.0, 0.0);
 float3 SunDirection = float3(1.0, 0.0, -0.6);
 float3 SunColor = float3(1.0, 0.95, 0.85);
 float SunStrength = 0.8;
@@ -408,6 +409,13 @@ float4 PS_Terrain(PixelInput input) : SV_Target
     return float4(finalColor, finalAlpha);
 }
 
+float4 PS_Highlight(PixelInput input) : SV_Target
+{
+    float textureAlpha = tex2D(SamplerState0, input.TexCoord).a;
+    clip(textureAlpha - 0.01);
+    return float4(HighlightColor * textureAlpha, textureAlpha * Alpha);
+}
+
 float4 PS_Objects(PixelInput input) : SV_Target
 {
     float4 texColor = tex2D(SamplerState0, input.TexCoord);
@@ -469,6 +477,15 @@ technique DynamicLighting_SkinnedInstanced
     {
         VertexShader = compile VS_SHADERMODEL VS_ObjectsSkinnedInstanced();
         PixelShader = compile PS_SHADERMODEL PS_Objects();
+    }
+}
+
+technique Highlight_Skinned
+{
+    pass Pass1
+    {
+        VertexShader = compile VS_SHADERMODEL VS_ObjectsSkinned();
+        PixelShader = compile PS_SHADERMODEL PS_Highlight();
     }
 }
 #endif

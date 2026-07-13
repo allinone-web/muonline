@@ -12,10 +12,13 @@ namespace Client.Main.Controls.Terrain
     /// <summary>
     /// Handles the rendering of terrain tiles, including opaque and alpha-blended layers.
     /// </summary>
-    public class TerrainRenderer
+    public class TerrainRenderer : IDisposable
     {
         private const float SpecialHeight = 1200f;
         private const int BlockSize = 4;
+        // The old procedural/index stitching path switches topology depending on LOD.
+        // Keep the explicit-UV path until all stitching variants are validated.
+        private const bool EnableTerrainIndexBatching = false;
         private const int TileBatchVerts = 16384 * 6;
         private const int TileBatchIndices = 16384 * 6;
         private const float LodSkirtDepth = Constants.TERRAIN_SCALE * 1.5f;
@@ -83,6 +86,10 @@ namespace Client.Main.Controls.Terrain
         // Static terrain vertex buffers (terrain uses procedural UVs in the shader)
         private VertexBuffer _terrainVertexBufferBase;
         private VertexBuffer _terrainVertexBufferAlpha;
+        // Terrain owns its streaming buffers. Sharing model buffers here can expose a
+        // different vertex declaration or in-flight contents after animation uploads.
+        private DynamicVertexBuffer _terrainStreamBufferOpaque;
+        private DynamicVertexBuffer _terrainStreamBufferAlpha;
         private bool _terrainVertexBuffersBuilt;
         private Color[] _terrainBuffersHeightMapRef;
         private Client.Data.ATT.TWFlags[] _terrainBuffersTerrainWallRef;
@@ -320,7 +327,7 @@ namespace Client.Main.Controls.Terrain
                 var effect = GraphicsManager.Instance.DynamicLightingEffect;
 
                 // Enable index batching only when the shader supports procedural terrain UVs.
-                if (!after && !_hasLodTransitions && SupportsProceduralTerrainUv(effect))
+                if (EnableTerrainIndexBatching && !after && !_hasLodTransitions && SupportsProceduralTerrainUv(effect))
                 {
                     EnsureTerrainVertexBuffers();
                     _useTerrainIndexBatching = _terrainVertexBufferBase != null &&
@@ -352,25 +359,50 @@ namespace Client.Main.Controls.Terrain
                 effect.VertexColorEnabled = true;
             }
 
-            foreach (var block in _visibility.VisibleBlocks)
+            var previousRasterizer = _graphicsDevice.RasterizerState;
+            var previousDepth = _graphicsDevice.DepthStencilState;
+            var previousBlend = _graphicsDevice.BlendState;
+            var previousSampler = _graphicsDevice.SamplerStates[0];
+
+            try
             {
-                if (block?.IsVisible == true)
+                // LOD skirts were the only visible fragments when a leaked cull state
+                // rejected the horizontal surface. Terrain is intentionally two-sided.
+                _graphicsDevice.RasterizerState = RasterizerState.CullNone;
+                _graphicsDevice.DepthStencilState = DepthStencilState.Default;
+                _graphicsDevice.BlendState = BlendState.Opaque;
+                _graphicsDevice.SamplerStates[0] = SamplerState.LinearWrap;
+                _lastBlendState = BlendState.Opaque;
+
+                foreach (var block in _visibility.VisibleBlocks)
                 {
-                    RenderTerrainBlock(
-                        block.Xi, block.Yi,
-                        after,
-                        _visibility.LodSteps[block.LODLevel],
-                        block); // Pass block for hierarchical culling
+                    if (block?.IsVisible == true)
+                    {
+                        RenderTerrainBlock(
+                            block.Xi, block.Yi,
+                            after,
+                            _visibility.LodSteps[block.LODLevel],
+                            block); // Pass block for hierarchical culling
+                    }
                 }
+
+                if (_useTerrainIndexBatching)
+                    FlushAllTileIndexBatches();
+                else
+                    FlushAllTileBatches();
+
+                if (!after)
+                    _grassRenderer.Draw();
             }
-
-            if (_useTerrainIndexBatching)
-                FlushAllTileIndexBatches();
-            else
-                FlushAllTileBatches();
-
-            if (!after)
-                _grassRenderer.Draw();
+            finally
+            {
+                _graphicsDevice.SetVertexBuffer(null);
+                _graphicsDevice.Indices = null;
+                _graphicsDevice.BlendState = previousBlend;
+                _graphicsDevice.DepthStencilState = previousDepth;
+                _graphicsDevice.RasterizerState = previousRasterizer;
+                _graphicsDevice.SamplerStates[0] = previousSampler;
+            }
         }
 
         private void ResetMetrics()
@@ -559,7 +591,7 @@ namespace Client.Main.Controls.Terrain
 
             // Optional fast path for terrain: static VB + per-texture index batching (requires shader support).
             _hasLodTransitions = BuildVisibleLodGrid();
-            if (!_hasLodTransitions && SupportsProceduralTerrainUv(shadowEffect))
+            if (EnableTerrainIndexBatching && !_hasLodTransitions && SupportsProceduralTerrainUv(shadowEffect))
             {
                 EnsureTerrainVertexBuffers();
                 _useTerrainIndexBatching = _terrainVertexBufferBase != null &&
@@ -1486,110 +1518,117 @@ namespace Client.Main.Controls.Terrain
             counters[texIndex] = dstOff + 6;
         }
 
+        private DynamicVertexBuffer EnsureTerrainStreamBuffer(bool alphaLayer, int requiredVertexCount)
+        {
+            DynamicVertexBuffer buffer = alphaLayer
+                ? _terrainStreamBufferAlpha
+                : _terrainStreamBufferOpaque;
+
+            if (buffer == null || buffer.IsDisposed || buffer.VertexCount < requiredVertexCount)
+            {
+                buffer?.Dispose();
+                // Allocate the full batch once; subsequent frames only stream new data.
+                int capacity = Math.Max(requiredVertexCount, TileBatchVerts);
+                buffer = new DynamicVertexBuffer(
+                    _graphicsDevice,
+                    TerrainVertexPositionColorNormalTexture.VertexDeclaration,
+                    capacity,
+                    BufferUsage.WriteOnly);
+
+                if (alphaLayer)
+                    _terrainStreamBufferAlpha = buffer;
+                else
+                    _terrainStreamBufferOpaque = buffer;
+            }
+
+            return buffer;
+        }
+
         private void FlushSingleTexture(int texIndex, bool alphaLayer)
         {
             int vertCount = alphaLayer ? _tileAlphaCounts[texIndex] : _tileBatchCounts[texIndex];
-            if (vertCount == 0) return;
+            if (vertCount == 0)
+                return;
 
-            var batch = GetTileBatchBuffer(texIndex, alphaLayer);
-            var texture = _data.Textures[texIndex];
-            if (texture == null) return;
-            var blendState = alphaLayer ? BlendState.NonPremultiplied : BlendState.Opaque;
-
-            if (_useDynamicLightingShader)
+            // Always clear the logical count, even when a texture is still loading.
+            try
             {
-                var effect = GraphicsManager.Instance.DynamicLightingEffect;
-                if (effect == null || effect.CurrentTechnique == null) return;
+                var batch = GetTileBatchBuffer(texIndex, alphaLayer);
+                var texture = _data.Textures[texIndex];
+                if (texture == null || texture.IsDisposed)
+                    return;
 
-                int triCount = vertCount / 3;
-                // Avoid unnecessary state changes
-                if (_lastBoundTexture != texture)
-                {
-                    effect.Parameters["DiffuseTexture"]?.SetValue(texture);
-                    _lastBoundTexture = texture;
-                }
-
+                var blendState = alphaLayer ? BlendState.NonPremultiplied : BlendState.Opaque;
                 if (_lastBlendState != blendState)
                 {
                     _graphicsDevice.BlendState = blendState;
                     _lastBlendState = blendState;
                 }
 
-                var vertexBuffer = DynamicBufferPool.RentVertexBuffer(vertCount);
-                if (vertexBuffer == null)
+                if (_useDynamicLightingShader)
                 {
-                    // Fallback to old path if pooling unavailable
+                    var effect = GraphicsManager.Instance.DynamicLightingEffect;
+                    if (effect == null || effect.CurrentTechnique == null)
+                        return;
+
+                    if (_lastBoundTexture != texture)
+                    {
+                        effect.Parameters["DiffuseTexture"]?.SetValue(texture);
+                        _lastBoundTexture = texture;
+                    }
+
+                    var vertexBuffer = EnsureTerrainStreamBuffer(alphaLayer, vertCount);
+                    vertexBuffer.SetData(batch, 0, vertCount, SetDataOptions.Discard);
+                    _graphicsDevice.Indices = null;
+                    _graphicsDevice.SetVertexBuffer(vertexBuffer);
+
+                    int triangleCount = vertCount / 3;
+                    foreach (var pass in effect.CurrentTechnique.Passes)
+                    {
+                        pass.Apply();
+                        _graphicsDevice.DrawPrimitives(PrimitiveType.TriangleList, 0, triangleCount);
+                    }
+                }
+                else
+                {
+                    var effect = GraphicsManager.Instance.BasicEffect3D;
+                    if (effect == null || effect.CurrentTechnique == null)
+                        return;
+
+                    if (_lastBoundTexture != texture)
+                    {
+                        effect.Texture = texture;
+                        _lastBoundTexture = texture;
+                    }
+
+                    for (int i = 0; i < vertCount; i++)
+                    {
+                        var vertex = batch[i];
+                        _fallbackTileBuffer[i] = new VertexPositionColorTexture(
+                            vertex.Position, vertex.Color, vertex.TextureCoordinate);
+                    }
+
                     foreach (var pass in effect.CurrentTechnique.Passes)
                     {
                         pass.Apply();
                         _graphicsDevice.DrawUserPrimitives(
                             PrimitiveType.TriangleList,
-                            batch, 0,
-                            triCount);
+                            _fallbackTileBuffer,
+                            0,
+                            vertCount / 3);
                     }
                 }
-                else
-                {
-                    try
-                    {
-                        vertexBuffer.SetData(batch, 0, vertCount, SetDataOptions.Discard);
-                        _graphicsDevice.SetVertexBuffer(vertexBuffer);
 
-                        foreach (var pass in effect.CurrentTechnique.Passes)
-                        {
-                            pass.Apply();
-                            _graphicsDevice.DrawPrimitives(
-                                PrimitiveType.TriangleList,
-                                0,
-                                triCount);
-                        }
-                    }
-                    finally
-                    {
-                        _graphicsDevice.SetVertexBuffer(null);
-                        DynamicBufferPool.ReturnVertexBuffer(vertexBuffer);
-                    }
-                }
+                DrawCalls++;
+                DrawnTriangles += vertCount / 3;
             }
-            else
+            finally
             {
-                var effect = GraphicsManager.Instance.BasicEffect3D;
-                if (effect == null || effect.CurrentTechnique == null) return;
-
-                // Avoid unnecessary state changes
-                if (_lastBoundTexture != texture)
-                {
-                    effect.Texture = texture;
-                    _lastBoundTexture = texture;
-                }
-
-                if (_lastBlendState != blendState)
-                {
-                    _graphicsDevice.BlendState = blendState;
-                    _lastBlendState = blendState;
-                }
-
-                for (int i = 0; i < vertCount; i++)
-                {
-                    var v = batch[i];
-                    _fallbackTileBuffer[i] = new VertexPositionColorTexture(v.Position, v.Color, v.TextureCoordinate);
-                }
-
-                foreach (var pass in effect.CurrentTechnique.Passes)
-                {
-                    pass.Apply();
-                    _graphicsDevice.DrawUserPrimitives(
-                        PrimitiveType.TriangleList,
-                        _fallbackTileBuffer, 0,
-                        vertCount / 3);
-                }
+                if (alphaLayer)
+                    _tileAlphaCounts[texIndex] = 0;
+                else
+                    _tileBatchCounts[texIndex] = 0;
             }
-
-            DrawCalls++;
-            DrawnTriangles += vertCount / 3;
-
-            if (alphaLayer) _tileAlphaCounts[texIndex] = 0;
-            else _tileBatchCounts[texIndex] = 0;
         }
 
         private void FlushAllTileBatches()
@@ -1692,5 +1731,17 @@ namespace Client.Main.Controls.Terrain
             }
             return buffer;
         }
+        public void Dispose()
+        {
+            _terrainStreamBufferOpaque?.Dispose();
+            _terrainStreamBufferOpaque = null;
+            _terrainStreamBufferAlpha?.Dispose();
+            _terrainStreamBufferAlpha = null;
+            _terrainVertexBufferBase?.Dispose();
+            _terrainVertexBufferBase = null;
+            _terrainVertexBufferAlpha?.Dispose();
+            _terrainVertexBufferAlpha = null;
+        }
+
     }
 }

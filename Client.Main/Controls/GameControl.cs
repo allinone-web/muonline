@@ -304,64 +304,62 @@ namespace Client.Main.Controls
 
             if (Status != GameControlStatus.Ready || !Visible) return;
 
-            // Cache mouse and display rectangle to avoid repeated property lookups
-            var mouse = CurrentMouseState;
-            var prevMouse = PreviousMouseState;
-            Rectangle rect = DisplayRectangle;
-            Point mousePosition = mouse.Position;
-            IsMouseOver = Interactive &&
-                          mousePosition.X >= rect.X && mousePosition.X <= rect.X + rect.Width &&
-                          mousePosition.Y >= rect.Y && mousePosition.Y <= rect.Y + rect.Height;
-
-            // moved: Scene.MouseControl = this; 
-            // MouseControl is now determined by BaseScene to ensure topmost logic.
-
-            if (Interactive && Visible) // process clicks only if interactive and visible
+            // Non-interactive visual controls make up most of the UI tree. Avoid fetching
+            // mouse state and recursively calculating DisplayRectangle unless the control can
+            // consume or explicitly capture pointer input.
+            bool needsPointerHitTest = Interactive || CapturePointerWhenNonInteractive;
+            if (!needsPointerHitTest)
             {
-                if (IsMouseOver) // mouse is currently over this control
-                {
-                    if (mouse.LeftButton == ButtonState.Pressed)
-                    {
-                        IsMousePressed = true; // for UI styling, indicate it's being pressed
-                        if (prevMouse.LeftButton == ButtonState.Released)
-                        {
-                            _isCurrentlyPressedByMouse = true; // this control initiated the press sequence
-                            Scene?.FocusControlIfInteractive(this); // attempt to set focus
-                        }
-                    }
-                    else if (mouse.LeftButton == ButtonState.Released)
-                    {
-                        // mouse is released WHILE OVER this control
-                        if (_isCurrentlyPressedByMouse && prevMouse.LeftButton == ButtonState.Pressed)
-                        {
-                            // click occurred (press and release over this control)
-                            if (OnClick()) // call OnClick and check if it was handled
-                            {
-                                if (Scene is BaseScene baseScene && this != baseScene.World)
-                                {
-                                    baseScene.SetMouseInputConsumed();
-                                }
-                            }
-                        }
-                        _isCurrentlyPressedByMouse = false; // reset press initiator
-                        IsMousePressed = false; // reset styling state
-                    }
-                }
-                else // mouse is not over this control
-                {
-                    IsMousePressed = false; // not pressed for styling if mouse isn't over
-                    // if mouse was pressed on this control but then dragged off and released elsewhere,
-                    // reset if mouse is released not over this control.
-                    if (mouse.LeftButton == ButtonState.Released)
-                    {
-                        _isCurrentlyPressedByMouse = false;
-                    }
-                }
-            }
-            else // not interactive or not visible
-            {
+                IsMouseOver = false;
                 IsMousePressed = false;
                 _isCurrentlyPressedByMouse = false;
+            }
+            else
+            {
+                var mouse = CurrentMouseState;
+                Rectangle rectangle = DisplayRectangle;
+                Point mousePosition = mouse.Position;
+                IsMouseOver = mousePosition.X >= rectangle.Left && mousePosition.X <= rectangle.Right &&
+                              mousePosition.Y >= rectangle.Top && mousePosition.Y <= rectangle.Bottom;
+
+                if (!Interactive)
+                {
+                    IsMousePressed = false;
+                    _isCurrentlyPressedByMouse = false;
+                }
+                else
+                {
+                    var previousMouse = PreviousMouseState;
+                    if (IsMouseOver)
+                    {
+                        if (mouse.LeftButton == ButtonState.Pressed)
+                        {
+                            IsMousePressed = true;
+                            if (previousMouse.LeftButton == ButtonState.Released)
+                            {
+                                _isCurrentlyPressedByMouse = true;
+                                Scene?.FocusControlIfInteractive(this);
+                            }
+                        }
+                        else
+                        {
+                            if (_isCurrentlyPressedByMouse && previousMouse.LeftButton == ButtonState.Pressed && OnClick())
+                            {
+                                if (Scene is BaseScene baseScene && this != baseScene.World)
+                                    baseScene.SetMouseInputConsumed();
+                            }
+
+                            _isCurrentlyPressedByMouse = false;
+                            IsMousePressed = false;
+                        }
+                    }
+                    else
+                    {
+                        IsMousePressed = false;
+                        if (mouse.LeftButton == ButtonState.Released)
+                            _isCurrentlyPressedByMouse = false;
+                    }
+                }
             }
 
             // Iterate over a copy for updating children to prevent collection modification issues
@@ -411,11 +409,6 @@ namespace Client.Main.Controls
 
             DrawBackground();
             DrawBorder();
-
-            GraphicsDevice.SamplerStates[0] = SamplerState.LinearWrap;
-            GraphicsDevice.RasterizerState = RasterizerState.CullNone;
-            GraphicsDevice.DepthStencilState = DepthStencilState.Default;
-            GraphicsDevice.BlendState = BlendState.Opaque; // Usually AlphaBlend for UI
 
             for (int i = 0; i < Controls.Count; i++)
                 Controls[i].Draw(gameTime);
@@ -581,16 +574,15 @@ namespace Client.Main.Controls
             if (BorderThickness <= 0 || BorderColor.A == 0) // Check alpha for transparency
                 return;
 
-            Color finalBorderColor = BorderColor * Alpha; // Apply control's alpha
+            Color finalBorderColor = BorderColor * Alpha;
+            Rectangle rectangle = DisplayRectangle;
+            Texture2D pixel = GraphicsManager.Instance.Pixel;
+            SpriteBatch sprite = GraphicsManager.Instance.Sprite;
 
-            // Top border
-            GraphicsManager.Instance.Sprite.Draw(GraphicsManager.Instance.Pixel, new Rectangle(DisplayRectangle.X, DisplayRectangle.Y, DisplayRectangle.Width, BorderThickness), finalBorderColor);
-            // Bottom border
-            GraphicsManager.Instance.Sprite.Draw(GraphicsManager.Instance.Pixel, new Rectangle(DisplayRectangle.X, DisplayRectangle.Y + DisplayRectangle.Height - BorderThickness, DisplayRectangle.Width, BorderThickness), finalBorderColor);
-            // Left border
-            GraphicsManager.Instance.Sprite.Draw(GraphicsManager.Instance.Pixel, new Rectangle(DisplayRectangle.X, DisplayRectangle.Y, BorderThickness, DisplayRectangle.Height), finalBorderColor);
-            // Right border
-            GraphicsManager.Instance.Sprite.Draw(GraphicsManager.Instance.Pixel, new Rectangle(DisplayRectangle.X + DisplayRectangle.Width - BorderThickness, DisplayRectangle.Y, BorderThickness, DisplayRectangle.Height), finalBorderColor);
+            sprite.Draw(pixel, new Rectangle(rectangle.X, rectangle.Y, rectangle.Width, BorderThickness), finalBorderColor);
+            sprite.Draw(pixel, new Rectangle(rectangle.X, rectangle.Bottom - BorderThickness, rectangle.Width, BorderThickness), finalBorderColor);
+            sprite.Draw(pixel, new Rectangle(rectangle.X, rectangle.Y, BorderThickness, rectangle.Height), finalBorderColor);
+            sprite.Draw(pixel, new Rectangle(rectangle.Right - BorderThickness, rectangle.Y, BorderThickness, rectangle.Height), finalBorderColor);
         }
 
         protected virtual void OnScreenSizeChanged()

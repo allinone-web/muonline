@@ -1,4 +1,4 @@
-using Client.Main.Graphics;
+﻿using Client.Main.Graphics;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 using System;
@@ -7,14 +7,15 @@ namespace Client.Main.Controllers;
 
 internal sealed class MainPlayerCameraController
 {
+    private const int MiddleMouseDragThresholdPixels = 3;
+
     private float _currentCameraDistance = Constants.DEFAULT_CAMERA_DISTANCE;
     private float _targetCameraDistance = Constants.DEFAULT_CAMERA_DISTANCE;
     private int _previousScrollValue;
     private bool _mouseScrollToZoom = true;
     private float _cameraYaw = Constants.DEFAULT_CAMERA_YAW;
     private float _cameraPitch = Constants.DEFAULT_CAMERA_PITCH;
-    private bool _isRotating;
-    private bool _wasRotating;
+    private int _middleMouseTravel;
 
     public bool MouseScrollToZoom
     {
@@ -25,10 +26,8 @@ internal sealed class MainPlayerCameraController
     public void Initialize()
     {
         _previousScrollValue = MuGame.Instance.Mouse.ScrollWheelValue;
-        _cameraYaw = Constants.DEFAULT_CAMERA_YAW;
-        _cameraPitch = Constants.DEFAULT_CAMERA_PITCH;
-        _currentCameraDistance = Constants.DEFAULT_CAMERA_DISTANCE;
-        _targetCameraDistance = Constants.DEFAULT_CAMERA_DISTANCE;
+        ResetToDefault(immediateDistance: true);
+        _middleMouseTravel = 0;
     }
 
     public void Update(GameTime gameTime)
@@ -40,8 +39,7 @@ internal sealed class MainPlayerCameraController
             Constants.ZOOM_SPEED * deltaTime);
 
         var mouse = MuGame.Instance.Mouse;
-        var prevMouse = MuGame.Instance.PrevMouseState;
-        var keyboard = MuGame.Instance.Keyboard;
+        var previousMouse = MuGame.Instance.PrevMouseState;
 
         if (MouseScrollToZoom)
         {
@@ -58,26 +56,39 @@ internal sealed class MainPlayerCameraController
 
         _previousScrollValue = mouse.ScrollWheelValue;
 
-        _isRotating = mouse.MiddleButton == ButtonState.Pressed;
-        if (_isRotating)
+        bool middlePressed = mouse.MiddleButton == ButtonState.Pressed;
+        bool middleWasPressed = previousMouse.MiddleButton == ButtonState.Pressed;
+
+        if (middlePressed && !middleWasPressed)
         {
-            int deltaX = mouse.X - prevMouse.X;
-            int deltaY = mouse.Y - prevMouse.Y;
-            _cameraYaw -= deltaX * Constants.ROTATION_SENSITIVITY;
-            _cameraPitch = MathHelper.Clamp(
-                _cameraPitch - deltaY * Constants.ROTATION_SENSITIVITY,
-                Constants.MIN_PITCH,
-                Constants.MAX_PITCH);
-            _cameraYaw = MathHelper.WrapAngle(_cameraYaw);
+            _middleMouseTravel = 0;
         }
 
-        if (_wasRotating && !_isRotating)
+        if (middlePressed)
         {
-            _cameraYaw = Constants.DEFAULT_CAMERA_YAW;
-            _cameraPitch = Constants.DEFAULT_CAMERA_PITCH;
+            int deltaX = mouse.X - previousMouse.X;
+            int deltaY = mouse.Y - previousMouse.Y;
+
+            if (deltaX != 0 || deltaY != 0)
+            {
+                _middleMouseTravel += Math.Abs(deltaX) + Math.Abs(deltaY);
+                _cameraYaw = MathHelper.WrapAngle(
+                    _cameraYaw - deltaX * Constants.ROTATION_SENSITIVITY);
+                _cameraPitch = MathHelper.Clamp(
+                    _cameraPitch - deltaY * Constants.ROTATION_SENSITIVITY,
+                    Constants.MIN_PITCH,
+                    Constants.MAX_PITCH);
+            }
         }
 
-        _wasRotating = _isRotating;
+        if (!middlePressed && middleWasPressed)
+        {
+            // A click resets the complete view. A drag keeps the new yaw, pitch and zoom.
+            if (_middleMouseTravel < MiddleMouseDragThresholdPixels)
+                ResetToDefault(immediateDistance: true);
+
+            _middleMouseTravel = 0;
+        }
     }
 
     public void Apply(Vector3 target)
@@ -90,5 +101,15 @@ internal sealed class MainPlayerCameraController
         Camera.Instance.FOV = 35 * Constants.FOV_SCALE;
         Camera.Instance.Position = cameraPosition;
         Camera.Instance.Target = target;
+    }
+
+    private void ResetToDefault(bool immediateDistance)
+    {
+        _cameraYaw = Constants.DEFAULT_CAMERA_YAW;
+        _cameraPitch = Constants.DEFAULT_CAMERA_PITCH;
+        _targetCameraDistance = Constants.DEFAULT_CAMERA_DISTANCE;
+
+        if (immediateDistance)
+            _currentCameraDistance = Constants.DEFAULT_CAMERA_DISTANCE;
     }
 }

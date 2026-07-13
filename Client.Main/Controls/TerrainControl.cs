@@ -1,4 +1,4 @@
-using Client.Data.ATT;
+﻿using Client.Data.ATT;
 using Client.Data.MAP;
 using Client.Main.Controls.Terrain;
 using Client.Main.Graphics;
@@ -224,6 +224,7 @@ namespace Client.Main.Controls
 
         public override void Dispose()
         {
+            _renderer?.Dispose();
             _grassRenderer?.Dispose();
             base.Dispose();
             _data = null; // Allow GC to collect all data

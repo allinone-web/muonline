@@ -1,4 +1,4 @@
-﻿using Client.Main.Configuration;
+﻿﻿using Client.Main.Configuration;
 using Client.Main.Content;
 using Client.Main.Controllers;
 using Client.Main.Controls;
@@ -19,6 +19,7 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
 using System.Threading.Tasks;
 
 
@@ -28,13 +29,14 @@ namespace Client.Main
     {
         private const string LocalSettingsFileName = "appsettings.local.json";
         private const int MaxMainThreadActionsPerFrame = 96;
-        private static readonly TimeSpan MaxMainThreadActionTimePerFrame = TimeSpan.FromMilliseconds(3);
+        private static readonly TimeSpan MaxMainThreadActionTimePerFrame = TimeSpan.FromMilliseconds(2);
         private static readonly TimeSpan SimulationFixedStep = TimeSpan.FromSeconds(1.0 / 60.0);
         private const int SimulationMaxStepsPerFrame = 4;
         private static readonly TimeSpan SimulationMaxAcceptedElapsed = TimeSpan.FromMilliseconds(250);
         // Static Fields
         private static Controllers.TaskScheduler _taskScheduler;
         private static readonly MainThreadDispatcher _mainThreadDispatcher = new(null, MaxMainThreadActionsPerFrame, MaxMainThreadActionTimePerFrame);
+        private static int _mainThreadId;
 
         // Static Properties
         public static MuGame Instance { get; private set; }
@@ -48,6 +50,7 @@ namespace Client.Main
         public static Controllers.TaskScheduler TaskScheduler => _taskScheduler;
         public static int FrameIndex { get; private set; }
         public static int MainThreadPendingActions => _mainThreadDispatcher.PendingCount;
+        public static bool IsMainThread => _mainThreadId != 0 && Environment.CurrentManagedThreadId == _mainThreadId;
         public static int MainThreadProcessedActionsLastFrame => _mainThreadDispatcher.LastProcessedCount;
         public static long MainThreadProcessedActionsTotal => _mainThreadDispatcher.TotalProcessedCount;
         public static int LastSimulationStepCount { get; private set; }
@@ -101,6 +104,7 @@ namespace Client.Main
         // Constructors
         public MuGame()
         {
+            _mainThreadId = Environment.CurrentManagedThreadId;
             Instance = this;
 
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
@@ -454,12 +458,12 @@ namespace Client.Main
             LastSimulationAcceptedElapsedMs = simStep.AcceptedElapsed.TotalMilliseconds;
             LastSimulationAccumulationAlpha = simStep.InterpolationAlpha;
 
-            int workScale = Math.Max(1, simStep.StepCount);
+            // Keep background/main-thread work on a fixed budget. Scaling it after a slow
+            // frame creates a feedback loop that makes the next frame even slower.
+            ProcessMainThreadActions();
 
-            ProcessMainThreadActions(workScale);
-
-            // Process prioritized tasks using the task scheduler
-            _taskScheduler?.ProcessFrame(workScale);
+            // Process prioritized tasks using a fixed per-frame budget.
+            _taskScheduler?.ProcessFrame();
 
             try // outer try
             {
@@ -499,9 +503,9 @@ namespace Client.Main
             }
         }
 
-        private void ProcessMainThreadActions(int workScale)
+        private void ProcessMainThreadActions()
         {
-            _mainThreadDispatcher.ProcessPending(workScale);
+            _mainThreadDispatcher.ProcessPending();
         }
 
         protected override void LoadContent()

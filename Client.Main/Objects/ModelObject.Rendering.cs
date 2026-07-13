@@ -264,6 +264,86 @@ namespace Client.Main.Objects
             return new ShaderSelection(useDynamicLighting, useItemMaterial, useMonsterMaterial);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool CanUseGpuSkinGeometry()
+        {
+            return SupportsGpuDynamicSkinning &&
+                   Constants.ENABLE_GPU_SKINNING &&
+                   !UsesMutableMeshData &&
+                   GetVertexDeformer() == null;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool CanUseGpuSkinningForMesh(int mesh)
+        {
+            if (!CanUseGpuSkinGeometry())
+                return false;
+
+            ShaderSelection selection = DetermineShaderForMesh(mesh);
+            if (selection.UseItemMaterial)
+            {
+                return TryGetTechnique(
+                    GraphicsManager.Instance.ItemMaterialEffect,
+                    "BasicColorDrawing_Skinned") != null;
+            }
+
+            if (selection.UseMonsterMaterial)
+            {
+                return TryGetTechnique(
+                    GraphicsManager.Instance.MonsterMaterialEffect,
+                    "MonsterMaterialDrawing_Skinned") != null;
+            }
+
+            return selection.UseDynamicLighting &&
+                   TryGetTechnique(
+                       GraphicsManager.Instance.DynamicLightingEffect,
+                       "DynamicLighting_Skinned") != null;
+        }
+
+        private bool TryResolveMaterialMeshBuffers(
+            int mesh,
+            Effect effect,
+            string baseTechniqueName,
+            string skinnedTechniqueName,
+            out VertexBuffer vertexBuffer,
+            out IndexBuffer indexBuffer,
+            out bool usingGpuSkinning)
+        {
+            vertexBuffer = null;
+            indexBuffer = null;
+            usingGpuSkinning = false;
+
+            EffectTechnique baseTechnique = TryGetTechnique(effect, baseTechniqueName) ??
+                                            (effect != null && effect.Techniques.Count > 0
+                                                ? effect.Techniques[0]
+                                                : null);
+            if (baseTechnique == null)
+                return false;
+
+            if (CanUseGpuSkinningForMesh(mesh) && EnsureGpuSkinnedMeshForMainPass(mesh))
+            {
+                var state = _meshes[mesh];
+                EffectTechnique skinnedTechnique = TryGetTechnique(effect, skinnedTechniqueName);
+                if (skinnedTechnique != null &&
+                    state.GpuVertexBuffer != null && !state.GpuVertexBuffer.IsDisposed &&
+                    state.GpuIndexBuffer != null && !state.GpuIndexBuffer.IsDisposed &&
+                    TryUploadGpuSkinBoneMatrices(effect, state.GpuBoneCount))
+                {
+                    effect.CurrentTechnique = skinnedTechnique;
+                    vertexBuffer = state.GpuVertexBuffer;
+                    indexBuffer = state.GpuIndexBuffer;
+                    usingGpuSkinning = true;
+                    return true;
+                }
+            }
+
+            effect.CurrentTechnique = baseTechnique;
+            vertexBuffer = _meshes?[mesh]?.CpuVertexBuffer;
+            indexBuffer = _meshes?[mesh]?.CpuIndexBuffer;
+            return vertexBuffer != null && !vertexBuffer.IsDisposed &&
+                   indexBuffer != null && !indexBuffer.IsDisposed;
+        }
+
         // Determines if this mesh needs special shader path and cannot use fast alpha path
         private bool NeedsSpecialShaderForMesh(int mesh)
         {
@@ -319,12 +399,27 @@ namespace Client.Main.Objects
                 if (RenderShadow && !LowQuality && !useShadowMap && !isNight)
                     doShadow = TryGetShadowMatrix(out shadowMatrix);
 
-                if (doShadow)
+                bool highlightAllowed = !LowQuality && IsMouseHover &&
+                                        !(this is MonsterObject monster && monster.IsDead);
+                Matrix highlightMatrix = Matrix.Identity;
+                Vector3 highlightColor = Vector3.One;
+                if (highlightAllowed)
+                {
+                    const float scaleHighlight = 0.015f;
+                    const float scaleFactor = 1f + scaleHighlight;
+                    highlightMatrix = Matrix.CreateScale(scaleFactor) *
+                                      Matrix.CreateTranslation(-scaleHighlight, -scaleHighlight, -scaleHighlight) *
+                                      worldPos;
+                    highlightColor = this is MonsterObject ? _redHighlight : _greenHighlight;
+                }
+
+                if (doShadow || highlightAllowed)
                 {
                     float shadowOpacity = ShadowOpacity;
-                    if (World?.Terrain != null)
+                    if (doShadow && World?.Terrain != null)
                     {
-                        var dyn = World.Terrain.EvaluateDynamicLight(new Vector2(worldPos.Translation.X, worldPos.Translation.Y));
+                        var dyn = World.Terrain.EvaluateDynamicLight(
+                            new Vector2(worldPos.Translation.X, worldPos.Translation.Y));
                         float lum = (0.2126f * dyn.X + 0.7152f * dyn.Y + 0.0722f * dyn.Z) / 255f;
                         shadowOpacity *= MathHelper.Clamp(1f - lum * 0.6f, 0.35f, 1f);
                     }
@@ -338,15 +433,21 @@ namespace Client.Main.Objects
                             if (kvp.Value.Count == 0)
                                 continue;
 
-                            DrawProjectedShadowPass(
-                                kvp.Value,
-                                doShadow,
-                                useShadowMap,
-                                shadowMatrix,
-                                view,
-                                projection,
-                                shadowOpacity,
-                                ref drewBlobShadow);
+                            if (doShadow)
+                            {
+                                DrawProjectedShadowPass(
+                                    kvp.Value,
+                                    doShadow,
+                                    useShadowMap,
+                                    shadowMatrix,
+                                    view,
+                                    projection,
+                                    shadowOpacity,
+                                    ref drewBlobShadow);
+                            }
+
+                            if (highlightAllowed)
+                                DrawMeshesHighlight(kvp.Value, highlightMatrix, highlightColor);
                         }
                     }
                     finally
@@ -744,16 +845,18 @@ namespace Client.Main.Objects
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool ShouldUseBlobShadowForCurrentPass()
         {
-            if (this is not MonsterObject)
+            if (this is not WalkerObject)
                 return false;
 
-            if (MuGame.AppSettings?.Graphics?.ForceMonsterMeshShadows == true)
+            // Keep the existing explicit compatibility switch for users who prefer the
+            // legacy full-mesh monster shadow when shadow mapping is disabled.
+            if (this is MonsterObject && MuGame.AppSettings?.Graphics?.ForceMonsterMeshShadows == true)
                 return false;
 
-            if (GraphicsQualityManager.ActivePreset == GraphicsQualityPreset.High)
-                return false;
-
-            return LowQuality || Constants.OPTIMIZE_FOR_INTEGRATED_GPU;
+            // A projected animated mesh forces a second CPU-skinned copy even when the
+            // main pass uses GPU skinning. A single blob quad preserves grounding without
+            // duplicating animation, uploads and draw calls for every walker.
+            return true;
         }
 
         private void DrawMeshesHighlight(List<int> meshIndices, Matrix highlightMatrix, Vector3 highlightColor)
@@ -783,15 +886,22 @@ namespace Client.Main.Objects
 
             var shaderSelection = DetermineShaderForMesh(mesh);
 
+            // Route every skinned-capable shader before checking CPU buffers. GPU-only
+            // objects intentionally release their CPU copy, especially after crowd instancing.
+            if (shaderSelection.UseItemMaterial)
+            {
+                DrawMeshWithItemMaterial(mesh);
+                return;
+            }
+
+            if (shaderSelection.UseMonsterMaterial)
+            {
+                DrawMeshWithMonsterMaterial(mesh);
+                return;
+            }
+
             if (shaderSelection.UseDynamicLighting)
             {
-                // Do not gate the recovery path on the cached GpuSkinEnabled flag.
-                // A walker may have been rendered through crowd instancing in the previous
-                // frame and then leave that path because of hover, LOD or Walk/Stop blending.
-                // In that transition the per-instance GPU bindings can be stale while the
-                // shared GPU geometry is still available in BMDLoader.
-                bool hasGpuDynamicBuffers = EnsureGpuSkinnedMeshForMainPass(mesh);
-
                 DrawMeshWithDynamicLighting(mesh);
                 return;
             }
@@ -816,24 +926,6 @@ namespace Client.Main.Objects
                     {
                         // PERFORMANCE: Use cached RasterizerState to avoid per-mesh allocation
                         gd.RasterizerState = GraphicsManager.GetCachedRasterizerState(depthBias, prevRasterizer.CullMode, prevRasterizer);
-                    }
-
-                    if (shaderSelection.UseItemMaterial)
-                    {
-                        DrawMeshWithItemMaterial(mesh);
-                        return;
-                    }
-
-                    if (shaderSelection.UseMonsterMaterial)
-                    {
-                        DrawMeshWithMonsterMaterial(mesh);
-                        return;
-                    }
-
-                    if (shaderSelection.UseDynamicLighting)
-                    {
-                        DrawMeshWithDynamicLighting(mesh);
-                        return;
                     }
 
                     var alphaEffect = GraphicsManager.Instance.AlphaTestEffect3D;
@@ -923,10 +1015,7 @@ namespace Client.Main.Objects
         {
             if (Model?.Meshes == null || mesh < 0 || mesh >= Model.Meshes.Length)
                 return;
-            if (_meshes?[mesh]?.CpuVertexBuffer == null ||
-                _meshes?[mesh]?.CpuIndexBuffer == null ||
-                _meshes?[mesh]?.Texture == null ||
-                IsHiddenMesh(mesh))
+            if (_meshes?[mesh]?.Texture == null || IsHiddenMesh(mesh))
                 return;
 
             try
@@ -935,12 +1024,21 @@ namespace Client.Main.Objects
                 var effect = GraphicsManager.Instance.ItemMaterialEffect;
 
                 if (effect == null)
+                    return;
+
+                ModelEffectBindings bindings = GetModelEffectBindings(effect);
+                if (!TryResolveMaterialMeshBuffers(
+                    mesh,
+                    effect,
+                    "BasicColorDrawing",
+                    "BasicColorDrawing_Skinned",
+                    out VertexBuffer vertexBuffer,
+                    out IndexBuffer indexBuffer,
+                    out bool usingGpuSkinning))
                 {
-                    DrawMesh(mesh);
                     return;
                 }
 
-                effect.CurrentTechnique = effect.Techniques[0];
                 GraphicsManager.Instance.ShadowMapRenderer?.ApplyShadowParameters(effect);
 
                 var prevDepthState = gd.DepthStencilState;
@@ -949,8 +1047,6 @@ namespace Client.Main.Objects
                 try
                 {
                     bool isBlendMesh = IsBlendMesh(mesh);
-                    var vertexBuffer = _meshes[mesh].CpuVertexBuffer;
-                    var indexBuffer = _meshes[mesh].CpuIndexBuffer;
                     var texture = _meshes[mesh].Texture;
 
                     var prevCull = gd.RasterizerState;
@@ -979,32 +1075,34 @@ namespace Client.Main.Objects
 
                     // Set world view projection matrix
                     Matrix worldViewProjection = WorldPosition * Camera.Instance.View * Camera.Instance.Projection;
-                    effect.Parameters["WorldViewProjection"]?.SetValue(worldViewProjection);
-                    effect.Parameters["World"]?.SetValue(WorldPosition);
-                    effect.Parameters["View"]?.SetValue(Camera.Instance.View);
-                    effect.Parameters["Projection"]?.SetValue(Camera.Instance.Projection);
-                    effect.Parameters["EyePosition"]?.SetValue(Camera.Instance.Position);
-                    effect.Parameters["LightDirection"]?.SetValue(sunDir);
-                    effect.Parameters["ShadowStrength"]?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
+                    bindings.WorldViewProjection?.SetValue(worldViewProjection);
+                    bindings.World?.SetValue(WorldPosition);
+                    bindings.View?.SetValue(Camera.Instance.View);
+                    bindings.Projection?.SetValue(Camera.Instance.Projection);
+                    bindings.EyePosition?.SetValue(Camera.Instance.Position);
+                    bindings.LightDirection?.SetValue(sunDir);
+                    bindings.ShadowStrength?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
 
                     // Set texture
-                    effect.Parameters["DiffuseTexture"]?.SetValue(texture);
+                    bindings.DiffuseTexture?.SetValue(texture);
 
                     // Set item properties
                     int itemOptions = ItemLevel & 0x0F;
                     if (IsExcellentItem)
                         itemOptions |= 0x10;
 
-                    effect.Parameters["ItemOptions"]?.SetValue(itemOptions);
-                    effect.Parameters["Time"]?.SetValue(GetShaderTimeSeconds());
-                    effect.Parameters["IsAncient"]?.SetValue(IsAncientItem);
-                    effect.Parameters["IsExcellent"]?.SetValue(IsExcellentItem);
-                    effect.Parameters["Alpha"]?.SetValue(TotalAlpha);
+                    bindings.ItemOptions?.SetValue(itemOptions);
+                    bindings.Time?.SetValue(GetShaderTimeSeconds());
+                    bindings.IsAncient?.SetValue(IsAncientItem);
+                    bindings.IsExcellent?.SetValue(IsExcellentItem);
+                    bindings.Alpha?.SetValue(TotalAlpha);
 
                     gd.SetVertexBuffer(vertexBuffer);
                     gd.Indices = indexBuffer;
 
                     int primitiveCount = indexBuffer.IndexCount / 3;
+                    if (usingGpuSkinning)
+                        RegisterGpuSkinnedMeshDraw();
 
                     foreach (EffectPass pass in effect.CurrentTechnique.Passes)
                     {
@@ -1024,7 +1122,6 @@ namespace Client.Main.Objects
             catch (Exception ex)
             {
                 _logger?.LogDebug("Error in DrawMeshWithItemMaterial: {Message}", ex.Message);
-                DrawMesh(mesh);
             }
         }
 
@@ -1032,10 +1129,7 @@ namespace Client.Main.Objects
         {
             if (Model?.Meshes == null || mesh < 0 || mesh >= Model.Meshes.Length)
                 return;
-            if (_meshes?[mesh]?.CpuVertexBuffer == null ||
-                _meshes?[mesh]?.CpuIndexBuffer == null ||
-                _meshes?[mesh]?.Texture == null ||
-                IsHiddenMesh(mesh))
+            if (_meshes?[mesh]?.Texture == null || IsHiddenMesh(mesh))
                 return;
 
             try
@@ -1044,12 +1138,21 @@ namespace Client.Main.Objects
                 var effect = GraphicsManager.Instance.MonsterMaterialEffect;
 
                 if (effect == null)
+                    return;
+
+                ModelEffectBindings bindings = GetModelEffectBindings(effect);
+                if (!TryResolveMaterialMeshBuffers(
+                    mesh,
+                    effect,
+                    "MonsterMaterialDrawing",
+                    "MonsterMaterialDrawing_Skinned",
+                    out VertexBuffer vertexBuffer,
+                    out IndexBuffer indexBuffer,
+                    out bool usingGpuSkinning))
                 {
-                    DrawMesh(mesh);
                     return;
                 }
 
-                effect.CurrentTechnique = effect.Techniques[0];
                 GraphicsManager.Instance.ShadowMapRenderer?.ApplyShadowParameters(effect);
 
                 var prevDepthState = gd.DepthStencilState;
@@ -1058,8 +1161,6 @@ namespace Client.Main.Objects
                 try
                 {
                     bool isBlendMesh = IsBlendMesh(mesh);
-                    var vertexBuffer = _meshes[mesh].CpuVertexBuffer;
-                    var indexBuffer = _meshes[mesh].CpuIndexBuffer;
                     var texture = _meshes[mesh].Texture;
 
                     var prevCull = gd.RasterizerState;
@@ -1087,28 +1188,32 @@ namespace Client.Main.Objects
                     bool sunEnabled = Constants.SUN_ENABLED && worldAllowsSun && UseSunLight && !HasWalkerAncestor();
 
                     // Set matrices
-                    effect.Parameters["World"]?.SetValue(WorldPosition);
-                    effect.Parameters["View"]?.SetValue(Camera.Instance.View);
-                    effect.Parameters["Projection"]?.SetValue(Camera.Instance.Projection);
-                    effect.Parameters["EyePosition"]?.SetValue(Camera.Instance.Position);
-                    effect.Parameters["LightDirection"]?.SetValue(sunDir);
-                    effect.Parameters["ShadowStrength"]?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
+                    bindings.WorldViewProjection?.SetValue(
+                        WorldPosition * Camera.Instance.View * Camera.Instance.Projection);
+                    bindings.World?.SetValue(WorldPosition);
+                    bindings.View?.SetValue(Camera.Instance.View);
+                    bindings.Projection?.SetValue(Camera.Instance.Projection);
+                    bindings.EyePosition?.SetValue(Camera.Instance.Position);
+                    bindings.LightDirection?.SetValue(sunDir);
+                    bindings.ShadowStrength?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
 
                     // Set texture
-                    effect.Parameters["DiffuseTexture"]?.SetValue(texture);
+                    bindings.DiffuseTexture?.SetValue(texture);
 
                     // Set monster-specific properties
-                    effect.Parameters["GlowColor"]?.SetValue(GlowColor);
-                    effect.Parameters["GlowIntensity"]?.SetValue(GlowIntensity);
-                    effect.Parameters["EnableGlow"]?.SetValue(GlowIntensity > 0.0f && !SimpleColorMode);
-                    effect.Parameters["SimpleColorMode"]?.SetValue(SimpleColorMode);
-                    effect.Parameters["Time"]?.SetValue(GetShaderTimeSeconds());
-                    effect.Parameters["Alpha"]?.SetValue(TotalAlpha);
+                    bindings.GlowColor?.SetValue(GlowColor);
+                    bindings.GlowIntensity?.SetValue(GlowIntensity);
+                    bindings.EnableGlow?.SetValue(GlowIntensity > 0.0f && !SimpleColorMode);
+                    bindings.SimpleColorMode?.SetValue(SimpleColorMode);
+                    bindings.Time?.SetValue(GetShaderTimeSeconds());
+                    bindings.Alpha?.SetValue(TotalAlpha);
 
                     gd.SetVertexBuffer(vertexBuffer);
                     gd.Indices = indexBuffer;
 
                     int primitiveCount = indexBuffer.IndexCount / 3;
+                    if (usingGpuSkinning)
+                        RegisterGpuSkinnedMeshDraw();
 
                     foreach (EffectPass pass in effect.CurrentTechnique.Passes)
                     {
@@ -1128,7 +1233,6 @@ namespace Client.Main.Objects
             catch (Exception ex)
             {
                 _logger?.LogDebug("Error in DrawMeshWithMonsterMaterial: {Message}", ex.Message);
-                DrawMesh(mesh);
             }
         }
 
@@ -1145,11 +1249,9 @@ namespace Client.Main.Objects
                 var effect = GraphicsManager.Instance.DynamicLightingEffect;
 
                 if (effect == null)
-                {
-                    DrawMesh(mesh); // Fallback to standard rendering
                     return;
-                }
 
+                ModelEffectBindings bindings = GetModelEffectBindings(effect);
                 var prevDepthState = gd.DepthStencilState;
                 bool depthStateChanged = false;
 
@@ -1160,7 +1262,8 @@ namespace Client.Main.Objects
                     // A monster can leave crowd instancing when an action changes or a
                     // one-shot starts. Do not trust a stale per-instance flag from the
                     // previous path; lazily attach the shared GPU geometry for this draw.
-                    bool useGpuSkinning = EnsureGpuSkinnedMeshForMainPass(mesh);
+                    bool useGpuSkinning = CanUseGpuSkinningForMesh(mesh) &&
+                                               EnsureGpuSkinnedMeshForMainPass(mesh);
 
                     VertexBuffer vertexBuffer = useGpuSkinning ? _meshes[mesh].GpuVertexBuffer : _meshes?[mesh]?.CpuVertexBuffer;
                     IndexBuffer indexBuffer = useGpuSkinning ? _meshes[mesh].GpuIndexBuffer : _meshes?[mesh]?.CpuIndexBuffer;
@@ -1190,23 +1293,26 @@ namespace Client.Main.Objects
                         ? _meshes[mesh].GpuBoneCount
                         : 0;
 
-                    bool needsGpuBoneRefresh = useGpuSkinning &&
-                                               requiredBoneCount > _dynamicLightingPreparedGpuBoneCount;
+                    // DynamicLightingEffect is shared by terrain, shadows, hover and all
+                    // objects. Rebind the technique and bone palette for every mesh draw;
+                    // invocation-level caching allowed another pass to leave Highlight or
+                    // Terrain active and caused an intermittent CPU fallback.
+                    PrepareDynamicLightingEffect(effect, useGpuSkinning, requiredBoneCount);
+                    _dynamicLightingPreparedInvocationId = _drawModelInvocationId;
+                    _dynamicLightingPreparedWithGpuSkinning = useGpuSkinning;
+                    _dynamicLightingPreparedGpuBoneCount = useGpuSkinning ? requiredBoneCount : 0;
 
-                    if (_dynamicLightingPreparedInvocationId != _drawModelInvocationId ||
-                        _dynamicLightingPreparedWithGpuSkinning != useGpuSkinning ||
-                        needsGpuBoneRefresh)
+                    if (useGpuSkinning &&
+                        !string.Equals(effect.CurrentTechnique?.Name, "DynamicLighting_Skinned", StringComparison.Ordinal))
                     {
-                        PrepareDynamicLightingEffect(effect, useGpuSkinning, requiredBoneCount);
-                        _dynamicLightingPreparedInvocationId = _drawModelInvocationId;
-                        _dynamicLightingPreparedWithGpuSkinning = useGpuSkinning;
-                        _dynamicLightingPreparedGpuBoneCount = useGpuSkinning ? requiredBoneCount : 0;
+                        // Do not silently oscillate between GPU and CPU because of leaked
+                        // effect state. Retry the exact skinned binding once.
+                        PrepareDynamicLightingEffect(effect, true, requiredBoneCount);
                     }
 
-                    if (useGpuSkinning && !string.Equals(effect.CurrentTechnique?.Name, "DynamicLighting_Skinned", StringComparison.Ordinal))
+                    if (useGpuSkinning &&
+                        !string.Equals(effect.CurrentTechnique?.Name, "DynamicLighting_Skinned", StringComparison.Ordinal))
                     {
-                        _dynamicLightingPreparedWithGpuSkinning = false;
-                        _dynamicLightingPreparedGpuBoneCount = 0;
                         vertexBuffer = _meshes?[mesh]?.CpuVertexBuffer;
                         indexBuffer = _meshes?[mesh]?.CpuIndexBuffer;
                         if (vertexBuffer == null || indexBuffer == null)
@@ -1218,7 +1324,7 @@ namespace Client.Main.Objects
                         RegisterGpuSkinnedMeshDraw();
 
                     // Set texture
-                    effect.Parameters["DiffuseTexture"]?.SetValue(texture);
+                    bindings.DiffuseTexture?.SetValue(texture);
 
                     gd.SetVertexBuffer(vertexBuffer);
                     gd.Indices = indexBuffer;
@@ -1243,64 +1349,107 @@ namespace Client.Main.Objects
             catch (Exception ex)
             {
                 _logger?.LogDebug("Error in DrawMeshWithDynamicLighting: {Message}", ex.Message);
-                DrawMesh(mesh); // Fallback to standard rendering
             }
         }
 
         public virtual void DrawMeshHighlight(int mesh, Matrix highlightMatrix, Vector3 highlightColor)
         {
-            if (IsHiddenMesh(mesh) || _meshes == null || mesh >= _meshes.Length)
-                return;
-
-            if (mesh < 0 ||
-                mesh >= _meshes.Length)
+            if (IsHiddenMesh(mesh) || _meshes == null ||
+                mesh < 0 || mesh >= _meshes.Length ||
+                _meshes[mesh].Texture == null)
             {
                 return;
             }
 
-            VertexBuffer vertexBuffer = _meshes[mesh].CpuVertexBuffer;
-            IndexBuffer indexBuffer = _meshes[mesh].CpuIndexBuffer;
-
-            if (vertexBuffer == null || indexBuffer == null)
-                return;
-
-            int primitiveCount = indexBuffer.IndexCount / 3;
-
-            // Save previous graphics states
             var previousDepthState = GraphicsDevice.DepthStencilState;
             var previousBlendState = GraphicsDevice.BlendState;
 
-            var alphaTestEffect = GraphicsManager.Instance.AlphaTestEffect3D;
-            if (alphaTestEffect == null || alphaTestEffect.CurrentTechnique == null) return;
-
-            float prevAlpha = alphaTestEffect.Alpha;
-
-            alphaTestEffect.World = highlightMatrix;
-            alphaTestEffect.Texture = _meshes[mesh].Texture;
-            alphaTestEffect.DiffuseColor = highlightColor;
-            alphaTestEffect.Alpha = 1f;
-
-            // Configure depth and blend states for drawing the highlight
-            GraphicsDevice.DepthStencilState = GraphicsManager.ReadOnlyDepth;
-            GraphicsDevice.BlendState = BlendState.Additive;
-
-            // Draw the mesh highlight
-            foreach (EffectPass pass in alphaTestEffect.CurrentTechnique.Passes)
+            try
             {
-                pass.Apply();
+                // Keep hover on the GPU. Hovered walkers leave crowd instancing so they can
+                // be selected independently, but their geometry and bone palette remain skinned.
+                if (EnsureGpuSkinnedMeshForMainPass(mesh))
+                {
+                    var effect = GraphicsManager.Instance.DynamicLightingEffect;
+                    var technique = TryGetTechnique(effect, "Highlight_Skinned");
+                    var state = _meshes[mesh];
+                    ModelEffectBindings bindings = GetModelEffectBindings(effect);
+
+                    if (technique != null && bindings != null &&
+                        state.GpuVertexBuffer != null && !state.GpuVertexBuffer.IsDisposed &&
+                        state.GpuIndexBuffer != null && !state.GpuIndexBuffer.IsDisposed &&
+                        TryUploadGpuSkinBoneMatrices(effect, bindings, state.GpuBoneCount))
+                    {
+                        effect.CurrentTechnique = technique;
+                        bindings.World?.SetValue(highlightMatrix);
+                        bindings.View?.SetValue(Camera.Instance.View);
+                        bindings.Projection?.SetValue(Camera.Instance.Projection);
+                        bindings.WorldViewProjection?.SetValue(
+                            highlightMatrix * Camera.Instance.View * Camera.Instance.Projection);
+                        bindings.DiffuseTexture?.SetValue(state.Texture);
+                        bindings.HighlightColor?.SetValue(highlightColor);
+                        bindings.Alpha?.SetValue(1f);
+
+                        GraphicsDevice.DepthStencilState = GraphicsManager.ReadOnlyDepth;
+                        GraphicsDevice.BlendState = BlendState.Additive;
+                        GraphicsDevice.SetVertexBuffer(state.GpuVertexBuffer);
+                        GraphicsDevice.Indices = state.GpuIndexBuffer;
+
+                        int primitiveCount = state.GpuIndexBuffer.IndexCount / 3;
+                        foreach (EffectPass pass in technique.Passes)
+                        {
+                            pass.Apply();
+                            GraphicsDevice.DrawIndexedPrimitives(
+                                PrimitiveType.TriangleList, 0, 0, primitiveCount);
+                        }
+
+                        // Highlight uses the shared dynamic-lighting effect with another
+                        // technique. Force the following main mesh draw to restore all
+                        // skinned lighting parameters instead of trusting the per-object cache.
+                        _dynamicLightingPreparedInvocationId = -1;
+                        _dynamicLightingPreparedWithGpuSkinning = false;
+                        _dynamicLightingPreparedGpuBoneCount = 0;
+                        return;
+                    }
+                }
+
+                VertexBuffer vertexBuffer = _meshes[mesh].CpuVertexBuffer;
+                IndexBuffer indexBuffer = _meshes[mesh].CpuIndexBuffer;
+                if (vertexBuffer == null || indexBuffer == null)
+                    return;
+
+                var alphaTestEffect = GraphicsManager.Instance.AlphaTestEffect3D;
+                if (alphaTestEffect == null || alphaTestEffect.CurrentTechnique == null)
+                    return;
+
+                float previousAlpha = alphaTestEffect.Alpha;
+                alphaTestEffect.World = highlightMatrix;
+                alphaTestEffect.Texture = _meshes[mesh].Texture;
+                alphaTestEffect.DiffuseColor = highlightColor;
+                alphaTestEffect.Alpha = 1f;
+
+                GraphicsDevice.DepthStencilState = GraphicsManager.ReadOnlyDepth;
+                GraphicsDevice.BlendState = BlendState.Additive;
                 GraphicsDevice.SetVertexBuffer(vertexBuffer);
                 GraphicsDevice.Indices = indexBuffer;
-                GraphicsDevice.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, primitiveCount);
+
+                int cpuPrimitiveCount = indexBuffer.IndexCount / 3;
+                foreach (EffectPass pass in alphaTestEffect.CurrentTechnique.Passes)
+                {
+                    pass.Apply();
+                    GraphicsDevice.DrawIndexedPrimitives(
+                        PrimitiveType.TriangleList, 0, 0, cpuPrimitiveCount);
+                }
+
+                alphaTestEffect.Alpha = previousAlpha;
+                alphaTestEffect.World = WorldPosition;
+                alphaTestEffect.DiffuseColor = Vector3.One;
             }
-
-            alphaTestEffect.Alpha = prevAlpha;
-
-            // Restore previous graphics states
-            GraphicsDevice.DepthStencilState = previousDepthState;
-            GraphicsDevice.BlendState = previousBlendState;
-
-            alphaTestEffect.World = WorldPosition;
-            alphaTestEffect.DiffuseColor = Vector3.One;
+            finally
+            {
+                GraphicsDevice.DepthStencilState = previousDepthState;
+                GraphicsDevice.BlendState = previousBlendState;
+            }
         }
 
         public override void DrawAfter(GameTime gameTime)

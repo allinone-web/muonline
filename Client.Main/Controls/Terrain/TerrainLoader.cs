@@ -90,6 +90,7 @@ namespace Client.Main.Controls.Terrain
                 }
             }
 
+            _terrainData.TexturePaths = textureMapFiles;
             _terrainData.Textures = new Microsoft.Xna.Framework.Graphics.Texture2D[textureMapFiles.Length];
             for (int t = 0; t < textureMapFiles.Length; t++)
             {
@@ -97,9 +98,10 @@ namespace Client.Main.Controls.Terrain
                 if (string.IsNullOrEmpty(path) || !File.Exists(path))
                     continue;
 
-                int textureIndex = t;
-                tasks.Add(TextureLoader.Instance.Prepare(path)
-                    .ContinueWith(_ => _terrainData.Textures[textureIndex] = TextureLoader.Instance.GetTexture2D(path)));
+                // File I/O and decoding may run in parallel, but Texture2D creation and SetData
+                // must be serialized on the MonoGame graphics thread. Creating several terrain
+                // textures concurrently on worker threads caused missing tiles and corrupted data.
+                tasks.Add(TextureLoader.Instance.Prepare(path));
             }
 
             // Load lightmap or default to white
@@ -114,11 +116,64 @@ namespace Client.Main.Controls.Terrain
                 _terrainData.LightData = Enumerable.Repeat(Microsoft.Xna.Framework.Color.White, Constants.TERRAIN_SIZE * Constants.TERRAIN_SIZE).ToArray();
             }
 
-            await Task.WhenAll(tasks);
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+            await UploadTerrainTexturesOnGraphicsThreadAsync(textureMapFiles).ConfigureAwait(false);
 
             _terrainData.GrassWind = new float[Constants.TERRAIN_SIZE * Constants.TERRAIN_SIZE];
 
             return _terrainData;
+        }
+
+        private Task UploadTerrainTexturesOnGraphicsThreadAsync(string[] texturePaths)
+        {
+            var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            void UploadTextures()
+            {
+                try
+                {
+                    int loadedCount = 0;
+                    int expectedCount = 0;
+
+                    for (int textureIndex = 0; textureIndex < texturePaths.Length; textureIndex++)
+                    {
+                        string path = texturePaths[textureIndex];
+                        if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                            continue;
+
+                        expectedCount++;
+                        try
+                        {
+                            var texture = TextureLoader.Instance.GetTexture2D(path);
+                            if (texture != null && !texture.IsDisposed)
+                            {
+                                _terrainData.Textures[textureIndex] = texture;
+                                loadedCount++;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            // A single malformed texture must not prevent all later terrain
+                            // layers from being uploaded. The renderer can retry this index.
+                            Console.WriteLine($"[TerrainLoader] Failed to upload texture {textureIndex} '{path}': {ex.Message}");
+                        }
+                    }
+
+                    Console.WriteLine($"[TerrainLoader] Uploaded {loadedCount}/{expectedCount} terrain textures for World{_worldIndex}.");
+                    completion.TrySetResult(true);
+                }
+                catch (Exception ex)
+                {
+                    completion.TrySetException(ex);
+                }
+            }
+
+            if (MuGame.IsMainThread)
+                UploadTextures();
+            else
+                MuGame.ScheduleOnMainThread(UploadTextures);
+
+            return completion.Task;
         }
     }
 }

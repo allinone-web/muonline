@@ -1,4 +1,4 @@
-#if OPENGL
+﻿#if OPENGL
     #define SV_POSITION POSITION
     #define VS_SHADERMODEL vs_3_0
     #define PS_SHADERMODEL ps_3_0
@@ -17,6 +17,9 @@ float4x4 World;
 float4x4 View;
 float4x4 Projection;
 float4x4 WorldViewProjection;
+#if !OPENGL
+float4x4 BoneMatrices[256];
+#endif
 
 float3 EyePosition;
 float3 LightDirection = float3(0.707, -0.707, 0);
@@ -63,6 +66,17 @@ struct VertexShaderInput
     float3 Normal : NORMAL0;
     float2 TextureCoordinate : TEXCOORD0;
 };
+
+#if !OPENGL
+struct VertexShaderInputSkinned
+{
+    float3 Position : POSITION0;
+    float3 Normal : NORMAL0;
+    float2 TextureCoordinate : TEXCOORD0;
+    float4 Color : COLOR0;
+    float2 BoneIndices : TEXCOORD1;
+};
+#endif
 
 struct VertexShaderOutput
 {
@@ -171,20 +185,34 @@ float SampleShadow(float3 worldPos, float3 normal)
     return lerp(1.0, shadow / 9.0, inBounds);
 }
 
-VertexShaderOutput MainVS(in VertexShaderInput input)
+VertexShaderOutput BuildMaterialVertex(float4 localPosition, float3 localNormal, float2 textureCoordinate)
 {
     VertexShaderOutput output = (VertexShaderOutput)0;
+    float4 worldPosition = mul(localPosition, World);
 
-    float4 worldPosition = mul(input.Position, World);
-    output.Position = mul(input.Position, WorldViewProjection);
-    
+    output.Position = mul(localPosition, WorldViewProjection);
     output.WorldPosition = worldPosition.xyz;
-    output.Normal = normalize(mul(input.Normal, (float3x3)World));
-    output.TextureCoordinate = input.TextureCoordinate;
+    output.Normal = normalize(mul(localNormal, (float3x3)World));
+    output.TextureCoordinate = textureCoordinate;
     output.ViewDirection = normalize(EyePosition - worldPosition.xyz);
-
     return output;
 }
+
+VertexShaderOutput MainVS(in VertexShaderInput input)
+{
+    return BuildMaterialVertex(input.Position, input.Normal, input.TextureCoordinate);
+}
+
+#if !OPENGL
+VertexShaderOutput MainVS_Skinned(in VertexShaderInputSkinned input)
+{
+    int positionBoneIndex = min(max((int)input.BoneIndices.x, 0), 255);
+    int normalBoneIndex = min(max((int)input.BoneIndices.y, 0), 255);
+    float4 localPosition = mul(float4(input.Position, 1.0), BoneMatrices[positionBoneIndex]);
+    float3 localNormal = mul(input.Normal, (float3x3)BoneMatrices[normalBoneIndex]);
+    return BuildMaterialVertex(localPosition, localNormal, input.TextureCoordinate);
+}
+#endif
 
 float4 MainPS(VertexShaderOutput input) : COLOR
 {
@@ -488,3 +516,14 @@ technique BasicColorDrawing
         PixelShader = compile PS_SHADERMODEL MainPS();
     }
 }
+
+#if !OPENGL
+technique BasicColorDrawing_Skinned
+{
+    pass P0
+    {
+        VertexShader = compile VS_SHADERMODEL MainVS_Skinned();
+        PixelShader = compile PS_SHADERMODEL MainPS();
+    }
+}
+#endif

@@ -1,4 +1,4 @@
-﻿using Client.Data.ATT;
+using Client.Data.ATT;
 using Client.Data.CAP;
 using Client.Data.OBJS;
 using Client.Main.Controllers;
@@ -19,20 +19,8 @@ using System.Threading.Tasks;
 
 namespace Client.Main.Controls
 {
-    // Shared helper for reference comparison in comparers
-    internal static class ComparerHelper
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static int CompareRefs<T>(T a, T b) where T : class
-        {
-            if (ReferenceEquals(a, b)) return 0;
-            if (a is null) return -1;
-            if (b is null) return 1;
-            return RuntimeHelpers.GetHashCode(a).CompareTo(RuntimeHelpers.GetHashCode(b));
-        }
-    }
-
-    // Comparers for sorting world objects by depth
+    // Comparers for deterministic depth ordering. Opaque objects are rendered front-to-back,
+    // while transparent objects are rendered back-to-front.
     sealed class WorldObjectDepthAsc : IComparer<WorldObject>
     {
         public static readonly WorldObjectDepthAsc Instance = new();
@@ -40,10 +28,12 @@ namespace Client.Main.Controls
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public int Compare(WorldObject a, WorldObject b)
         {
+            if (ReferenceEquals(a, b)) return 0;
+            if (a is null) return -1;
+            if (b is null) return 1;
+
             int cmp = a.Depth.CompareTo(b.Depth);
             if (cmp != 0) return cmp;
-
-            // Tie-break for deterministic ordering (prevents flicker when many objects share the same depth).
             return a.NetworkId.CompareTo(b.NetworkId);
         }
     }
@@ -55,105 +45,67 @@ namespace Client.Main.Controls
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public int Compare(WorldObject a, WorldObject b)
         {
+            if (ReferenceEquals(a, b)) return 0;
+            if (a is null) return 1;
+            if (b is null) return -1;
+
             int cmp = b.Depth.CompareTo(a.Depth);
             if (cmp != 0) return cmp;
-
-            // Tie-break for deterministic ordering (prevents flicker when many objects share the same depth).
             return b.NetworkId.CompareTo(a.NetworkId);
         }
     }
 
-    readonly struct WorldObjectBatchSortKey
+    sealed class WorldObjectOpaqueBatchComparer : IComparer<WorldObject>
     {
-        public readonly int TextureKey;
-        public readonly int BlendKey;
-        public readonly int ModelKey;
-        public readonly float Depth;
-        public readonly ushort NetworkId;
-        public readonly int Ordinal;
-        public readonly bool IsModel;
-
-        public WorldObjectBatchSortKey(
-            int textureKey,
-            int blendKey,
-            int modelKey,
-            float depth,
-            ushort networkId,
-            int ordinal,
-            bool isModel)
-        {
-            TextureKey = textureKey;
-            BlendKey = blendKey;
-            ModelKey = modelKey;
-            Depth = depth;
-            NetworkId = networkId;
-            Ordinal = ordinal;
-            IsModel = isModel;
-        }
-    }
-
-    sealed class WorldObjectBatchSnapshotAsc : IComparer<WorldObject>
-    {
-        private IReadOnlyDictionary<WorldObject, WorldObjectBatchSortKey> _keys;
-
-        public void SetKeys(IReadOnlyDictionary<WorldObject, WorldObjectBatchSortKey> keys)
-        {
-            _keys = keys;
-        }
+        public static readonly WorldObjectOpaqueBatchComparer Instance = new();
+        private const float DepthBucketSize = 512f;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int CompareDepth(float a, float b)
-        {
-            bool aNaN = float.IsNaN(a);
-            bool bNaN = float.IsNaN(b);
-            if (aNaN || bNaN)
-            {
-                if (aNaN && bNaN) return 0;
-                return aNaN ? 1 : -1;
-            }
-
-            return a.CompareTo(b);
-        }
+        private static int ReferenceKey(object value) => value == null ? 0 : RuntimeHelpers.GetHashCode(value);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int DepthBucket(float depth)
+        {
+            if (!float.IsFinite(depth))
+                return int.MaxValue;
+            return (int)MathF.Floor(depth / DepthBucketSize);
+        }
+
         public int Compare(WorldObject a, WorldObject b)
         {
-            if (ReferenceEquals(a, b))
-                return 0;
-            if (a is null)
-                return -1;
-            if (b is null)
-                return 1;
+            if (ReferenceEquals(a, b)) return 0;
+            if (a is null) return -1;
+            if (b is null) return 1;
 
-            if (_keys == null ||
-                !_keys.TryGetValue(a, out var ka) ||
-                !_keys.TryGetValue(b, out var kb))
+            // Keep approximate front-to-back ordering for early-Z, then group nearby
+            // objects by model/material to reduce state and geometry switches.
+            int comparison = DepthBucket(a.Depth).CompareTo(DepthBucket(b.Depth));
+            if (comparison != 0) return comparison;
+
+            bool aIsModel = a is ModelObject;
+            bool bIsModel = b is ModelObject;
+            comparison = bIsModel.CompareTo(aIsModel);
+            if (comparison != 0) return comparison;
+
+            if (a is ModelObject aModel && b is ModelObject bModel)
             {
-                return WorldObjectDepthAsc.Instance.Compare(a, b);
+                comparison = ReferenceKey(aModel.Model).CompareTo(ReferenceKey(bModel.Model));
+                if (comparison != 0) return comparison;
+
+                comparison = ReferenceKey(aModel.GetSortTextureHint()).CompareTo(ReferenceKey(bModel.GetSortTextureHint()));
+                if (comparison != 0) return comparison;
             }
 
-            int depthCmp = CompareDepth(ka.Depth, kb.Depth);
-            if (depthCmp != 0) return depthCmp;
+            comparison = ReferenceKey(a.BlendState).CompareTo(ReferenceKey(b.BlendState));
+            if (comparison != 0) return comparison;
 
-            int idCmp = ka.NetworkId.CompareTo(kb.NetworkId);
-            if (idCmp != 0) return idCmp;
+            comparison = a.Depth.CompareTo(b.Depth);
+            if (comparison != 0) return comparison;
 
-            int ordinalCmp = ka.Ordinal.CompareTo(kb.Ordinal);
-            if (ordinalCmp != 0) return ordinalCmp;
-
-            if (ka.IsModel && kb.IsModel)
-            {
-                int texCmp = ka.TextureKey.CompareTo(kb.TextureKey);
-                if (texCmp != 0) return texCmp;
-
-                int blendCmp = ka.BlendKey.CompareTo(kb.BlendKey);
-                if (blendCmp != 0) return blendCmp;
-
-                int modelCmp = ka.ModelKey.CompareTo(kb.ModelKey);
-                if (modelCmp != 0) return modelCmp;
-            }
-
-            return ComparerHelper.CompareRefs(a, b);
+            comparison = a.NetworkId.CompareTo(b.NetworkId);
+            return comparison != 0
+                ? comparison
+                : ReferenceKey(a).CompareTo(ReferenceKey(b));
         }
     }
 
@@ -172,15 +124,13 @@ namespace Client.Main.Controls
 
         private readonly List<WorldObject> _solidBehind = [];
         private readonly List<WorldObject> _transparentObjects = [];
-        private readonly List<WorldObject> _solidInFront = [];
-        private readonly Dictionary<WorldObject, WorldObjectBatchSortKey> _batchSortKeys = [];
-        private readonly WorldObjectBatchSnapshotAsc _batchSortComparerAsc = new();
         private readonly List<WalkerObject> _walkers = [];
         private readonly List<PlayerObject> _players = [];
         private readonly List<MonsterObject> _monsters = [];
         private readonly List<DroppedItemObject> _droppedItems = [];
         private readonly DroppedItemRenderSelector _droppedItemSelector = new();
         private readonly Queue<WorldObject> _objectsToInitialize = [];
+        private readonly HashSet<WorldObject> _queuedForInitialization = [];
         private readonly List<WorldObject> _visibleObjects = [];
 
         // Snapshot of objects that survived this frame's visibility/culling pass.
@@ -196,7 +146,18 @@ namespace Client.Main.Controls
         private bool _dirtyVisibleObjects = true;
         private bool _hasVisibilitySnapshot;
         private ulong _lastCulledCameraVersion;
+        private Vector3 _lastCulledCameraPosition;
+        private Vector3 _lastCulledCameraDirection = Vector3.UnitY;
+        private float _lastCulledViewFar = float.NaN;
+        private float _lastCulledFov = float.NaN;
+        private float _lastCulledAspectRatio = float.NaN;
         private readonly Stopwatch _cullingStopwatch = new();
+        private const int MaxObjectInitializationsPerFrame = 8;
+        private const int MaxConcurrentObjectInitializations = 4;
+        private int _activeObjectInitializations;
+        private const float CameraCullMoveThreshold = 32f;
+        private const float CameraCullDirectionDotThreshold = 0.9995f;
+        private const float WorldCullGuardBand = 64f;
         private const float NearUpdateDistanceSq = 2200f * 2200f;
         private const float MidUpdateDistanceSq = 4200f * 4200f;
         private const float FarUpdateDistanceSq = 6200f * 6200f;
@@ -400,14 +361,20 @@ namespace Client.Main.Controls
 
             if (_objectsToInitialize.Count > 0)
             {
-                int initCount = Math.Min(100, _objectsToInitialize.Count);
+                int availableSlots = Math.Max(0, MaxConcurrentObjectInitializations - Volatile.Read(ref _activeObjectInitializations));
+                int initCount = Math.Min(
+                    Math.Min(MaxObjectInitializationsPerFrame, _objectsToInitialize.Count),
+                    availableSlots);
                 for (int i = 0; i < initCount; i++)
                 {
                     var obj = _objectsToInitialize.Dequeue();
+                    _queuedForInitialization.Remove(obj);
+
                     if (obj == null || !ReferenceEquals(obj.World, this) || obj.Status != GameControlStatus.NonInitialized)
                         continue;
 
-                    QueueObjectInitialization(obj);
+                    if (!QueueObjectInitialization(obj))
+                        EnqueueObjectInitialization(obj);
                 }
             }
 
@@ -420,18 +387,19 @@ namespace Client.Main.Controls
 
             UpdateVisibleObjects(time);
 
-            ulong cameraVersion = Camera.Instance.CullingStateVersion;
+            var camera = Camera.Instance;
+            ulong cameraVersion = camera.CullingStateVersion;
             bool needsFullRebuild =
                 _dirtyVisibleObjects ||
                 (Constants.ENABLE_CROWD_SPATIAL_CULLING && _spatialObjectSectors.Count != Objects.Count) ||
-                _lastCulledCameraVersion != cameraVersion ||
+                HasSignificantCameraCullChange(camera) ||
                 !_hasVisibilitySnapshot;
 
             if (needsFullRebuild)
             {
                 RebuildVisibleObjects();
                 _dirtyVisibleObjects = false;
-                _lastCulledCameraVersion = cameraVersion;
+                CaptureCulledCameraState(camera, cameraVersion);
             }
             else if (_positionDirtyObjects.Count > 0)
             {
@@ -441,19 +409,33 @@ namespace Client.Main.Controls
             WorldHoverSystem.UpdateHover(_visibleObjects, Scene);
         }
 
-        private void QueueObjectInitialization(WorldObject obj)
+        private bool QueueObjectInitialization(WorldObject obj)
+        {
+            if (obj == null || obj.Status != GameControlStatus.NonInitialized)
+                return true;
+
+            var scheduler = MuGame.TaskScheduler;
+            if (scheduler == null || Volatile.Read(ref _activeObjectInitializations) >= MaxConcurrentObjectInitializations)
+                return false;
+
+            Interlocked.Increment(ref _activeObjectInitializations);
+            bool queued = scheduler.QueueTask(
+                () => LoadInitializedObjectAsync(obj),
+                Controllers.TaskScheduler.Priority.Low);
+
+            if (!queued)
+                Interlocked.Decrement(ref _activeObjectInitializations);
+
+            return queued;
+        }
+
+        private void EnqueueObjectInitialization(WorldObject obj)
         {
             if (obj == null || obj.Status != GameControlStatus.NonInitialized)
                 return;
 
-            bool queued = MuGame.TaskScheduler?.QueueTask(
-                () => LoadInitializedObjectAsync(obj),
-                Controllers.TaskScheduler.Priority.Low) == true;
-
-            if (!queued)
-            {
-                _ = LoadInitializedObjectAsync(obj);
-            }
+            if (_queuedForInitialization.Add(obj))
+                _objectsToInitialize.Enqueue(obj);
         }
 
         private async Task LoadInitializedObjectAsync(WorldObject obj)
@@ -477,6 +459,10 @@ namespace Client.Main.Controls
                         obj.Dispose();
                     }
                 });
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _activeObjectInitializations);
             }
         }
 
@@ -550,7 +536,7 @@ namespace Client.Main.Controls
             _positionDirtyObjects.Add(e.Control);
             MarkWorldGeometryChanged();
             if (e.Control.Status == GameControlStatus.NonInitialized)
-                _objectsToInitialize.Enqueue(e.Control);
+                EnqueueObjectInitialization(e.Control);
         }
 
         private void Object_HiddenChanged(object sender, EventArgs e)
@@ -595,6 +581,7 @@ namespace Client.Main.Controls
 
             RemoveVisibleObject(e.Control);
             _positionDirtyObjects.Remove(e.Control);
+            _queuedForInitialization.Remove(e.Control);
             UnregisterSpatialObject(e.Control);
             MarkWorldGeometryChanged();
         }
@@ -754,7 +741,6 @@ namespace Client.Main.Controls
             _renderCounter = 0;
             _solidBehind.Clear();
             _transparentObjects.Clear();
-            _solidInFront.Clear();
 
             var objects = _visibleObjects;
 
@@ -776,36 +762,25 @@ namespace Client.Main.Controls
             }
 
             FrameMetrics.SolidBehindObjects = _solidBehind.Count;
-            FrameMetrics.SolidInFrontObjects = _solidInFront.Count;
+            FrameMetrics.SolidInFrontObjects = 0;
             FrameMetrics.TransparentObjects = _transparentObjects.Count;
 
-            // Sort lists
             if (_solidBehind.Count > 1)
             {
-                if (Constants.ENABLE_BATCH_OPTIMIZED_SORTING)
-                    SortSolidListBatchOptimizedAsc(_solidBehind);
-                else
-                    _solidBehind.Sort(WorldObjectDepthAsc.Instance);
+                IComparer<WorldObject> comparer = Constants.ENABLE_BATCH_OPTIMIZED_SORTING
+                    ? WorldObjectOpaqueBatchComparer.Instance
+                    : WorldObjectDepthAsc.Instance;
+                _solidBehind.Sort(comparer);
             }
 
             if (_transparentObjects.Count > 1)
                 _transparentObjects.Sort(WorldObjectDepthDesc.Instance);
-
-            if (_solidInFront.Count > 1)
-            {
-                if (Constants.ENABLE_BATCH_OPTIMIZED_SORTING)
-                    SortSolidListBatchOptimizedAsc(_solidInFront);
-                else
-                    _solidInFront.Sort(WorldObjectDepthAsc.Instance);
-            }
-
 
             DrawListWithSpriteBatchGrouping(_solidBehind, DepthStateDefault, time);
             DrawListWithSpriteBatchGrouping(_transparentObjects, DepthStateDepthRead, time);
 
             // Draw post-pass (DrawAfter)
             DrawAfterPass(_solidBehind, DepthStateDefault, time);
-            DrawAfterPass(_solidInFront, DepthStateDefault, time);
             DrawAfterPass(_transparentObjects, DepthStateDepthRead, time);
 
             OverheadNameplateRenderer.FlushQueuedNameplates(GraphicsManager.Instance.Sprite);
@@ -837,47 +812,6 @@ namespace Client.Main.Controls
                 FrameMetrics.AnimationUpdates,
                 FrameMetrics.AnimationSkips,
                 FrameMetrics.LowQualityObjects);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int GetRefSortKey(object value)
-            => value == null ? 0 : RuntimeHelpers.GetHashCode(value);
-
-        private void SortSolidListBatchOptimizedAsc(List<WorldObject> list)
-        {
-            _batchSortKeys.Clear();
-
-            for (int i = 0; i < list.Count; i++)
-            {
-                var obj = list[i];
-                if (obj == null)
-                    continue;
-
-                int textureKey = 0;
-                int blendKey = 0;
-                int modelKey = 0;
-                bool isModel = false;
-
-                if (obj is ModelObject model)
-                {
-                    isModel = true;
-                    textureKey = GetRefSortKey(model.GetSortTextureHint());
-                    blendKey = GetRefSortKey(model.BlendState);
-                    modelKey = GetRefSortKey(model.Model);
-                }
-
-                _batchSortKeys[obj] = new WorldObjectBatchSortKey(
-                    textureKey,
-                    blendKey,
-                    modelKey,
-                    obj.Depth,
-                    obj.NetworkId,
-                    i,
-                    isModel);
-            }
-
-            _batchSortComparerAsc.SetKeys(_batchSortKeys);
-            list.Sort(_batchSortComparerAsc);
         }
 
         private void DrawListWithSpriteBatchGrouping(List<WorldObject> list, DepthStencilState depthState, GameTime time)
@@ -928,8 +862,8 @@ namespace Client.Main.Controls
                             ? GraphicsManager.GetQualityLinearSamplerState()
                             : GraphicsManager.GetQualitySamplerState();
                     }
-                    // Elf buff orb is rendered in solid-in-front pass for proper owner ordering,
-                    // but as additive sprite it must not write depth (quad-shaped occlusion artifacts).
+                    // Additive sprites must not write depth because their quads would occlude
+                    // later transparent geometry.
                     var objectDepthState = ResolveObjectDepthState(obj, depthState);
                     var batchDepth =
                         obj is WaterMistParticleSystem ||
@@ -1067,11 +1001,17 @@ namespace Client.Main.Controls
         private static bool IsObjectInView(WorldObject obj, Vector2 cam2, float maxDistSq, BoundingFrustum frustum)
         {
             var pos3 = obj.WorldPosition.Translation;
-            var obj2 = new Vector2(pos3.X, pos3.Y);
-            if (Vector2.DistanceSquared(cam2, obj2) > maxDistSq)
+            float dx = cam2.X - pos3.X;
+            float dy = cam2.Y - pos3.Y;
+            if (dx * dx + dy * dy > maxDistSq)
                 return false;
 
-            return frustum != null && frustum.Contains(obj.BoundingBoxWorld) != ContainmentType.Disjoint;
+            if (frustum == null)
+                return false;
+
+            BoundingBox bounds = obj.BoundingBoxWorld;
+            Vector3 margin = new(WorldCullGuardBand);
+            return frustum.Contains(new BoundingBox(bounds.Min - margin, bounds.Max + margin)) != ContainmentType.Disjoint;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1083,9 +1023,9 @@ namespace Client.Main.Controls
             var policy = obj.RenderPolicy;
 
             if (policy.ForceVisible || (obj is WalkerObject walker && walker.IsMainWalker))
-        {
-            return true;
-        }
+            {
+                return true;
+            }
 
             return obj.World?.WorldIndex == 95
                 && (policy.ForceVisibleInLoginWorld || HasForceVisibleEffectChild(obj));
@@ -1582,35 +1522,38 @@ namespace Client.Main.Controls
                     if (obj == null || !obj.Visible)
                         continue;
 
-                    if (ShouldAlwaysUpdate(obj))
+                    int stride = 1;
+                    if (!ShouldAlwaysUpdate(obj))
                     {
-                        obj.SetLowQuality(false);
+                        var position = obj.WorldPosition.Translation;
+                        float dx = camX - position.X;
+                        float dy = camY - position.Y;
+                        float distanceSquared = dx * dx + dy * dy;
+                        stride = Constants.ENABLE_ANIMATION_THROTTLING
+                            ? ResolveUpdateStride(distanceSquared)
+                            : 1;
+                    }
+
+                    bool lowQuality = stride > 1;
+                    obj.SetLowQuality(lowQuality);
+                    if (obj is ModelObject model)
+                        model.SetAnimationUpdateStride(stride);
+
+                    if (lowQuality)
+                    {
+                        FrameMetrics.LowQualityObjects++;
+                        if (((frame + obj.UpdateOffset) % stride) != 0)
+                            FrameMetrics.AnimationSkips++;
+                        else
+                            FrameMetrics.AnimationUpdates++;
+                    }
+                    else
+                    {
                         FrameMetrics.AnimationUpdates++;
-                        obj.Update(time);
-                        continue;
                     }
 
-                    var pos = obj.WorldPosition.Translation;
-                    float dx = camX - pos.X;
-                    float dy = camY - pos.Y;
-                    float distSq = dx * dx + dy * dy;
-
-                    int stride = Constants.ENABLE_ANIMATION_THROTTLING
-                        ? ResolveUpdateStride(distSq)
-                        : 1;
-                    obj.SetLowQuality(stride > 1);
-
-                    if (stride > 1 && ((frame + obj.UpdateOffset) % stride) != 0)
-                    {
-                        FrameMetrics.LowQualityObjects++;
-                        FrameMetrics.AnimationSkips++;
-                        continue;
-                    }
-
-                    if (stride > 1)
-                        FrameMetrics.LowQualityObjects++;
-
-                    FrameMetrics.AnimationUpdates++;
+                    // Movement, network interpolation and gameplay state still update every
+                    // frame. ModelObject throttles only its expensive bone-pose calculation.
                     obj.Update(time);
                 }
             }
@@ -1642,6 +1585,95 @@ namespace Client.Main.Controls
             if (distSq <= MidUpdateDistanceSq) return 2;
             if (distSq <= FarUpdateDistanceSq) return 4;
             return 6;
+        }
+
+
+        private bool HasSignificantCameraCullChange(Camera camera)
+        {
+            if (!_hasVisibilitySnapshot || camera == null)
+                return true;
+
+            float moveThresholdSq = CameraCullMoveThreshold * CameraCullMoveThreshold;
+            if (Vector3.DistanceSquared(camera.Position, _lastCulledCameraPosition) >= moveThresholdSq)
+                return true;
+
+            Vector3 direction = camera.Target - camera.Position;
+            if (direction.LengthSquared() > 1e-8f)
+                direction.Normalize();
+            else
+                direction = Vector3.UnitY;
+
+            if (Vector3.Dot(direction, _lastCulledCameraDirection) < CameraCullDirectionDotThreshold)
+                return true;
+
+            return MathF.Abs(camera.ViewFar - _lastCulledViewFar) > 0.01f ||
+                   MathF.Abs(camera.FOV - _lastCulledFov) > 0.001f ||
+                   MathF.Abs(camera.AspectRatio - _lastCulledAspectRatio) > 0.0001f;
+        }
+
+        private void CaptureCulledCameraState(Camera camera, ulong cameraVersion)
+        {
+            _lastCulledCameraVersion = cameraVersion;
+            _lastCulledCameraPosition = camera.Position;
+
+            Vector3 direction = camera.Target - camera.Position;
+            if (direction.LengthSquared() > 1e-8f)
+                direction.Normalize();
+            else
+                direction = Vector3.UnitY;
+
+            _lastCulledCameraDirection = direction;
+            _lastCulledViewFar = camera.ViewFar;
+            _lastCulledFov = camera.FOV;
+            _lastCulledAspectRatio = camera.AspectRatio;
+        }
+
+        internal void CollectObjectsNear(Vector3 center, float radius, List<WorldObject> destination)
+        {
+            if (destination == null)
+                throw new ArgumentNullException(nameof(destination));
+
+            destination.Clear();
+            float safeRadius = MathF.Max(0f, radius);
+
+            if (!Constants.ENABLE_CROWD_SPATIAL_CULLING)
+            {
+                var snapshot = Objects.GetSnapshot();
+                for (int i = 0; i < snapshot.Count; i++)
+                {
+                    var obj = snapshot[i];
+                    if (obj != null)
+                        destination.Add(obj);
+                }
+                return;
+            }
+
+            if (_spatialObjectSectors.Count != Objects.Count)
+                RebuildSpatialGridFromSnapshot();
+
+            int centerTileX = (int)MathF.Floor(center.X / Constants.TERRAIN_SCALE);
+            int centerTileY = (int)MathF.Floor(center.Y / Constants.TERRAIN_SCALE);
+            int centerSectorX = Math.Clamp(centerTileX / SpatialSectorTileSize, 0, SpatialSectorsPerAxis - 1);
+            int centerSectorY = Math.Clamp(centerTileY / SpatialSectorTileSize, 0, SpatialSectorsPerAxis - 1);
+            int sectorRadius = (int)MathF.Ceiling(safeRadius / (Constants.TERRAIN_SCALE * SpatialSectorTileSize)) + 1;
+
+            int minX = Math.Max(0, centerSectorX - sectorRadius);
+            int maxX = Math.Min(SpatialSectorsPerAxis - 1, centerSectorX + sectorRadius);
+            int minY = Math.Max(0, centerSectorY - sectorRadius);
+            int maxY = Math.Min(SpatialSectorsPerAxis - 1, centerSectorY + sectorRadius);
+
+            for (int y = minY; y <= maxY; y++)
+            {
+                for (int x = minX; x <= maxX; x++)
+                {
+                    var bucket = _spatialSectors[x, y];
+                    for (int i = 0; i < bucket.Count; i++)
+                        destination.Add(bucket[i]);
+                }
+            }
+
+            for (int i = 0; i < _spatialOffGridObjects.Count; i++)
+                destination.Add(_spatialOffGridObjects[i]);
         }
 
 
@@ -1678,6 +1710,8 @@ namespace Client.Main.Controls
             _players.Clear();
             _monsters.Clear();
             _droppedItems.Clear();
+            _objectsToInitialize.Clear();
+            _queuedForInitialization.Clear();
             _visibleObjectSet.Clear();
             _visibleObjectIndices.Clear();
             _visibleObjectsNeedCompaction = false;
@@ -1706,7 +1740,7 @@ namespace Client.Main.Controls
         {
             if (worldObject.Status == GameControlStatus.NonInitialized)
             {
-                _objectsToInitialize.Enqueue(worldObject);
+                EnqueueObjectInitialization(worldObject);
                 return;
             }
 

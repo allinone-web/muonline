@@ -11,14 +11,14 @@ namespace Client.Main.Controllers
     public class TaskScheduler : IDisposable
     {
         private readonly ILogger<TaskScheduler> _logger;
-        private readonly ConcurrentPriorityQueue<TaskItem> _taskQueue;
+        private readonly ConcurrentPriorityQueue _taskQueue;
         private readonly CancellationTokenSource _cts = new();
 
         // Configuration
         // Lower per-frame budget to smooth out spikes when many spawn/load tasks enqueue at once
-        private readonly int _maxTasksPerFrame = 4;
+        private readonly int _maxTasksPerFrame = 6;
         private readonly int _maxTotalQueuedTasks = 150;
-        private readonly TimeSpan _maxProcessingTimePerFrame = TimeSpan.FromMilliseconds(8); // tighter per-frame slice
+        private readonly TimeSpan _maxProcessingTimePerFrame = TimeSpan.FromMilliseconds(2);
 
         // Statistics
         private long _processedTasks;
@@ -28,6 +28,8 @@ namespace Client.Main.Controllers
         private int _lastFrameQueueAtStart;
         private int _lastFrameQueueRemaining;
         private double _lastFrameProcessingMs;
+        private long _lastBacklogWarningTimestamp;
+        private long _lastQueueFullWarningTimestamp;
 
         // Priority levels
         public enum Priority
@@ -38,33 +40,23 @@ namespace Client.Main.Controllers
             Low = 3,          // Background tasks (model loading, texture caching)
         }
 
-        private class TaskItem : IComparable<TaskItem>
+        private sealed class TaskItem
         {
-            public Action Action { get; }
-            public Priority TaskPriority { get; }
-            public DateTime Created { get; } = DateTime.UtcNow;
-
             public TaskItem(Action action, Priority priority)
             {
                 Action = action;
                 TaskPriority = priority;
             }
 
-            public int CompareTo(TaskItem other)
-            {
-                if (TaskPriority != other.TaskPriority)
-                {
-                    return TaskPriority.CompareTo(other.TaskPriority);
-                }
-                return Created.CompareTo(other.Created); // FIFO within priority
-            }
+            public Action Action { get; }
+            public Priority TaskPriority { get; }
         }
 
         public TaskScheduler(ILoggerFactory loggerFactory)
         {
             _logger = loggerFactory?.CreateLogger<TaskScheduler>() ??
                      LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<TaskScheduler>();
-            _taskQueue = new ConcurrentPriorityQueue<TaskItem>();
+            _taskQueue = new ConcurrentPriorityQueue();
             _uptimeStopwatch.Start();
         }
 
@@ -77,8 +69,16 @@ namespace Client.Main.Controllers
 
             if (_taskQueue.Count >= _maxTotalQueuedTasks)
             {
-                _logger.LogWarning("Task queue is full ({Count}). Dropping task with priority {Priority}",
-                                  _taskQueue.Count, priority);
+                long now = Stopwatch.GetTimestamp();
+                long previous = Volatile.Read(ref _lastQueueFullWarningTimestamp);
+                if (previous == 0 ||
+                    (Stopwatch.GetElapsedTime(previous, now) >= TimeSpan.FromSeconds(5) &&
+                     Interlocked.CompareExchange(ref _lastQueueFullWarningTimestamp, now, previous) == previous))
+                {
+                    Volatile.Write(ref _lastQueueFullWarningTimestamp, now);
+                    _logger.LogWarning("Task queue is full ({Count}). Dropping task with priority {Priority}",
+                                      _taskQueue.Count, priority);
+                }
                 return false;
             }
 
@@ -111,23 +111,20 @@ namespace Client.Main.Controllers
         /// <summary>
         /// Processes queued tasks on the main thread. Should be called each frame.
         /// </summary>
-        public void ProcessFrame(int workScale = 1)
+        public void ProcessFrame()
         {
             if (_cts.IsCancellationRequested) return;
-            workScale = Math.Max(1, workScale);
 
             _frameStopwatch.Restart();
             var processedThisFrame = 0;
             int queuedAtStart = _taskQueue.Count;
-            int maxTasksThisFrame = _maxTasksPerFrame * workScale;
-            TimeSpan maxProcessingTime = TimeSpan.FromTicks(_maxProcessingTimePerFrame.Ticks * workScale);
+            int maxTasksThisFrame = _maxTasksPerFrame;
+            TimeSpan maxProcessingTime = _maxProcessingTimePerFrame;
 
-            // Increase throughput when queue is backing up, still capped by time budget.
+            // A backlog may increase the item cap, but never the fixed time budget.
+            // This improves throughput without sacrificing frame-time stability.
             if (queuedAtStart > 40)
-            {
-                int adaptiveCap = 12 * workScale;
-                maxTasksThisFrame = Math.Min(adaptiveCap, maxTasksThisFrame + (queuedAtStart / 25));
-            }
+                maxTasksThisFrame = Math.Min(12, maxTasksThisFrame + queuedAtStart / 40);
 
             while (processedThisFrame < maxTasksThisFrame)
             {
@@ -150,10 +147,10 @@ namespace Client.Main.Controllers
                     processedThisFrame++;
                     Interlocked.Increment(ref _processedTasks);
 
-                    if (processingTime > 1.0) // Log slow tasks
+                    if (processingTime > 2.0 && _logger.IsEnabled(LogLevel.Debug))
                     {
-                        _logger.LogInformation("Slow task execution ({ProcessingTime:F2}ms) - Priority: {Priority}",
-                                              processingTime, taskItem.TaskPriority);
+                        _logger.LogDebug("Slow scheduled task ({ProcessingTime:F2}ms) - Priority: {Priority}",
+                                         processingTime, taskItem.TaskPriority);
                     }
                 }
                 catch (Exception ex)
@@ -168,9 +165,15 @@ namespace Client.Main.Controllers
             _lastFrameQueueAtStart = queuedAtStart;
             _lastFrameQueueRemaining = remaining;
             _lastFrameProcessingMs = _frameStopwatch.Elapsed.TotalMilliseconds;
-            if (remaining > 50) // Warn about buildup
+            if (remaining > 50)
             {
-                _logger.LogWarning("Task queue is backing up. Current count: {Count}", remaining);
+                long now = Stopwatch.GetTimestamp();
+                long previous = Volatile.Read(ref _lastBacklogWarningTimestamp);
+                if (Stopwatch.GetElapsedTime(previous, now) >= TimeSpan.FromSeconds(5) &&
+                    Interlocked.CompareExchange(ref _lastBacklogWarningTimestamp, now, previous) == previous)
+                {
+                    _logger.LogWarning("Task queue is backing up. Current count: {Count}", remaining);
+                }
             }
         }
 
@@ -225,16 +228,16 @@ namespace Client.Main.Controllers
         }
 
         // Simple concurrent priority queue implementation
-        private class ConcurrentPriorityQueue<T> where T : TaskItem
+        private sealed class ConcurrentPriorityQueue
         {
             private readonly object _lock = new();
-            private readonly Queue<T> _criticalQueue = new();
-            private readonly Queue<T> _highQueue = new();
-            private readonly Queue<T> _normalQueue = new();
-            private readonly Queue<T> _lowQueue = new();
+            private readonly Queue<TaskItem> _criticalQueue = new();
+            private readonly Queue<TaskItem> _highQueue = new();
+            private readonly Queue<TaskItem> _normalQueue = new();
+            private readonly Queue<TaskItem> _lowQueue = new();
             private int _count;
 
-            public void Enqueue(T item)
+            public void Enqueue(TaskItem item)
             {
                 lock (_lock)
                 {
@@ -258,7 +261,7 @@ namespace Client.Main.Controllers
                 }
             }
 
-            public bool TryDequeue(out T item)
+            public bool TryDequeue(out TaskItem item)
             {
                 lock (_lock)
                 {

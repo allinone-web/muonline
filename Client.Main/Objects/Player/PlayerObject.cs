@@ -1,4 +1,4 @@
-﻿using Client.Main.Content;
+﻿﻿using Client.Main.Content;
 using Client.Main.Controls;
 using Client.Main.Data;
 using Client.Main.Models;
@@ -1412,17 +1412,13 @@ namespace Client.Main.Objects.Player
 
         private void UpdateEquipmentAnimationStride()
         {
-            int desiredStride = 1;
-
-            if (!IsMainWalker)
-            {
-                desiredStride = IsOneShotPlaying ? 1 : (LowQuality ? 2 : 1);
-            }
+            int desiredStride = IsMainWalker || IsOneShotPlaying
+                ? 1
+                : AnimationUpdateStride;
 
             if (_lastEquipmentAnimationStride == desiredStride)
                 return;
 
-            SetAnimationUpdateStride(desiredStride);
             HelmMask?.SetAnimationUpdateStride(desiredStride);
             Helm?.SetAnimationUpdateStride(desiredStride);
             Armor?.SetAnimationUpdateStride(desiredStride);

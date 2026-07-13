@@ -10,7 +10,6 @@ using Microsoft.Xna.Framework.Graphics;
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
-using System.Threading;
 using System.Threading.Tasks;
 using Client.Main.Controls;
 using Client.Main.Models;
@@ -51,7 +50,6 @@ namespace Client.Main.Objects
         private static readonly RasterizerState _cullClockwise = RasterizerState.CullClockwise;
         private static readonly RasterizerState _cullNone = RasterizerState.CullNone;
 
-        private static int _animationStrideSeed = 0;
         private static int _gpuSkinnedMeshesDrawnThisFrame = 0;
         private static int _modelFallbackDrawCallsThisFrame = 0;
         private static int _sharedAnimationPaletteHitsThisFrame = 0;
@@ -179,28 +177,44 @@ namespace Client.Main.Objects
         private bool _boneMatrixCacheValid = false;
 
         private const int MaxGpuSkinBones = 256;
-        private static Effect _gpuSkinCapabilityEffect;
+        private static Effect _gpuSkinCapabilityDynamicEffect;
+        private static Effect _gpuSkinCapabilityItemEffect;
+        private static Effect _gpuSkinCapabilityMonsterEffect;
         private static bool _gpuSkinCapability;
 
-        // Detect support from the compiled effect instead of relying on a project symbol.
-        // This is important for the WindowsDX launcher because DefineConstants from the
-        // executable project are not guaranteed to flow into the referenced Client.Main project.
+        // Detect support from compiled effects instead of relying on project symbols.
+        // GPU geometry is shared by all material paths; every path still verifies its
+        // own skinned technique before it is selected for a mesh.
         private static bool SupportsGpuDynamicSkinning
         {
             get
             {
-                var effect = GraphicsManager.Instance?.DynamicLightingEffect;
-                if (ReferenceEquals(effect, _gpuSkinCapabilityEffect))
-                    return _gpuSkinCapability;
+                var graphics = GraphicsManager.Instance;
+                var dynamicEffect = graphics?.DynamicLightingEffect;
+                var itemEffect = graphics?.ItemMaterialEffect;
+                var monsterEffect = graphics?.MonsterMaterialEffect;
 
-                _gpuSkinCapabilityEffect = effect;
-                _gpuSkinCapability = effect != null &&
-                                     TryGetTechnique(effect, "DynamicLighting_Skinned") != null;
+                if (ReferenceEquals(dynamicEffect, _gpuSkinCapabilityDynamicEffect) &&
+                    ReferenceEquals(itemEffect, _gpuSkinCapabilityItemEffect) &&
+                    ReferenceEquals(monsterEffect, _gpuSkinCapabilityMonsterEffect))
+                {
+                    return _gpuSkinCapability;
+                }
+
+                _gpuSkinCapabilityDynamicEffect = dynamicEffect;
+                _gpuSkinCapabilityItemEffect = itemEffect;
+                _gpuSkinCapabilityMonsterEffect = monsterEffect;
+                _gpuSkinCapability =
+                    TryGetTechnique(dynamicEffect, "DynamicLighting_Skinned") != null ||
+                    TryGetTechnique(itemEffect, "BasicColorDrawing_Skinned") != null ||
+                    TryGetTechnique(monsterEffect, "MonsterMaterialDrawing_Skinned") != null;
+
                 return _gpuSkinCapability;
             }
         }
 
         private Matrix[] _gpuSkinBoneUploadBuffer = Array.Empty<Matrix>();
+        private int _gpuSkinBoneUploadCount;
 
         #endregion
 
@@ -232,7 +246,6 @@ namespace Client.Main.Objects
         private uint _lastLinkedParentPoseVersion = uint.MaxValue;
         private ModelObject _lastLinkedParentModel = null;
         private double _lastFrameTimeMs = 0; // To track timing in methods without GameTime
-        private double _lastStrideAnimationBufferUpdateTimeMs = double.NegativeInfinity;
         private float _drawShaderTimeSeconds = 0f;
         private int _animationSampleActionIndex = -1;
         private int _animationSampleFrame0 = 0;
@@ -240,7 +253,6 @@ namespace Client.Main.Objects
         private int _animationSampleInterpolationBucket = 0;
         private bool _animationSampleValid = false;
 
-        private readonly int _animationStrideOffset;
 
         #endregion
 
@@ -393,7 +405,6 @@ namespace Client.Main.Objects
         {
             _logger = AppLoggerFactory?.CreateLogger(GetType());
             // MatrixChanged subscription removed - UpdateWorldPosition was a no-op
-            _animationStrideOffset = Interlocked.Increment(ref _animationStrideSeed) & 31;
         }
 
         #endregion
@@ -535,7 +546,9 @@ namespace Client.Main.Objects
                         // Keep nearby animations smooth; only throttle when low-quality is active.
                         // Attachments with animated material effects (e.g. item glow) must stay per-frame.
                         bool forcePerFrameStride = HasRealtimeMaterialAnimation();
-                        desiredStride = (walker.IsOneShotPlaying || forcePerFrameStride) ? 1 : (LowQuality ? 4 : 1);
+                        desiredStride = (walker.IsOneShotPlaying || forcePerFrameStride)
+                            ? 1
+                            : walker.AnimationUpdateStride;
                     }
 
                     if (AnimationUpdateStride != desiredStride)
@@ -632,6 +645,8 @@ namespace Client.Main.Objects
 
             _cachedBoneMatrix = null;
             _boneMatrixCacheValid = false;
+            _gpuSkinBoneUploadBuffer = Array.Empty<Matrix>();
+            _gpuSkinBoneUploadCount = 0;
             _animationStateValid = false;
             _animationStepAccumulatorSeconds = 0f;
             _animationPoseVersion = 0;
@@ -704,7 +719,6 @@ namespace Client.Main.Objects
                 return;
 
             AnimationUpdateStride = newStride;
-            _lastStrideAnimationBufferUpdateTimeMs = double.NegativeInfinity;
         }
 
         private void OnRenderShadowChanged()

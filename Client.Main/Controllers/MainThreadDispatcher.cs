@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 
@@ -126,7 +126,7 @@ namespace Client.Main.Controllers
             _queue.Enqueue(new AsyncAction(action));
         }
 
-        public int ProcessPending(int workScale = 1)
+        public int ProcessPending()
         {
             if (_queue.IsEmpty)
             {
@@ -135,9 +135,8 @@ namespace Client.Main.Controllers
                 return 0;
             }
 
-            workScale = Math.Max(1, workScale);
-            int maxActions = _maxActionsPerFrame * workScale;
-            TimeSpan maxTime = TimeSpan.FromTicks(_maxActionTimePerFrame.Ticks * workScale);
+            int maxActions = _maxActionsPerFrame;
+            TimeSpan maxTime = _maxActionTimePerFrame;
 
             int processed = 0;
             long frameStart = Stopwatch.GetTimestamp();

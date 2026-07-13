@@ -1,4 +1,4 @@
-// Client.Main/Objects/WorldObject.cs
+﻿// Client.Main/Objects/WorldObject.cs
 
 using Client.Main.Controllers;
 using Client.Main.Controls;
@@ -211,11 +211,8 @@ namespace Client.Main.Objects
         {
             if (Status == GameControlStatus.NonInitialized)
             {
-                // World objects are initialized by WorldControl's budgeted queue.
-                // Do not load until World is assigned; Load() requires it.
-                if (World != null)
-                    Load().ConfigureAwait(false);
-
+                // WorldControl owns initialization and applies a strict per-frame budget.
+                // Starting Load() here would bypass backpressure and create spawn-time spikes.
                 return;
             }
             if (Status != GameControlStatus.Ready) return;

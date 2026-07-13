@@ -1,4 +1,4 @@
-using Microsoft.Xna.Framework.Graphics;
+﻿using Microsoft.Xna.Framework.Graphics;
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -7,11 +7,13 @@ namespace Client.Main.Graphics
 {
     /// <summary>
     /// Lightweight pool for dynamic vertex and index buffers that hides GPU allocation latency.
-    /// Buffers are bucketed by capacity (rounded up) and reused on demand.
+    /// Buffers are kept in exact-capacity buckets because several render paths derive primitive
+    /// counts from the physical index-buffer size.
     /// </summary>
     public static class DynamicBufferPool
     {
         private const int MaxBuffersPerBucket = 8;
+        private const int PruneIntervalFrames = 120;
 
         // DX needs extra breathing room to avoid reusing buffers the GPU still references.
 #if WINDOWS_DX
@@ -32,6 +34,7 @@ namespace Client.Main.Graphics
 
         private static GraphicsDevice _graphicsDevice;
         private static int _frameId;
+        private static int _lastPruneFrame;
 
         // Explicit VertexDeclaration to ensure correct layout on DirectX
         private static VertexDeclaration _explicitVertexDeclaration;
@@ -75,6 +78,7 @@ namespace Client.Main.Graphics
 
             _graphicsDevice = graphicsDevice;
             Volatile.Write(ref _frameId, 0);
+            Volatile.Write(ref _lastPruneFrame, 0);
 
             if (_graphicsDevice != null)
             {
@@ -112,7 +116,13 @@ namespace Client.Main.Graphics
                 frameIndex = current + 1; // guarantee monotonic progression
 
             Volatile.Write(ref _frameId, frameIndex);
-            PruneStaleBuffers();
+
+            int lastPrune = Volatile.Read(ref _lastPruneFrame);
+            if (frameIndex - lastPrune >= PruneIntervalFrames &&
+                Interlocked.CompareExchange(ref _lastPruneFrame, frameIndex, lastPrune) == lastPrune)
+            {
+                PruneStaleBuffers();
+            }
         }
 
         public static DynamicVertexBuffer RentVertexBuffer(int requiredVertexCount)

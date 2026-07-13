@@ -31,12 +31,12 @@ namespace Client.Main.Objects
         {
             await base.Load();
 
-            TextureData = await TextureLoader.Instance.Prepare(TexturePath);
+            SpriteTexture = await TextureLoader.Instance.PrepareAndGetTexture(TexturePath);
+            TextureData = TextureLoader.Instance.Get(TexturePath);
 
-            if (TextureData != null)
+            if (TextureData != null && SpriteTexture != null)
             {
                 SpriteBatch = GraphicsManager.Instance.Sprite;
-                SpriteTexture = TextureLoader.Instance.GetTexture2D(TexturePath);
             }
             else
             {

@@ -51,9 +51,6 @@ namespace Client.Main.Objects
                 if (ShouldSkipTransformOnlyBufferUpdate())
                     return;
 
-                if (ShouldThrottleAnimationOnlyBufferUpdate())
-                    return;
-
                 EnsureMeshRuntimeState(meshCount);
 
                 // Bone transforms are expensive to prepare. Delay until a mesh actually needs CPU skinning.
@@ -108,17 +105,13 @@ namespace Client.Main.Objects
                         // Main-pass GPU skinning and projected mesh shadows are independent concerns.
                         // A projected shadow may still need CPU-skinned buffers, but that must not disable
                         // GPU skinning for the visible model. In that case both buffer paths are maintained.
-                        bool canUseGpuSkinning = SupportsGpuDynamicSkinning &&
-                                                 Constants.ENABLE_GPU_SKINNING &&
-                                                 !usesMutableMeshData &&
-                                                 !hasVertexDeformer &&
-                                                 DetermineShaderForMesh(meshIndex).UseDynamicLighting;
+                        bool canUseGpuSkinning = CanUseGpuSkinningForMesh(meshIndex);
 
                         var ms = _meshes[meshIndex];
                         bool gpuSkinReady = canUseGpuSkinning &&
                                             ms.GpuSkinEnabled &&
-                                            ms.GpuVertexBuffer != null &&
-                                            ms.GpuIndexBuffer != null &&
+                                            ms.GpuVertexBuffer != null && !ms.GpuVertexBuffer.IsDisposed &&
+                                            ms.GpuIndexBuffer != null && !ms.GpuIndexBuffer.IsDisposed &&
                                             ms.GpuBoneCount > 0;
 
                         bool gpuSkinActive = canUseGpuSkinning &&
@@ -145,10 +138,9 @@ namespace Client.Main.Objects
 
                             // Keep building/updating CPU buffers below only for the projected shadow pass.
                         }
-                        else
-                        {
-                            ms.GpuSkinEnabled = false;
-                        }
+                        // GpuSkinEnabled describes attached immutable GPU geometry, not the
+                        // shader selected for this particular frame. Do not clear it during
+                        // temporary walk/stop blends, hover transitions or material changes.
 
                         // Calculate mesh-specific lighting
                         bool isBlend = IsBlendMesh(meshIndex);
@@ -290,34 +282,6 @@ namespace Client.Main.Objects
             return true;
         }
 
-        private bool ShouldThrottleAnimationOnlyBufferUpdate()
-        {
-            if ((_invalidatedBufferFlags & MeshDirtyFlags.Animation) == 0 ||
-                (_invalidatedBufferFlags & ~(MeshDirtyFlags.Animation | MeshDirtyFlags.Transform)) != 0 ||
-                AnimationUpdateStride <= 1)
-                return false;
-
-            int animationUpdateFps = Constants.ClampPerformanceFps(Constants.ANIMATION_UPDATE_FPS);
-            double strideFrameMs = 1000.0 / animationUpdateFps;
-            double nowMs = _lastFrameTimeMs;
-            double intervalMs = strideFrameMs * AnimationUpdateStride;
-
-            if (double.IsNegativeInfinity(_lastStrideAnimationBufferUpdateTimeMs))
-            {
-                double phaseMs = (_animationStrideOffset % AnimationUpdateStride) * strideFrameMs;
-                _lastStrideAnimationBufferUpdateTimeMs = nowMs - intervalMs + phaseMs;
-            }
-
-            if (nowMs - _lastStrideAnimationBufferUpdateTimeMs >= intervalMs)
-            {
-                _lastStrideAnimationBufferUpdateTimeMs = nowMs;
-                return false;
-            }
-
-            _invalidatedBufferFlags &= ~MeshDirtyFlags.Transform;
-            return true;
-        }
-
         private bool RequiresCpuProjectedShadowBuffers()
         {
             bool useShadowMap = Constants.ENABLE_DYNAMIC_LIGHTING_SHADER &&
@@ -329,7 +293,7 @@ namespace Client.Main.Objects
 
             // Blob shadows use a static quad and do not consume the model's CPU-skinned mesh.
             // Do not force a GPU -> CPU fallback when this cheaper path is selected.
-            if (this is MonsterObject && ShouldUseBlobShadowForCurrentPass())
+            if (ShouldUseBlobShadowForCurrentPass())
                 return false;
 
             return true;
@@ -430,21 +394,15 @@ namespace Client.Main.Objects
 
             var ms = _meshes[meshIndex];
             if (ms.GpuSkinEnabled &&
-                ms.GpuVertexBuffer != null &&
-                ms.GpuIndexBuffer != null &&
+                ms.GpuVertexBuffer != null && !ms.GpuVertexBuffer.IsDisposed &&
+                ms.GpuIndexBuffer != null && !ms.GpuIndexBuffer.IsDisposed &&
                 ms.GpuBoneCount > 0)
             {
                 return true;
             }
 
-            if (!SupportsGpuDynamicSkinning ||
-                !Constants.ENABLE_GPU_SKINNING ||
-                UsesMutableMeshData ||
-                GetVertexDeformer() != null ||
-                !DetermineShaderForMesh(meshIndex).UseDynamicLighting)
-            {
+            if (!CanUseGpuSkinGeometry())
                 return false;
-            }
 
             return TryEnableGpuSkinnedMesh(
                 meshIndex,

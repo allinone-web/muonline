@@ -22,7 +22,6 @@ namespace Client.Main.Controls.Terrain
             public VertexBuffer VertexBuffer;
             public int VertexCount;
             public BoundingBox Bounds;
-            public Vector3 Center;
 
             public void Dispose()
             {
@@ -31,15 +30,20 @@ namespace Client.Main.Controls.Terrain
             }
         }
 
-        private const float GrassBladeBaseW = 130f;
-        private const float GrassBladeBaseH = 45f;
-        private const float GrassScaleMax = 3.0f;
-        private const float GrassUWidth = 0.30f;
+        private const float GrassBladeBaseW = 105f;
+        private const float GrassBladeBaseH = 50f;
+        private const float GrassScaleMin = 0.82f;
+        private const float GrassScaleMax = 1.75f;
+        private const float GrassUWidth = 0.26f;
+        private const float GrassPlacementRadius = 0.42f;
+        private const float GrassBaseSink = 1.5f;
         private const float FootprintBoundaryEpsilon = 0.001f;
-        private const int ChunkSize = 16; // 16x16 tiles
-        private const int GrassPerTile = 6;
+        private const int ChunkSize = 24;
+        private const int GrassCandidatesPerTile = 30;
         private const int VerticesPerBlade = 6;
-        private const float MaxRenderDistanceSq = 5000f * 5000f;
+        private const float DensityFadeStart = 1450f;
+        private const float DensityFadeEnd = 4300f;
+        private const float ChunkCullDistanceSq = 4600f * 4600f;
 
         private volatile bool _texReady;
         private readonly object _contentLoadLock = new();
@@ -54,12 +58,23 @@ namespace Client.Main.Controls.Terrain
 
         private Texture2D _grassSpriteTexture;
         private Effect _grassWindEffect;
+        private EffectParameter _worldParameter;
+        private EffectParameter _viewParameter;
+        private EffectParameter _projectionParameter;
+        private EffectParameter _textureParameter;
+        private EffectParameter _timeParameter;
+        private EffectParameter _windSpeedParameter;
+        private EffectParameter _windStrengthParameter;
+        private EffectParameter _alphaCutoffParameter;
+        private EffectParameter _cameraPositionParameter;
+        private EffectParameter _densityFadeStartParameter;
+        private EffectParameter _densityFadeEndParameter;
         private string _grassSpritePath;
         private short _worldIndex;
 
         private readonly List<GrassChunk> _chunks = new();
 
-        public float GrassBrightness { get; set; } = 2f;
+        public float GrassBrightness { get; set; } = 1.35f;
         public HashSet<byte> GrassTextureIndices { get; } = new() { 0 };
         public int Flushes { get; private set; }
         public int DrawnTriangles { get; private set; }
@@ -84,9 +99,6 @@ namespace Client.Main.Controls.Terrain
             _ = wind;
             _ = lightManager;
         }
-
-        private static readonly object _premulLock = new();
-        private static readonly HashSet<string> _premultipliedOnce = new(StringComparer.OrdinalIgnoreCase);
 
         public void LoadContent(short worldIndex)
         {
@@ -116,23 +128,7 @@ namespace Client.Main.Controls.Terrain
             try
             {
                 _grassSpriteTexture = await TextureLoader.Instance.PrepareAndGetTexture(_grassSpritePath);
-                if (_grassSpriteTexture != null)
-                {
-                    bool doPremul = false;
-                    lock (_premulLock)
-                    {
-                        if (!_premultipliedOnce.Contains(_grassSpritePath))
-                        {
-                            _premultipliedOnce.Add(_grassSpritePath);
-                            doPremul = true;
-                        }
-                    }
-
-                    if (doPremul)
-                        PremultiplyAlpha(_grassSpriteTexture);
-
-                    _texReady = true;
-                }
+                _texReady = _grassSpriteTexture != null;
             }
             catch (Exception ex)
             {
@@ -142,6 +138,7 @@ namespace Client.Main.Controls.Terrain
             try
             {
                 _grassWindEffect ??= MuGame.Instance?.Content?.Load<Effect>("Grass");
+                CacheEffectParameters();
             }
             catch (Exception ex)
             {
@@ -238,7 +235,7 @@ namespace Client.Main.Controls.Terrain
 
         private GrassChunk BuildChunk(int chunkX, int chunkY)
         {
-            int maxVertexCount = ChunkSize * ChunkSize * GrassPerTile * VerticesPerBlade;
+            int maxVertexCount = ChunkSize * ChunkSize * GrassCandidatesPerTile * VerticesPerBlade;
             var vertices = ArrayPool<GrassVertexPositionColorTextureWind>.Shared.Rent(maxVertexCount);
 
             try
@@ -271,20 +268,43 @@ namespace Client.Main.Controls.Terrain
                             staticLight = _data.FinalLightMap[terrainIndex];
                         }
 
-                        var tileLight = new Color(
-                            (byte)MathF.Min(staticLight.R * brightness, 255f),
-                            (byte)MathF.Min(staticLight.G * brightness, 255f),
-                            (byte)MathF.Min(staticLight.B * brightness, 255f));
+                        // Low-frequency value noise creates broad clumps instead of placing the
+                        // same number of blades on every tile. The first candidate has a higher
+                        // chance so sparse areas still blend naturally into denser patches.
+                        float patchNoise = FractalPatchNoise(x, y);
+                        float patchDensity = MathHelper.Lerp(0.65f, 1.0f, patchNoise);
 
-                        for (int bladeIndex = 0; bladeIndex < GrassPerTile; bladeIndex++)
+                        for (int bladeIndex = 0; bladeIndex < GrassCandidatesPerTile; bladeIndex++)
                         {
+                            float placementRoll = PseudoRandom(x, y, 701 + bladeIndex * 37);
+                            float placementChance = bladeIndex == 0
+                                ? MathHelper.Clamp(0.52f + patchDensity * 0.48f, 0f, 1f)
+                                : patchDensity * MathHelper.Lerp(
+                                    0.72f,
+                                    0.94f,
+                                    PseudoRandom(x, y, 809 + bladeIndex * 53));
+
+                            if (placementRoll > placementChance)
+                                continue;
+
+                            float shadeVariation = MathHelper.Lerp(
+                                0.88f,
+                                1.08f,
+                                PseudoRandom(x, y, 977 + bladeIndex * 29));
+                            float lightScale = brightness * shadeVariation;
+                            var bladeLight = new Color(
+                                (byte)MathF.Min(staticLight.R * lightScale, 255f),
+                                (byte)MathF.Min(staticLight.G * lightScale, 255f),
+                                (byte)MathF.Min(staticLight.B * lightScale, 255f),
+                                (byte)255);
+
                             AddGrassBlade(
                                 vertices,
                                 ref vertexCount,
                                 x,
                                 y,
                                 bladeIndex,
-                                tileLight,
+                                bladeLight,
                                 ref minBounds,
                                 ref maxBounds);
                         }
@@ -298,7 +318,6 @@ namespace Client.Main.Controls.Terrain
                 {
                     VertexCount = vertexCount,
                     Bounds = new BoundingBox(minBounds, maxBounds),
-                    Center = (minBounds + maxBounds) * 0.5f,
                     VertexBuffer = new VertexBuffer(
                         _graphicsDevice,
                         GrassVertexPositionColorTextureWind.VertexDeclaration,
@@ -325,35 +344,41 @@ namespace Client.Main.Controls.Terrain
             ref Vector3 minBounds,
             ref Vector3 maxBounds)
         {
-            float u0 = PseudoRandom(tileX, tileY, 123 + bladeIndex) * (1f - GrassUWidth);
+            float u0 = PseudoRandom(tileX, tileY, 123 + bladeIndex * 17) * (1f - GrassUWidth);
             float u1 = u0 + GrassUWidth;
-            float maxOffset = 0.5f - (GrassUWidth * 0.5f);
 
-            float rx = (PseudoRandom(tileX, tileY, 17 + bladeIndex) * 2f - 1f) * maxOffset;
-            float ry = (PseudoRandom(tileX, tileY, 91 + bladeIndex) * 2f - 1f) * maxOffset;
+            float rx = (PseudoRandom(tileX, tileY, 17 + bladeIndex * 31) * 2f - 1f) * GrassPlacementRadius;
+            float ry = (PseudoRandom(tileX, tileY, 91 + bladeIndex * 43) * 2f - 1f) * GrassPlacementRadius;
 
             float worldX = (tileX + 0.5f + rx) * Constants.TERRAIN_SCALE;
             float worldY = (tileY + 0.5f + ry) * Constants.TERRAIN_SCALE;
-            float scale = MathHelper.Lerp(1.0f, GrassScaleMax, PseudoRandom(tileX, tileY, 33 + bladeIndex));
-            float jitter = MathHelper.ToRadians((PseudoRandom(tileX, tileY, 57 + bladeIndex) - 0.5f) * 180f);
 
-            float width = GrassBladeBaseW * GrassUWidth * scale;
-            float bladeHeight = GrassBladeBaseH * scale;
+            float scaleNoise = PseudoRandom(tileX, tileY, 33 + bladeIndex * 47);
+            float scale = MathHelper.Lerp(GrassScaleMin, GrassScaleMax, scaleNoise * scaleNoise);
+            float widthVariation = MathHelper.Lerp(
+                0.86f,
+                1.14f,
+                PseudoRandom(tileX, tileY, 211 + bladeIndex * 19));
+            float heightVariation = MathHelper.Lerp(
+                0.90f,
+                1.12f,
+                PseudoRandom(tileX, tileY, 263 + bladeIndex * 23));
+
+            float width = GrassBladeBaseW * GrassUWidth * scale * widthVariation;
+            float bladeHeight = GrassBladeBaseH * scale * heightVariation;
             float halfWidth = width * 0.5f;
-            float baseAngle = MathHelper.ToRadians(45f) + jitter;
-            float cosBase = MathF.Cos(baseAngle);
-            float sinBase = MathF.Sin(baseAngle);
+            float angle = PseudoRandom(tileX, tileY, 57 + bladeIndex * 59) * MathHelper.Pi;
+            float cosBase = MathF.Cos(angle);
+            float sinBase = MathF.Sin(angle);
             float dirX = -sinBase;
             float dirY = cosBase;
-            float swayAmplitude = MathF.Max(6f, bladeHeight * 0.22f);
+            float swayAmplitude = MathF.Max(4f, bladeHeight * 0.16f);
 
             float endpoint1X = worldX - halfWidth * cosBase;
             float endpoint1Y = worldY - halfWidth * sinBase;
             float endpoint2X = worldX + halfWidth * cosBase;
             float endpoint2Y = worldY + halfWidth * sinBase;
 
-            // Include the maximum shader displacement in the placement footprint. This prevents
-            // a valid source tile from rendering a wide or wind-bent blade over a NoMove or NoGround tile.
             float swayExtentX = MathF.Abs(dirX) * swayAmplitude;
             float swayExtentY = MathF.Abs(dirY) * swayAmplitude;
             float footprintMinX = MathF.Min(endpoint1X, endpoint2X) - swayExtentX;
@@ -370,30 +395,49 @@ namespace Client.Main.Controls.Terrain
                 return;
             }
 
-            float height = _physics.RequestTerrainHeight(worldX, worldY);
-            Vector3 basePos = new Vector3(worldX, worldY, height);
+            // Sample both endpoints so the quad follows the local terrain slope instead of
+            // floating above one side or cutting deeply into the other.
+            float baseHeight1 = _physics.RequestTerrainHeight(endpoint1X, endpoint1Y) - GrassBaseSink;
+            float baseHeight2 = _physics.RequestTerrainHeight(endpoint2X, endpoint2Y) - GrassBaseSink;
 
-            Vector3 wp1 = new Vector3(endpoint1X, endpoint1Y, basePos.Z);
-            Vector3 wp2 = new Vector3(endpoint2X, endpoint2Y, basePos.Z);
-            Vector3 wp3 = new Vector3(endpoint1X, endpoint1Y, basePos.Z + bladeHeight);
-            Vector3 wp4 = new Vector3(endpoint2X, endpoint2Y, basePos.Z + bladeHeight);
+            float lean = MathHelper.Lerp(
+                -0.08f,
+                0.08f,
+                PseudoRandom(tileX, tileY, 331 + bladeIndex * 61)) * bladeHeight;
+            float topOffsetX = dirX * lean;
+            float topOffsetY = dirY * lean;
 
-            // Bounds include the maximum GPU wind displacement to avoid edge-culling pops.
+            Vector3 wp1 = new Vector3(endpoint1X, endpoint1Y, baseHeight1);
+            Vector3 wp2 = new Vector3(endpoint2X, endpoint2Y, baseHeight2);
+            Vector3 wp3 = new Vector3(endpoint1X + topOffsetX, endpoint1Y + topOffsetY, baseHeight1 + bladeHeight);
+            Vector3 wp4 = new Vector3(endpoint2X + topOffsetX, endpoint2Y + topOffsetY, baseHeight2 + bladeHeight);
+
             minBounds = Vector3.Min(
                 minBounds,
-                new Vector3(footprintMinX, footprintMinY, basePos.Z));
+                new Vector3(footprintMinX, footprintMinY, MathF.Min(baseHeight1, baseHeight2)));
             maxBounds = Vector3.Max(
                 maxBounds,
-                new Vector3(footprintMaxX, footprintMaxY, basePos.Z + bladeHeight));
+                new Vector3(
+                    footprintMaxX,
+                    footprintMaxY,
+                    MathF.Max(baseHeight1, baseHeight2) + bladeHeight));
 
             Vector2 t1 = new Vector2(u0, 1f);
             Vector2 t2 = new Vector2(u1, 1f);
             Vector2 t3 = new Vector2(u0, 0f);
             Vector2 t4 = new Vector2(u1, 0f);
 
-            float phase = jitter * 2.7f + basePos.X * 0.0012f + basePos.Y * 0.0011f;
+            float phase = angle * 2.7f + worldX * 0.0012f + worldY * 0.0011f;
             Vector4 windBottom = new Vector4(dirX, dirY, phase, 0f);
             Vector4 windTop = new Vector4(dirX, dirY, phase, swayAmplitude);
+
+            // Alpha stores a stable per-blade density threshold used by Grass.fx. This makes
+            // distant blades disappear individually instead of switching an entire chunk at once.
+            byte densitySeed = (byte)Math.Clamp(
+                (int)(PseudoRandom(tileX, tileY, 1201 + bladeIndex * 71) * 254f),
+                0,
+                254);
+            lightColor.A = densitySeed;
 
             vertices[vertexCount++] = new GrassVertexPositionColorTextureWind(wp1, lightColor, t1, windBottom);
             vertices[vertexCount++] = new GrassVertexPositionColorTextureWind(wp2, lightColor, t2, windBottom);
@@ -455,20 +499,25 @@ namespace Client.Main.Controls.Terrain
 
             try
             {
-                dev.BlendState = BlendState.AlphaBlend;
+                // Grass.fx already rejects transparent pixels with clip(), so blending only
+                // adds overdraw and disables the cheapest opaque path.
+                dev.BlendState = BlendState.Opaque;
                 dev.DepthStencilState = DepthStencilState.Default;
                 dev.RasterizerState = RasterizerState.CullNone;
-                dev.SamplerStates[0] = SamplerState.PointClamp;
+                dev.SamplerStates[0] = SamplerState.LinearClamp;
 
                 float timeSeconds = (float)(MuGame.Instance?.GameTime.TotalGameTime.TotalSeconds ?? 0.0);
-                _grassWindEffect.Parameters["World"]?.SetValue(Matrix.Identity);
-                _grassWindEffect.Parameters["View"]?.SetValue(Camera.Instance.View);
-                _grassWindEffect.Parameters["Projection"]?.SetValue(Camera.Instance.Projection);
-                _grassWindEffect.Parameters["GrassTexture"]?.SetValue(_grassSpriteTexture);
-                _grassWindEffect.Parameters["Time"]?.SetValue(timeSeconds);
-                _grassWindEffect.Parameters["WindSpeed"]?.SetValue(2.2f);
-                _grassWindEffect.Parameters["WindStrength"]?.SetValue(1.0f);
-                _grassWindEffect.Parameters["AlphaCutoff"]?.SetValue(64f / 255f);
+                _worldParameter?.SetValue(Matrix.Identity);
+                _viewParameter?.SetValue(Camera.Instance.View);
+                _projectionParameter?.SetValue(Camera.Instance.Projection);
+                _textureParameter?.SetValue(_grassSpriteTexture);
+                _timeParameter?.SetValue(timeSeconds);
+                _windSpeedParameter?.SetValue(1.55f);
+                _windStrengthParameter?.SetValue(0.68f);
+                _alphaCutoffParameter?.SetValue(0.36f);
+                _cameraPositionParameter?.SetValue(Camera.Instance.Position);
+                _densityFadeStartParameter?.SetValue(DensityFadeStart);
+                _densityFadeEndParameter?.SetValue(DensityFadeEnd);
 
                 var frustum = Camera.Instance.Frustum;
                 var camPos = Camera.Instance.Position;
@@ -486,10 +535,15 @@ namespace Client.Main.Controls.Terrain
                         if (chunk?.VertexBuffer == null || chunk.VertexBuffer.IsDisposed)
                             continue;
 
-                        if (Vector3.DistanceSquared(camPos, chunk.Center) > MaxRenderDistanceSq)
+                        // The shader reaches zero density before this conservative AABB
+                        // distance cull, so chunks can never visibly pop at the outer range.
+                        if (DistanceSquaredToBoundsXY(camPos, chunk.Bounds) > ChunkCullDistanceSq)
                             continue;
 
                         if (frustum.Contains(chunk.Bounds) == ContainmentType.Disjoint)
+                            continue;
+
+                        if (chunk.VertexCount <= 0)
                             continue;
 
                         dev.SetVertexBuffer(chunk.VertexBuffer);
@@ -510,6 +564,24 @@ namespace Client.Main.Controls.Terrain
             }
         }
 
+        private void CacheEffectParameters()
+        {
+            if (_grassWindEffect == null)
+                return;
+
+            _worldParameter = _grassWindEffect.Parameters["World"];
+            _viewParameter = _grassWindEffect.Parameters["View"];
+            _projectionParameter = _grassWindEffect.Parameters["Projection"];
+            _textureParameter = _grassWindEffect.Parameters["GrassTexture"];
+            _timeParameter = _grassWindEffect.Parameters["Time"];
+            _windSpeedParameter = _grassWindEffect.Parameters["WindSpeed"];
+            _windStrengthParameter = _grassWindEffect.Parameters["WindStrength"];
+            _alphaCutoffParameter = _grassWindEffect.Parameters["AlphaCutoff"];
+            _cameraPositionParameter = _grassWindEffect.Parameters["CameraPosition"];
+            _densityFadeStartParameter = _grassWindEffect.Parameters["DensityFadeStart"];
+            _densityFadeEndParameter = _grassWindEffect.Parameters["DensityFadeEnd"];
+        }
+
         public void Dispose()
         {
             DisposeChunks();
@@ -525,6 +597,56 @@ namespace Client.Main.Controls.Terrain
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static float DistanceSquaredToBoundsXY(Vector3 point, BoundingBox bounds)
+        {
+            float dx = point.X < bounds.Min.X
+                ? bounds.Min.X - point.X
+                : point.X > bounds.Max.X
+                    ? point.X - bounds.Max.X
+                    : 0f;
+            float dy = point.Y < bounds.Min.Y
+                ? bounds.Min.Y - point.Y
+                : point.Y > bounds.Max.Y
+                    ? point.Y - bounds.Max.Y
+                    : 0f;
+            return dx * dx + dy * dy;
+        }
+
+        private static float FractalPatchNoise(int tileX, int tileY)
+        {
+            float broad = ValueNoise(tileX / 8f, tileY / 8f, 1501);
+            float medium = ValueNoise(tileX / 3.5f, tileY / 3.5f, 1601);
+            float value = broad * 0.72f + medium * 0.28f;
+            return SmoothStep(0.12f, 0.88f, value);
+        }
+
+        private static float ValueNoise(float x, float y, int salt)
+        {
+            int x0 = (int)MathF.Floor(x);
+            int y0 = (int)MathF.Floor(y);
+            float tx = x - x0;
+            float ty = y - y0;
+            tx = tx * tx * (3f - 2f * tx);
+            ty = ty * ty * (3f - 2f * ty);
+
+            float n00 = PseudoRandom(x0, y0, salt);
+            float n10 = PseudoRandom(x0 + 1, y0, salt);
+            float n01 = PseudoRandom(x0, y0 + 1, salt);
+            float n11 = PseudoRandom(x0 + 1, y0 + 1, salt);
+
+            float nx0 = MathHelper.Lerp(n00, n10, tx);
+            float nx1 = MathHelper.Lerp(n01, n11, tx);
+            return MathHelper.Lerp(nx0, nx1, ty);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static float SmoothStep(float edge0, float edge1, float value)
+        {
+            float t = MathHelper.Clamp((value - edge0) / (edge1 - edge0), 0f, 1f);
+            return t * t * (3f - 2f * t);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static float PseudoRandom(int x, int y, int salt = 0)
         {
             uint h = (uint)(x * 73856093 ^ y * 19349663 ^ salt * 83492791);
@@ -534,29 +656,6 @@ namespace Client.Main.Controls.Terrain
             return (h & 0xFFFFFF) / 16777215f;
         }
 
-        private static void PremultiplyAlpha(Texture2D tex)
-        {
-            if (tex.Format != SurfaceFormat.Color || tex.IsDisposed)
-                return;
 
-            int len = tex.Width * tex.Height;
-            var px = new Color[len];
-            tex.GetData(px);
-
-            for (int i = 0; i < len; i++)
-            {
-                var c = px[i];
-                if (c.A == 255)
-                    continue;
-
-                px[i] = new Color(
-                    (byte)(c.R * c.A / 255),
-                    (byte)(c.G * c.A / 255),
-                    (byte)(c.B * c.A / 255),
-                    c.A);
-            }
-
-            tex.SetData(px);
-        }
     }
 }

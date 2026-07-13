@@ -70,7 +70,8 @@ namespace Client.Main.Objects
                 int actionIndex,
                 int frame0,
                 int frame1,
-                int interpolationBucket)
+                int interpolationBucket,
+                int transitionPoseDiscriminator)
             {
                 Model = model;
                 MeshIndex = meshIndex;
@@ -80,6 +81,7 @@ namespace Client.Main.Objects
                 Frame0 = frame0;
                 Frame1 = frame1;
                 InterpolationBucket = interpolationBucket;
+                TransitionPoseDiscriminator = transitionPoseDiscriminator;
             }
 
             public BMD Model { get; }
@@ -90,6 +92,7 @@ namespace Client.Main.Objects
             public int Frame0 { get; }
             public int Frame1 { get; }
             public int InterpolationBucket { get; }
+            public int TransitionPoseDiscriminator { get; }
 
             public bool Equals(WalkerCrowdInstancingBatchKey other)
             {
@@ -100,7 +103,8 @@ namespace Client.Main.Objects
                     && ActionIndex == other.ActionIndex
                     && Frame0 == other.Frame0
                     && Frame1 == other.Frame1
-                    && InterpolationBucket == other.InterpolationBucket;
+                    && InterpolationBucket == other.InterpolationBucket
+                    && TransitionPoseDiscriminator == other.TransitionPoseDiscriminator;
             }
 
             public override bool Equals(object obj) => obj is WalkerCrowdInstancingBatchKey other && Equals(other);
@@ -118,6 +122,7 @@ namespace Client.Main.Objects
                     hash = (hash * 31) + Frame0;
                     hash = (hash * 31) + Frame1;
                     hash = (hash * 31) + InterpolationBucket;
+                    hash = (hash * 31) + TransitionPoseDiscriminator;
                     return hash;
                 }
             }
@@ -257,6 +262,7 @@ namespace Client.Main.Objects
                 return;
             }
 
+            ModelEffectBindings bindings = GetModelEffectBindings(effect);
             var gd = graphicsManager.GraphicsDevice;
             var prevBlend = gd.BlendState;
             var prevRaster = gd.RasterizerState;
@@ -293,7 +299,7 @@ namespace Client.Main.Objects
                     batch.InstanceBuffer.SetData(batch.UploadBuffer, 0, instanceCount, SetDataOptions.Discard);
 
                     gd.RasterizerState = batch.TwoSided ? RasterizerState.CullNone : RasterizerState.CullClockwise;
-                    effect.Parameters["DiffuseTexture"]?.SetValue(batch.Texture);
+                    bindings.DiffuseTexture?.SetValue(batch.Texture);
 
                     batch.VertexBindings[0] = new VertexBufferBinding(batch.GeometryVertexBuffer);
                     batch.VertexBindings[1] = new VertexBufferBinding(batch.InstanceBuffer, 0, 1);
@@ -348,6 +354,7 @@ namespace Client.Main.Objects
                 return;
             }
 
+            ModelEffectBindings bindings = GetModelEffectBindings(effect);
             var gd = graphicsManager.GraphicsDevice;
             var prevBlend = gd.BlendState;
             var prevRaster = gd.RasterizerState;
@@ -384,7 +391,7 @@ namespace Client.Main.Objects
                     batch.InstanceBuffer.SetData(batch.UploadBuffer, 0, instanceCount, SetDataOptions.Discard);
 
                     gd.RasterizerState = batch.TwoSided ? RasterizerState.CullNone : RasterizerState.CullClockwise;
-                    effect.Parameters["DiffuseTexture"]?.SetValue(batch.Texture);
+                    bindings.DiffuseTexture?.SetValue(batch.Texture);
 
                     batch.VertexBindings[0] = new VertexBufferBinding(batch.GeometryVertexBuffer);
                     batch.VertexBindings[1] = new VertexBufferBinding(batch.InstanceBuffer, 0, 1);
@@ -668,15 +675,29 @@ namespace Client.Main.Objects
 
                 bool twoSided = IsMeshTwoSided(meshIndex, false);
                 Texture2D texture = _meshes[meshIndex].Texture;
+                // During an action cross-fade the final bone palette also depends on the
+                // previous action and the per-object blend progress. Keep the object on the
+                // GPU-instanced path, but isolate that temporary palette in a one-object batch.
+                // Once blending finishes the discriminator returns to zero and matching
+                // monsters are grouped together again.
+                int transitionPoseDiscriminator = _isBlending
+                    ? RuntimeHelpers.GetHashCode(this)
+                    : 0;
+                int batchActionIndex = _isBlending ? -1 : _animationSampleActionIndex;
+                int batchFrame0 = _isBlending ? 0 : _animationSampleFrame0;
+                int batchFrame1 = _isBlending ? 0 : _animationSampleFrame1;
+                int batchInterpolationBucket = _isBlending ? 0 : _animationSampleInterpolationBucket;
+
                 var key = new WalkerCrowdInstancingBatchKey(
                     Model,
                     meshIndex,
                     texture,
                     twoSided,
-                    _animationSampleActionIndex,
-                    _animationSampleFrame0,
-                    _animationSampleFrame1,
-                    _animationSampleInterpolationBucket);
+                    batchActionIndex,
+                    batchFrame0,
+                    batchFrame1,
+                    batchInterpolationBucket,
+                    transitionPoseDiscriminator);
 
                 if (!_walkerCrowdInstancingBatches.TryGetValue(key, out var batch))
                 {
@@ -749,10 +770,12 @@ namespace Client.Main.Objects
             if (UsesMutableMeshData)
                 return false;
 
-            if (!Visible || IsMouseHover || Model?.Meshes == null || Model.Meshes.Length == 0)
+            // Hover must not evict a walker from the GPU-instanced crowd path.
+            // A separate GPU highlight pass is rendered by DrawQueuedCrowdInstancingSidePasses.
+            if (!Visible || Model?.Meshes == null || Model.Meshes.Length == 0)
                 return false;
 
-            if (LinkParentAnimation || ParentBoneLink >= 0 || ContinuousAnimation || _isBlending || !_animationSampleValid)
+            if (LinkParentAnimation || ParentBoneLink >= 0 || ContinuousAnimation || !_animationSampleValid)
                 return false;
 
             // Attack and skill one-shots are safe to batch after transition blending: the
@@ -914,14 +937,15 @@ namespace Client.Main.Objects
             if (camera == null)
                 return;
 
-            effect.Parameters["World"]?.SetValue(_identity);
-            effect.Parameters["View"]?.SetValue(camera.View);
-            effect.Parameters["Projection"]?.SetValue(camera.Projection);
-            effect.Parameters["WorldViewProjection"]?.SetValue(camera.View * camera.Projection);
-            effect.Parameters["EyePosition"]?.SetValue(camera.Position);
-            effect.Parameters["Alpha"]?.SetValue(1f);
-            effect.Parameters["TerrainDynamicIntensityScale"]?.SetValue(1.5f);
-            effect.Parameters["DebugLightingAreas"]?.SetValue(Constants.DEBUG_LIGHTING_AREAS ? 1.0f : 0.0f);
+            ModelEffectBindings bindings = GetModelEffectBindings(effect);
+            bindings.World?.SetValue(_identity);
+            bindings.View?.SetValue(camera.View);
+            bindings.Projection?.SetValue(camera.Projection);
+            bindings.WorldViewProjection?.SetValue(camera.View * camera.Projection);
+            bindings.EyePosition?.SetValue(camera.Position);
+            bindings.Alpha?.SetValue(1f);
+            bindings.TerrainDynamicIntensityScale?.SetValue(1.5f);
+            bindings.DebugLightingAreas?.SetValue(Constants.DEBUG_LIGHTING_AREAS ? 1.0f : 0.0f);
 
             Vector3 sunDir = GraphicsManager.Instance.ShadowMapRenderer?.LightDirection ?? Constants.SUN_DIRECTION;
             if (sunDir.LengthSquared() < 0.0001f)
@@ -929,11 +953,11 @@ namespace Client.Main.Objects
             sunDir = Vector3.Normalize(sunDir);
             bool sunEnabled = Constants.SUN_ENABLED && (world?.IsSunWorld ?? true);
 
-            effect.Parameters["SunDirection"]?.SetValue(sunDir);
-            effect.Parameters["SunColor"]?.SetValue(_sunColor);
-            effect.Parameters["SunStrength"]?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveSunStrength() : 0f);
-            effect.Parameters["ShadowStrength"]?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
-            effect.Parameters["AmbientLight"]?.SetValue(_ambientLightVector * SunCycleManager.AmbientMultiplier);
+            bindings.SunDirection?.SetValue(sunDir);
+            bindings.SunColor?.SetValue(_sunColor);
+            bindings.SunStrength?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveSunStrength() : 0f);
+            bindings.ShadowStrength?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
+            bindings.AmbientLight?.SetValue(_ambientLightVector * SunCycleManager.AmbientMultiplier);
 
             GraphicsManager.Instance.ShadowMapRenderer?.ApplyShadowParameters(effect);
             UploadStaticMapInstancingDynamicLights(effect, world);

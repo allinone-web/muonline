@@ -106,6 +106,7 @@ namespace Client.Main.Objects
                 if (effect == null || blobTexture == null)
                     return;
 
+                ModelEffectBindings bindings = GetModelEffectBindings(effect);
                 var previousBlend = GraphicsDevice.BlendState;
                 var previousDepth = GraphicsDevice.DepthStencilState;
                 var previousRaster = GraphicsDevice.RasterizerState;
@@ -126,10 +127,10 @@ namespace Client.Main.Objects
 
                     Matrix blobWorld = Matrix.CreateScale(scaleX, 1f, scaleZ) * shadowWorld;
 
-                    effect.Parameters["World"]?.SetValue(blobWorld);
-                    effect.Parameters["ViewProjection"]?.SetValue(view * projection);
-                    effect.Parameters["ShadowTint"]?.SetValue(new Vector4(0f, 0f, 0f, shadowOpacity));
-                    effect.Parameters["ShadowTexture"]?.SetValue(blobTexture);
+                    bindings.World?.SetValue(blobWorld);
+                    bindings.ViewProjection?.SetValue(view * projection);
+                    bindings.ShadowTint?.SetValue(new Vector4(0f, 0f, 0f, shadowOpacity));
+                    bindings.ShadowTexture?.SetValue(blobTexture);
 
                     foreach (var pass in effect.CurrentTechnique.Passes)
                     {
@@ -200,10 +201,11 @@ namespace Client.Main.Objects
                     if (effect == null || _meshes?[mesh]?.Texture == null)
                         return;
 
-                    effect.Parameters["World"]?.SetValue(shadowWorld);
-                    effect.Parameters["ViewProjection"]?.SetValue(view * projection);
-                    effect.Parameters["ShadowTint"]?.SetValue(new Vector4(0, 0, 0, shadowOpacity));
-                    effect.Parameters["ShadowTexture"]?.SetValue(_meshes[mesh].Texture);
+                    ModelEffectBindings bindings = GetModelEffectBindings(effect);
+                    bindings.World?.SetValue(shadowWorld);
+                    bindings.ViewProjection?.SetValue(view * projection);
+                    bindings.ShadowTint?.SetValue(new Vector4(0, 0, 0, shadowOpacity));
+                    bindings.ShadowTexture?.SetValue(_meshes[mesh].Texture);
 
                     foreach (var pass in effect.CurrentTechnique.Passes)
                     {
@@ -284,19 +286,20 @@ namespace Client.Main.Objects
                     var prevRaster = gd.RasterizerState;
                     var prevTechnique = shadowEffect?.CurrentTechnique;
 
-                    var shadowCasterTechnique = TryGetTechnique(shadowEffect, "ShadowCaster");
-                    var shadowCasterSkinnedTechnique = TryGetTechnique(shadowEffect, "ShadowCaster_Skinned");
+                    ModelEffectBindings bindings = GetModelEffectBindings(shadowEffect);
+                    var shadowCasterTechnique = bindings.GetTechnique("ShadowCaster");
+                    var shadowCasterSkinnedTechnique = bindings.GetTechnique("ShadowCaster_Skinned");
                     if (shadowCasterTechnique == null)
                         return;
 
-                    shadowEffect?.Parameters["World"]?.SetValue(WorldPosition);
-                    shadowEffect?.Parameters["LightViewProjection"]?.SetValue(lightViewProjection);
-                    shadowEffect?.Parameters["ShadowMapTexelSize"]?.SetValue(shadowTexel);
-                    shadowEffect?.Parameters["ShadowBias"]?.SetValue(Constants.SHADOW_BIAS);
-                    shadowEffect?.Parameters["ShadowNormalBias"]?.SetValue(Constants.SHADOW_NORMAL_BIAS);
-                    shadowEffect?.Parameters["SunDirection"]?.SetValue(GraphicsManager.Instance.ShadowMapRenderer?.LightDirection ?? Constants.SUN_DIRECTION);
-                    shadowEffect?.Parameters["UseProceduralTerrainUV"]?.SetValue(0.0f);
-                    shadowEffect?.Parameters["IsWaterTexture"]?.SetValue(0.0f);
+                    bindings.World?.SetValue(WorldPosition);
+                    bindings.LightViewProjection?.SetValue(lightViewProjection);
+                    bindings.ShadowMapTexelSize?.SetValue(shadowTexel);
+                    bindings.ShadowBias?.SetValue(Constants.SHADOW_BIAS);
+                    bindings.ShadowNormalBias?.SetValue(Constants.SHADOW_NORMAL_BIAS);
+                    bindings.SunDirection?.SetValue(GraphicsManager.Instance.ShadowMapRenderer?.LightDirection ?? Constants.SUN_DIRECTION);
+                    bindings.UseProceduralTerrainUv?.SetValue(0.0f);
+                    bindings.IsWaterTexture?.SetValue(0.0f);
 
                     gd.BlendState = BlendState.Opaque;
                     gd.DepthStencilState = DepthStencilState.Default;
@@ -331,7 +334,7 @@ namespace Client.Main.Objects
 
                             if (requiredBoneCount > uploadedSkinnedBoneCount)
                             {
-                                if (!TryUploadGpuSkinBoneMatrices(shadowEffect, requiredBoneCount))
+                                if (!TryUploadGpuSkinBoneMatrices(shadowEffect, bindings, requiredBoneCount))
                                 {
                                     useGpuSkinning = false;
                                     vb = _meshes?[i]?.CpuVertexBuffer;
@@ -356,7 +359,7 @@ namespace Client.Main.Objects
                         bool isTwoSided = IsMeshTwoSided(i, IsBlendMesh(i));
                         gd.RasterizerState = isTwoSided ? _cullNone : _cullClockwise;
 
-                        shadowEffect?.Parameters["DiffuseTexture"]?.SetValue(tex);
+                        bindings.DiffuseTexture?.SetValue(tex);
 
                         foreach (var pass in shadowEffect.CurrentTechnique.Passes)
                         {

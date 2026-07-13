@@ -3,6 +3,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
 namespace Client.Main.Graphics
 {
@@ -11,6 +12,32 @@ namespace Client.Main.Graphics
     /// </summary>
     public sealed class DynamicLightGpuUploader
     {
+        private sealed class EffectBindings
+        {
+            public EffectBindings(Effect effect)
+            {
+                LightPosInvRadius = effect.Parameters["LightPosInvRadius"];
+                LightColorIntensity = effect.Parameters["LightColorIntensity"];
+            }
+
+            public EffectParameter LightPosInvRadius { get; }
+            public EffectParameter LightColorIntensity { get; }
+
+            public int ResolveCapacity(int fallbackCapacity)
+            {
+                int fallback = Math.Max(1, fallbackCapacity);
+                int positionCapacity = GetEffectArrayCapacity(LightPosInvRadius, fallback);
+                int colorCapacity = GetEffectArrayCapacity(LightColorIntensity, fallback);
+                return Math.Max(1, Math.Min(positionCapacity, colorCapacity));
+            }
+        }
+
+        private static readonly ConditionalWeakTable<Effect, EffectBindings> _effectBindings = new();
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static EffectBindings GetBindings(Effect effect) =>
+            _effectBindings.GetValue(effect, static value => new EffectBindings(value));
+
         private readonly int _fallbackCapacity;
         private readonly float _minInfluence;
 
@@ -76,11 +103,7 @@ namespace Client.Main.Graphics
             if (effect == null)
                 return Math.Max(1, fallbackCapacity);
 
-            int fallback = Math.Max(1, fallbackCapacity);
-            int pos = GetEffectArrayCapacity(effect.Parameters["LightPosInvRadius"], fallback);
-            int color = GetEffectArrayCapacity(effect.Parameters["LightColorIntensity"], fallback);
-            int capacity = Math.Min(pos, color);
-            return Math.Max(1, capacity);
+            return GetBindings(effect).ResolveCapacity(fallbackCapacity);
         }
 
         private static int GetEffectArrayCapacity(EffectParameter parameter, int fallback)
@@ -221,8 +244,9 @@ namespace Client.Main.Graphics
             if (effect == null || capacity <= 0)
                 return;
 
-            effect.Parameters["LightPosInvRadius"]?.SetValue(_lightPosInvRadius);
-            effect.Parameters["LightColorIntensity"]?.SetValue(_lightColorIntensity);
+            EffectBindings bindings = GetBindings(effect);
+            bindings.LightPosInvRadius?.SetValue(_lightPosInvRadius);
+            bindings.LightColorIntensity?.SetValue(_lightColorIntensity);
         }
     }
 }

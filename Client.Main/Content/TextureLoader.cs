@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic; // Added for Dictionary
 using System.IO;
@@ -20,6 +20,7 @@ namespace Client.Main.Content
         public Func<TextureData, byte[]> CustomDecompressFunction = null;
 
         private readonly ConcurrentDictionary<string, Lazy<Task<TextureData>>> _textureTasks = new();
+        private readonly ConcurrentDictionary<string, Lazy<Task<Texture2D>>> _gpuTextureTasks = new();
         private readonly ConcurrentDictionary<string, ClientTexture> _textures = new();
 
         // Cache: Key -> Resolved Full Path (or empty if not found)
@@ -76,8 +77,42 @@ namespace Client.Main.Content
 
         public async Task<Texture2D> PrepareAndGetTexture(string path)
         {
-            await Prepare(path);
-            return GetTexture2D(path);
+            await Prepare(path).ConfigureAwait(false);
+
+            string normalizedKey = NormalizePathKey(path);
+            var lazyUpload = _gpuTextureTasks.GetOrAdd(
+                normalizedKey,
+                _ => new Lazy<Task<Texture2D>>(
+                    () => CreateTextureOnGraphicsThreadAsync(path, normalizedKey),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
+
+            return await lazyUpload.Value.ConfigureAwait(false);
+        }
+
+        private Task<Texture2D> CreateTextureOnGraphicsThreadAsync(string path, string normalizedKey)
+        {
+            if (MuGame.IsMainThread)
+                return Task.FromResult(GetTexture2D(path));
+
+            var completion = new TaskCompletionSource<Texture2D>(TaskCreationOptions.RunContinuationsAsynchronously);
+            MuGame.ScheduleOnMainThread(static state =>
+            {
+                var (loader, texturePath, cacheKey, source) = state;
+                try
+                {
+                    Texture2D texture = loader.GetTexture2D(texturePath);
+                    if (texture == null)
+                        loader._gpuTextureTasks.TryRemove(cacheKey, out _);
+                    source.TrySetResult(texture);
+                }
+                catch (Exception ex)
+                {
+                    loader._gpuTextureTasks.TryRemove(cacheKey, out _);
+                    source.TrySetException(ex);
+                }
+            }, (this, path, normalizedKey, completion));
+
+            return completion.Task;
         }
 
         private async Task<TextureData> InternalPrepare(string path)
@@ -383,12 +418,20 @@ namespace Client.Main.Content
             return texture;
         }
 
-        private void Touch(ClientTexture texture)
+        private static void Touch(ClientTexture texture)
         {
-            if (texture != null)
-            {
+            if (texture == null)
+                return;
+
+            // Texture lookups happen in draw paths. A system-clock query for every mesh or UI
+            // element is unnecessary; refresh the TTL timestamp at most once per second at 60 FPS.
+            int frame = MuGame.FrameIndex;
+            int previousFrame = Volatile.Read(ref texture.LastAccessFrame);
+            if (frame >= previousFrame && frame - previousFrame < 60)
+                return;
+
+            if (Interlocked.CompareExchange(ref texture.LastAccessFrame, frame, previousFrame) == previousFrame)
                 texture.LastAccessUtc = DateTime.UtcNow;
-            }
         }
 
         private async Task CleanupLoopAsync(CancellationToken token)
@@ -446,6 +489,7 @@ namespace Client.Main.Content
                         }
 
                         _textureTasks.TryRemove(key, out _);
+                        _gpuTextureTasks.TryRemove(key, out _);
                         _pathResolutionCache.TryRemove(key, out _); // Clean cache too
                     }
                 }

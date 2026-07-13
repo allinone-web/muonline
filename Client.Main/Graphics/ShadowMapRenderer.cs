@@ -4,10 +4,9 @@ using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Models;
 using Client.Main.Objects;
-using Client.Main.Objects.Player;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
-using System.Threading.Tasks;
+using System.Runtime.CompilerServices;
 
 namespace Client.Main.Graphics
 {
@@ -20,19 +19,55 @@ namespace Client.Main.Graphics
         private readonly GraphicsDevice _graphicsDevice;
         private RenderTarget2D _shadowMap;
         private int _frameCounter = 0;
-        private readonly List<(ModelObject model, float distSq)> _casterCandidates = new(64);
+        private readonly List<WorldObject> _nearbyObjects = new(256);
+        private readonly PriorityQueue<ModelObject, float> _closestCasters = new();
         private readonly BoundingFrustum _lightFrustum = new BoundingFrustum(Matrix.Identity);
+        private readonly ConditionalWeakTable<Effect, ShadowEffectBindings> _effectBindings = new();
         private Vector3 _lastCameraPosition = new(float.NaN, float.NaN, float.NaN);
         private Vector3 _lastCameraTarget = new(float.NaN, float.NaN, float.NaN);
         private float _lastShadowDistance = float.NaN;
         private bool _forceRender = true;
+        private bool _shadowCasterSupported;
         private int _lastWorldGeometryTick = int.MinValue;
-        private readonly object _candidateMergeLock = new();
-        private const int ParallelCasterThreshold = 160;
-        private static readonly ParallelOptions CandidateParallelOptions = new()
+
+
+        private sealed class ShadowEffectBindings
         {
-            MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1)
-        };
+            public ShadowEffectBindings(Effect effect)
+            {
+                ShadowCasterTechnique = FindTechnique(effect, "ShadowCaster");
+                DynamicLightingTechnique = FindTechnique(effect, "DynamicLighting");
+                LightViewProjection = effect.Parameters["LightViewProjection"];
+                ShadowMapTexelSize = effect.Parameters["ShadowMapTexelSize"];
+                ShadowBias = effect.Parameters["ShadowBias"];
+                ShadowNormalBias = effect.Parameters["ShadowNormalBias"];
+                SunDirection = effect.Parameters["SunDirection"];
+                ShadowsEnabled = effect.Parameters["ShadowsEnabled"];
+                ShadowMap = effect.Parameters["ShadowMap"];
+            }
+
+            public EffectTechnique ShadowCasterTechnique { get; }
+            public EffectTechnique DynamicLightingTechnique { get; }
+            public EffectParameter LightViewProjection { get; }
+            public EffectParameter ShadowMapTexelSize { get; }
+            public EffectParameter ShadowBias { get; }
+            public EffectParameter ShadowNormalBias { get; }
+            public EffectParameter SunDirection { get; }
+            public EffectParameter ShadowsEnabled { get; }
+            public EffectParameter ShadowMap { get; }
+
+            private static EffectTechnique FindTechnique(Effect effect, string name)
+            {
+                for (int i = 0; i < effect.Techniques.Count; i++)
+                {
+                    EffectTechnique technique = effect.Techniques[i];
+                    if (string.Equals(technique.Name, name, StringComparison.Ordinal))
+                        return technique;
+                }
+
+                return null;
+            }
+        }
 
         public Matrix LightView { get; private set; } = Matrix.Identity;
         public Matrix LightProjection { get; private set; } = Matrix.Identity;
@@ -54,6 +89,7 @@ namespace Client.Main.Graphics
         {
             _shadowMap?.Dispose();
             _shadowMap = null;
+            _shadowCasterSupported = false;
         }
 
         public void EnsureRenderTarget()
@@ -128,18 +164,28 @@ namespace Client.Main.Graphics
             if (!_forceRender && _frameCounter % updateInterval != 0)
                 return;
 
-            _lastWorldGeometryTick = worldTick;
+            var shadowEffect = GraphicsManager.Instance.DynamicLightingEffect;
+            if (shadowEffect == null || _shadowMap == null)
+                return;
 
+            ShadowEffectBindings bindings = _effectBindings.GetValue(
+                shadowEffect,
+                static effect => new ShadowEffectBindings(effect));
+            _shadowCasterSupported = bindings.ShadowCasterTechnique != null;
+            if (!_shadowCasterSupported)
+            {
+                _lastWorldGeometryTick = worldTick;
+                _forceRender = false;
+                return;
+            }
+
+            _lastWorldGeometryTick = worldTick;
             UpdateLightMatrices(camera, shadowDistance);
             _lastCameraPosition = camera.Position;
             _lastCameraTarget = camera.Target;
             _forceRender = false;
             _lightFrustum.Matrix = LightViewProjection;
             var lightFrustum = _lightFrustum;
-
-            var shadowEffect = GraphicsManager.Instance.DynamicLightingEffect;
-            if (shadowEffect == null || _shadowMap == null)
-                return;
 
             var previousTargets = _graphicsDevice.GetRenderTargets();
             var previousViewport = _graphicsDevice.Viewport;
@@ -150,84 +196,46 @@ namespace Client.Main.Graphics
                 _graphicsDevice.Viewport = new Viewport(0, 0, _shadowMap.Width, _shadowMap.Height);
                 _graphicsDevice.Clear(ClearOptions.Target | ClearOptions.DepthBuffer, Color.White, 1f, 0);
 
-                shadowEffect.CurrentTechnique = shadowEffect.Techniques["ShadowCaster"];
-                shadowEffect.Parameters["LightViewProjection"]?.SetValue(LightViewProjection);
-                shadowEffect.Parameters["ShadowMapTexelSize"]?.SetValue(new Vector2(1f / _shadowMap.Width, 1f / _shadowMap.Height));
-                shadowEffect.Parameters["ShadowBias"]?.SetValue(Constants.SHADOW_BIAS);
-                shadowEffect.Parameters["ShadowNormalBias"]?.SetValue(Constants.SHADOW_NORMAL_BIAS);
-                shadowEffect.Parameters["SunDirection"]?.SetValue(LightDirection);
+                shadowEffect.CurrentTechnique = bindings.ShadowCasterTechnique;
+                bindings.LightViewProjection?.SetValue(LightViewProjection);
+                bindings.ShadowMapTexelSize?.SetValue(new Vector2(1f / _shadowMap.Width, 1f / _shadowMap.Height));
+                bindings.ShadowBias?.SetValue(Constants.SHADOW_BIAS);
+                bindings.ShadowNormalBias?.SetValue(Constants.SHADOW_NORMAL_BIAS);
+                bindings.SunDirection?.SetValue(LightDirection);
 
                 // Terrain as caster
                 world.Terrain?.RenderShadowMap(shadowEffect, LightViewProjection);
 
-                // Collect and sort shadow casters by distance (closest first for best quality)
-                float maxDistanceSq = Constants.SHADOW_DISTANCE * Constants.SHADOW_DISTANCE;
-                Vector3 focus = Camera.Instance.Target;
+                // Query only nearby spatial sectors and keep a bounded set of the closest casters.
+                float maxDistance = Math.Min(shadowDistance, Math.Max(100f, Constants.SHADOW_DISTANCE));
+                float maxDistanceSq = maxDistance * maxDistance;
+                Vector3 focus = camera.Target;
                 if (focus == Vector3.Zero)
-                    focus = Camera.Instance.Position;
+                    focus = camera.Position;
 
-                _casterCandidates.Clear();
-                var snapshot = world.Objects.GetSnapshot();
-
-                bool useParallelCulling = Environment.ProcessorCount > 1 &&
-                                          snapshot.Count >= ParallelCasterThreshold;
-
-                if (useParallelCulling)
-                {
-                    Parallel.For(
-                        0,
-                        snapshot.Count,
-                        CandidateParallelOptions,
-                        () => new List<(ModelObject model, float distSq)>(16),
-                        (i, _, localCandidates) =>
-                        {
-                            TryCollectCasterCandidate(
-                                snapshot[i],
-                                lightFrustum,
-                                frustumGuardBand,
-                                focus,
-                                maxDistanceSq,
-                                localCandidates);
-                            return localCandidates;
-                        },
-                        localCandidates =>
-                        {
-                            if (localCandidates.Count == 0)
-                                return;
-
-                            lock (_candidateMergeLock)
-                            {
-                                _casterCandidates.AddRange(localCandidates);
-                            }
-                        });
-                }
-                else
-                {
-                    for (int i = 0; i < snapshot.Count; i++)
-                    {
-                        TryCollectCasterCandidate(
-                            snapshot[i],
-                            lightFrustum,
-                            frustumGuardBand,
-                            focus,
-                            maxDistanceSq,
-                            _casterCandidates);
-                    }
-                }
-
-                // Sort by distance (closest first) and limit count
-                _casterCandidates.Sort((a, b) => a.distSq.CompareTo(b.distSq));
                 int maxCasters = Math.Max(1, Constants.SHADOW_MAX_CASTERS);
-                int casterCount = Math.Min(_casterCandidates.Count, maxCasters);
+                _nearbyObjects.Clear();
+                _closestCasters.Clear();
+                world.CollectObjectsNear(focus, maxDistance + frustumGuardBand, _nearbyObjects);
 
-                for (int i = 0; i < casterCount; i++)
+                for (int i = 0; i < _nearbyObjects.Count; i++)
                 {
-                    var (model, _) = _casterCandidates[i];
-                    model.DrawShadowCaster(shadowEffect, LightViewProjection);
+                    TryQueueCasterCandidate(
+                        _nearbyObjects[i],
+                        lightFrustum,
+                        frustumGuardBand,
+                        focus,
+                        maxDistanceSq,
+                        maxCasters,
+                        _closestCasters);
                 }
 
-                // Restore default technique for later draws
-                shadowEffect.CurrentTechnique = shadowEffect.Techniques["DynamicLighting"];
+                while (_closestCasters.TryDequeue(out ModelObject model, out _))
+                    model.DrawShadowCaster(shadowEffect, LightViewProjection);
+
+                // Restore the regular technique when this effect exposes one.
+                if (bindings.DynamicLightingTechnique != null)
+                    shadowEffect.CurrentTechnique = bindings.DynamicLightingTechnique;
             }
             finally
             {
@@ -245,17 +253,18 @@ namespace Client.Main.Graphics
             if (effect == null)
                 return;
 
-            bool enabled = IsReady && _shadowMap != null;
-            effect.Parameters["ShadowsEnabled"]?.SetValue(enabled ? 1.0f : 0.0f);
-            effect.Parameters["ShadowMap"]?.SetValue(enabled ? _shadowMap : null);
-            effect.Parameters["LightViewProjection"]?.SetValue(LightViewProjection);
-            effect.Parameters["ShadowMapTexelSize"]?.SetValue(_shadowMap != null
+            bool enabled = IsReady && _shadowMap != null && _shadowCasterSupported;
+            ShadowEffectBindings bindings = _effectBindings.GetValue(effect, static value => new ShadowEffectBindings(value));
+            bindings.ShadowsEnabled?.SetValue(enabled ? 1.0f : 0.0f);
+            bindings.ShadowMap?.SetValue(enabled ? _shadowMap : null);
+            bindings.LightViewProjection?.SetValue(LightViewProjection);
+            bindings.ShadowMapTexelSize?.SetValue(_shadowMap != null
                 ? new Vector2(1f / _shadowMap.Width, 1f / _shadowMap.Height)
                 : Vector2.Zero);
-            effect.Parameters["ShadowBias"]?.SetValue(Constants.SHADOW_BIAS);
-            effect.Parameters["ShadowNormalBias"]?.SetValue(Constants.SHADOW_NORMAL_BIAS);
+            bindings.ShadowBias?.SetValue(Constants.SHADOW_BIAS);
+            bindings.ShadowNormalBias?.SetValue(Constants.SHADOW_NORMAL_BIAS);
             // Shader expects SunDirection as light->world; it internally negates it to get the vector toward the light.
-            effect.Parameters["SunDirection"]?.SetValue(LightDirection);
+            bindings.SunDirection?.SetValue(LightDirection);
         }
 
         private float ComputeShadowDistance(Camera camera)
@@ -344,13 +353,14 @@ namespace Client.Main.Graphics
             return new BoundingBox(box.Min - margin, box.Max + margin);
         }
 
-        private static void TryCollectCasterCandidate(
+        private static void TryQueueCasterCandidate(
             WorldObject worldObject,
             BoundingFrustum lightFrustum,
             float frustumGuardBand,
             Vector3 focus,
             float maxDistanceSq,
-            List<(ModelObject model, float distSq)> destination)
+            int maxCasters,
+            PriorityQueue<ModelObject, float> destination)
         {
             if (worldObject is not ModelObject model)
                 return;
@@ -358,16 +368,31 @@ namespace Client.Main.Graphics
             if (!model.Visible || model.Status == GameControlStatus.Disposed || !model.RenderShadow)
                 return;
 
-            Vector3 objPos = model.WorldPosition.Translation;
+            Vector3 objectPosition = model.WorldPosition.Translation;
+            float distanceSquared = Vector3.DistanceSquared(objectPosition, focus);
+            if (distanceSquared > maxDistanceSq)
+                return;
+
             BoundingBox bounds = ExpandBoundingBox(model.BoundingBoxWorld, frustumGuardBand);
             if (lightFrustum.Contains(bounds) == ContainmentType.Disjoint)
                 return;
 
-            float distSq = Vector3.DistanceSquared(objPos, focus);
-            if (distSq > maxDistanceSq)
+            // PriorityQueue dequeues the smallest priority. Negating distance keeps the
+            // farthest selected caster at the head, so it can be replaced in O(log N).
+            float priority = -distanceSquared;
+            if (destination.Count < maxCasters)
+            {
+                destination.Enqueue(model, priority);
+                return;
+            }
+
+            destination.TryPeek(out _, out float farthestPriority);
+            float farthestDistanceSquared = -farthestPriority;
+            if (distanceSquared >= farthestDistanceSquared)
                 return;
 
-            destination.Add((model, distSq));
+            destination.Dequeue();
+            destination.Enqueue(model, priority);
         }
     }
 }
