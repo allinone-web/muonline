@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
@@ -681,9 +681,20 @@ namespace Client.Main.Controls.UI.Game.Inventory
 
             var currentBlendState = gd.BlendState;
             var currentRasterizerState = gd.RasterizerState;
+            var previousTechnique = effect.CurrentTechnique;
+            var previewTechnique = FindTechnique(effect, "BasicColorDrawing");
+            if (previewTechnique == null)
+            {
+                return;
+            }
 
             try
             {
+                // Item previews use CPU-skinned VertexPositionColorNormalTexture buffers.
+                // The shared ItemMaterial effect may have been left on the skinned technique
+                // by world rendering, which requires TEXCOORD1 (bone indices) and is therefore
+                // incompatible with the preview vertex declaration.
+                effect.CurrentTechnique = previewTechnique;
                 BlendState customBlendState = GetBlendStateForMesh(mesh);
                 if (customBlendState != null)
                 {
@@ -742,9 +753,28 @@ namespace Client.Main.Controls.UI.Game.Inventory
             }
             finally
             {
+                effect.CurrentTechnique = previousTechnique;
                 gd.BlendState = currentBlendState;
                 gd.RasterizerState = currentRasterizerState;
             }
+        }
+
+        private static EffectTechnique FindTechnique(Effect effect, string techniqueName)
+        {
+            if (effect == null || string.IsNullOrEmpty(techniqueName))
+            {
+                return null;
+            }
+
+            foreach (var technique in effect.Techniques)
+            {
+                if (string.Equals(technique.Name, techniqueName, StringComparison.Ordinal))
+                {
+                    return technique;
+                }
+            }
+
+            return null;
         }
 
         private static BlendState GetBlendStateForMesh(Client.Data.BMD.BMDTextureMesh mesh)

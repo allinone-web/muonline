@@ -158,7 +158,12 @@ namespace Client.Main.Controls.UI
                       .Append(" | Backend=")
                       .Append(ModelObject.IsGpuSkinningBackendSupported ? "OK" : "N/A")
                       .Append(" | Drawn=")
-                      .Append(ModelObject.LastFrameGpuSkinnedMeshesDrawn);
+                      .Append(ModelObject.LastFrameGpuSkinnedMeshesDrawn)
+                      .Append(" | Batch=")
+                      .Append(ModelObject.LastFrameGpuSkinnedBatchDrawCalls)
+                      .Append('/')
+                      .Append(ModelObject.LastFrameGpuSkinnedBatchedMeshes)
+                      .Append(ModelObject.IsGpuSkinnedMeshBatchingRuntimeDisabled ? " (disabled)" : string.Empty);
                     SetLabelTextIfChanged(_gpuSkinningStatusLabel, _sb.ToString());
 
                     // Update terrain performance metrics display

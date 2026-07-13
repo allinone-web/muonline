@@ -15,6 +15,14 @@ namespace Client.Main.Objects
 {
     public abstract partial class ModelObject
     {
+        private enum MeshShaderKind : byte
+        {
+            AlphaTest = 0,
+            DynamicLighting = 1,
+            ItemMaterial = 2,
+            MonsterMaterial = 3,
+        }
+
         // Struct to hold shader selection results
         private readonly struct ShaderSelection
         {
@@ -22,6 +30,7 @@ namespace Client.Main.Objects
             public readonly bool UseItemMaterial;
             public readonly bool UseMonsterMaterial;
             public readonly bool NeedsSpecialShader;
+            public readonly MeshShaderKind Kind;
 
             public ShaderSelection(bool useDynamicLighting, bool useItemMaterial, bool useMonsterMaterial)
             {
@@ -29,6 +38,13 @@ namespace Client.Main.Objects
                 UseItemMaterial = useItemMaterial;
                 UseMonsterMaterial = useMonsterMaterial;
                 NeedsSpecialShader = useItemMaterial || useMonsterMaterial || useDynamicLighting;
+                Kind = useItemMaterial
+                    ? MeshShaderKind.ItemMaterial
+                    : useMonsterMaterial
+                        ? MeshShaderKind.MonsterMaterial
+                        : useDynamicLighting
+                            ? MeshShaderKind.DynamicLighting
+                            : MeshShaderKind.AlphaTest;
             }
         }
 
@@ -38,18 +54,21 @@ namespace Client.Main.Objects
             public readonly Texture2D Texture;
             public readonly BlendState BlendState;
             public readonly bool TwoSided;
+            public readonly MeshShaderKind ShaderKind;
 
-            public MeshStateKey(Texture2D tex, BlendState blend, bool twoSided)
+            public MeshStateKey(Texture2D tex, BlendState blend, bool twoSided, MeshShaderKind shaderKind)
             {
                 Texture = tex;
                 BlendState = blend;
                 TwoSided = twoSided;
+                ShaderKind = shaderKind;
             }
 
             public bool Equals(MeshStateKey other) =>
                 ReferenceEquals(Texture, other.Texture) &&
                 ReferenceEquals(BlendState, other.BlendState) &&
-                TwoSided == other.TwoSided;
+                TwoSided == other.TwoSided &&
+                ShaderKind == other.ShaderKind;
 
             public override bool Equals(object obj) => obj is MeshStateKey o && Equals(o);
 
@@ -61,6 +80,7 @@ namespace Client.Main.Objects
                     h = h * 31 + (Texture?.GetHashCode() ?? 0);
                     h = h * 31 + (BlendState?.GetHashCode() ?? 0);
                     h = h * 31 + (TwoSided ? 1 : 0);
+                    h = h * 31 + (int)ShaderKind;
                     return h;
                 }
             }
@@ -171,7 +191,8 @@ namespace Client.Main.Objects
                     Texture2D texture = _meshes[meshIndex].Texture;
                     bool twoSided = IsMeshTwoSided(meshIndex, isBlend);
                     BlendState blend = GetMeshBlendState(meshIndex, isBlend);
-                    var key = new MeshStateKey(texture, blend, twoSided);
+                    MeshShaderKind shaderKind = DetermineShaderForMesh(meshIndex).Kind;
+                    var key = new MeshStateKey(texture, blend, twoSided, shaderKind);
 
                     if (!target.TryGetValue(key, out List<int> list))
                     {
@@ -682,6 +703,12 @@ namespace Client.Main.Objects
                     bool forcePerMeshTransparency = !Constants.ENABLE_DYNAMIC_LIGHTING_SHADER &&
                                                     stateKey.BlendState != BlendState.Opaque;
                     if (!forcePerMeshTransparency &&
+                        TryDrawGpuSkinnedMeshBatch(stateKey, meshIndices, isAfterDraw))
+                    {
+                        continue;
+                    }
+
+                    if (!forcePerMeshTransparency &&
                         TryDrawFastAlphaMeshBatch(stateKey, meshIndices, isAfterDraw))
                     {
                         continue;
@@ -710,6 +737,191 @@ namespace Client.Main.Objects
                     }
                 }
             }
+        }
+
+        private bool TryDrawGpuSkinnedMeshBatch(MeshStateKey stateKey, List<int> meshIndices, bool isAfterDraw)
+        {
+            if (_gpuSkinnedMeshBatchingFailed ||
+                !Constants.ENABLE_BMD_MESH_BATCHING ||
+                stateKey.ShaderKind == MeshShaderKind.AlphaTest ||
+                meshIndices == null || meshIndices.Count <= 1 ||
+                Model?.Meshes == null || _meshes == null ||
+                !CanUseGpuSkinGeometry())
+            {
+                return false;
+            }
+
+            for (int i = 0; i < meshIndices.Count; i++)
+            {
+                int meshIndex = meshIndices[i];
+                if ((uint)meshIndex >= (uint)Model.Meshes.Length ||
+                    (uint)meshIndex >= (uint)_meshes.Length ||
+                    IsHiddenMesh(meshIndex) ||
+                    IsStaticMapMeshQueuedForInstancing(meshIndex) ||
+                    !ReferenceEquals(_meshes[meshIndex].Texture, stateKey.Texture) ||
+                    DetermineShaderForMesh(meshIndex).Kind != stateKey.ShaderKind ||
+                    !CanUseGpuSkinningForMesh(meshIndex))
+                {
+                    return false;
+                }
+            }
+
+            var gd = GraphicsDevice;
+            DepthStencilState previousDepth = gd.DepthStencilState;
+            bool useReadOnlyDepth = isAfterDraw || !ReferenceEquals(stateKey.BlendState, BlendState.Opaque);
+
+            try
+            {
+                if (!BMDLoader.Instance.TryGetGpuSkinnedMeshBatchBuffers(
+                    Model,
+                    meshIndices,
+                    out VertexBuffer vertexBuffer,
+                    out IndexBuffer indexBuffer,
+                    out int boneCount))
+                {
+                    return false;
+                }
+
+                Effect effect = PrepareGpuSkinnedBatchEffect(stateKey, boneCount);
+                if (effect?.CurrentTechnique == null)
+                    return false;
+
+                if (useReadOnlyDepth)
+                    gd.DepthStencilState = GraphicsManager.ReadOnlyDepth;
+
+                gd.SetVertexBuffer(vertexBuffer);
+                gd.Indices = indexBuffer;
+                int primitiveCount = indexBuffer.IndexCount / 3;
+                int passCount = effect.CurrentTechnique.Passes.Count;
+                for (int passIndex = 0; passIndex < passCount; passIndex++)
+                {
+                    effect.CurrentTechnique.Passes[passIndex].Apply();
+                    gd.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, primitiveCount);
+                }
+
+                RegisterGpuSkinnedMeshDraw(meshIndices.Count);
+                RegisterGpuSkinnedBatchDraw(meshIndices.Count);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _gpuSkinnedMeshBatchingFailed = true;
+                _logger?.LogWarning(ex, "Combined GPU-skinned mesh batching disabled after runtime failure.");
+                return false;
+            }
+            finally
+            {
+                if (useReadOnlyDepth)
+                    gd.DepthStencilState = previousDepth;
+            }
+        }
+
+        private Effect PrepareGpuSkinnedBatchEffect(MeshStateKey stateKey, int boneCount)
+        {
+            return stateKey.ShaderKind switch
+            {
+                MeshShaderKind.DynamicLighting => PrepareDynamicLightingGpuBatch(stateKey.Texture, boneCount),
+                MeshShaderKind.ItemMaterial => PrepareItemMaterialGpuBatch(stateKey.Texture, boneCount),
+                MeshShaderKind.MonsterMaterial => PrepareMonsterMaterialGpuBatch(stateKey.Texture, boneCount),
+                _ => null,
+            };
+        }
+
+        private Effect PrepareDynamicLightingGpuBatch(Texture2D texture, int boneCount)
+        {
+            Effect effect = GraphicsManager.Instance.DynamicLightingEffect;
+            if (effect == null)
+                return null;
+
+            PrepareDynamicLightingEffect(effect, useGpuSkinning: true, requiredBoneCount: boneCount);
+            if (!string.Equals(effect.CurrentTechnique?.Name, "DynamicLighting_Skinned", StringComparison.Ordinal))
+                return null;
+
+            GetModelEffectBindings(effect)?.DiffuseTexture?.SetValue(texture);
+            return effect;
+        }
+
+        private Effect PrepareItemMaterialGpuBatch(Texture2D texture, int boneCount)
+        {
+            Effect effect = GraphicsManager.Instance.ItemMaterialEffect;
+            ModelEffectBindings bindings = GetModelEffectBindings(effect);
+            EffectTechnique technique = bindings?.GetTechnique("BasicColorDrawing_Skinned");
+            if (effect == null || bindings == null || technique == null ||
+                !TryUploadGpuSkinBoneMatrices(effect, bindings, boneCount))
+            {
+                return null;
+            }
+
+            effect.CurrentTechnique = technique;
+            GraphicsManager.Instance.ShadowMapRenderer?.ApplyShadowParameters(effect);
+
+            var camera = Camera.Instance;
+            Matrix world = WorldPosition;
+            bindings.WorldViewProjection?.SetValue(world * camera.View * camera.Projection);
+            bindings.World?.SetValue(world);
+            bindings.View?.SetValue(camera.View);
+            bindings.Projection?.SetValue(camera.Projection);
+            bindings.EyePosition?.SetValue(camera.Position);
+
+            Vector3 sunDir = GraphicsManager.Instance.ShadowMapRenderer?.LightDirection ?? Constants.SUN_DIRECTION;
+            if (sunDir.LengthSquared() < 0.0001f)
+                sunDir = new Vector3(1f, 0f, -0.6f);
+            sunDir = Vector3.Normalize(sunDir);
+            bool worldAllowsSun = World is WorldControl wc ? wc.IsSunWorld : true;
+            bool sunEnabled = Constants.SUN_ENABLED && worldAllowsSun && UseSunLight && !HasWalkerAncestor();
+            bindings.LightDirection?.SetValue(sunDir);
+            bindings.ShadowStrength?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
+            bindings.DiffuseTexture?.SetValue(texture);
+
+            int itemOptions = ItemLevel & 0x0F;
+            if (IsExcellentItem)
+                itemOptions |= 0x10;
+            bindings.ItemOptions?.SetValue(itemOptions);
+            bindings.Time?.SetValue(GetShaderTimeSeconds());
+            bindings.IsAncient?.SetValue(IsAncientItem);
+            bindings.IsExcellent?.SetValue(IsExcellentItem);
+            bindings.Alpha?.SetValue(TotalAlpha);
+            return effect;
+        }
+
+        private Effect PrepareMonsterMaterialGpuBatch(Texture2D texture, int boneCount)
+        {
+            Effect effect = GraphicsManager.Instance.MonsterMaterialEffect;
+            ModelEffectBindings bindings = GetModelEffectBindings(effect);
+            EffectTechnique technique = bindings?.GetTechnique("MonsterMaterialDrawing_Skinned");
+            if (effect == null || bindings == null || technique == null ||
+                !TryUploadGpuSkinBoneMatrices(effect, bindings, boneCount))
+            {
+                return null;
+            }
+
+            effect.CurrentTechnique = technique;
+            GraphicsManager.Instance.ShadowMapRenderer?.ApplyShadowParameters(effect);
+
+            var camera = Camera.Instance;
+            Matrix world = WorldPosition;
+            bindings.WorldViewProjection?.SetValue(world * camera.View * camera.Projection);
+            bindings.World?.SetValue(world);
+            bindings.View?.SetValue(camera.View);
+            bindings.Projection?.SetValue(camera.Projection);
+            bindings.EyePosition?.SetValue(camera.Position);
+
+            Vector3 sunDir = GraphicsManager.Instance.ShadowMapRenderer?.LightDirection ?? Constants.SUN_DIRECTION;
+            if (sunDir.LengthSquared() < 0.0001f)
+                sunDir = new Vector3(1f, 0f, -0.6f);
+            sunDir = Vector3.Normalize(sunDir);
+            bool worldAllowsSun = World is WorldControl wc ? wc.IsSunWorld : true;
+            bool sunEnabled = Constants.SUN_ENABLED && worldAllowsSun && UseSunLight && !HasWalkerAncestor();
+            bindings.LightDirection?.SetValue(sunDir);
+            bindings.ShadowStrength?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
+            bindings.DiffuseTexture?.SetValue(texture);
+            bindings.GlowColor?.SetValue(GlowColor);
+            bindings.GlowIntensity?.SetValue(GlowIntensity);
+            bindings.EnableGlow?.SetValue(GlowIntensity > 0f && !SimpleColorMode);
+            bindings.SimpleColorMode?.SetValue(SimpleColorMode);
+            bindings.Time?.SetValue(GetShaderTimeSeconds());
+            bindings.Alpha?.SetValue(TotalAlpha);
+            return effect;
         }
 
         private bool TryDrawFastAlphaMeshBatch(MeshStateKey stateKey, List<int> meshIndices, bool isAfterDraw)

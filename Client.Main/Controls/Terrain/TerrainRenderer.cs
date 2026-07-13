@@ -720,7 +720,14 @@ namespace Client.Main.Controls.Terrain
                 : Vector2.Zero;
             float focusRadius = ResolveTerrainDynamicLightFocusRadius();
 
-            LastUploadedDynamicLights = _dynamicLightUploader.Upload(effect, visibleLights, focusPos, maxLights, focusRadius);
+            LastUploadedDynamicLights = _dynamicLightUploader.Upload(
+                effect,
+                visibleLights,
+                focusPos,
+                maxLights,
+                focusRadius,
+                _lightManager.VisibleLightsVersion,
+                cacheCellSize: 128f);
         }
 
         private static float ResolveTerrainDynamicLightFocusRadius()

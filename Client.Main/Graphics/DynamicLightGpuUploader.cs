@@ -2,6 +2,7 @@ using Client.Main.Controls;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
@@ -12,6 +13,45 @@ namespace Client.Main.Graphics
     /// </summary>
     public sealed class DynamicLightGpuUploader
     {
+        private readonly struct SelectionCacheKey : IEquatable<SelectionCacheKey>
+        {
+            public SelectionCacheKey(int listId, int version, int cellX, int cellY, int radiusBucket)
+            {
+                ListId = listId;
+                Version = version;
+                CellX = cellX;
+                CellY = cellY;
+                RadiusBucket = radiusBucket;
+            }
+
+            private int ListId { get; }
+            private int Version { get; }
+            private int CellX { get; }
+            private int CellY { get; }
+            private int RadiusBucket { get; }
+
+            public bool Equals(SelectionCacheKey other) =>
+                ListId == other.ListId && Version == other.Version &&
+                CellX == other.CellX && CellY == other.CellY &&
+                RadiusBucket == other.RadiusBucket;
+
+            public override bool Equals(object obj) => obj is SelectionCacheKey other && Equals(other);
+            public override int GetHashCode() => HashCode.Combine(ListId, Version, CellX, CellY, RadiusBucket);
+        }
+
+        private sealed class SelectionCacheEntry
+        {
+            public required int[] CandidateIndices { get; init; }
+            public int CandidateCount { get; init; }
+            public int LastFrame;
+        }
+
+        private const int MaxSelectionCacheEntries = 2048;
+        private const int SelectionCacheMaxIdleFrames = 180;
+        private static readonly Dictionary<SelectionCacheKey, SelectionCacheEntry> _selectionCache = new(512);
+        private static readonly object _selectionCacheLock = new();
+        private static int _selectionCacheListId;
+        private static int _selectionCacheVersion;
         private sealed class EffectBindings
         {
             public EffectBindings(Effect effect)
@@ -22,6 +62,7 @@ namespace Client.Main.Graphics
 
             public EffectParameter LightPosInvRadius { get; }
             public EffectParameter LightColorIntensity { get; }
+            public long LastSelectionToken = long.MinValue;
 
             public int ResolveCapacity(int fallbackCapacity)
             {
@@ -52,7 +93,14 @@ namespace Client.Main.Graphics
             _minInfluence = Math.Max(0f, minInfluence);
         }
 
-        public int Upload(Effect effect, IReadOnlyList<DynamicLightSnapshot> lights, Vector2 focus, int maxLights, float focusRadius = 0f)
+        public int Upload(
+            Effect effect,
+            IReadOnlyList<DynamicLightSnapshot> lights,
+            Vector2 focus,
+            int maxLights,
+            float focusRadius = 0f,
+            int lightsVersion = 0,
+            float cacheCellSize = 0f)
         {
             if (effect == null)
                 return 0;
@@ -63,12 +111,40 @@ namespace Client.Main.Graphics
 
             if (lights == null || lights.Count == 0 || maxLights <= 0)
             {
-                ApplyToEffect(effect, capacity);
+                ApplyToEffect(effect, capacity, selectionToken: 0);
                 return 0;
             }
 
             int budget = Math.Min(capacity, maxLights);
-            int selectedCount = SelectRelevantLights(lights, focus, Math.Max(0f, focusRadius), budget);
+            int selectedCount;
+            long selectionToken = long.MinValue;
+
+            if (lightsVersion > 0 && cacheCellSize > 0f && float.IsFinite(cacheCellSize))
+            {
+                SelectionCacheEntry cached = GetOrCreateCachedSelection(
+                    lights,
+                    lightsVersion,
+                    focus,
+                    Math.Max(0f, focusRadius),
+                    cacheCellSize);
+                selectedCount = SelectRelevantLights(
+                    lights,
+                    focus,
+                    Math.Max(0f, focusRadius),
+                    budget,
+                    cached.CandidateIndices,
+                    cached.CandidateCount);
+                selectionToken = CalculateSelectionToken(
+                    RuntimeHelpers.GetHashCode(lights),
+                    lightsVersion,
+                    budget,
+                    _selectedIndices,
+                    selectedCount);
+            }
+            else
+            {
+                selectedCount = SelectRelevantLights(lights, focus, Math.Max(0f, focusRadius), budget);
+            }
 
             for (int i = 0; i < selectedCount; i++)
             {
@@ -83,7 +159,7 @@ namespace Client.Main.Graphics
                 _lightColorIntensity[i] = new Vector4(light.Color, intensity);
             }
 
-            ApplyToEffect(effect, capacity);
+            ApplyToEffect(effect, capacity, selectionToken);
             return selectedCount;
         }
 
@@ -95,7 +171,142 @@ namespace Client.Main.Graphics
             int capacity = ResolveEffectCapacity(effect, _fallbackCapacity);
             EnsureCapacity(capacity);
             ClearBuffers(capacity);
-            ApplyToEffect(effect, capacity);
+            ApplyToEffect(effect, capacity, selectionToken: 0);
+        }
+
+        private SelectionCacheEntry GetOrCreateCachedSelection(
+            IReadOnlyList<DynamicLightSnapshot> lights,
+            int lightsVersion,
+            Vector2 focus,
+            float focusRadius,
+            float cacheCellSize)
+        {
+            float safeCellSize = Math.Max(1f, cacheCellSize);
+            float invCell = 1f / safeCellSize;
+            int cellX = (int)MathF.Floor(focus.X * invCell);
+            int cellY = (int)MathF.Floor(focus.Y * invCell);
+            int radiusBucket = (int)MathF.Ceiling(focusRadius / safeCellSize);
+            int listId = RuntimeHelpers.GetHashCode(lights);
+            var key = new SelectionCacheKey(listId, lightsVersion, cellX, cellY, radiusBucket);
+            int frame = MuGame.FrameIndex;
+
+            lock (_selectionCacheLock)
+            {
+                EnsureSelectionCacheGenerationNoLock(listId, lightsVersion);
+                if (_selectionCache.TryGetValue(key, out var cached))
+                {
+                    cached.LastFrame = frame;
+                    return cached;
+                }
+            }
+
+            float expandedRadius = radiusBucket * safeCellSize;
+            float minX = cellX * safeCellSize - expandedRadius;
+            float minY = cellY * safeCellSize - expandedRadius;
+            float maxX = (cellX + 1) * safeCellSize + expandedRadius;
+            float maxY = (cellY + 1) * safeCellSize + expandedRadius;
+
+            int[] candidates = ArrayPool<int>.Shared.Rent(Math.Max(1, lights.Count));
+            int candidateCount = 0;
+            for (int i = 0; i < lights.Count; i++)
+            {
+                var light = lights[i];
+                if (light.Intensity <= 0f || !IsFinite(light.Position) || !IsFinite(light.Color) ||
+                    light.Radius <= 0.0001f)
+                {
+                    continue;
+                }
+
+                float nearestX = MathHelper.Clamp(light.Position.X, minX, maxX);
+                float nearestY = MathHelper.Clamp(light.Position.Y, minY, maxY);
+                float dx = light.Position.X - nearestX;
+                float dy = light.Position.Y - nearestY;
+                if (dx * dx + dy * dy < light.Radius * light.Radius)
+                    candidates[candidateCount++] = i;
+            }
+
+            var created = new SelectionCacheEntry
+            {
+                CandidateIndices = candidates,
+                CandidateCount = candidateCount,
+                LastFrame = frame
+            };
+
+            lock (_selectionCacheLock)
+            {
+                EnsureSelectionCacheGenerationNoLock(listId, lightsVersion);
+                if (_selectionCache.TryGetValue(key, out var raced))
+                {
+                    raced.LastFrame = frame;
+                    ArrayPool<int>.Shared.Return(candidates, clearArray: false);
+                    return raced;
+                }
+
+                _selectionCache[key] = created;
+                PruneSelectionCacheNoLock(frame);
+                return created;
+            }
+        }
+
+        private static long CalculateSelectionToken(
+            int listId,
+            int version,
+            int budget,
+            int[] selectedIndices,
+            int selectedCount)
+        {
+            unchecked
+            {
+                const ulong offsetBasis = 14695981039346656037UL;
+                const ulong prime = 1099511628211UL;
+                ulong hash = offsetBasis;
+                hash = (hash ^ (uint)listId) * prime;
+                hash = (hash ^ (uint)version) * prime;
+                hash = (hash ^ (uint)budget) * prime;
+                hash = (hash ^ (uint)selectedCount) * prime;
+                for (int i = 0; i < selectedCount; i++)
+                    hash = (hash ^ (uint)selectedIndices[i]) * prime;
+
+                long token = (long)(hash & 0x7FFFFFFFFFFFFFFFUL);
+                return token == 0 ? 1 : token;
+            }
+        }
+
+        private static void EnsureSelectionCacheGenerationNoLock(int listId, int version)
+        {
+            if (_selectionCacheListId == listId && _selectionCacheVersion == version)
+                return;
+
+            foreach (var entry in _selectionCache.Values)
+                ArrayPool<int>.Shared.Return(entry.CandidateIndices, clearArray: false);
+
+            _selectionCache.Clear();
+            _selectionCacheListId = listId;
+            _selectionCacheVersion = version;
+        }
+
+        private static void PruneSelectionCacheNoLock(int frame)
+        {
+            if (_selectionCache.Count <= MaxSelectionCacheEntries && frame % 120 != 0)
+                return;
+
+            var stale = new List<SelectionCacheKey>(64);
+            foreach (var pair in _selectionCache)
+            {
+                if (_selectionCache.Count - stale.Count <= MaxSelectionCacheEntries &&
+                    frame - pair.Value.LastFrame <= SelectionCacheMaxIdleFrames)
+                {
+                    continue;
+                }
+                stale.Add(pair.Key);
+            }
+
+            for (int i = 0; i < stale.Count; i++)
+            {
+                SelectionCacheKey key = stale[i];
+                if (_selectionCache.Remove(key, out var removed))
+                    ArrayPool<int>.Shared.Return(removed.CandidateIndices, clearArray: false);
+            }
         }
 
         public static int ResolveEffectCapacity(Effect effect, int fallbackCapacity)
@@ -142,7 +353,13 @@ namespace Client.Main.Graphics
                      float.IsNaN(value.Z) || float.IsInfinity(value.Z));
         }
 
-        private int SelectRelevantLights(IReadOnlyList<DynamicLightSnapshot> lights, Vector2 focus, float focusRadius, int budget)
+        private int SelectRelevantLights(
+            IReadOnlyList<DynamicLightSnapshot> lights,
+            Vector2 focus,
+            float focusRadius,
+            int budget,
+            int[] candidateIndices = null,
+            int candidateCount = 0)
         {
             if (budget <= 0)
                 return 0;
@@ -150,9 +367,14 @@ namespace Client.Main.Graphics
             int selected = 0;
             float weakestScore = float.MaxValue;
             int weakestIndex = 0;
+            int iterationCount = candidateIndices == null ? lights.Count : candidateCount;
 
-            for (int i = 0; i < lights.Count; i++)
+            for (int candidate = 0; candidate < iterationCount; candidate++)
             {
+                int i = candidateIndices == null ? candidate : candidateIndices[candidate];
+                if ((uint)i >= (uint)lights.Count)
+                    continue;
+
                 var light = lights[i];
                 if (light.Intensity <= 0f || !IsFinite(light.Position) || !IsFinite(light.Color))
                     continue;
@@ -239,14 +461,18 @@ namespace Client.Main.Graphics
             }
         }
 
-        private void ApplyToEffect(Effect effect, int capacity)
+        private void ApplyToEffect(Effect effect, int capacity, long selectionToken)
         {
             if (effect == null || capacity <= 0)
                 return;
 
             EffectBindings bindings = GetBindings(effect);
+            if (selectionToken != long.MinValue && bindings.LastSelectionToken == selectionToken)
+                return;
+
             bindings.LightPosInvRadius?.SetValue(_lightPosInvRadius);
             bindings.LightColorIntensity?.SetValue(_lightColorIntensity);
+            bindings.LastSelectionToken = selectionToken;
         }
     }
 }

@@ -54,6 +54,9 @@ namespace Client.Main.Objects
         private static int _modelFallbackDrawCallsThisFrame = 0;
         private static int _sharedAnimationPaletteHitsThisFrame = 0;
         private static int _sharedAnimationPaletteMissesThisFrame = 0;
+        private static int _gpuSkinnedBatchDrawCallsThisFrame = 0;
+        private static int _gpuSkinnedBatchedMeshesThisFrame = 0;
+        private static bool _gpuSkinnedMeshBatchingFailed;
 
         // Track per-pass preparation to avoid re-uploading shared effect parameters per mesh
         private static int _drawModelInvocationCounter = 0;
@@ -63,7 +66,10 @@ namespace Client.Main.Objects
         public static int LastFrameModelInstancedDrawCalls { get; private set; }
         public static int LastFrameSharedAnimationPaletteHits { get; private set; }
         public static int LastFrameSharedAnimationPaletteMisses { get; private set; }
+        public static int LastFrameGpuSkinnedBatchDrawCalls { get; private set; }
+        public static int LastFrameGpuSkinnedBatchedMeshes { get; private set; }
         public static bool IsGpuSkinningBackendSupported => SupportsGpuDynamicSkinning;
+        public static bool IsGpuSkinnedMeshBatchingRuntimeDisabled => _gpuSkinnedMeshBatchingFailed;
 
         public static void BeginFrameGpuSkinningMetrics()
         {
@@ -71,10 +77,14 @@ namespace Client.Main.Objects
             LastFrameModelFallbackDrawCalls = _modelFallbackDrawCallsThisFrame;
             LastFrameSharedAnimationPaletteHits = _sharedAnimationPaletteHitsThisFrame;
             LastFrameSharedAnimationPaletteMisses = _sharedAnimationPaletteMissesThisFrame;
+            LastFrameGpuSkinnedBatchDrawCalls = _gpuSkinnedBatchDrawCallsThisFrame;
+            LastFrameGpuSkinnedBatchedMeshes = _gpuSkinnedBatchedMeshesThisFrame;
             _gpuSkinnedMeshesDrawnThisFrame = 0;
             _modelFallbackDrawCallsThisFrame = 0;
             _sharedAnimationPaletteHitsThisFrame = 0;
             _sharedAnimationPaletteMissesThisFrame = 0;
+            _gpuSkinnedBatchDrawCallsThisFrame = 0;
+            _gpuSkinnedBatchedMeshesThisFrame = 0;
             PruneSharedAnimationPaletteCache(MuGame.FrameIndex);
             BeginFrameStaticMapInstancingMetrics();
         }
@@ -83,6 +93,13 @@ namespace Client.Main.Objects
         {
             if (meshInstanceCount > 0)
                 _gpuSkinnedMeshesDrawnThisFrame += meshInstanceCount;
+        }
+
+        private static void RegisterGpuSkinnedBatchDraw(int meshCount)
+        {
+            _gpuSkinnedBatchDrawCallsThisFrame++;
+            if (meshCount > 0)
+                _gpuSkinnedBatchedMeshesThisFrame += meshCount;
         }
 
         private static void RegisterModelFallbackDrawCall()
@@ -172,6 +189,8 @@ namespace Client.Main.Objects
 
         // Enhanced animation caching system
         private Matrix[] _cachedBoneMatrix = null;
+        private Matrix[] _lastCachedBoneSource = null;
+        private uint _lastCachedBonePoseVersion = uint.MaxValue;
         private int _lastCachedAction = -1;
         private float _lastCachedAnimTime = -1;
         private bool _boneMatrixCacheValid = false;
@@ -231,7 +250,7 @@ namespace Client.Main.Objects
         private Vector2 _lastLightSampleCell = new Vector2(float.MaxValue);
         private Vector3 _lastSampledLight = Vector3.Zero;
 
-        private readonly DynamicLightGpuUploader _dynamicLightUploader = new(32);
+        private static readonly DynamicLightGpuUploader _dynamicLightUploader = new(32);
 
         private int _drawModelInvocationId = 0;
         private int _dynamicLightingPreparedInvocationId = -1;
@@ -264,7 +283,12 @@ namespace Client.Main.Objects
         public Color Color { get; set; } = Color.White;
         public ItemDefinition ItemDefinition { get; set; }
         protected Matrix[] BoneTransform { get; set; }
-        public Matrix[] GetBoneTransforms() => BoneTransform;
+        // Shared animation palettes are immutable render snapshots. They are kept
+        // separate from the writable per-object BoneTransform array so a monster can
+        // enter a shared pose without copying every matrix and can detach safely when
+        // an action transition starts.
+        private Matrix[] _sharedAnimationRenderBones;
+        public Matrix[] GetBoneTransforms() => GetEffectiveBoneTransforms();
         public int CurrentAction { get; set; }
         public int CurrentFrame { get; private set; }
         public int ParentBoneLink { get; set; } = -1;
@@ -293,12 +317,11 @@ namespace Client.Main.Objects
         {
             get
             {
-                if (ParentBoneLink >= 0 && Parent != null && Parent is ModelObject modelObject)
+                if (ParentBoneLink >= 0 && Parent is ModelObject modelObject)
                 {
-                    if (modelObject.BoneTransform != null && ParentBoneLink < modelObject.BoneTransform.Length)
-                    {
-                        return modelObject.BoneTransform[ParentBoneLink];
-                    }
+                    Matrix[] parentBones = modelObject.GetEffectiveBoneTransforms();
+                    if (parentBones != null && ParentBoneLink < parentBones.Length)
+                        return parentBones[ParentBoneLink];
                 }
                 return Matrix.Identity;
             }
@@ -492,6 +515,7 @@ namespace Client.Main.Objects
 
             if (Model?.Bones != null && Model.Bones.Length > 0)
             {
+                _sharedAnimationRenderBones = null;
                 BoneTransform = new Matrix[Model.Bones.Length];
 
                 // Pre-allocate blend buffer to avoid allocations during action transitions
@@ -654,6 +678,7 @@ namespace Client.Main.Objects
 
             Model = null;
             BoneTransform = null;
+            _sharedAnimationRenderBones = null;
             _invalidatedBufferFlags = MeshDirtyFlags.None;
             ReleaseDynamicBuffers();
 
@@ -664,6 +689,8 @@ namespace Client.Main.Objects
             _boundingComputed = false;
 
             _cachedBoneMatrix = null;
+            _lastCachedBoneSource = null;
+            _lastCachedBonePoseVersion = uint.MaxValue;
             _boneMatrixCacheValid = false;
             _gpuSkinBoneUploadBuffer = Array.Empty<Matrix>();
             _gpuSkinBoneUploadCount = 0;
@@ -763,7 +790,8 @@ namespace Client.Main.Objects
 
             _boundingFrameCounter = 0;
 
-            if (Model?.Meshes == null || Model.Meshes.Length == 0 || BoneTransform == null) return;
+            Matrix[] activeBones = GetEffectiveBoneTransforms();
+            if (Model?.Meshes == null || Model.Meshes.Length == 0 || activeBones == null) return;
 
             // Use faster min/max calculation with cached vectors
             Vector3 min = _maxValueVector;
@@ -771,7 +799,7 @@ namespace Client.Main.Objects
 
             bool hasValidVertices = false;
             var meshes = Model.Meshes;
-            var bones = BoneTransform;
+            var bones = activeBones;
             int boneCount = bones.Length;
 
             // Optimized: Only sample every 4th vertex for performance while maintaining accuracy

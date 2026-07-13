@@ -988,7 +988,14 @@ namespace Client.Main.Objects
                 : Vector2.Zero;
             float focusRadius = ResolveStaticMapInstancingLightCoverageRadius();
 
-            _staticInstancingLightUploader.Upload(effect, visibleLights, focus, maxLights, focusRadius);
+            _staticInstancingLightUploader.Upload(
+                effect,
+                visibleLights,
+                focus,
+                maxLights,
+                focusRadius,
+                terrain.VisibleLightsVersion,
+                cacheCellSize: 192f);
         }
 
         private static float ResolveStaticMapInstancingLightCoverageRadius()

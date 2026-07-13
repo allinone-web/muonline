@@ -148,15 +148,14 @@ namespace Client.Main.Objects
                 return false;
             }
 
-            ModelObject paletteOwner = LinkParentAnimation && Parent is ModelObject parentModel && parentModel.BoneTransform != null
+            ModelObject paletteOwner = LinkParentAnimation && Parent is ModelObject parentModel
                 ? parentModel
                 : this;
-            Matrix[] bones = paletteOwner.BoneTransform;
+            Matrix[] bones = paletteOwner.GetEffectiveBoneTransforms();
             bones = GetRenderBoneTransforms(bones) ?? bones;
-            uint poseVersion = paletteOwner._animationPoseVersion;
+            uint poseVersion = paletteOwner.GetEffectiveBonePoseVersion();
 
-            if (ReferenceEquals(bindings.BonePaletteOwner, paletteOwner) &&
-                ReferenceEquals(bindings.BonePaletteSource, bones) &&
+            if (ReferenceEquals(bindings.BonePaletteSource, bones) &&
                 bindings.BonePalettePoseVersion == poseVersion &&
                 bindings.BonePaletteCount >= requiredBoneCount)
             {
@@ -276,7 +275,14 @@ namespace Client.Main.Objects
             int maxLights = ResolveDynamicObjectLightBudget(worldTranslation);
             var focus = new Vector2(worldTranslation.X, worldTranslation.Y);
             float focusRadius = ResolveDynamicObjectLightFocusRadius();
-            _dynamicLightUploader.Upload(effect, visibleLights, focus, maxLights, focusRadius);
+            _dynamicLightUploader.Upload(
+                effect,
+                visibleLights,
+                focus,
+                maxLights,
+                focusRadius,
+                terrain.VisibleLightsVersion,
+                cacheCellSize: 96f);
         }
 
         private int ResolveDynamicObjectLightBudget(Vector3 worldTranslation)

@@ -496,13 +496,13 @@ namespace Client.Main.Objects
 
         private Matrix[] GetCachedBoneTransforms()
         {
-            Matrix[] bones = (LinkParentAnimation && Parent is ModelObject parentModel && parentModel.BoneTransform != null)
-                ? parentModel.BoneTransform
-                : BoneTransform;
-
+            Matrix[] bones = GetEffectiveBoneTransforms();
             if (bones == null) return null;
 
             float currentAnimTime = (float)_animTime;
+            uint activePoseVersion = LinkParentAnimation && Parent is ModelObject parentModel
+                ? parentModel.GetEffectiveBonePoseVersion()
+                : GetEffectiveBonePoseVersion();
 
             // For child objects that link to parent animation OR have ParentBoneLink, always use fresh bone transforms
             // This ensures weapons and accessories animate properly during blending
@@ -515,6 +515,8 @@ namespace Client.Main.Objects
             // Check if we can use cached bone matrix for main objects
             // But be more conservative - only cache if animation time hasn't changed at all
             if (_boneMatrixCacheValid &&
+                ReferenceEquals(_lastCachedBoneSource, bones) &&
+                _lastCachedBonePoseVersion == activePoseVersion &&
                 _lastCachedAction == CurrentAction &&
                 Math.Abs(_lastCachedAnimTime - currentAnimTime) < 0.0001f &&
                 _cachedBoneMatrix != null &&
@@ -531,6 +533,8 @@ namespace Client.Main.Objects
 
             Array.Copy(bones, _cachedBoneMatrix, bones.Length);
 
+            _lastCachedBoneSource = bones;
+            _lastCachedBonePoseVersion = activePoseVersion;
             _lastCachedAction = CurrentAction;
             _lastCachedAnimTime = currentAnimTime;
             _boneMatrixCacheValid = true;

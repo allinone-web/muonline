@@ -73,6 +73,41 @@ namespace Client.Main.Objects
             public int LastFrame;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private Matrix[] GetEffectiveBoneTransforms()
+        {
+            if (LinkParentAnimation && Parent is ModelObject parentModel)
+                return parentModel.GetEffectiveBoneTransforms();
+
+            return _sharedAnimationRenderBones ?? BoneTransform;
+        }
+
+        private void EnsureWritableBoneTransforms(int boneCount)
+        {
+            if (boneCount <= 0)
+                return;
+
+            if (BoneTransform == null || BoneTransform.Length != boneCount)
+                BoneTransform = new Matrix[boneCount];
+
+            if (_sharedAnimationRenderBones != null)
+            {
+                int copyCount = Math.Min(boneCount, _sharedAnimationRenderBones.Length);
+                Array.Copy(_sharedAnimationRenderBones, BoneTransform, copyCount);
+                for (int i = copyCount; i < boneCount; i++)
+                    BoneTransform[i] = Matrix.Identity;
+                _sharedAnimationRenderBones = null;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint GetEffectiveBonePoseVersion()
+        {
+            // Shared arrays are immutable and their reference identifies the exact pose.
+            // Local arrays are mutated in-place, therefore they still require the version.
+            return _sharedAnimationRenderBones != null ? uint.MaxValue : _animationPoseVersion;
+        }
+
         private const int MaxSharedAnimationPaletteEntries = 512;
         private const int SharedAnimationPaletteMaxIdleFrames = 180;
         private static readonly Dictionary<SharedAnimationPaletteKey, SharedAnimationPaletteEntry> _sharedAnimationPalettes = new(256);
@@ -302,8 +337,9 @@ namespace Client.Main.Objects
 
                 // Check if we can skip expensive calculation using local cache
                 // But be more conservative - only skip if frames and interpolation are identical
+                Matrix[] activeBones = GetEffectiveBoneTransforms();
                 if (_animationStateValid && currentAnimState.Equals(_lastAnimationState) &&
-                    BoneTransform != null && BoneTransform.Length == bones.Length)
+                    activeBones != null && activeBones.Length == bones.Length)
                 {
                     // Animation state hasn't changed - no need to recalculate
                     return;
@@ -326,9 +362,9 @@ namespace Client.Main.Objects
                 RegisterSharedAnimationPaletteMiss();
             }
 
-            // Initialize or resize bone transform array if needed
-            if (BoneTransform == null || BoneTransform.Length != bones.Length)
-                BoneTransform = new Matrix[bones.Length];
+            // A shared palette is read-only. Detach only when this object really needs
+            // a unique pose (cache miss, blend, procedural post-process, etc.).
+            EnsureWritableBoneTransforms(bones.Length);
 
             // Rent temp array from pool for safer hierarchical calculations
             // ArrayPool may return larger array, so we use bones.Length for actual operations
@@ -513,22 +549,13 @@ namespace Client.Main.Objects
                 return false;
             }
 
-            if (BoneTransform == null || BoneTransform.Length != boneCount)
-                BoneTransform = new Matrix[boneCount];
-
-            bool changed = false;
-            for (int i = 0; i < boneCount; i++)
-            {
-                if (BoneTransform[i] != entry.Bones[i])
-                    changed = true;
-
-                BoneTransform[i] = entry.Bones[i];
-            }
-
+            bool changed = !ReferenceEquals(_sharedAnimationRenderBones, entry.Bones);
+            _sharedAnimationRenderBones = entry.Bones;
             entry.LastFrame = MuGame.FrameIndex;
+
             if (changed)
             {
-                _animationPoseVersion++;
+                unchecked { _animationPoseVersion++; }
                 InvalidateBuffers(MeshDirtyFlags.Animation);
             }
 
@@ -547,19 +574,23 @@ namespace Client.Main.Objects
             if (bones == null || boneCount <= 0)
                 return;
 
-            if (!_sharedAnimationPalettes.TryGetValue(key, out var entry) ||
-                entry.Bones == null ||
-                entry.Bones.Length != boneCount)
+            // Published pose arrays are immutable because active monsters may hold a
+            // direct reference to them. Never overwrite an existing published array.
+            if (_sharedAnimationPalettes.TryGetValue(key, out var existing) &&
+                existing.Bones != null &&
+                existing.Bones.Length == boneCount)
             {
-                entry = new SharedAnimationPaletteEntry
-                {
-                    Bones = new Matrix[boneCount]
-                };
-                _sharedAnimationPalettes[key] = entry;
+                existing.LastFrame = MuGame.FrameIndex;
+                return;
             }
 
-            Array.Copy(bones, entry.Bones, boneCount);
-            entry.LastFrame = MuGame.FrameIndex;
+            var snapshot = new Matrix[boneCount];
+            Array.Copy(bones, snapshot, boneCount);
+            _sharedAnimationPalettes[key] = new SharedAnimationPaletteEntry
+            {
+                Bones = snapshot,
+                LastFrame = MuGame.FrameIndex
+            };
         }
 
         private static void PruneSharedAnimationPaletteCache(int frame)
@@ -708,8 +739,7 @@ namespace Client.Main.Objects
             if (playerBones == null || playerBones.Length == 0)
                 return false;
 
-            if (BoneTransform == null || BoneTransform.Length != bones.Length)
-                BoneTransform = new Matrix[bones.Length];
+            EnsureWritableBoneTransforms(bones.Length);
 
             for (int i = 0; i < bones.Length; i++)
             {

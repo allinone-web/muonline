@@ -43,6 +43,36 @@ namespace Client.Main.Content
             public override int GetHashCode() => HashCode.Combine(AssetId, MeshIndex);
         }
 
+        private readonly struct GpuSkinBatchCacheKey : IEquatable<GpuSkinBatchCacheKey>
+        {
+            public GpuSkinBatchCacheKey(int assetId, ulong meshSequenceHash, int meshCount)
+            {
+                AssetId = assetId;
+                MeshSequenceHash = meshSequenceHash;
+                MeshCount = meshCount;
+            }
+
+            public int AssetId { get; }
+            public ulong MeshSequenceHash { get; }
+            public int MeshCount { get; }
+
+            public bool Equals(GpuSkinBatchCacheKey other) =>
+                AssetId == other.AssetId &&
+                MeshSequenceHash == other.MeshSequenceHash &&
+                MeshCount == other.MeshCount;
+
+            public override bool Equals(object obj) => obj is GpuSkinBatchCacheKey other && Equals(other);
+            public override int GetHashCode() => HashCode.Combine(AssetId, MeshSequenceHash, MeshCount);
+        }
+
+        private sealed class GpuSkinBatchCacheEntry
+        {
+            public required int[] MeshIndices { get; init; }
+            public required VertexBuffer VertexBuffer { get; init; }
+            public required IndexBuffer IndexBuffer { get; init; }
+            public int BoneCount { get; init; }
+        }
+
         private readonly struct MeshCornerKey : IEquatable<MeshCornerKey>
         {
             public MeshCornerKey(int vertexIndex, int normalIndex, int texCoordIndex)
@@ -98,6 +128,7 @@ namespace Client.Main.Content
         private readonly Dictionary<MeshCacheKey, VertexBuffer> _gpuSkinVertexBuffers = [];
         private readonly Dictionary<MeshCacheKey, IndexBuffer> _gpuSkinIndexBuffers = [];
         private readonly Dictionary<MeshCacheKey, int> _gpuSkinBoneCounts = [];
+        private readonly Dictionary<GpuSkinBatchCacheKey, GpuSkinBatchCacheEntry> _gpuSkinBatchBuffers = [];
         private readonly object _gpuSkinBufferLock = new();
         // Parallel.For has a measurable setup/synchronization cost. Keep small and
         // medium meshes on the calling thread and parallelize only genuinely large jobs.
@@ -1095,6 +1126,274 @@ namespace Client.Main.Content
             }
         }
 
+        /// <summary>
+        /// Returns one immutable GPU-skinned vertex/index buffer for a group of meshes.
+        /// The caller guarantees that all meshes share the same render state and texture.
+        /// Combining them removes per-mesh vertex/index binds and draw calls while keeping
+        /// the same bone palette and material parameters.
+        /// </summary>
+        public bool TryGetGpuSkinnedMeshBatchBuffers(
+            BMD asset,
+            IReadOnlyList<int> meshIndices,
+            out VertexBuffer vertexBuffer,
+            out IndexBuffer indexBuffer,
+            out int boneCount)
+        {
+            vertexBuffer = null;
+            indexBuffer = null;
+            boneCount = 0;
+
+            if (asset?.Meshes == null || _graphicsDevice == null ||
+                meshIndices == null || meshIndices.Count <= 1)
+            {
+                return false;
+            }
+
+            int assetId = RuntimeHelpers.GetHashCode(asset);
+            ulong sequenceHash = CalculateMeshSequenceHash(meshIndices);
+            var cacheKey = new GpuSkinBatchCacheKey(assetId, sequenceHash, meshIndices.Count);
+
+            lock (_gpuSkinBufferLock)
+            {
+                if (_gpuSkinBatchBuffers.TryGetValue(cacheKey, out var cached))
+                {
+                    if (!MeshSequenceEquals(cached.MeshIndices, meshIndices))
+                        return false; // Extremely unlikely hash collision: keep correctness over batching.
+
+                    if (cached.VertexBuffer != null && !cached.VertexBuffer.IsDisposed &&
+                        cached.IndexBuffer != null && !cached.IndexBuffer.IsDisposed &&
+                        cached.BoneCount > 0)
+                    {
+                        vertexBuffer = cached.VertexBuffer;
+                        indexBuffer = cached.IndexBuffer;
+                        boneCount = cached.BoneCount;
+                        return true;
+                    }
+
+                    _gpuSkinBatchBuffers.Remove(cacheKey);
+                }
+            }
+
+            var topologies = ArrayPool<MeshTopology>.Shared.Rent(meshIndices.Count);
+            int totalVertices = 0;
+            int totalIndices = 0;
+            try
+            {
+                for (int i = 0; i < meshIndices.Count; i++)
+                {
+                    int meshIndex = meshIndices[i];
+                    if ((uint)meshIndex >= (uint)asset.Meshes.Length)
+                        return false;
+
+                    var mesh = asset.Meshes[meshIndex];
+                    if (mesh?.Triangles == null || mesh.Vertices == null ||
+                        mesh.Normals == null || mesh.TexCoords == null)
+                    {
+                        return false;
+                    }
+
+                    var topology = GetOrCreateMeshTopology(mesh, new MeshCacheKey(assetId, meshIndex));
+                    if (topology.Vertices.Length == 0 || topology.Indices.Length == 0)
+                        return false;
+
+                    topologies[i] = topology;
+                    checked
+                    {
+                        totalVertices += topology.Vertices.Length;
+                        totalIndices += topology.Indices.Length;
+                    }
+                }
+
+                if (totalVertices <= 0 || totalIndices <= 0)
+                    return false;
+
+                bool use16BitIndices = totalVertices <= ushort.MaxValue;
+                var vertices = ArrayPool<SkinnedVertexPositionColorNormalTexture>.Shared.Rent(totalVertices);
+                try
+                {
+                    int outputVertex = 0;
+                    int maxBoneIndex = 0;
+                    for (int groupIndex = 0; groupIndex < meshIndices.Count; groupIndex++)
+                    {
+                        int meshIndex = meshIndices[groupIndex];
+                        var mesh = asset.Meshes[meshIndex];
+                        var topology = topologies[groupIndex];
+
+                        for (int localVertex = 0; localVertex < topology.Vertices.Length; localVertex++)
+                        {
+                            MeshCorner corner = topology.Vertices[localVertex];
+                            var sourceVertex = mesh.Vertices[corner.VertexIndex];
+                            int positionBoneIndex = sourceVertex.Node >= 0 ? sourceVertex.Node : 0;
+                            int normalBoneIndex = positionBoneIndex;
+                            if (TryResolveNormalBoneIndex(mesh, corner.NormalIndex, out int resolvedNormalBone) &&
+                                resolvedNormalBone >= 0)
+                            {
+                                normalBoneIndex = resolvedNormalBone;
+                            }
+
+                            maxBoneIndex = Math.Max(maxBoneIndex, Math.Max(positionBoneIndex, normalBoneIndex));
+                            var normal = mesh.Normals[corner.NormalIndex].Normal;
+                            var uv = mesh.TexCoords[corner.TexCoordIndex];
+                            vertices[outputVertex++] = new SkinnedVertexPositionColorNormalTexture(
+                                sourceVertex.Position,
+                                Color.White,
+                                normal,
+                                new Vector2(uv.U, uv.V),
+                                new Vector2(positionBoneIndex, normalBoneIndex));
+                        }
+                    }
+
+                    VertexBuffer newVertexBuffer = null;
+                    IndexBuffer newIndexBuffer = null;
+                    try
+                    {
+                        newVertexBuffer = new VertexBuffer(
+                            _graphicsDevice,
+                            SkinnedVertexPositionColorNormalTexture.VertexDeclaration,
+                            totalVertices,
+                            BufferUsage.WriteOnly);
+                        newVertexBuffer.SetData(vertices, 0, totalVertices);
+
+                        if (use16BitIndices)
+                        {
+                            var indices = ArrayPool<ushort>.Shared.Rent(totalIndices);
+                            try
+                            {
+                                int outputIndex = 0;
+                                int baseVertex = 0;
+                                for (int groupIndex = 0; groupIndex < meshIndices.Count; groupIndex++)
+                                {
+                                    var topology = topologies[groupIndex];
+                                    for (int i = 0; i < topology.Indices.Length; i++)
+                                        indices[outputIndex++] = (ushort)(baseVertex + topology.Indices[i]);
+                                    baseVertex += topology.Vertices.Length;
+                                }
+
+                                newIndexBuffer = new IndexBuffer(
+                                    _graphicsDevice,
+                                    IndexElementSize.SixteenBits,
+                                    totalIndices,
+                                    BufferUsage.WriteOnly);
+                                newIndexBuffer.SetData(indices, 0, totalIndices);
+                            }
+                            finally
+                            {
+                                ArrayPool<ushort>.Shared.Return(indices, clearArray: false);
+                            }
+                        }
+                        else
+                        {
+                            var indices = ArrayPool<int>.Shared.Rent(totalIndices);
+                            try
+                            {
+                                int outputIndex = 0;
+                                int baseVertex = 0;
+                                for (int groupIndex = 0; groupIndex < meshIndices.Count; groupIndex++)
+                                {
+                                    var topology = topologies[groupIndex];
+                                    for (int i = 0; i < topology.Indices.Length; i++)
+                                        indices[outputIndex++] = baseVertex + topology.Indices[i];
+                                    baseVertex += topology.Vertices.Length;
+                                }
+
+                                newIndexBuffer = new IndexBuffer(
+                                    _graphicsDevice,
+                                    IndexElementSize.ThirtyTwoBits,
+                                    totalIndices,
+                                    BufferUsage.WriteOnly);
+                                newIndexBuffer.SetData(indices, 0, totalIndices);
+                            }
+                            finally
+                            {
+                                ArrayPool<int>.Shared.Return(indices, clearArray: false);
+                            }
+                        }
+
+                        int resolvedBoneCount = maxBoneIndex + 1;
+                        int[] cachedMeshIndices = new int[meshIndices.Count];
+                        for (int i = 0; i < meshIndices.Count; i++)
+                            cachedMeshIndices[i] = meshIndices[i];
+
+                        lock (_gpuSkinBufferLock)
+                        {
+                            if (_gpuSkinBatchBuffers.TryGetValue(cacheKey, out var existing))
+                            {
+                                if (MeshSequenceEquals(existing.MeshIndices, meshIndices) &&
+                                    existing.VertexBuffer != null && !existing.VertexBuffer.IsDisposed &&
+                                    existing.IndexBuffer != null && !existing.IndexBuffer.IsDisposed)
+                                {
+                                    newVertexBuffer.Dispose();
+                                    newIndexBuffer.Dispose();
+                                    vertexBuffer = existing.VertexBuffer;
+                                    indexBuffer = existing.IndexBuffer;
+                                    boneCount = existing.BoneCount;
+                                    return true;
+                                }
+
+                                newVertexBuffer.Dispose();
+                                newIndexBuffer.Dispose();
+                                return false;
+                            }
+
+                            var entry = new GpuSkinBatchCacheEntry
+                            {
+                                MeshIndices = cachedMeshIndices,
+                                VertexBuffer = newVertexBuffer,
+                                IndexBuffer = newIndexBuffer,
+                                BoneCount = resolvedBoneCount
+                            };
+                            _gpuSkinBatchBuffers.Add(cacheKey, entry);
+                            vertexBuffer = newVertexBuffer;
+                            indexBuffer = newIndexBuffer;
+                            boneCount = resolvedBoneCount;
+                            return true;
+                        }
+                    }
+                    catch
+                    {
+                        newVertexBuffer?.Dispose();
+                        newIndexBuffer?.Dispose();
+                        throw;
+                    }
+                }
+                finally
+                {
+                    ArrayPool<SkinnedVertexPositionColorNormalTexture>.Shared.Return(vertices, clearArray: false);
+                }
+            }
+            finally
+            {
+                Array.Clear(topologies, 0, meshIndices.Count);
+                ArrayPool<MeshTopology>.Shared.Return(topologies, clearArray: false);
+            }
+        }
+
+        private static ulong CalculateMeshSequenceHash(IReadOnlyList<int> meshIndices)
+        {
+            const ulong offsetBasis = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            ulong hash = offsetBasis;
+            for (int i = 0; i < meshIndices.Count; i++)
+            {
+                hash ^= unchecked((uint)meshIndices[i]);
+                hash *= prime;
+            }
+            return hash;
+        }
+
+        private static bool MeshSequenceEquals(int[] cached, IReadOnlyList<int> current)
+        {
+            if (cached == null || current == null || cached.Length != current.Count)
+                return false;
+
+            for (int i = 0; i < cached.Length; i++)
+            {
+                if (cached[i] != current[i])
+                    return false;
+            }
+            return true;
+        }
+
         private bool TryGetCachedGpuSkinnedBuffersNoLock(
             MeshCacheKey cacheKey,
             out VertexBuffer vertexBuffer,
@@ -1156,9 +1455,16 @@ namespace Client.Main.Content
                 foreach (var ib in _gpuSkinIndexBuffers.Values)
                     ib?.Dispose();
 
+                foreach (var batch in _gpuSkinBatchBuffers.Values)
+                {
+                    batch.VertexBuffer?.Dispose();
+                    batch.IndexBuffer?.Dispose();
+                }
+
                 _gpuSkinVertexBuffers.Clear();
                 _gpuSkinIndexBuffers.Clear();
                 _gpuSkinBoneCounts.Clear();
+                _gpuSkinBatchBuffers.Clear();
             }
         }
     }
