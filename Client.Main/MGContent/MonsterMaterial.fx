@@ -98,7 +98,11 @@ float Noise2(float2 coords)
 
 float SampleShadow(float3 worldPos, float3 normal)
 {
-    // Branchless shadow sampling for OpenGL compatibility
+    // ShadowsEnabled is uniform for the whole draw call, so this branch avoids
+    // all nine shadow-map samples when shadows are disabled.
+    if (ShadowsEnabled < 0.5)
+        return 1.0;
+
     float4 lightPos = mul(float4(worldPos, 1.0), LightViewProjection);
     float3 proj = lightPos.xyz / lightPos.w;
     float2 uv = proj.xy * 0.5 + 0.5;
@@ -124,8 +128,7 @@ float SampleShadow(float3 worldPos, float3 normal)
         }
     }
 
-    // Return 1.0 (no shadow) if shadows disabled or out of bounds
-    return lerp(1.0, shadow / 9.0, inBounds * ShadowsEnabled);
+    return lerp(1.0, shadow / 9.0, inBounds);
 }
 
 VertexShaderOutput MainVS(in VertexShaderInput input)
@@ -133,8 +136,7 @@ VertexShaderOutput MainVS(in VertexShaderInput input)
     VertexShaderOutput output = (VertexShaderOutput)0;
 
     float4 worldPosition = mul(input.Position, World);
-    float4 viewPosition = mul(worldPosition, View);
-    output.Position = mul(viewPosition, Projection);
+    output.Position = mul(input.Position, WorldViewProjection);
     
     output.WorldPosition = worldPosition.xyz;
     output.Normal = normalize(mul(input.Normal, (float3x3)World));
@@ -155,43 +157,42 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     float lightIntensity = max(0.1, dot(normal, -LightDirection));
     color.rgb *= lightIntensity;
 
-    // Store original lit color for proper blending
     float3 originalColor = color.rgb;
     float3 effectiveGlowColor = GlowColor * GlowIntensityScale;
 
-    float simpleMask = SimpleColorMode ? 1.0 : 0.0;
-    float glowMask = (!SimpleColorMode && EnableGlow && GlowIntensity > 0.0) ? 1.0 : 0.0;
+    if (SimpleColorMode)
+    {
+        color.rgb = originalColor * effectiveGlowColor * GlowIntensity;
+    }
+    else if (EnableGlow && GlowIntensity > 0.0)
+    {
+        // EnableGlow is uniform for the draw call. Keeping the ghost samples inside
+        // this branch removes four texture fetches from ordinary monsters.
+        float subtlePulse = (1.0 + sin(Time * 1.5)) * 0.03 + 0.97;
+        float shimmer = (1.0 + sin(Time * 20.0 + normal.x * 12.0)) * 0.15 + 0.85;
+        float3 metallic = effectiveGlowColor * 2.0;
+        float intensityMultiplier = GlowIntensity * GlowIntensityScale;
+        float extraGlow = max(0.0, intensityMultiplier - 2.0) * 0.5;
+        float glowEffect = (1.0 + sin(Time * 4.0)) * 0.1 + 0.8;
 
-    float3 simpleColor = originalColor * effectiveGlowColor * GlowIntensity;
+        float2 ghostOffset1 = float2(sin(Time * 4.0) * 0.035, cos(Time * 3.5) * 0.035);
+        float2 ghostOffset2 = float2(sin(Time * 5.5 + 2.1) * 0.025, cos(Time * 4.8 + 1.8) * 0.025);
+        float2 ghostOffset3 = float2(sin(Time * 6.2 + 4.2) * 0.02, cos(Time * 5.9 + 3.7) * 0.02);
+        float2 ghostOffset4 = float2(sin(Time * 3.3 + 1.1) * 0.015, cos(Time * 6.7 + 2.3) * 0.015);
 
-    // Pre-calculate ghosting regardless of mask to avoid divergent texture fetches
-    float subtlePulse = (1.0 + sin(Time * 1.5)) * 0.03 + 0.97;
-    float shimmer = (1.0 + sin(Time * 20.0 + normal.x * 12.0)) * 0.15 + 0.85;
-    float3 metallic = effectiveGlowColor * 2.0;
-    float intensityMultiplier = GlowIntensity * GlowIntensityScale;
-    float extraGlow = max(0.0, intensityMultiplier - 2.0) * 0.5;
-    float glowEffect = (1.0 + sin(Time * 4.0)) * 0.1 + 0.8;
+        float4 ghost1 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset1);
+        float4 ghost2 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset2);
+        float4 ghost3 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset3);
+        float4 ghost4 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset4);
 
-    float2 ghostOffset1 = float2(sin(Time * 4.0) * 0.035, cos(Time * 3.5) * 0.035);
-    float2 ghostOffset2 = float2(sin(Time * 5.5 + 2.1) * 0.025, cos(Time * 4.8 + 1.8) * 0.025);
-    float2 ghostOffset3 = float2(sin(Time * 6.2 + 4.2) * 0.02, cos(Time * 5.9 + 3.7) * 0.02);
-    float2 ghostOffset4 = float2(sin(Time * 3.3 + 1.1) * 0.015, cos(Time * 6.7 + 2.3) * 0.015);
-
-    float4 ghost1 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset1);
-    float4 ghost2 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset2);
-    float4 ghost3 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset3);
-    float4 ghost4 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset4);
-
-    float3 glowColor = originalColor * metallic * (2.2 * intensityMultiplier) * subtlePulse;
-    glowColor += ghost1.rgb * (0.5 * intensityMultiplier) * shimmer;
-    glowColor += ghost2.rgb * (0.4 * intensityMultiplier) * shimmer;
-    glowColor += ghost3.rgb * (0.3 * intensityMultiplier) * shimmer;
-    glowColor += ghost4.rgb * (0.2 * intensityMultiplier) * shimmer;
-    glowColor += effectiveGlowColor * glowEffect * extraGlow;
-
-    float3 baseColor = originalColor;
-    baseColor = lerp(baseColor, simpleColor, simpleMask);
-    color.rgb = lerp(baseColor, glowColor, glowMask);
+        float3 glowColor = originalColor * metallic * (2.2 * intensityMultiplier) * subtlePulse;
+        glowColor += ghost1.rgb * (0.5 * intensityMultiplier) * shimmer;
+        glowColor += ghost2.rgb * (0.4 * intensityMultiplier) * shimmer;
+        glowColor += ghost3.rgb * (0.3 * intensityMultiplier) * shimmer;
+        glowColor += ghost4.rgb * (0.2 * intensityMultiplier) * shimmer;
+        glowColor += effectiveGlowColor * glowEffect * extraGlow;
+        color.rgb = glowColor;
+    }
 
     float shadowTerm = SampleShadow(input.WorldPosition, normal);
     float shadowMix = lerp(1.0 - ShadowStrength, 1.0, shadowTerm);

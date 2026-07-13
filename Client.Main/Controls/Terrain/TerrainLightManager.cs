@@ -28,6 +28,8 @@ namespace Client.Main.Controls.Terrain
         private int _activeLightsVersion;
         private int _visibleLightsVersion;
         private float _lightUpdateAccumulatorSeconds;
+        private float _invalidLightSweepAccumulatorSeconds;
+        private const float InvalidLightSweepIntervalSeconds = 1f;
         private bool _forceSnapshotRefresh = true;
 
         public IReadOnlyList<DynamicLight> DynamicLights => _dynamicLights;
@@ -141,8 +143,20 @@ namespace Client.Main.Controls.Terrain
         public void UpdateActiveLights(float deltaTime)
         {
             var world = _parent.World;
-            if (SweepInvalidLights(world))
-                MarkSnapshotsDirty();
+            float safeDeltaTime = float.IsFinite(deltaTime) && deltaTime > 0f ? deltaTime : 0f;
+
+            // Normal object disposal removes owner lights immediately. The full orphan
+            // validation remains as a safety net, but running it every frame can become
+            // O(lights * worldObjects) because root owners use Objects.Contains().
+            _invalidLightSweepAccumulatorSeconds += safeDeltaTime;
+            bool shouldSweepInvalidLights = _forceSnapshotRefresh ||
+                                            _invalidLightSweepAccumulatorSeconds >= InvalidLightSweepIntervalSeconds;
+            if (shouldSweepInvalidLights)
+            {
+                _invalidLightSweepAccumulatorSeconds = 0f;
+                if (SweepInvalidLights(world))
+                    MarkSnapshotsDirty();
+            }
 
             LastFrameRegisteredCount = _dynamicLights.Count;
 
@@ -154,7 +168,6 @@ namespace Client.Main.Controls.Terrain
                 return;
             }
 
-            float safeDeltaTime = float.IsFinite(deltaTime) && deltaTime > 0f ? deltaTime : 0f;
             if (safeDeltaTime > 0f)
                 _lightUpdateAccumulatorSeconds = MathF.Min(_lightUpdateAccumulatorSeconds + safeDeltaTime, 1f);
 

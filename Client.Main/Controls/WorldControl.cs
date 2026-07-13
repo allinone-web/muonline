@@ -188,6 +188,9 @@ namespace Client.Main.Controls
         // full World.Objects snapshot to avoid touching everything on the map.
         public IReadOnlyList<WorldObject> VisibleObjects => _visibleObjects;
         private readonly HashSet<WorldObject> _visibleObjectSet = [];
+        private readonly Dictionary<WorldObject, int> _visibleObjectIndices = [];
+        private bool _isUpdatingVisibleObjects;
+        private bool _visibleObjectsNeedCompaction;
         private readonly HashSet<WorldObject> _positionDirtyObjects = [];
         private readonly object _visibleMergeLock = new();
         private bool _dirtyVisibleObjects = true;
@@ -197,8 +200,8 @@ namespace Client.Main.Controls
         private const float NearUpdateDistanceSq = 2200f * 2200f;
         private const float MidUpdateDistanceSq = 4200f * 4200f;
         private const float FarUpdateDistanceSq = 6200f * 6200f;
-        private const int ParallelVisibleRebuildThreshold = 220;
-        private const int ParallelDirtyRefreshThreshold = 80;
+        private const int ParallelVisibleRebuildThreshold = 768;
+        private const int ParallelDirtyRefreshThreshold = 256;
         private const int SpatialSectorTileSize = 16;
         private const int SpatialSectorsPerAxis = Constants.TERRAIN_SIZE / SpatialSectorTileSize;
         private const int SpatialInvalidSector = -1;
@@ -417,7 +420,7 @@ namespace Client.Main.Controls
 
             UpdateVisibleObjects(time);
 
-            ulong cameraVersion = Camera.Instance.StateVersion;
+            ulong cameraVersion = Camera.Instance.CullingStateVersion;
             bool needsFullRebuild =
                 _dirtyVisibleObjects ||
                 (Constants.ENABLE_CROWD_SPATIAL_CULLING && _spatialObjectSectors.Count != Objects.Count) ||
@@ -1111,7 +1114,10 @@ namespace Client.Main.Controls
                 return;
 
             if (_visibleObjectSet.Add(obj))
+            {
+                _visibleObjectIndices[obj] = _visibleObjects.Count;
                 _visibleObjects.Add(obj);
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1120,8 +1126,62 @@ namespace Client.Main.Controls
             if (obj == null)
                 return;
 
-            if (_visibleObjectSet.Remove(obj))
-                _visibleObjects.Remove(obj);
+            if (!_visibleObjectSet.Remove(obj))
+                return;
+
+            if (!_visibleObjectIndices.TryGetValue(obj, out int index) ||
+                (uint)index >= (uint)_visibleObjects.Count)
+            {
+                index = _visibleObjects.IndexOf(obj);
+                if (index < 0)
+                {
+                    _visibleObjectIndices.Remove(obj);
+                    return;
+                }
+            }
+
+            if (_isUpdatingVisibleObjects)
+            {
+                _visibleObjects[index] = null;
+                _visibleObjectIndices.Remove(obj);
+                _visibleObjectsNeedCompaction = true;
+                return;
+            }
+
+            int lastIndex = _visibleObjects.Count - 1;
+            WorldObject last = _visibleObjects[lastIndex];
+            if (index != lastIndex)
+            {
+                _visibleObjects[index] = last;
+                if (last != null)
+                    _visibleObjectIndices[last] = index;
+            }
+
+            _visibleObjects.RemoveAt(lastIndex);
+            _visibleObjectIndices.Remove(obj);
+        }
+
+        private void CompactVisibleObjects()
+        {
+            if (!_visibleObjectsNeedCompaction)
+                return;
+
+            int writeIndex = 0;
+            for (int readIndex = 0; readIndex < _visibleObjects.Count; readIndex++)
+            {
+                WorldObject obj = _visibleObjects[readIndex];
+                if (obj == null)
+                    continue;
+
+                _visibleObjects[writeIndex] = obj;
+                _visibleObjectIndices[obj] = writeIndex;
+                writeIndex++;
+            }
+
+            if (writeIndex < _visibleObjects.Count)
+                _visibleObjects.RemoveRange(writeIndex, _visibleObjects.Count - writeIndex);
+
+            _visibleObjectsNeedCompaction = false;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1311,6 +1371,8 @@ namespace Client.Main.Controls
             _cullingStopwatch.Restart();
             _visibleObjects.Clear();
             _visibleObjectSet.Clear();
+            _visibleObjectIndices.Clear();
+            _visibleObjectsNeedCompaction = false;
             _positionDirtyObjects.Clear();
 
             var camera = Camera.Instance;
@@ -1386,7 +1448,10 @@ namespace Client.Main.Controls
             {
                 var obj = _visibleObjects[i];
                 if (obj != null)
+                {
                     _visibleObjectSet.Add(obj);
+                    _visibleObjectIndices[obj] = i;
+                }
             }
 
             _cullingStopwatch.Stop();
@@ -1508,47 +1573,51 @@ namespace Client.Main.Controls
             float camY = camPos.Y;
             int frame = MuGame.FrameIndex;
 
-            for (int i = objects.Count - 1; i >= 0; i--)
+            _isUpdatingVisibleObjects = true;
+            try
             {
-                // _visibleObjects can shrink while objects update/remove themselves.
-                // Guard each access to avoid transient out-of-range exceptions.
-                if ((uint)i >= (uint)objects.Count)
-                    continue;
-
-                var obj = objects[i];
-                if (obj == null || !obj.Visible)
-                    continue;
-
-                if (ShouldAlwaysUpdate(obj))
+                for (int i = objects.Count - 1; i >= 0; i--)
                 {
-                    obj.SetLowQuality(false);
+                    var obj = objects[i];
+                    if (obj == null || !obj.Visible)
+                        continue;
+
+                    if (ShouldAlwaysUpdate(obj))
+                    {
+                        obj.SetLowQuality(false);
+                        FrameMetrics.AnimationUpdates++;
+                        obj.Update(time);
+                        continue;
+                    }
+
+                    var pos = obj.WorldPosition.Translation;
+                    float dx = camX - pos.X;
+                    float dy = camY - pos.Y;
+                    float distSq = dx * dx + dy * dy;
+
+                    int stride = Constants.ENABLE_ANIMATION_THROTTLING
+                        ? ResolveUpdateStride(distSq)
+                        : 1;
+                    obj.SetLowQuality(stride > 1);
+
+                    if (stride > 1 && ((frame + obj.UpdateOffset) % stride) != 0)
+                    {
+                        FrameMetrics.LowQualityObjects++;
+                        FrameMetrics.AnimationSkips++;
+                        continue;
+                    }
+
+                    if (stride > 1)
+                        FrameMetrics.LowQualityObjects++;
+
                     FrameMetrics.AnimationUpdates++;
                     obj.Update(time);
-                    continue;
                 }
-
-                var pos = obj.WorldPosition.Translation;
-                float dx = camX - pos.X;
-                float dy = camY - pos.Y;
-                float distSq = dx * dx + dy * dy;
-
-                int stride = Constants.ENABLE_ANIMATION_THROTTLING
-                    ? ResolveUpdateStride(distSq)
-                    : 1;
-                obj.SetLowQuality(stride > 1);
-
-                if (stride > 1 && ((frame + obj.UpdateOffset) % stride) != 0)
-                {
-                    FrameMetrics.LowQualityObjects++;
-                    FrameMetrics.AnimationSkips++;
-                    continue;
-                }
-
-                if (stride > 1)
-                    FrameMetrics.LowQualityObjects++;
-
-                FrameMetrics.AnimationUpdates++;
-                obj.Update(time);
+            }
+            finally
+            {
+                _isUpdatingVisibleObjects = false;
+                CompactVisibleObjects();
             }
         }
 
@@ -1610,6 +1679,9 @@ namespace Client.Main.Controls
             _monsters.Clear();
             _droppedItems.Clear();
             _visibleObjectSet.Clear();
+            _visibleObjectIndices.Clear();
+            _visibleObjectsNeedCompaction = false;
+            _isUpdatingVisibleObjects = false;
             _positionDirtyObjects.Clear();
             _spatialObjectSectors.Clear();
             _spatialOffGridObjects.Clear();

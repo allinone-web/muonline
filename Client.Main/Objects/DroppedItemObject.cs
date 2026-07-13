@@ -28,12 +28,14 @@ namespace Client.Main.Objects
     public class DroppedItemObject : WorldObject
     {
         // ─────────────────── constants
-        private const float HeightOffset = 55f; // Item exactly at terrain level - model will be positioned above
+        private const float TerrainPenetrationClearance = 2f;
         private const float PickupRange = 300f;
         private const float LabelOffsetZ = 10f;
         private const int LabelPixelGap = 20;
         private const float BoundingPadding = 2f; // Small padding for interaction
-        private const int MaxCoinModels = 30;
+        // A coin pile used to create up to 30 complete ModelObject instances.
+        // Twelve keeps the pile readable while sharply reducing updates and draw calls.
+        private const int MaxCoinModels = 12;
         private const float LabelVisibilityDistSq = 2000f * 2000f; // Squared distance for label visibility check
 
         internal int TileKey => HashCode.Combine(_scope.PositionX, _scope.PositionY);
@@ -162,8 +164,10 @@ return;
 
             if (World != null)
             {
-float z = world.Terrain.RequestTerrainHeight(Position.X, Position.Y);
-                Position = new(Position.X, Position.Y, z + HeightOffset);
+                // Terrain height is already in renderer/world coordinates. The old +55
+                // compensated for the previously unscaled height query and now caused levitation.
+                float z = world.Terrain.RequestTerrainHeight(Position.X, Position.Y);
+                Position = new(Position.X, Position.Y, z);
             }
 
             _font = GraphicsManager.Instance.Font;
@@ -222,6 +226,7 @@ _coinModels.Add(model);
                     }
 
                     RecenterCoinsAndFitBoundingBox();
+                    LiftVisualsAboveTerrain();
                     _log.LogDebug("Gold coin pile loaded with {Count} coins at position {Pos}", coinCount, Position);
                     AttachShineEffect();
                     return; // 3D model loaded
@@ -263,8 +268,10 @@ if (!await TryLoadChildModel(model, world, loadGeneration))
 return;
 _modelObj = model;
 
-                        // Position model so its bottom touches the ground
+                        // Position model so its bottom touches the parent ground plane, then
+                        // lift the complete rotated model only when a terrain triangle penetrates it.
                         PositionModelOnGround(model);
+                        LiftVisualsAboveTerrain();
 
                         AttachShineEffect();
                         return; // 3D model loaded
@@ -385,6 +392,77 @@ _modelObj = model;
             BoundingBoxLocal = new BoundingBox(
                 new Vector3(-halfWidth - BoundingPadding, -halfDepth - BoundingPadding, 0f),
                 new Vector3(halfWidth + BoundingPadding, halfDepth + BoundingPadding, height + BoundingPadding));
+        }
+
+        // =====================================================================
+        /// <summary>
+        /// Lifts the parent drop only by the amount required to keep every rendered
+        /// model vertex above the actual terrain triangles. Existing placement is
+        /// preserved when there is no penetration.
+        /// </summary>
+        private void LiftVisualsAboveTerrain()
+        {
+            if (World?.Terrain == null)
+                return;
+
+            float requiredLift = 0f;
+
+            if (_modelObj != null)
+                requiredLift = MathF.Max(requiredLift, CalculateRequiredTerrainLift(_modelObj));
+
+            for (int i = 0; i < _coinModels.Count; i++)
+                requiredLift = MathF.Max(requiredLift, CalculateRequiredTerrainLift(_coinModels[i]));
+
+            if (requiredLift <= 0.001f || float.IsNaN(requiredLift) || float.IsInfinity(requiredLift))
+                return;
+
+            Position = new Vector3(Position.X, Position.Y, Position.Z + requiredLift);
+        }
+
+        /// <summary>
+        /// Calculates how far a child model must be lifted so none of its transformed
+        /// vertices are below the terrain surface. This runs once when the drop loads.
+        /// </summary>
+        private float CalculateRequiredTerrainLift(ModelObject model)
+        {
+            if (model?.Model?.Meshes == null || World?.Terrain == null)
+                return 0f;
+
+            var bones = model.GetBoneTransforms();
+            Matrix rotationMatrix = Matrix.CreateRotationX(model.Angle.X) *
+                                    Matrix.CreateRotationY(model.Angle.Y) *
+                                    Matrix.CreateRotationZ(model.Angle.Z);
+
+            float requiredLift = 0f;
+
+            foreach (var mesh in model.Model.Meshes)
+            {
+                if (mesh?.Vertices == null)
+                    continue;
+
+                foreach (var vert in mesh.Vertices)
+                {
+                    Matrix boneMatrix = Matrix.Identity;
+                    if (bones != null && vert.Node >= 0 && vert.Node < bones.Length)
+                        boneMatrix = bones[vert.Node];
+
+                    Vector3 localPos = new Vector3(vert.Position.X, vert.Position.Y, vert.Position.Z);
+                    Vector3 transformedPos = Vector3.Transform(localPos, boneMatrix);
+                    transformedPos = Vector3.Transform(transformedPos, rotationMatrix) * model.Scale;
+                    transformedPos += model.Position;
+
+                    float worldX = Position.X + transformedPos.X;
+                    float worldY = Position.Y + transformedPos.Y;
+                    float vertexWorldZ = Position.Z + transformedPos.Z;
+                    float terrainZ = World.Terrain.RequestTerrainHeight(worldX, worldY);
+
+                    float penetration = terrainZ + TerrainPenetrationClearance - vertexWorldZ;
+                    if (penetration > requiredLift)
+                        requiredLift = penetration;
+                }
+            }
+
+            return requiredLift;
         }
 
         // =====================================================================

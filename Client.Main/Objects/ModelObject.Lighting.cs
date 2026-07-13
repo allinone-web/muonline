@@ -96,7 +96,9 @@ namespace Client.Main.Objects
             Vector3 terrainLight = Vector3.One;
             if (LightEnabled && World?.Terrain != null)
                 terrainLight = World.Terrain.EvaluateTerrainLight(worldTranslation.X, worldTranslation.Y);
-            terrainLight = Vector3.Clamp(terrainLight / 255f, Vector3.Zero, Vector3.One);
+            // EvaluateTerrainLight is already normalized to 0..1. Dynamic lights
+            // are uploaded separately below and must not be baked into this value.
+            terrainLight = Vector3.Clamp(terrainLight, Vector3.Zero, Vector3.One);
             effect.Parameters["TerrainLight"]?.SetValue(terrainLight);
 
             if (!Constants.ENABLE_DYNAMIC_LIGHTS)

@@ -1,4 +1,4 @@
-﻿using Client.Data.BMD;
+using Client.Data.BMD;
 using Client.Main.Controllers;
 using Client.Main.Helpers;
 using Client.Main.Models;
@@ -19,6 +19,7 @@ namespace Client.Main.Objects
         private float _fadeTimer = 0f;
         private float _fadeDuration = 3.5f; // longer fade for smoother disappearance
         private float _startZ;
+        private float _fadeGroundZ;
         private const float SinkBelowGround = 30f; // how deep to sink below terrain surface
         private const float NameplateHeightOffset = 20f;
 
@@ -77,6 +78,14 @@ namespace Client.Main.Objects
             _fadeDuration = Math.Max(1.5f, duration);
             _fadeTimer = 0f;
             _startZ = Position.Z;
+            _fadeGroundZ = World?.Terrain?.RequestTerrainHeight(Position.X, Position.Y) ?? _startZ;
+
+            RenderShadow = false;
+            for (int i = 0; i < Children.Count; i++)
+            {
+                if (Children[i] is ModelObject modelChild)
+                    modelChild.RenderShadow = false;
+            }
 
             if (Blood && World != null)
             {
@@ -104,15 +113,6 @@ namespace Client.Main.Objects
             // Apply fading BEFORE base.Update so buffers/shaders see updated alpha/color this frame
             if (_isFading)
             {
-                RenderShadow = false;
-                // Also disable shadows for all equipment (weapons, shields, etc.)
-                foreach (var child in Children)
-                {
-                    if (child is ModelObject modelChild)
-                    {
-                        modelChild.RenderShadow = false;
-                    }
-                }
                 _fadeTimer += (float)gameTime.ElapsedGameTime.TotalSeconds;
                 float p = MathHelper.Clamp(_fadeTimer / _fadeDuration, 0f, 1f);
 
@@ -123,11 +123,9 @@ namespace Client.Main.Objects
                 // Also darken body color for shader paths that ignore alpha
                 byte shade = (byte)(255 * Alpha);
                 Color = new Color(shade, shade, shade, (byte)255);
-                InvalidateBuffers();
+                InvalidateBuffers(MeshDirtyFlags.Material);
 
-                // Compute terrain height to sink under ground reliably
-                float groundZ = World?.Terrain?.RequestTerrainHeight(Position.X, Position.Y) ?? _startZ;
-                float targetZ = groundZ - SinkBelowGround;
+                float targetZ = _fadeGroundZ - SinkBelowGround;
 
                 // Start sinking after a short delay for better readability
                 const float sinkStart = 0.3f; // start sinking after 30% of fade time

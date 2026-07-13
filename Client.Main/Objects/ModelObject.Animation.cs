@@ -477,7 +477,6 @@ namespace Client.Main.Objects
                 this is not MonsterObject ||
                 Model == null ||
                 _isBlending ||
-                RequiresPerFrameAnimation ||
                 LinkParentAnimation ||
                 ParentBoneLink >= 0 ||
                 ContinuousAnimation ||
@@ -489,8 +488,14 @@ namespace Client.Main.Objects
             if (actionIdx == (int)Client.Main.Models.MonsterActionType.Die)
                 return false;
 
-            if (this is WalkerObject walker && walker.IsOneShotPlaying)
+            // Attack and skill one-shots may share an identical quantized pose. Death is
+            // rejected above; other special one-shots stay per-instance.
+            if (this is WalkerObject walker &&
+                walker.IsOneShotPlaying &&
+                !walker.IsAttackOrSkillAnimationPlaying())
+            {
                 return false;
+            }
 
             return true;
         }
@@ -591,7 +596,10 @@ namespace Client.Main.Objects
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static int QuantizeAnimationInterpolation(float t)
         {
-            return (int)MathHelper.Clamp(MathF.Round(t * 255f), 0f, 255f);
+            // Five bits are enough for visually smooth interpolation while allowing
+            // substantially more monsters to share a pose/instancing batch.
+            const float BucketCountMinusOne = 31f;
+            return (int)MathHelper.Clamp(MathF.Round(t * BucketCountMinusOne), 0f, BucketCountMinusOne);
         }
 
         /// <summary>

@@ -58,7 +58,6 @@ namespace Client.Main.Objects
 
                 Vector3 position = WorldPosition.Translation;
                 float terrainH = World.Terrain.RequestTerrainHeight(position.X, position.Y);
-                terrainH += terrainH * 0.5f;
 
                 float heightAboveTerrain = position.Z - terrainH;
                 float angleRad = MathHelper.ToRadians(45);
@@ -311,16 +310,12 @@ namespace Client.Main.Objects
                         if (IsHiddenMesh(i))
                             continue;
 
+                        // The shadow pass runs before the normal world pass. Recover the
+                        // per-instance GPU bindings here as well, otherwise a monster that has
+                        // just left crowd instancing can fall back to CPU (or skip its caster)
+                        // for one or more frames before the main pass gets a chance to repair it.
                         bool useGpuSkinning = shadowCasterSkinnedTechnique != null &&
-                                              _meshes != null &&
-                                              (uint)i < (uint)_meshes.Length &&
-                                              _meshes[i].GpuSkinEnabled &&
-                                              _meshes != null &&
-                                              (uint)i < (uint)_meshes.Length &&
-                                              _meshes[i].GpuVertexBuffer != null &&
-                                              _meshes != null &&
-                                              (uint)i < (uint)_meshes.Length &&
-                                              _meshes[i].GpuIndexBuffer != null;
+                                              EnsureGpuSkinnedMeshForMainPass(i);
 
                         VertexBuffer vb = useGpuSkinning ? _meshes[i].GpuVertexBuffer : _meshes?[i]?.CpuVertexBuffer;
                         IndexBuffer ib = useGpuSkinning ? _meshes[i].GpuIndexBuffer : _meshes?[i]?.CpuIndexBuffer;

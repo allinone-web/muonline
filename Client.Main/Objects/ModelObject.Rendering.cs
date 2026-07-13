@@ -549,6 +549,8 @@ namespace Client.Main.Objects
                 meshIndices == null ||
                 meshIndices.Count <= 1 ||
                 Model?.Meshes == null ||
+                RequiresPerFrameAnimation ||
+                HasAnimatedCurrentAction() ||
                 GetVertexDeformer() != null ||
                 UsesMutableMeshData)
             {
@@ -637,7 +639,7 @@ namespace Client.Main.Objects
             Vector3 meshLight = Light;
             Vector3 worldTranslation = WorldPosition.Translation;
             if (LightEnabled && World?.Terrain != null)
-                meshLight = World.Terrain.EvaluateTerrainLight(worldTranslation.X, worldTranslation.Y) + Light;
+                meshLight = EvaluateCombinedTerrainLight(worldTranslation.X, worldTranslation.Y) + Light;
 
             float r = MathF.Min(Color.R * (meshLight.X * TotalAlpha), 255f);
             float g = MathF.Min(Color.G * (meshLight.Y * TotalAlpha), 255f);
@@ -779,28 +781,23 @@ namespace Client.Main.Objects
             if (IsStaticMapMeshQueuedForInstancing(mesh))
                 return;
 
-            bool hasCpuBuffers = _meshes?[mesh]?.CpuVertexBuffer != null && _meshes?[mesh]?.CpuIndexBuffer != null;
-            bool hasGpuDynamicBuffers = _meshes != null &&
-                                        (uint)mesh < (uint)_meshes.Length &&
-                                        _meshes[mesh].GpuSkinEnabled &&
-                                        _meshes != null &&
-                                        (uint)mesh < (uint)_meshes.Length &&
-                                        _meshes[mesh].GpuVertexBuffer != null &&
-                                        _meshes != null &&
-                                        (uint)mesh < (uint)_meshes.Length &&
-                                        _meshes[mesh].GpuIndexBuffer != null;
-
             var shaderSelection = DetermineShaderForMesh(mesh);
 
             if (shaderSelection.UseDynamicLighting)
             {
-                if (!hasCpuBuffers && !hasGpuDynamicBuffers)
-                    return;
+                // Do not gate the recovery path on the cached GpuSkinEnabled flag.
+                // A walker may have been rendered through crowd instancing in the previous
+                // frame and then leave that path because of hover, LOD or Walk/Stop blending.
+                // In that transition the per-instance GPU bindings can be stale while the
+                // shared GPU geometry is still available in BMDLoader.
+                bool hasGpuDynamicBuffers = EnsureGpuSkinnedMeshForMainPass(mesh);
 
                 DrawMeshWithDynamicLighting(mesh);
                 return;
             }
 
+            bool hasCpuBuffers = _meshes?[mesh]?.CpuVertexBuffer != null &&
+                                 _meshes?[mesh]?.CpuIndexBuffer != null;
             if (!hasCpuBuffers)
                 return;
 
@@ -1160,15 +1157,10 @@ namespace Client.Main.Objects
                 {
                     bool isBlendMesh = IsBlendMesh(mesh);
                     var texture = _meshes[mesh].Texture;
-                    bool useGpuSkinning = _meshes != null &&
-                                          (uint)mesh < (uint)_meshes.Length &&
-                                          _meshes[mesh].GpuSkinEnabled &&
-                                          _meshes != null &&
-                                          (uint)mesh < (uint)_meshes.Length &&
-                                          _meshes[mesh].GpuVertexBuffer != null &&
-                                          _meshes != null &&
-                                          (uint)mesh < (uint)_meshes.Length &&
-                                          _meshes[mesh].GpuIndexBuffer != null;
+                    // A monster can leave crowd instancing when an action changes or a
+                    // one-shot starts. Do not trust a stale per-instance flag from the
+                    // previous path; lazily attach the shared GPU geometry for this draw.
+                    bool useGpuSkinning = EnsureGpuSkinnedMeshForMainPass(mesh);
 
                     VertexBuffer vertexBuffer = useGpuSkinning ? _meshes[mesh].GpuVertexBuffer : _meshes?[mesh]?.CpuVertexBuffer;
                     IndexBuffer indexBuffer = useGpuSkinning ? _meshes[mesh].GpuIndexBuffer : _meshes?[mesh]?.CpuIndexBuffer;

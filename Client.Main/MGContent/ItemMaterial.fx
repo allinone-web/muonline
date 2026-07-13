@@ -138,7 +138,11 @@ float3 GetCustomSpectrum(float phase, float blueScale)
 
 float SampleShadow(float3 worldPos, float3 normal)
 {
-    // Branchless shadow sampling for OpenGL compatibility
+    // ShadowsEnabled is uniform for the whole draw call. Avoid all nine
+    // shadow-map samples when this material is rendered without shadows.
+    if (ShadowsEnabled < 0.5)
+        return 1.0;
+
     float4 lightPos = mul(float4(worldPos, 1.0), LightViewProjection);
     float3 proj = lightPos.xyz / lightPos.w;
     float2 uv = proj.xy * 0.5 + 0.5;
@@ -164,8 +168,7 @@ float SampleShadow(float3 worldPos, float3 normal)
         }
     }
 
-    // Return 1.0 (no shadow) if shadows disabled or out of bounds
-    return lerp(1.0, shadow / 9.0, inBounds * ShadowsEnabled);
+    return lerp(1.0, shadow / 9.0, inBounds);
 }
 
 VertexShaderOutput MainVS(in VertexShaderInput input)
@@ -173,8 +176,7 @@ VertexShaderOutput MainVS(in VertexShaderInput input)
     VertexShaderOutput output = (VertexShaderOutput)0;
 
     float4 worldPosition = mul(input.Position, World);
-    float4 viewPosition = mul(worldPosition, View);
-    output.Position = mul(viewPosition, Projection);
+    output.Position = mul(input.Position, WorldViewProjection);
     
     output.WorldPosition = worldPosition.xyz;
     output.Normal = normalize(mul(input.Normal, (float3x3)World));
@@ -251,19 +253,43 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     float2 excellentOffset5 = float2(sin(Time * 0.7 + 4.8) * 0.035, cos(Time * 0.6 + 4.4) * 0.035);
     float2 excellentOffset6 = float2(sin(Time * 0.9 + 6.0) * 0.028, cos(Time * 0.8 + 5.5) * 0.028);
     
-    // Sample all textures
-    float4 ghost1 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset1);
-    float4 ghost2 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset2);
-    float4 ghost3 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset3);
-    float4 ghost4 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset4);
-    float4 ancientGhost1 = tex2D(DiffuseSampler, input.TextureCoordinate + ancientOffset1);
-    float4 ancientGhost2 = tex2D(DiffuseSampler, input.TextureCoordinate + ancientOffset2);
-    float4 excellentGhost1 = tex2D(DiffuseSampler, input.TextureCoordinate + excellentOffset1);
-    float4 excellentGhost2 = tex2D(DiffuseSampler, input.TextureCoordinate + excellentOffset2);
-    float4 excellentGhost3 = tex2D(DiffuseSampler, input.TextureCoordinate + excellentOffset3);
-    float4 excellentGhost4 = tex2D(DiffuseSampler, input.TextureCoordinate + excellentOffset4);
-    float4 excellentGhost5 = tex2D(DiffuseSampler, input.TextureCoordinate + excellentOffset5);
-    float4 excellentGhost6 = tex2D(DiffuseSampler, input.TextureCoordinate + excellentOffset6);
+    // Material flags are uniform for a draw call. Conditional sampling removes
+    // up to twelve unnecessary diffuse fetches from ordinary/non-special items.
+    float4 ghost1 = 0.0;
+    float4 ghost2 = 0.0;
+    float4 ghost3 = 0.0;
+    float4 ghost4 = 0.0;
+    if (itemLevel >= 7.0)
+    {
+        ghost1 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset1);
+        ghost2 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset2);
+        ghost3 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset3);
+        ghost4 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset4);
+    }
+
+    float4 ancientGhost1 = 0.0;
+    float4 ancientGhost2 = 0.0;
+    if (IsAncient)
+    {
+        ancientGhost1 = tex2D(DiffuseSampler, input.TextureCoordinate + ancientOffset1);
+        ancientGhost2 = tex2D(DiffuseSampler, input.TextureCoordinate + ancientOffset2);
+    }
+
+    float4 excellentGhost1 = 0.0;
+    float4 excellentGhost2 = 0.0;
+    float4 excellentGhost3 = 0.0;
+    float4 excellentGhost4 = 0.0;
+    float4 excellentGhost5 = 0.0;
+    float4 excellentGhost6 = 0.0;
+    if (IsExcellent)
+    {
+        excellentGhost1 = tex2D(DiffuseSampler, input.TextureCoordinate + excellentOffset1);
+        excellentGhost2 = tex2D(DiffuseSampler, input.TextureCoordinate + excellentOffset2);
+        excellentGhost3 = tex2D(DiffuseSampler, input.TextureCoordinate + excellentOffset3);
+        excellentGhost4 = tex2D(DiffuseSampler, input.TextureCoordinate + excellentOffset4);
+        excellentGhost5 = tex2D(DiffuseSampler, input.TextureCoordinate + excellentOffset5);
+        excellentGhost6 = tex2D(DiffuseSampler, input.TextureCoordinate + excellentOffset6);
+    }
     
     float levelMask = step(7.0, itemLevel);
     

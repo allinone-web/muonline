@@ -129,7 +129,11 @@ struct PixelInput
 // ============================================================================
 
 #define TERRAIN_MAX_LIGHTS MAX_LIGHTS
-#define TERRAIN_LOW_MAX_LIGHTS 8
+#if OPENGL
+    #define TERRAIN_LOW_MAX_LIGHTS 2
+#else
+    #define TERRAIN_LOW_MAX_LIGHTS 8
+#endif
 
 float3 CalculateTerrainLighting(float3 worldPos, float3 normal)
 {

@@ -2,6 +2,7 @@ using Client.Data.ATT;
 using Microsoft.Xna.Framework;
 using System;
 using System.Linq;
+using System.Runtime.CompilerServices;
 
 namespace Client.Main.Controls.Terrain
 {
@@ -10,7 +11,11 @@ namespace Client.Main.Controls.Terrain
     /// </summary>
     public class TerrainPhysics
     {
+        // Keep terrain queries in exactly the same vertical coordinate system as TerrainRenderer.
+        // TerrainRenderer scales height-map samples by 1.5 and adds this offset per flagged vertex.
+        private const float TerrainHeightScale = 1.5f;
         private const float SpecialHeight = 1200f;
+        private const byte DominantTextureAlphaThreshold = 128;
 
         private readonly TerrainData _data;
         private readonly TerrainLightManager _lightManager;
@@ -23,48 +28,106 @@ namespace Client.Main.Controls.Terrain
 
         public TWFlags RequestTerrainFlag(int x, int y)
         {
-            if (_data.Attributes == null)
-                return default;
+            return TryGetTerrainFlag(x, y, out var flags) ? flags : default;
+        }
 
-            return _data.Attributes.TerrainWall[GetTerrainIndex(x, y)];
+        /// <summary>
+        /// Safely reads terrain flags for a tile.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool TryGetTerrainFlag(int x, int y, out TWFlags flags)
+        {
+            flags = default;
+
+            if ((uint)x >= (uint)Constants.TERRAIN_SIZE ||
+                (uint)y >= (uint)Constants.TERRAIN_SIZE)
+            {
+                return false;
+            }
+
+            var terrainWall = _data.Attributes?.TerrainWall;
+            int index = GetTerrainIndex(x, y);
+            if (terrainWall == null || (uint)index >= (uint)terrainWall.Length)
+                return false;
+
+            flags = terrainWall[index];
+            return true;
+        }
+
+        /// <summary>
+        /// Returns true for tiles that must not receive grass.
+        /// Missing or invalid terrain data is treated as blocked.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool IsTerrainBlocked(int x, int y)
+        {
+            const TWFlags blockedFlags = TWFlags.NoMove | TWFlags.NoGround;
+            return !TryGetTerrainFlag(x, y, out var flags) ||
+                   (flags & blockedFlags) != 0;
         }
 
         public float RequestTerrainHeight(float xf, float yf)
         {
-            if (_data.Attributes?.TerrainWall == null
-                || xf < 0 || yf < 0
-                || _data.HeightMap == null
-                || float.IsNaN(xf) || float.IsNaN(yf))
+            if (xf < 0f || yf < 0f ||
+                _data.HeightMap == null ||
+                float.IsNaN(xf) || float.IsNaN(yf) ||
+                float.IsInfinity(xf) || float.IsInfinity(yf))
+            {
+                return 0f;
+            }
+
+            float tileX = xf / Constants.TERRAIN_SCALE;
+            float tileY = yf / Constants.TERRAIN_SCALE;
+
+            int x0 = (int)MathF.Floor(tileX);
+            int y0 = (int)MathF.Floor(tileY);
+            float tx = tileX - x0;
+            float ty = tileY - y0;
+
+            // TerrainRenderer builds each corner independently. Reproduce the same
+            // height calculation before interpolation, including TWFlags.Height.
+            float h00 = GetRenderedSampleHeight(x0, y0);
+            float h10 = GetRenderedSampleHeight(x0 + 1, y0);
+            float h11 = GetRenderedSampleHeight(x0 + 1, y0 + 1);
+            float h01 = GetRenderedSampleHeight(x0, y0 + 1);
+
+            // TerrainRenderer splits the quad along the h00 -> h11 diagonal:
+            // triangle 1: h00, h10, h11; triangle 2: h11, h01, h00.
+            // Bilinear interpolation does not lie on those triangle planes and can
+            // therefore return a height below the rendered terrain on uneven tiles.
+            if (tx >= ty)
+            {
+                return (1f - tx) * h00
+                     + (tx - ty) * h10
+                     + ty * h11;
+            }
+
+            return (1f - ty) * h00
+                 + tx * h11
+                 + (ty - tx) * h01;
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(
+            System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        private float GetRenderedSampleHeight(int x, int y)
+        {
+            int wrappedX = x & Constants.TERRAIN_SIZE_MASK;
+            int wrappedY = y & Constants.TERRAIN_SIZE_MASK;
+            int index = wrappedY * Constants.TERRAIN_SIZE + wrappedX;
+
+            if ((uint)index >= (uint)_data.HeightMap.Length)
                 return 0f;
 
-            xf /= Constants.TERRAIN_SCALE;
-            yf /= Constants.TERRAIN_SCALE;
+            float height = _data.HeightMap[index].R * TerrainHeightScale;
+            var terrainWall = _data.Attributes?.TerrainWall;
+            if (terrainWall != null &&
+                (uint)index < (uint)terrainWall.Length &&
+                (terrainWall[index] & TWFlags.Height) != 0)
+            {
+                height += SpecialHeight;
+            }
 
-            int xi = (int)xf, yi = (int)yf;
-            int index = GetTerrainIndex(xi, yi);
-
-            if (index < _data.Attributes.TerrainWall.Length
-                && _data.Attributes.TerrainWall[index].HasFlag(TWFlags.Height))
-                return SpecialHeight;
-
-            float xd = xf - xi, yd = yf - yi;
-            int x1 = xi & Constants.TERRAIN_SIZE_MASK, y1 = yi & Constants.TERRAIN_SIZE_MASK;
-            int x2 = (xi + 1) & Constants.TERRAIN_SIZE_MASK, y2 = (yi + 1) & Constants.TERRAIN_SIZE_MASK;
-
-            int i1 = y1 * Constants.TERRAIN_SIZE + x1;
-            int i2 = y1 * Constants.TERRAIN_SIZE + x2;
-            int i3 = y2 * Constants.TERRAIN_SIZE + x2;
-            int i4 = y2 * Constants.TERRAIN_SIZE + x1;
-
-            float h1 = _data.HeightMap[i1].R;
-            float h2 = _data.HeightMap[i2].R;
-            float h3 = _data.HeightMap[i3].R;
-            float h4 = _data.HeightMap[i4].R;
-
-            return (1 - xd) * (1 - yd) * h1
-                 + xd * (1 - yd) * h2
-                 + xd * yd * h3
-                 + (1 - xd) * yd * h4;
+            return height;
         }
 
         public Vector3 RequestTerrainLight(float xf, float yf, float ambientLight)
@@ -111,16 +174,71 @@ namespace Client.Main.Controls.Terrain
             return result / 255f;
         }
 
+        /// <summary>
+        /// Returns the texture that visually dominates the terrain tile.
+        /// Grass uses this instead of requiring alpha to be exactly 255.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool TryGetDominantTextureIndexAt(int x, int y, out byte textureIndex)
+        {
+            textureIndex = 0;
+
+            if (!TryGetMappingCell(x, y, out byte layer1, out byte layer2, out byte alpha))
+                return false;
+
+            textureIndex = alpha >= DominantTextureAlphaThreshold ? layer2 : layer1;
+            return true;
+        }
+
         public byte GetBaseTextureIndexAt(int x, int y)
         {
-            if (_data.Mapping.Layer1 == null || _data.Mapping.Layer2 == null || _data.Mapping.Alpha == null)
-                return 0;
-
             x = Math.Clamp(x, 0, Constants.TERRAIN_SIZE - 1);
             y = Math.Clamp(y, 0, Constants.TERRAIN_SIZE - 1);
-            int idx = GetTerrainIndex(x, y);
-            byte alpha = _data.Mapping.Alpha[idx];
-            return alpha == 255 ? _data.Mapping.Layer2[idx] : _data.Mapping.Layer1[idx];
+
+            if (!TryGetMappingCell(x, y, out byte layer1, out byte layer2, out byte alpha))
+                return 0;
+
+            return alpha == byte.MaxValue ? layer2 : layer1;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryGetMappingCell(
+            int x,
+            int y,
+            out byte layer1,
+            out byte layer2,
+            out byte alpha)
+        {
+            layer1 = 0;
+            layer2 = 0;
+            alpha = 0;
+
+            if ((uint)x >= (uint)Constants.TERRAIN_SIZE ||
+                (uint)y >= (uint)Constants.TERRAIN_SIZE)
+            {
+                return false;
+            }
+
+            var mapping = _data.Mapping;
+            if (mapping.Layer1 is null ||
+                mapping.Layer2 is null ||
+                mapping.Alpha is null)
+            {
+                return false;
+            }
+
+            int index = GetTerrainIndex(x, y);
+            if ((uint)index >= (uint)mapping.Layer1.Length ||
+                (uint)index >= (uint)mapping.Layer2.Length ||
+                (uint)index >= (uint)mapping.Alpha.Length)
+            {
+                return false;
+            }
+
+            layer1 = mapping.Layer1[index];
+            layer2 = mapping.Layer2[index];
+            alpha = mapping.Alpha[index];
+            return true;
         }
 
         private static byte GetChannel(Color c, int index)

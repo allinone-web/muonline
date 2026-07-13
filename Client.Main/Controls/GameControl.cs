@@ -21,48 +21,187 @@ namespace Client.Main.Controls
 
         // Fields
         private Point _controlSize, _viewSize;
+        private GameControl _parent;
+        private ControlAlign _align;
+        private bool _autoViewSize = true;
+        private int _x, _y;
+        private float _scale = 1f;
+        private Margin _margin = Margin.Empty;
+        private Margin _padding = new Margin();
+        private Point _offset;
+        private bool _visible = true;
+        private bool _layoutDirty = true;
         private bool _isCurrentlyPressedByMouse = false;
         private static readonly ILogger _logger = Microsoft.Extensions.Logging.LoggerFactory.Create(builder => { }).CreateLogger<GameControl>();
 
         // Properties
         public GraphicsDevice GraphicsDevice => MuGame.Instance.GraphicsDevice;
         public GameControl Root => Parent?.Root ?? this;
-        public GameControl Parent { get; set; }
+        public GameControl Parent
+        {
+            get => _parent;
+            set
+            {
+                if (ReferenceEquals(_parent, value))
+                    return;
+
+                _parent = value;
+                MarkLayoutDirty();
+            }
+        }
         public BaseScene Scene => this is BaseScene scene ? scene : Parent?.Scene;
         public virtual WorldControl World => Scene?.World;
 
         public ChildrenCollection<GameControl> Controls { get; private set; }
         public GameControlStatus Status { get; protected set; } = GameControlStatus.NonInitialized;
-        public ControlAlign Align { get; set; }
-        public bool AutoViewSize { get; set; } = true;
+        public ControlAlign Align
+        {
+            get => _align;
+            set
+            {
+                if (_align == value)
+                    return;
+
+                _align = value;
+                MarkLayoutDirty();
+            }
+        }
+        public bool AutoViewSize
+        {
+            get => _autoViewSize;
+            set
+            {
+                if (_autoViewSize == value)
+                    return;
+
+                _autoViewSize = value;
+                MarkLayoutDirty();
+            }
+        }
         public bool Interactive { get; set; }
         /// <summary>
         /// Allows non-interactive controls to still capture pointer hit-testing in scene input routing.
         /// Defaults to false to keep click-through behavior for visual-only overlays.
         /// </summary>
         public bool CapturePointerWhenNonInteractive { get; set; }
-        public int X { get; set; }
-        public int Y { get; set; }
-        public Point ControlSize { get => _controlSize; set => _controlSize = value; }
+        public int X
+        {
+            get => _x;
+            set
+            {
+                if (_x == value)
+                    return;
+
+                _x = value;
+                MarkLayoutDirty();
+            }
+        }
+        public int Y
+        {
+            get => _y;
+            set
+            {
+                if (_y == value)
+                    return;
+
+                _y = value;
+                MarkLayoutDirty();
+            }
+        }
+        public Point ControlSize
+        {
+            get => _controlSize;
+            set
+            {
+                if (_controlSize == value)
+                    return;
+
+                _controlSize = value;
+                MarkLayoutDirty();
+            }
+        }
         public Point ViewSize
         {
             get => _viewSize;
-            set { if (_viewSize != value) { _viewSize = value; OnScreenSizeChanged(); } }
+            set
+            {
+                if (_viewSize == value)
+                    return;
+
+                _viewSize = value;
+                MarkLayoutDirty();
+                OnScreenSizeChanged();
+            }
         }
-        public float Scale { get; set; } = 1f;
-        public Margin Margin { get; set; } = Margin.Empty;
-        public Margin Padding { get; set; } = new Margin();
+        public float Scale
+        {
+            get => _scale;
+            set
+            {
+                if (Math.Abs(_scale - value) < 0.0001f)
+                    return;
+
+                _scale = value;
+                MarkLayoutDirty();
+            }
+        }
+        public Margin Margin
+        {
+            get => _margin;
+            set
+            {
+                if (EqualityComparer<Margin>.Default.Equals(_margin, value))
+                    return;
+
+                _margin = value;
+                MarkLayoutDirty();
+            }
+        }
+        public Margin Padding
+        {
+            get => _padding;
+            set
+            {
+                if (EqualityComparer<Margin>.Default.Equals(_padding, value))
+                    return;
+
+                _padding = value;
+                MarkLayoutDirty();
+            }
+        }
         public Color BorderColor { get; set; }
         public int BorderThickness { get; set; } = 0;
         public Color BackgroundColor { get; set; } = Color.Transparent;
-        public Point Offset { get; set; }
+        public Point Offset
+        {
+            get => _offset;
+            set
+            {
+                if (_offset == value)
+                    return;
+
+                _offset = value;
+                MarkLayoutDirty();
+            }
+        }
         public virtual Point DisplayPosition => new(
             (Parent?.DisplayRectangle.X ?? 0) + X + Margin.Left - Margin.Right + Offset.X,
             (Parent?.DisplayRectangle.Y ?? 0) + Y + Margin.Top - Margin.Bottom + Offset.Y
         );
         public virtual Point DisplaySize => new((int)(ViewSize.X * Scale), (int)(ViewSize.Y * Scale));
         public virtual Rectangle DisplayRectangle => new(DisplayPosition, DisplaySize);
-        public bool Visible { get; set; } = true;
+        public bool Visible
+        {
+            get => _visible;
+            set
+            {
+                if (_visible == value)
+                    return;
+
+                _visible = value;
+                MarkLayoutDirty();
+            }
+        }
 
         // Added property for storing additional data (e.g., design info)
         public object Tag { get; set; }
@@ -85,6 +224,8 @@ namespace Client.Main.Controls
         protected GameControl()
         {
             Controls = new ChildrenCollection<GameControl>(this);
+            Controls.ControlAdded += OnChildCollectionChanged;
+            Controls.ControlRemoved += OnChildCollectionChanged;
         }
 
         protected virtual MouseState CurrentMouseState => MuGame.Instance.Mouse;
@@ -237,34 +378,8 @@ namespace Client.Main.Controls
                 }
             }
 
-            if (AutoViewSize)
-            {
-                int maxWidth = 0, maxHeight = 0;
-                // For AutoViewSize, iterate over the current Controls collection
-                // Use for loop to avoid ToArray() allocation
-                for (int j = 0; j < Controls.Count; j++)
-                {
-                    var control = Controls[j];
-                    if (control.Status == GameControlStatus.Disposed) continue; // Skip disposed controls for layout
-
-                    int controlWidth = control.DisplaySize.X + control.Margin.Left;
-                    int controlHeight = control.DisplaySize.Y + control.Margin.Top;
-
-                    if (!Align.HasFlag(ControlAlign.Left))
-                        controlWidth += control.X;
-                    if (!Align.HasFlag(ControlAlign.Bottom))
-                        controlHeight += control.Y;
-
-                    if (controlWidth > maxWidth)
-                        maxWidth = controlWidth;
-                    if (controlHeight > maxHeight)
-                        maxHeight = controlHeight;
-                }
-                ViewSize = new Point(Math.Max(ControlSize.X, maxWidth), Math.Max(ControlSize.Y, maxHeight));
-            }
-
-            if (Align != ControlAlign.None)
-                AlignControl();
+            if (_layoutDirty)
+                RecalculateLayout();
         }
 
         public virtual bool ProcessMouseScroll(int scrollDelta)
@@ -319,6 +434,9 @@ namespace Client.Main.Controls
         {
             if (NonDisposable) return;
 
+            Controls.ControlAdded -= OnChildCollectionChanged;
+            Controls.ControlRemoved -= OnChildCollectionChanged;
+
             // Use reverse iteration to avoid ToArray() allocation
             for (int i = Controls.Count - 1; i >= 0; i--)
             {
@@ -358,6 +476,67 @@ namespace Client.Main.Controls
         }
 
         // Protected Methods
+        private void OnChildCollectionChanged(object sender, ChildrenEventArgs<GameControl> e)
+        {
+            MarkLayoutDirty();
+        }
+
+        private void RecalculateLayout()
+        {
+            if (AutoViewSize)
+            {
+                int maxWidth = 0;
+                int maxHeight = 0;
+
+                for (int i = 0; i < Controls.Count; i++)
+                {
+                    var control = Controls[i];
+                    if (control.Status == GameControlStatus.Disposed)
+                        continue;
+
+                    int controlWidth = control.DisplaySize.X + control.Margin.Left;
+                    int controlHeight = control.DisplaySize.Y + control.Margin.Top;
+
+                    if (!Align.HasFlag(ControlAlign.Left))
+                        controlWidth += control.X;
+                    if (!Align.HasFlag(ControlAlign.Bottom))
+                        controlHeight += control.Y;
+
+                    maxWidth = Math.Max(maxWidth, controlWidth);
+                    maxHeight = Math.Max(maxHeight, controlHeight);
+                }
+
+                Point requiredSize = new(
+                    Math.Max(ControlSize.X, maxWidth),
+                    Math.Max(ControlSize.Y, maxHeight));
+
+                if (_viewSize != requiredSize)
+                {
+                    _viewSize = requiredSize;
+                    OnScreenSizeChanged();
+                }
+            }
+
+            if (Align != ControlAlign.None)
+                AlignControl();
+
+            _layoutDirty = false;
+        }
+
+        protected void MarkLayoutDirty()
+        {
+            _layoutDirty = true;
+
+            if (Parent != null)
+                Parent._layoutDirty = true;
+
+            if (Controls == null)
+                return;
+
+            for (int i = 0; i < Controls.Count; i++)
+                Controls[i]._layoutDirty = true;
+        }
+
         protected virtual void AlignControl()
         {
             if (Parent == null)
@@ -416,6 +595,12 @@ namespace Client.Main.Controls
 
         protected virtual void OnScreenSizeChanged()
         {
+            if (Parent != null)
+                Parent._layoutDirty = true;
+
+            for (int i = 0; i < Controls.Count; i++)
+                Controls[i]._layoutDirty = true;
+
             SizeChanged?.Invoke(this, EventArgs.Empty);
         }
     }

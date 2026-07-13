@@ -391,6 +391,11 @@ namespace Client.Main.Objects
                     gd.SetVertexBuffers(batch.VertexBindings);
                     gd.Indices = batch.GeometryIndexBuffer;
 
+                    // Count every GPU-skinned mesh instance. Previously the metric only
+                    // counted the non-instanced path, making crowd-instanced monsters look
+                    // as if GPU skinning had been disabled.
+                    RegisterGpuSkinnedMeshDraw(instanceCount);
+
                     int passCount = effect.CurrentTechnique.Passes.Count;
                     for (int p = 0; p < passCount; p++)
                     {
@@ -741,9 +746,6 @@ namespace Client.Main.Objects
             if (walker is Player.PlayerObject)
                 return false;
 
-            if (walker is MonsterObject)
-                return false;
-
             if (UsesMutableMeshData)
                 return false;
 
@@ -753,8 +755,10 @@ namespace Client.Main.Objects
             if (LinkParentAnimation || ParentBoneLink >= 0 || ContinuousAnimation || _isBlending || !_animationSampleValid)
                 return false;
 
-            // Death/one-shot animations cancel pose sharing: keep them on the per-instance path.
-            if (walker.IsOneShotPlaying)
+            // Attack and skill one-shots are safe to batch after transition blending: the
+            // batch key already contains action, frame pair, and interpolation bucket.
+            // Keep death, shock, and other special one-shots on the individual path.
+            if (walker.IsOneShotPlaying && !walker.IsAttackOrSkillAnimationPlaying())
                 return false;
 
             if (TotalAlpha < 0.999f || EnableCustomShader)
@@ -888,7 +892,7 @@ namespace Client.Main.Objects
             if (LightEnabled && World?.Terrain != null)
             {
                 Vector3 worldTranslation = WorldPosition.Translation;
-                meshLight = World.Terrain.EvaluateTerrainLight(worldTranslation.X, worldTranslation.Y) + Light;
+                meshLight = EvaluateCombinedTerrainLight(worldTranslation.X, worldTranslation.Y) + Light;
             }
 
             float lightScale = TotalAlpha;

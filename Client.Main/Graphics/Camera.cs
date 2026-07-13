@@ -1,6 +1,7 @@
 ﻿using Microsoft.Xna.Framework;
 using System;
 using System.Diagnostics;
+using System.Threading;
 
 namespace Client.Main.Graphics
 {
@@ -17,11 +18,11 @@ namespace Client.Main.Graphics
         private Vector3 _position = Vector3.Zero;
         private Vector3 _target = Vector3.Zero;
         private readonly BoundingFrustum _frustum = new(Matrix.Identity);
+        private Matrix _cullingView = Matrix.Identity;
 
         // Throttle CameraMoved events to avoid flooding subscribers during rapid camera updates
         private long _lastCameraMovedTimeMs = 0;
         private const int CAMERA_MOVED_COOLDOWN_MS = 300; // milliseconds
-        private readonly object _cameraMovedLock = new object();
 
         // Screen shake state
         private float _shakeIntensity;
@@ -70,7 +71,13 @@ namespace Client.Main.Graphics
         public Matrix View { get; private set; }
         public Matrix Projection { get; private set; }
         public BoundingFrustum Frustum => _frustum;
+        /// <summary>Changes whenever the rendered view/projection changes, including screen shake.</summary>
         public ulong StateVersion { get; private set; }
+        /// <summary>
+        /// Changes only when the stable camera used for visibility tests changes.
+        /// Screen shake intentionally does not invalidate world culling.
+        /// </summary>
+        public ulong CullingStateVersion { get; private set; }
 
         // Events
         public event EventHandler CameraMoved;
@@ -85,9 +92,8 @@ namespace Client.Main.Graphics
         // Public Methods
         public void ForceUpdate()
         {
+            UpdateView(updateCulling: true);
             UpdateProjection();
-            UpdateView();
-            UpdateFrustum();
         }
 
         /// <summary>
@@ -121,7 +127,7 @@ namespace Client.Main.Graphics
                 _shakeTimeLeft = 0f;
             }
 
-            UpdateView();
+            UpdateView(updateCulling: false);
         }
 
         // Private Methods
@@ -138,45 +144,68 @@ namespace Client.Main.Graphics
             unchecked
             {
                 StateVersion++;
+                CullingStateVersion++;
             }
             RaiseCameraMovedThrottled();
         }
 
-        private void UpdateView()
+        private void UpdateView(bool updateCulling = true)
         {
-            Vector3 pos = Position;
-            Vector3 tgt = Target;
+            Vector3 basePosition = _position;
+            Vector3 baseTarget = _target;
+            Matrix stableView = CreateViewMatrix(basePosition, baseTarget);
 
+            Vector3 renderPosition = basePosition;
+            Vector3 renderTarget = baseTarget;
             if (_shakeTimeLeft > 0f && _shakeIntensity > 0f)
             {
                 float decay = MathHelper.Clamp(_shakeTimeLeft / 0.5f, 0f, 1f);
                 float strength = _shakeIntensity * decay;
                 float t = _shakeElapsed * _shakeFrequency;
-                float ox = MathF.Sin(t * 1.0f + 0.0f) * strength;
+                float ox = MathF.Sin(t) * strength;
                 float oy = MathF.Sin(t * 1.3f + 1.7f) * strength;
                 float oz = MathF.Sin(t * 0.9f + 3.1f) * strength * 0.5f;
                 var offset = new Vector3(ox, oy, oz);
-                pos += offset;
-                tgt += offset;
+                renderPosition += offset;
+                renderTarget += offset;
             }
 
-            Vector3 cameraDirection = Vector3.Normalize(tgt - pos);
-            Vector3 cameraRight = Vector3.Cross(cameraDirection, Vector3.UnitZ);
-            var cameraUp = Vector3.Cross(cameraRight, cameraDirection);
+            View = renderPosition == basePosition
+                ? stableView
+                : CreateViewMatrix(renderPosition, renderTarget);
 
-            View = Matrix.CreateLookAt(pos, tgt, cameraUp);
-
-            UpdateFrustum();
-            unchecked
+            if (updateCulling)
             {
-                StateVersion++;
+                _cullingView = stableView;
+                UpdateFrustum();
+                unchecked { CullingStateVersion++; }
+                RaiseCameraMovedThrottled();
             }
-            RaiseCameraMovedThrottled();
+
+            unchecked { StateVersion++; }
+        }
+
+        private static Matrix CreateViewMatrix(Vector3 position, Vector3 target)
+        {
+            Vector3 direction = target - position;
+            if (direction.LengthSquared() < 1e-8f)
+                direction = Vector3.UnitY;
+            else
+                direction.Normalize();
+
+            Vector3 right = Vector3.Cross(direction, Vector3.UnitZ);
+            if (right.LengthSquared() < 1e-8f)
+                right = Vector3.UnitX;
+            else
+                right.Normalize();
+
+            Vector3 up = Vector3.Cross(right, direction);
+            return Matrix.CreateLookAt(position, target, up);
         }
 
         private void UpdateFrustum()
         {
-            _frustum.Matrix = View * Projection;
+            _frustum.Matrix = _cullingView * Projection;
         }
 
         /// <summary>
@@ -184,15 +213,17 @@ namespace Client.Main.Graphics
         /// </summary>
         private void RaiseCameraMovedThrottled()
         {
+            var handler = CameraMoved;
+            if (handler == null)
+                return;
+
             long nowMs = Stopwatch.GetTimestamp() * 1000 / Stopwatch.Frequency;
-            lock (_cameraMovedLock)
-            {
-                if (nowMs - _lastCameraMovedTimeMs >= CAMERA_MOVED_COOLDOWN_MS)
-                {
-                    _lastCameraMovedTimeMs = nowMs;
-                    CameraMoved?.Invoke(this, EventArgs.Empty);
-                }
-            }
+            long previous = Volatile.Read(ref _lastCameraMovedTimeMs);
+            if (nowMs - previous < CAMERA_MOVED_COOLDOWN_MS)
+                return;
+
+            if (Interlocked.CompareExchange(ref _lastCameraMovedTimeMs, nowMs, previous) == previous)
+                handler(this, EventArgs.Empty);
         }
     }
 }

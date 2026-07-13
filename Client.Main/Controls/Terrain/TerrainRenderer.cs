@@ -164,14 +164,16 @@ namespace Client.Main.Controls.Terrain
 
             _data.HeightMapTexture = new Texture2D(_graphicsDevice, Constants.TERRAIN_SIZE, Constants.TERRAIN_SIZE, false, SurfaceFormat.Single);
 
-            float[] heightData = ArrayPool<float>.Shared.Rent(Constants.TERRAIN_SIZE * Constants.TERRAIN_SIZE);
+            int valueCount = Constants.TERRAIN_SIZE * Constants.TERRAIN_SIZE;
+            float[] heightData = ArrayPool<float>.Shared.Rent(valueCount);
             try
             {
-                for (int i = 0; i < heightData.Length; i++)
-                {
+                // ArrayPool may return a larger array. Only fill and upload the logical
+                // terrain range; iterating over Length can read past HeightMap.
+                for (int i = 0; i < valueCount; i++)
                     heightData[i] = _data.HeightMap[i].R / 255.0f;
-                }
-                _data.HeightMapTexture.SetData(heightData);
+
+                _data.HeightMapTexture.SetData(heightData, 0, valueCount);
             }
             finally
             {

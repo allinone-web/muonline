@@ -81,9 +81,10 @@ namespace Client.Main.Objects
             BeginFrameStaticMapInstancingMetrics();
         }
 
-        private static void RegisterGpuSkinnedMeshDraw()
+        private static void RegisterGpuSkinnedMeshDraw(int meshInstanceCount = 1)
         {
-            _gpuSkinnedMeshesDrawnThisFrame++;
+            if (meshInstanceCount > 0)
+                _gpuSkinnedMeshesDrawnThisFrame += meshInstanceCount;
         }
 
         private static void RegisterModelFallbackDrawCall()
@@ -178,11 +179,27 @@ namespace Client.Main.Objects
         private bool _boneMatrixCacheValid = false;
 
         private const int MaxGpuSkinBones = 256;
-#if WINDOWS_DX
-        private const bool SupportsGpuDynamicSkinning = true;
-#else
-        private const bool SupportsGpuDynamicSkinning = false;
-#endif
+        private static Effect _gpuSkinCapabilityEffect;
+        private static bool _gpuSkinCapability;
+
+        // Detect support from the compiled effect instead of relying on a project symbol.
+        // This is important for the WindowsDX launcher because DefineConstants from the
+        // executable project are not guaranteed to flow into the referenced Client.Main project.
+        private static bool SupportsGpuDynamicSkinning
+        {
+            get
+            {
+                var effect = GraphicsManager.Instance?.DynamicLightingEffect;
+                if (ReferenceEquals(effect, _gpuSkinCapabilityEffect))
+                    return _gpuSkinCapability;
+
+                _gpuSkinCapabilityEffect = effect;
+                _gpuSkinCapability = effect != null &&
+                                     TryGetTechnique(effect, "DynamicLighting_Skinned") != null;
+                return _gpuSkinCapability;
+            }
+        }
+
         private Matrix[] _gpuSkinBoneUploadBuffer = Array.Empty<Matrix>();
 
         #endregion
@@ -309,7 +326,18 @@ namespace Client.Main.Objects
             }
         }
 
-        public bool RenderShadow { get => _renderShadow; set { _renderShadow = value; OnRenderShadowChanged(); } }
+        public bool RenderShadow
+        {
+            get => _renderShadow;
+            set
+            {
+                if (_renderShadow == value)
+                    return;
+
+                _renderShadow = value;
+                OnRenderShadowChanged();
+            }
+        }
         public float AnimationSpeed { get; set; } = 4f;
         public bool ContinuousAnimation { get; set; }
 
@@ -485,6 +513,11 @@ namespace Client.Main.Objects
                 uint parentPoseVersion = parent.AnimationPoseVersion;
                 if (_lastLinkedParentPoseVersion != parentPoseVersion)
                 {
+                    // Linked equipment uses the parent's bone palette, but the per-buffer
+                    // cache is keyed by this object's pose version. Advance the child
+                    // version whenever the effective parent pose changes, otherwise the
+                    // cache can incorrectly keep the first uploaded animation frame.
+                    unchecked { _animationPoseVersion++; }
                     InvalidateBuffers(MeshDirtyFlags.Animation);
                     _lastLinkedParentPoseVersion = parentPoseVersion;
                 }
@@ -518,37 +551,32 @@ namespace Client.Main.Objects
                 bool hasDynamicLightingShader = Constants.ENABLE_DYNAMIC_LIGHTING_SHADER &&
                                                GraphicsManager.Instance.DynamicLightingEffect != null;
 
-                Vector3 currentLight;
-
-                // CPU lighting path (shader disabled): sample terrain light on a small grid
-                if (!hasDynamicLightingShader && LightEnabled && World?.Terrain != null)
-                {
-                    var pos = WorldPosition.Translation;
-                    var cell = new Vector2(
-                        MathF.Floor(pos.X / _LIGHT_SAMPLE_GRID),
-                        MathF.Floor(pos.Y / _LIGHT_SAMPLE_GRID));
-
-                    if (_lastLightSampleCell != cell)
-                    {
-                        // Terrain base light
-                        _lastSampledLight = World.Terrain.EvaluateTerrainLight(pos.X, pos.Y);
-                        // Include dynamic lights on CPU path only
-                        _lastSampledLight += World.Terrain.EvaluateDynamicLight(new Vector2(pos.X, pos.Y));
-                        _lastLightSampleCell = cell;
-                    }
-
-                    currentLight = _lastSampledLight + Light;
-                }
-                else
-                {
-                    currentLight = LightEnabled && World?.Terrain != null
-                        ? World.Terrain.EvaluateTerrainLight(WorldPosition.Translation.X, WorldPosition.Translation.Y) + Light
-                        : Light;
-                }
-
-                // PERFORMANCE: Only invalidate lighting for CPU lighting path - shader lighting doesn't need buffer rebuilds
+                // The shader path samples terrain/dynamic lighting during draw. Do not perform
+                // an additional terrain lookup here because its result cannot invalidate a CPU buffer.
                 if (!hasDynamicLightingShader)
                 {
+                    Vector3 currentLight;
+
+                    if (LightEnabled && World?.Terrain != null)
+                    {
+                        var pos = WorldPosition.Translation;
+                        var cell = new Vector2(
+                            MathF.Floor(pos.X / _LIGHT_SAMPLE_GRID),
+                            MathF.Floor(pos.Y / _LIGHT_SAMPLE_GRID));
+
+                        if (_lastLightSampleCell != cell)
+                        {
+                            _lastSampledLight = EvaluateCombinedTerrainLight(pos.X, pos.Y);
+                            _lastLightSampleCell = cell;
+                        }
+
+                        currentLight = _lastSampledLight + Light;
+                    }
+                    else
+                    {
+                        currentLight = Light;
+                    }
+
                     // Reduce throttling for PlayerObjects to ensure proper rendering
                     bool isMainPlayer = this is PlayerObject p && p.IsMainWalker;
                     double lightUpdateInterval = isMainPlayer
@@ -618,6 +646,24 @@ namespace Client.Main.Objects
         #endregion
 
         #region Helper Methods
+
+        private Vector3 EvaluateCombinedTerrainLight(float x, float y)
+        {
+            var terrain = World?.Terrain;
+            if (!LightEnabled || terrain == null)
+                return Vector3.Zero;
+
+            Vector3 result = terrain.EvaluateTerrainLight(x, y);
+            if (Constants.ENABLE_DYNAMIC_LIGHTS)
+            {
+                // Dynamic-light CPU values use the legacy 0..255 scale, while
+                // baked terrain light is normalized to 0..1. Normalize before
+                // combining them for vertex-color fallback paths.
+                result += terrain.EvaluateDynamicLight(new Vector2(x, y)) / 255f;
+            }
+
+            return Vector3.Clamp(result, Vector3.Zero, Vector3.One);
+        }
 
         private bool HasWalkerAncestor()
         {

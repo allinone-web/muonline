@@ -294,70 +294,86 @@ namespace Client.Main.Content
             if (textureInfo?.Width == 0 || textureInfo?.Height == 0 || textureInfo.Data == null)
                 return null;
 
-            // Ensure we create texture on Main Thread if possible, usually MonoGame handles this,
-            // but Thread safety is good. Here we assume we are in Draw/Update or don't care.
-            try
+            // Prevent duplicate GPU uploads when several async loads complete at the same time.
+            // The caller is still responsible for invoking this method on the graphics thread.
+            lock (clientTexture)
             {
-                Texture2D texture;
-                bool isCompressed = textureInfo.IsCompressed;
+                if (clientTexture.Texture != null && !clientTexture.Texture.IsDisposed)
+                    return clientTexture.Texture;
 
-                if (CustomDecompressFunction != null && isCompressed)
+                try
                 {
-                    var data = CustomDecompressFunction(textureInfo);
-                    texture = new Texture2D(_graphicsDevice, textureInfo.Width, textureInfo.Height, false, SurfaceFormat.Color);
-                    texture.SetData(data);
+                    Texture2D texture;
+                    bool isCompressed = textureInfo.IsCompressed;
+
+                    if (CustomDecompressFunction != null && isCompressed)
+                    {
+                        var data = CustomDecompressFunction(textureInfo);
+                        texture = new Texture2D(_graphicsDevice, textureInfo.Width, textureInfo.Height, false, SurfaceFormat.Color);
+                        texture.SetData(data);
+                        clientTexture.Texture = texture;
+                        return texture;
+                    }
+                    else if (isCompressed)
+                    {
+                        texture = new Texture2D(_graphicsDevice, textureInfo.Width, textureInfo.Height, false, textureInfo.Format.ToXNA());
+                        texture.SetData(textureInfo.Data);
+                    }
+                    else
+                    {
+                        texture = new Texture2D(_graphicsDevice, textureInfo.Width, textureInfo.Height);
+                        int pixelCount = texture.Width * texture.Height;
+                        int components = textureInfo.Components;
+
+                        if (components != 3 && components != 4)
+                        {
+                            texture.Dispose();
+                            _logger?.LogDebug("Unsupported texture components: {Components} for texture {Path}", components, path);
+                            return null;
+                        }
+
+                        byte[] data = textureInfo.Data;
+                        int requiredBytes = checked(pixelCount * components);
+                        if (data.Length < requiredBytes)
+                        {
+                            texture.Dispose();
+                            _logger?.LogDebug(
+                                "Texture data is truncated: {ActualBytes}/{RequiredBytes} for {Path}",
+                                data.Length,
+                                requiredBytes,
+                                path);
+                            return null;
+                        }
+
+                        var pool = System.Buffers.ArrayPool<Color>.Shared;
+                        Color[] pixelData = pool.Rent(pixelCount);
+                        try
+                        {
+                            for (int i = 0; i < pixelCount; i++)
+                            {
+                                int dataIndex = i * components;
+                                byte r = data[dataIndex];
+                                byte g = data[dataIndex + 1];
+                                byte b = data[dataIndex + 2];
+                                byte a = components == 4 ? data[dataIndex + 3] : (byte)255;
+                                pixelData[i] = new Color(r, g, b, a);
+                            }
+                            texture.SetData(pixelData, 0, pixelCount);
+                        }
+                        finally
+                        {
+                            pool.Return(pixelData);
+                        }
+                    }
+
                     clientTexture.Texture = texture;
                     return texture;
                 }
-                else if (isCompressed)
+                catch (Exception ex)
                 {
-                    texture = new Texture2D(_graphicsDevice, textureInfo.Width, textureInfo.Height, false, textureInfo.Format.ToXNA());
-                    texture.SetData(textureInfo.Data);
+                    _logger?.LogError(ex, "Failed creating Texture2D for {Path}", path);
+                    return null;
                 }
-                else
-                {
-                    texture = new Texture2D(_graphicsDevice, textureInfo.Width, textureInfo.Height);
-                    int pixelCount = texture.Width * texture.Height;
-                    int components = textureInfo.Components;
-
-                    if (components != 3 && components != 4)
-                    {
-                        _logger?.LogDebug("Unsupported texture components: {Components} for texture {Path}", components, path);
-                        return null;
-                    }
-
-                    var pool = System.Buffers.ArrayPool<Color>.Shared;
-                    Color[] pixelData = pool.Rent(pixelCount);
-                    try
-                    {
-                        byte[] data = textureInfo.Data;
-                        for (int i = 0; i < pixelCount; i++)
-                        {
-                            int dataIndex = i * components;
-                            // Bounds check
-                            if (dataIndex + (components - 1) >= data.Length) break;
-
-                            byte r = data[dataIndex];
-                            byte g = data[dataIndex + 1];
-                            byte b = data[dataIndex + 2];
-                            byte a = components == 4 ? data[dataIndex + 3] : (byte)255;
-                            pixelData[i] = new Color(r, g, b, a);
-                        }
-                        texture.SetData(pixelData, 0, pixelCount);
-                    }
-                    finally
-                    {
-                        pool.Return(pixelData);
-                    }
-                }
-
-                clientTexture.Texture = texture;
-                return texture;
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "Failed creating Texture2D for {Path}", path);
-                return null;
             }
         }
 

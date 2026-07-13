@@ -43,24 +43,22 @@ namespace Client.Main.Content
             public override int GetHashCode() => HashCode.Combine(AssetId, MeshIndex);
         }
 
-        private const bool DisableGlobalMeshCache = false;
-        // Enhanced cache state for GetModelBuffers to avoid redundant calculations
-        private readonly Dictionary<MeshCacheKey, BufferCacheEntry> _bufferCacheState = [];
-        // Per-mesh optimization: track which bones influence a mesh
-        private readonly Dictionary<MeshCacheKey, short[]> _meshUsedBones = [];
+        private const bool DisablePerBufferMeshCache = false;
+        // Cache is tied to the concrete vertex-buffer instance. A cache keyed only by
+        // asset+mesh is incorrect because every ModelObject owns a different buffer.
+        private ConditionalWeakTable<DynamicVertexBuffer, BufferCacheEntry> _bufferCacheState = new();
         // Cache per (asset,mesh) vertex count to avoid per-frame summing
         private readonly Dictionary<MeshCacheKey, int> _meshVertexCountCache = [];
-        // Track if index data has been uploaded for this (asset,mesh) so we can skip re-upload
-        private readonly HashSet<MeshCacheKey> _indexInitialized = [];
-
         // Track chosen index element size per mesh (true => 16-bit)
         private readonly Dictionary<MeshCacheKey, bool> _indexIs16Bit = [];
         // Static buffers for GPU skinning path (no per-frame vertex uploads)
         private readonly Dictionary<MeshCacheKey, VertexBuffer> _gpuSkinVertexBuffers = [];
         private readonly Dictionary<MeshCacheKey, IndexBuffer> _gpuSkinIndexBuffers = [];
         private readonly Dictionary<MeshCacheKey, int> _gpuSkinBoneCounts = [];
-        private const int ParallelCpuSkinningVertexThreshold = 1200;
-        private const int ParallelTriangleAssemblyThreshold = 400;
+        // Parallel.For has a measurable setup/synchronization cost. Keep small and
+        // medium meshes on the calling thread and parallelize only genuinely large jobs.
+        private const int ParallelCpuSkinningVertexThreshold = 8000;
+        private const int ParallelTriangleAssemblyThreshold = 2500;
         private static readonly bool EnableParallelCpuSkinning = Environment.ProcessorCount > 1;
         private static readonly ParallelOptions CpuSkinningParallelOptions = new()
         {
@@ -87,18 +85,19 @@ namespace Client.Main.Content
         public int LastFrameMeshBatchBuilds { get; private set; }
         public int LastFrameMeshBatchMeshes { get; private set; }
 
-        private struct BufferCacheEntry
+        private sealed class BufferCacheEntry
         {
-            public Color LastColor;
-            public int LastBoneMatrixHash;
-            public bool IsValid;
-
-            public BufferCacheEntry(Color color, int boneMatrixHash)
+            public BufferCacheEntry()
             {
-                LastColor = color;
-                LastBoneMatrixHash = boneMatrixHash;
-                IsValid = true;
             }
+
+            public int OwnerId;
+            public int AssetId;
+            public int MeshIndex;
+            public uint PoseVersion;
+            public int VertexCount;
+            public Color LastColor;
+            public bool IsValid;
         }
 
         private GraphicsDevice _graphicsDevice;
@@ -352,7 +351,9 @@ namespace Client.Main.Content
          ref DynamicVertexBuffer vertexBuffer,
          ref DynamicIndexBuffer indexBuffer,
          bool skipCache = false,
-         IVertexDeformer vertexDeformer = null)
+         IVertexDeformer vertexDeformer = null,
+         int bufferOwnerId = 0,
+         uint poseVersion = 0)
         {
             if (asset == null || boneMatrix == null || _graphicsDevice == null)
             {
@@ -382,56 +383,7 @@ namespace Client.Main.Content
             }
             int totalIndices = totalVertices;
             bool prefer16Bit = totalIndices <= ushort.MaxValue;
-            bool useCache = !DisableGlobalMeshCache && !skipCache;
-
-            // Create cache key based on asset and mesh
-            // (reusing cacheKey defined above)
-            int boneMatrixHash = 0;
-            if (useCache)
-            {
-                // Build or get the set of bones used by this mesh (distinct node indices)
-                if (!_meshUsedBones.TryGetValue(cacheKey, out short[] usedBones))
-                {
-                    var verts = mesh.Vertices;
-                    var set = new HashSet<short>();
-                    for (int i = 0; i < verts.Length; i++)
-                    {
-                        short node = verts[i].Node;
-                        if (node >= 0)
-                            set.Add(node);
-                    }
-
-                    var normals = mesh.Normals;
-                    for (int i = 0; i < normals.Length; i++)
-                    {
-                        if (TryResolveNormalBoneIndex(mesh, i, out int normalBone) && normalBone >= 0)
-                            set.Add((short)normalBone);
-                    }
-
-                    usedBones = set.Count > 0 ? set.ToArray() : Array.Empty<short>();
-                    _meshUsedBones[cacheKey] = usedBones;
-                }
-
-                // Calculate a hash over only the bones influencing this mesh
-                boneMatrixHash = CalculateBoneMatrixHashSubset(boneMatrix, usedBones);
-
-                bool canUseCache = _bufferCacheState.TryGetValue(cacheKey, out var cacheEntry) &&
-                                   cacheEntry.IsValid &&
-                                   cacheEntry.LastColor == color &&
-                                   cacheEntry.LastBoneMatrixHash == boneMatrixHash &&
-                                   vertexBuffer != null &&
-                                   indexBuffer != null;
-
-                if (canUseCache)
-                {
-                    FrameCacheHits++;
-                    return;
-                }
-
-                FrameCacheMisses++;
-            }
-
-            FrameMeshesProcessed++;
+            bool useCache = !DisablePerBufferMeshCache && !skipCache && bufferOwnerId != 0;
 
             // Ensure buffers are properly sized
             if (vertexBuffer != null && vertexBuffer.IsDisposed)
@@ -471,6 +423,27 @@ namespace Client.Main.Content
                 createdOrResizedIndex = true;
                 _indexIs16Bit[cacheKey] = prefer16Bit;
             }
+
+            if (useCache &&
+                vertexBuffer != null &&
+                indexBuffer != null &&
+                _bufferCacheState.TryGetValue(vertexBuffer, out var cacheEntry) &&
+                cacheEntry.IsValid &&
+                cacheEntry.OwnerId == bufferOwnerId &&
+                cacheEntry.AssetId == assetId &&
+                cacheEntry.MeshIndex == meshIndex &&
+                cacheEntry.PoseVersion == poseVersion &&
+                cacheEntry.VertexCount == totalVertices &&
+                cacheEntry.LastColor.PackedValue == color.PackedValue)
+            {
+                FrameCacheHits++;
+                return;
+            }
+
+            if (useCache)
+                FrameCacheMisses++;
+
+            FrameMeshesProcessed++;
 
             // Build vertex data with unique-vertex transform caching
             VertexPositionColorNormalTexture[] vertices = null;
@@ -643,8 +616,9 @@ namespace Client.Main.Content
                 FrameVBUpdates++;
                 FrameVerticesTransformed += uniqueTransformed;
 
-                // Upload index data only if needed (new or resized buffer or not yet initialized)
-                if (createdOrResizedIndex || !_indexInitialized.Contains(cacheKey))
+                // The index stream is sequential and immutable for the lifetime of an active
+                // per-object buffer. Upload only when the concrete buffer is created/resized.
+                if (createdOrResizedIndex)
                 {
                     if (prefer16Bit)
                     {
@@ -672,15 +646,25 @@ namespace Client.Main.Content
                             ArrayPool<int>.Shared.Return(indices32, clearArray: true);
                         }
                     }
-
-                    _indexInitialized.Add(cacheKey);
                     FrameIBUploads++;
                 }
 
-                // Update cache entry only if caching is enabled for this platform
-                if (!skipCache && !DisableGlobalMeshCache)
+                if (useCache)
                 {
-                    _bufferCacheState[cacheKey] = new BufferCacheEntry(color, boneMatrixHash);
+                    var cacheStateEntry = _bufferCacheState.GetOrCreateValue(vertexBuffer);
+                    cacheStateEntry.OwnerId = bufferOwnerId;
+                    cacheStateEntry.AssetId = assetId;
+                    cacheStateEntry.MeshIndex = meshIndex;
+                    cacheStateEntry.PoseVersion = poseVersion;
+                    cacheStateEntry.VertexCount = totalVertices;
+                    cacheStateEntry.LastColor = color;
+                    cacheStateEntry.IsValid = true;
+                }
+                else if (vertexBuffer != null)
+                {
+                    // A procedural deformation or mutable mesh may overwrite a buffer that
+                    // previously had a valid cached pose.
+                    _bufferCacheState.Remove(vertexBuffer);
                 }
             }
             finally
@@ -1033,30 +1017,6 @@ namespace Client.Main.Content
             }
         }
 
-        private int CalculateBoneMatrixHashSubset(Matrix[] boneMatrix, short[] usedBones)
-        {
-            if (boneMatrix == null || usedBones == null || usedBones.Length == 0) return 0;
-            int hash = 17;
-            for (int i = 0; i < usedBones.Length; i++)
-            {
-                int idx = usedBones[i];
-                if ((uint)idx >= (uint)boneMatrix.Length) continue;
-                ref var m = ref boneMatrix[idx];
-                hash = hash * 31 + m.Translation.GetHashCode();
-                // Include more rotation/scale components to reduce false cache hits
-                hash = hash * 31 + m.M11.GetHashCode();
-                hash = hash * 31 + m.M12.GetHashCode();
-                hash = hash * 31 + m.M13.GetHashCode();
-                hash = hash * 31 + m.M21.GetHashCode();
-                hash = hash * 31 + m.M22.GetHashCode();
-                hash = hash * 31 + m.M23.GetHashCode();
-                hash = hash * 31 + m.M31.GetHashCode();
-                hash = hash * 31 + m.M32.GetHashCode();
-                hash = hash * 31 + m.M33.GetHashCode();
-            }
-            return hash;
-        }
-
         public string GetTexturePath(BMD bmd, string texturePath)
         {
             texturePath = texturePath.ToLowerInvariant();
@@ -1075,8 +1035,7 @@ namespace Client.Main.Content
         // Clear cache when needed (e.g., when objects are disposed)
         public void ClearBufferCache()
         {
-            _bufferCacheState.Clear();
-            _indexInitialized.Clear();
+            _bufferCacheState = new ConditionalWeakTable<DynamicVertexBuffer, BufferCacheEntry>();
             _indexIs16Bit.Clear();
             DisposeGpuSkinnedBuffers();
         }

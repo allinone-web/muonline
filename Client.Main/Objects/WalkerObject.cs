@@ -22,6 +22,8 @@ namespace Client.Main.Objects
         private Vector3 _targetAngle;
         private Direction _direction;
         private Vector2 _location;
+        private Vector3 _cachedTargetPosition;
+        private bool _targetPositionDirty = true;
         protected Queue<Vector2> _currentPath;   // FIFO – cheaper removal than List.RemoveAt(0)
         private uint _moveRequestVersion;
 
@@ -44,6 +46,8 @@ namespace Client.Main.Objects
         private Color _activeDebuffTint = DebuffTintNone;
         private Color _temporaryDebuffTint = DebuffTintNone;
         private double _temporaryDebuffTintUntilMs;
+        private double _nextDebuffTintCheckMs;
+        private const double DebuffTintCheckIntervalMs = 100d;
 
         // Properties
         public bool IsMainWalker => World is WalkableWorldControl walkableWorld && walkableWorld.Walker == this;
@@ -73,16 +77,21 @@ namespace Client.Main.Objects
         {
             get
             {
+                if (!_targetPositionDirty)
+                    return _cachedTargetPosition;
+
                 var x = Location.X * Constants.TERRAIN_SCALE + 0.5f * Constants.TERRAIN_SCALE;
                 var y = Location.Y * Constants.TERRAIN_SCALE + 0.5f * Constants.TERRAIN_SCALE;
                 var z = World is null ? 0 : World.Terrain.RequestTerrainHeight(x, y);
-                return new Vector3(x, y, z);
+                _cachedTargetPosition = new Vector3(x, y, z);
+                _targetPositionDirty = false;
+                return _cachedTargetPosition;
             }
         }
 
         public Vector3 MoveTargetPosition { get; set; }
         public float MoveSpeed { get; set; } = Constants.MOVE_SPEED;
-        public bool IsMoving => Vector3.Distance(MoveTargetPosition, TargetPosition) > 0f;
+        public bool IsMoving => Vector3.DistanceSquared(MoveTargetPosition, TargetPosition) > 0.0001f;
         public new ushort NetworkId { get; set; }
 
         public ushort idanim = 0;
@@ -118,7 +127,8 @@ namespace Client.Main.Objects
         public new virtual async Task Load()
         {
             MoveTargetPosition = Vector3.Zero;
-        _mainPlayerCameraController.Initialize();
+            _targetPositionDirty = true;
+            _mainPlayerCameraController.Initialize();
 
             await base.Load();
         }
@@ -128,6 +138,8 @@ namespace Client.Main.Objects
             _currentPath = null;
             MoveTargetPosition = Vector3.Zero;
             _movementIntent = false;
+            _targetPositionDirty = true;
+            _nextDebuffTintCheckMs = 0d;
 
             // Reset animation state to clear any stuck death animations
             _animationController?.Reset();
@@ -152,6 +164,7 @@ namespace Client.Main.Objects
             _location = new Vector2(
                 (int)(Position.X / Constants.TERRAIN_SCALE),
                 (int)(Position.Y / Constants.TERRAIN_SCALE));
+            _targetPositionDirty = true;
 
             // Align target angle with current rotation to prevent snapping
             _targetAngle = Angle;
@@ -167,7 +180,13 @@ namespace Client.Main.Objects
 
         public override void Update(GameTime gameTime)
         {
-            UpdateDebuffTint();
+            if (Status != GameControlStatus.Ready || World == null || !Visible)
+            {
+                base.Update(gameTime);
+                return;
+            }
+
+            UpdateDebuffTint(gameTime.TotalGameTime.TotalMilliseconds);
             base.Update(gameTime);
 
             float controllerDelta;
@@ -405,6 +424,7 @@ namespace Client.Main.Objects
         {
             if (oldLocation == newLocation) return;
             _location = new Vector2((int)newLocation.X, (int)newLocation.Y);
+            _targetPositionDirty = true;
 
             if (oldLocation == Vector2.Zero)
                 return;
@@ -440,11 +460,10 @@ namespace Client.Main.Objects
                     Angle = new Vector3(Angle.X, Angle.Y, _targetAngle.Z);
             }
 
-            float heightScaleFactor = 0.5f;
-            float terrainHeightAtMoveTarget = MoveTargetPosition.Z + worldExtraHeight + ExtraHeight;
-            float desiredHeightOffset = heightScaleFactor * terrainHeightAtMoveTarget;
-            float targetHeight = terrainHeightAtMoveTarget + desiredHeightOffset;
-
+            float targetHeight =
+                MoveTargetPosition.Z +
+                worldExtraHeight +
+                ExtraHeight;
             float interpolationFactor = 15f * deltaTime;
             float newZ = MathHelper.Lerp(Position.Z, targetHeight, interpolationFactor);
 
@@ -454,37 +473,41 @@ namespace Client.Main.Objects
 
         private void UpdateMoveTargetPosition(GameTime time)
         {
+            Vector3 targetPosition = TargetPosition;
+
             if (MoveTargetPosition == Vector3.Zero)
             {
-                MoveTargetPosition = TargetPosition;
-                UpdateCameraPosition(MoveTargetPosition);
-                return;
-            }
-            if (!IsMoving)
-            {
-                MoveTargetPosition = TargetPosition;
+                MoveTargetPosition = targetPosition;
                 UpdateCameraPosition(MoveTargetPosition);
                 return;
             }
 
-            Vector3 direction = TargetPosition - MoveTargetPosition;
-            if (direction.LengthSquared() > 0.0001f)
+            Vector3 remaining = targetPosition - MoveTargetPosition;
+            float remainingDistanceSq = remaining.LengthSquared();
+            if (remainingDistanceSq <= 0.0001f)
             {
-                UpdateFacingFromVector(new Vector2(direction.X, direction.Y));
-                direction.Normalize();
+                MoveTargetPosition = targetPosition;
+                UpdateCameraPosition(MoveTargetPosition);
+                return;
             }
+
+            UpdateFacingFromVector(new Vector2(remaining.X, remaining.Y));
 
             float deltaTime = (float)time.ElapsedGameTime.TotalSeconds;
-            Vector3 moveVector = direction * MoveSpeed * deltaTime;
+            float maxStep = MoveSpeed * deltaTime;
 
-            if (moveVector.Length() >= (TargetPosition - MoveTargetPosition).Length())
+            if (maxStep * maxStep >= remainingDistanceSq)
             {
-                UpdateCameraPosition(TargetPosition);
+                UpdateCameraPosition(targetPosition);
                 if (_currentPath == null || _currentPath.Count == 0)
                     _movementIntent = false;
             }
             else
+            {
+                float inverseDistance = 1f / MathF.Sqrt(remainingDistanceSq);
+                Vector3 moveVector = remaining * (inverseDistance * maxStep);
                 UpdateCameraPosition(MoveTargetPosition + moveVector);
+            }
         }
 
         private void UpdateCameraPosition(Vector3 position)
@@ -496,9 +519,16 @@ namespace Client.Main.Objects
             _mainPlayerCameraController.Apply(position);
         }
 
-        private void UpdateDebuffTint()
+        private void UpdateDebuffTint(double nowMs)
         {
-            Color tint = ResolveDebuffTint();
+            if (nowMs < _nextDebuffTintCheckMs)
+                return;
+
+            // Stagger network-state lookups so a crowd of walkers does not query buffs
+            // on the same frame.
+            _nextDebuffTintCheckMs = nowMs + DebuffTintCheckIntervalMs + (NetworkId & 0x0F);
+
+            Color tint = ResolveDebuffTint(nowMs);
             if (tint.PackedValue == _activeDebuffTint.PackedValue)
                 return;
 
@@ -507,11 +537,10 @@ namespace Client.Main.Objects
             InvalidateBuffers(BufferFlagLighting);
         }
 
-        private Color ResolveDebuffTint()
+        private Color ResolveDebuffTint(double nowMs)
         {
             if (_temporaryDebuffTint.PackedValue != DebuffTintNone.PackedValue)
             {
-                double nowMs = MuGame.Instance?.GameTime?.TotalGameTime.TotalMilliseconds ?? Environment.TickCount64;
                 if (nowMs <= _temporaryDebuffTintUntilMs)
                     return _temporaryDebuffTint;
 
@@ -557,6 +586,7 @@ namespace Client.Main.Objects
             _temporaryDebuffTint = tint;
             if (untilMs > _temporaryDebuffTintUntilMs)
                 _temporaryDebuffTintUntilMs = untilMs;
+            _nextDebuffTintCheckMs = 0d;
         }
 
         private static void ApplyTintRecursive(ModelObject model, Color tint)

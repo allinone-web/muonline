@@ -68,6 +68,7 @@ namespace Client.Main
         private Matrix _cachedEffectOrtho;
         private Vector2 _cachedEffectResolution;
         private Vector2 _lastValidMouseInBackBuffer;
+        private ulong _lastMouseRayCameraVersion = ulong.MaxValue;
 
         // Public Instance Properties
         public BaseScene ActiveScene { get; private set; }
@@ -656,9 +657,10 @@ namespace Client.Main
         public void ApplyGraphicsOptions()
         {
 #if !(ANDROID || IOS)
-            _graphics.SynchronizeWithVerticalRetrace = !Constants.UNLIMITED_FPS && !Constants.DISABLE_VSYNC;
-            IsFixedTimeStep = !Constants.UNLIMITED_FPS;
-            TargetElapsedTime = Constants.UNLIMITED_FPS
+            bool runUncapped = Constants.UNLIMITED_FPS || Constants.DISABLE_VSYNC;
+            _graphics.SynchronizeWithVerticalRetrace = !runUncapped;
+            IsFixedTimeStep = !runUncapped;
+            TargetElapsedTime = runUncapped
                 ? TimeSpan.FromMilliseconds(1)
                 : TimeSpan.FromSeconds(1.0 / 60.0);
 #endif
@@ -804,8 +806,15 @@ namespace Client.Main
                     shouldUpdateRay = true;
             }
 
+            ulong cameraVersion = Camera.Instance.StateVersion;
+            if (_lastMouseRayCameraVersion != cameraVersion)
+                shouldUpdateRay = true;
+
             if (shouldUpdateRay)
+            {
                 UpdateMouseRay();
+                _lastMouseRayCameraVersion = cameraVersion;
+            }
         }
 
         private void UpdateMouseRay()
@@ -921,8 +930,9 @@ namespace Client.Main
         private void ApplyEffect(Effect effect, RenderTarget2D source, RenderTarget2D destination)
         {
             GraphicsDevice.SetRenderTarget(destination);
-            GraphicsDevice.Clear(Color.Transparent);
 
+            // Every post-processing pass covers the full destination. Clearing and
+            // alpha-blending add bandwidth without changing the final image.
             EnsureEffectCache(destination.Width, destination.Height);
 
             if (effect == GraphicsManager.Instance.FXAAEffect)
@@ -935,16 +945,14 @@ namespace Client.Main
                 effect.Parameters["WorldViewProjection"]?.SetValue(_cachedEffectOrtho);
             }
 
-            GraphicsManager.Instance.Sprite.Begin(SpriteSortMode.Immediate, BlendState.AlphaBlend, GraphicsManager.GetQualityLinearSamplerState(), DepthStencilState.None, RasterizerState.CullNone, effect);
+            GraphicsManager.Instance.Sprite.Begin(SpriteSortMode.Immediate, BlendState.Opaque, GraphicsManager.GetQualityLinearSamplerState(), DepthStencilState.None, RasterizerState.CullNone, effect);
             GraphicsManager.Instance.Sprite.Draw(source, GraphicsDevice.Viewport.Bounds, Color.White);
             GraphicsManager.Instance.Sprite.End();
-
-            // Deactivate render target after each effect
-            GraphicsDevice.SetRenderTarget(null);
         }
 
         private void DrawFinalImageToScreen(RenderTarget2D sourceTarget)
         {
+            GraphicsDevice.SetRenderTarget(null);
             GraphicsDevice.Clear(Color.Black);
 
             Effect gammaEffect = Constants.MSAA_ENABLED ? GraphicsManager.Instance.GammaCorrectionEffect : null;
