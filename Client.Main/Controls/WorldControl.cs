@@ -124,6 +124,7 @@ namespace Client.Main.Controls
 
         private readonly List<WorldObject> _solidBehind = [];
         private readonly List<WorldObject> _transparentObjects = [];
+        private readonly List<ModelObject> _queuedCrowdSidePasses = [];
         private readonly List<WalkerObject> _walkers = [];
         private readonly List<PlayerObject> _players = [];
         private readonly List<MonsterObject> _monsters = [];
@@ -825,6 +826,7 @@ namespace Client.Main.Controls
             SetDepthState(depthState);
             bool canUseMapInstancing = depthState == DepthStateDefault && Constants.ENABLE_MAP_OBJECT_INSTANCING;
             bool canUseWalkerCrowdInstancing = depthState == DepthStateDefault && Constants.ENABLE_WALKER_CROWD_INSTANCING;
+            _queuedCrowdSidePasses.Clear();
 
             var spriteBatch = GraphicsManager.Instance.Sprite;
             Helpers.SpriteBatchScope? scope = null;
@@ -847,8 +849,8 @@ namespace Client.Main.Controls
                 {
                     FrameMetrics.SpriteBatchObjects++;
 
-                    if (canUseWalkerCrowdInstancing && ModelObject.HasPendingWalkerCrowdInstancingBatches())
-                        ModelObject.FlushWalkerCrowdInstancingBatches(this);
+                    if (canUseWalkerCrowdInstancing)
+                        FlushWalkerCrowdBatchesAndSidePasses(time);
 
                     if (canUseMapInstancing && ModelObject.HasPendingStaticMapInstancingBatches())
                         ModelObject.FlushStaticMapInstancingBatches(this);
@@ -903,7 +905,7 @@ namespace Client.Main.Controls
                     if (canUseWalkerCrowdInstancing && ModelObject.TryQueueWalkerCrowdForInstancing(obj))
                     {
                         if (obj is ModelObject queuedMonster)
-                            queuedMonster.DrawQueuedCrowdInstancingSidePasses(time);
+                            _queuedCrowdSidePasses.Add(queuedMonster);
 
                         obj.RenderOrder = ++_renderCounter;
                         continue;
@@ -912,9 +914,6 @@ namespace Client.Main.Controls
                     var staticMapQueueResult = canUseMapInstancing
                         ? ModelObject.TryQueueStaticMapObjectForInstancing(obj)
                         : ModelObject.StaticMapInstancingQueueResult.None;
-
-                    if (canUseWalkerCrowdInstancing && ModelObject.HasPendingWalkerCrowdInstancingBatches())
-                        ModelObject.FlushWalkerCrowdInstancingBatches(this);
 
                     if (canUseMapInstancing &&
                         staticMapQueueResult == ModelObject.StaticMapInstancingQueueResult.None &&
@@ -932,11 +931,22 @@ namespace Client.Main.Controls
 
             scope?.Dispose();
 
-            if (canUseWalkerCrowdInstancing && ModelObject.HasPendingWalkerCrowdInstancingBatches())
-                ModelObject.FlushWalkerCrowdInstancingBatches(this);
+            if (canUseWalkerCrowdInstancing)
+                FlushWalkerCrowdBatchesAndSidePasses(time);
 
             if (canUseMapInstancing && ModelObject.HasPendingStaticMapInstancingBatches())
                 ModelObject.FlushStaticMapInstancingBatches(this);
+        }
+
+        private void FlushWalkerCrowdBatchesAndSidePasses(GameTime time)
+        {
+            if (ModelObject.HasPendingWalkerCrowdInstancingBatches())
+                ModelObject.FlushWalkerCrowdInstancingBatches(this);
+
+            for (int i = 0; i < _queuedCrowdSidePasses.Count; i++)
+                _queuedCrowdSidePasses[i]?.DrawQueuedCrowdInstancingSidePasses(time);
+
+            _queuedCrowdSidePasses.Clear();
         }
 
         private void DrawAfterPass(List<WorldObject> list, DepthStencilState state, GameTime time)

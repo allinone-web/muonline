@@ -219,7 +219,19 @@ namespace Client.Main.Controls.UI
                       .Append(" DC:")
                       .Append(ModelObject.LastFrameStaticMapInstancedDrawCalls)
                       .Append(" FB:")
-                      .Append(ModelObject.LastFrameStaticMapInstancingFallbacks);
+                      .Append(ModelObject.LastFrameStaticMapInstancingFallbacks)
+                      .Append(" | MP:")
+                      .Append(ModelObject.IsWalkerCrowdMultiPoseActive ? "ON" : "LEG")
+                      .Append(" O:")
+                      .Append(ModelObject.LastFrameWalkerCrowdMultiPoseObjects)
+                      .Append(" MI:")
+                      .Append(ModelObject.LastFrameWalkerCrowdMultiPoseMeshInstances)
+                      .Append(" P:")
+                      .Append(ModelObject.LastFrameWalkerCrowdMultiPoseUniquePoses)
+                      .Append(" D:")
+                      .Append(ModelObject.LastFrameWalkerCrowdMultiPoseDrawCalls)
+                      .Append(" U:")
+                      .Append(ModelObject.LastFrameWalkerCrowdMultiPosePaletteUploads);
                     SetLabelTextIfChanged(_instancingStatusLabel, _sb.ToString());
                 }
             }

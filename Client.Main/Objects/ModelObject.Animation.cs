@@ -1,4 +1,4 @@
-using Client.Data.BMD;
+﻿using Client.Data.BMD;
 using Client.Main.Content;
 using Client.Main.Controls.UI.Game.Inventory;
 using Client.Main.Models;
@@ -243,6 +243,10 @@ namespace Client.Main.Objects
                     _blendFromAction = -1;
                 }
 
+                // Cross-fade mutates the local palette after GenerateBoneMatrix().
+                // Advance the pose version so multi-pose instancing and effect palette
+                // caches never reuse an earlier blend step for the current object.
+                unchecked { _animationPoseVersion++; }
                 InvalidateBuffers(MeshDirtyFlags.Animation);
             }
 

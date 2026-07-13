@@ -1,4 +1,4 @@
-using Client.Data.BMD;
+﻿using Client.Data.BMD;
 using Client.Main.Content;
 using Client.Main.Controls;
 using Client.Main.Controllers;
@@ -185,6 +185,7 @@ namespace Client.Main.Objects
         private static readonly List<WalkerCrowdInstancingBatch> _walkerCrowdInstancingActiveBatches = new List<WalkerCrowdInstancingBatch>(128);
         private static bool _staticMapInstancingFailed;
         private static bool _walkerCrowdInstancingFailed;
+        private static Effect _cachedStaticMapInstancingEffect;
         private static EffectTechnique _cachedStaticMapInstancingTechnique;
         private static readonly Matrix _identity = Matrix.Identity;
 
@@ -200,7 +201,8 @@ namespace Client.Main.Objects
         public static int LastFrameStaticMapInstancedDrawCalls { get; private set; }
         public static int LastFrameStaticMapInstancingFallbacks { get; private set; }
         public static bool IsStaticMapInstancingBackendSupported => SupportsGpuDynamicSkinning;
-        public static bool IsStaticMapInstancingRuntimeDisabled => _staticMapInstancingFailed || _walkerCrowdInstancingFailed;
+        public static bool IsStaticMapInstancingRuntimeDisabled =>
+            _staticMapInstancingFailed || (_walkerCrowdInstancingFailed && _walkerCrowdMultiPoseInstancingFailed);
 
         private static void BeginFrameStaticMapInstancingMetrics()
         {
@@ -215,6 +217,7 @@ namespace Client.Main.Objects
             _staticMapInstancedBatchesThisFrame = 0;
             _staticMapInstancedDrawCallsThisFrame = 0;
             _staticMapInstancingFallbacksThisFrame = 0;
+            BeginFrameWalkerCrowdMultiPoseMetrics();
         }
 
         internal static void RegisterStaticMapInstancingFallback()
@@ -335,14 +338,14 @@ namespace Client.Main.Objects
             }
         }
 
-        internal static void FlushWalkerCrowdInstancingBatches(WorldControl world)
+        private static void FlushWalkerCrowdLegacyInstancingBatches(WorldControl world)
         {
             if (_walkerCrowdInstancingActiveBatches.Count == 0)
                 return;
 
-            if (_walkerCrowdInstancingFailed || !IsWalkerCrowdInstancingSupported())
+            if (_walkerCrowdInstancingFailed || !IsWalkerCrowdLegacyInstancingSupported())
             {
-                ClearWalkerCrowdInstancingQueues();
+                ClearWalkerCrowdLegacyInstancingQueues();
                 return;
             }
 
@@ -350,7 +353,7 @@ namespace Client.Main.Objects
             var effect = graphicsManager.DynamicLightingEffect;
             if (effect == null || _cachedStaticMapInstancingTechnique == null)
             {
-                ClearWalkerCrowdInstancingQueues();
+                ClearWalkerCrowdLegacyInstancingQueues();
                 return;
             }
 
@@ -426,12 +429,12 @@ namespace Client.Main.Objects
                 gd.BlendState = prevBlend;
                 gd.RasterizerState = prevRaster;
                 gd.SamplerStates[0] = prevSampler;
-                ClearWalkerCrowdInstancingQueues();
+                ClearWalkerCrowdLegacyInstancingQueues();
             }
         }
 
         internal static bool HasPendingStaticMapInstancingBatches() => _staticMapInstancingActiveBatches.Count > 0;
-        internal static bool HasPendingWalkerCrowdInstancingBatches() => _walkerCrowdInstancingActiveBatches.Count > 0;
+        private static bool HasPendingWalkerCrowdLegacyInstancingBatches() => _walkerCrowdInstancingActiveBatches.Count > 0;
 
         private static void EnsureInstanceUploadBuffer(StaticMapInstancingBatch batch, int instanceCount)
         {
@@ -497,7 +500,7 @@ namespace Client.Main.Objects
             _staticMapInstancingActiveBatches.Clear();
         }
 
-        private static void ClearWalkerCrowdInstancingQueues()
+        private static void ClearWalkerCrowdLegacyInstancingQueues()
         {
             for (int i = 0; i < _walkerCrowdInstancingActiveBatches.Count; i++)
                 _walkerCrowdInstancingActiveBatches[i].Instances.Clear();
@@ -518,11 +521,16 @@ namespace Client.Main.Objects
             if (effect == null)
                 return false;
 
-            _cachedStaticMapInstancingTechnique ??= TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced");
+            if (!ReferenceEquals(_cachedStaticMapInstancingEffect, effect))
+            {
+                _cachedStaticMapInstancingEffect = effect;
+                _cachedStaticMapInstancingTechnique = TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced");
+            }
+
             return _cachedStaticMapInstancingTechnique != null;
         }
 
-        private static bool IsWalkerCrowdInstancingSupported()
+        private static bool IsWalkerCrowdLegacyInstancingSupported()
         {
             if (_walkerCrowdInstancingFailed ||
                 !Constants.ENABLE_WALKER_CROWD_INSTANCING ||
@@ -536,7 +544,12 @@ namespace Client.Main.Objects
             if (effect == null)
                 return false;
 
-            _cachedStaticMapInstancingTechnique ??= TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced");
+            if (!ReferenceEquals(_cachedStaticMapInstancingEffect, effect))
+            {
+                _cachedStaticMapInstancingEffect = effect;
+                _cachedStaticMapInstancingTechnique = TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced");
+            }
+
             return _cachedStaticMapInstancingTechnique != null;
         }
 
@@ -616,7 +629,7 @@ namespace Client.Main.Objects
                 : StaticMapInstancingQueueResult.Partial;
         }
 
-        private bool TryQueueWalkerCrowdForInstancing()
+        private bool TryQueueWalkerCrowdLegacyForInstancing()
         {
             if (!CanUseWalkerCrowdInstancing())
                 return false;
@@ -778,13 +791,19 @@ namespace Client.Main.Objects
             if (LinkParentAnimation || ParentBoneLink >= 0 || ContinuousAnimation || !_animationSampleValid)
                 return false;
 
-            // Attack and skill one-shots are safe to batch after transition blending: the
-            // batch key already contains action, frame pair, and interpolation bucket.
-            // Keep death, shock, and other special one-shots on the individual path.
+            // Attack and skill one-shots are safe on the multi-pose path because every
+            // instance selects its own palette row. Keep death, shock, and other special
+            // one-shots on the individual renderer because they often need custom handling.
             if (walker.IsOneShotPlaying && !walker.IsAttackOrSkillAnimationPlaying())
                 return false;
 
             if (TotalAlpha < 0.999f || EnableCustomShader)
+                return false;
+
+            // The crowd path currently batches opaque dynamic-lighting meshes only.
+            // Keep the entire object on the individual renderer when it owns any
+            // visible transparent or custom-blended mesh so no secondary mesh vanishes.
+            if (HasVisibleTransparentMapMesh())
                 return false;
 
             if (_animationSampleActionIndex < 0)
@@ -926,12 +945,16 @@ namespace Client.Main.Objects
             return new Color((byte)r, (byte)g, (byte)b, alpha);
         }
 
-        private static void PrepareStaticMapInstancingEffect(Effect effect, WorldControl world)
+        private static void PrepareStaticMapInstancingEffect(
+            Effect effect,
+            WorldControl world,
+            EffectTechnique technique = null)
         {
-            if (effect == null || _cachedStaticMapInstancingTechnique == null)
+            EffectTechnique selectedTechnique = technique ?? _cachedStaticMapInstancingTechnique;
+            if (effect == null || selectedTechnique == null)
                 return;
 
-            effect.CurrentTechnique = _cachedStaticMapInstancingTechnique;
+            effect.CurrentTechnique = selectedTechnique;
 
             var camera = Camera.Instance;
             if (camera == null)

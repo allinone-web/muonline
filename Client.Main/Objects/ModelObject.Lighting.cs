@@ -20,6 +20,8 @@ namespace Client.Main.Objects
             {
                 _effect = effect;
                 BoneMatrices = effect.Parameters["BoneMatrices"];
+                CrowdBonePaletteTexture = effect.Parameters["CrowdBonePaletteTexture"];
+                CrowdBonePaletteRowCount = effect.Parameters["CrowdBonePaletteRowCount"];
                 World = effect.Parameters["World"];
                 View = effect.Parameters["View"];
                 Projection = effect.Parameters["Projection"];
@@ -57,6 +59,8 @@ namespace Client.Main.Objects
             }
 
             public EffectParameter BoneMatrices { get; }
+            public EffectParameter CrowdBonePaletteTexture { get; }
+            public EffectParameter CrowdBonePaletteRowCount { get; }
             public EffectParameter World { get; }
             public EffectParameter View { get; }
             public EffectParameter Projection { get; }

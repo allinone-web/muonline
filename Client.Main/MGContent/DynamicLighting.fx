@@ -15,6 +15,11 @@ float4x4 Projection;
 float4x4 WorldViewProjection; // Includes World * View * Projection
 #if !OPENGL
 float4x4 BoneMatrices[256];
+// Multi-pose crowd skinning stores one palette per texture row.
+// The row width is selected per flush (32/64/128/256 bones), and each bone
+// occupies four consecutive float4 texels (one texel per matrix row).
+Texture2D CrowdBonePaletteTexture;
+float CrowdBonePaletteRowCount = 1.0;
 #endif
 
 float3 EyePosition;
@@ -112,6 +117,21 @@ struct VertexInputSkinnedInstanced
     float4 InstWorld2    : TEXCOORD4;
     float4 InstWorld3    : TEXCOORD5;
     float4 InstanceColor : COLOR1;
+};
+
+struct VertexInputSkinnedMultiPoseInstanced
+{
+    float3 Position      : POSITION0;
+    float3 Normal        : NORMAL0;
+    float2 TexCoord      : TEXCOORD0;
+    float4 Color         : COLOR0;
+    float2 BoneIndices   : TEXCOORD1;
+    float4 InstWorld0    : TEXCOORD2;
+    float4 InstWorld1    : TEXCOORD3;
+    float4 InstWorld2    : TEXCOORD4;
+    float4 InstWorld3    : TEXCOORD5;
+    float4 InstanceColor : COLOR1;
+    float2 PaletteData   : TEXCOORD6;
 };
 #endif
 
@@ -337,6 +357,49 @@ PixelInput VS_ObjectsSkinnedInstanced(VertexInputSkinnedInstanced input)
     output.DynamicLight = float3(0, 0, 0);
     return output;
 }
+
+float4x4 LoadCrowdBoneMatrix(int boneIndex, int paletteRow)
+{
+    int safeBoneIndex = min(max(boneIndex, 0), 255);
+    int safePaletteRow = min(max(paletteRow, 0), max((int)CrowdBonePaletteRowCount - 1, 0));
+    int texelX = safeBoneIndex * 4;
+
+    return float4x4(
+        CrowdBonePaletteTexture.Load(int3(texelX + 0, safePaletteRow, 0)),
+        CrowdBonePaletteTexture.Load(int3(texelX + 1, safePaletteRow, 0)),
+        CrowdBonePaletteTexture.Load(int3(texelX + 2, safePaletteRow, 0)),
+        CrowdBonePaletteTexture.Load(int3(texelX + 3, safePaletteRow, 0)));
+}
+
+PixelInput VS_ObjectsSkinnedMultiPoseInstanced(VertexInputSkinnedMultiPoseInstanced input)
+{
+    PixelInput output;
+    int positionBoneIndex = min(max((int)input.BoneIndices.x, 0), 255);
+    int normalBoneIndex = min(max((int)input.BoneIndices.y, 0), 255);
+    int paletteRow = (int)(input.PaletteData.x + 0.5);
+
+    float4x4 positionBone = LoadCrowdBoneMatrix(positionBoneIndex, paletteRow);
+    float3 localNormal = mul(input.Normal, (float3x3)positionBone);
+    if (normalBoneIndex != positionBoneIndex)
+    {
+        float4x4 normalBone = LoadCrowdBoneMatrix(normalBoneIndex, paletteRow);
+        localNormal = mul(input.Normal, (float3x3)normalBone);
+    }
+
+    float4x4 instanceWorld = float4x4(input.InstWorld0, input.InstWorld1, input.InstWorld2, input.InstWorld3);
+    float4 localPos = mul(float4(input.Position, 1.0), positionBone);
+    float4 worldPos = mul(localPos, instanceWorld);
+
+    output.WorldPos = worldPos.xyz;
+    output.Position = mul(worldPos, View);
+    output.Position = mul(output.Position, Projection);
+    output.Normal = normalize(mul(localNormal, (float3x3)instanceWorld));
+    output.TexCoord = input.TexCoord;
+    output.Color = input.Color * input.InstanceColor;
+    output.DynamicLight = float3(0, 0, 0);
+    return output;
+}
+
 #endif
 
 float SampleShadow(float3 worldPos, float3 normal)
@@ -476,6 +539,15 @@ technique DynamicLighting_SkinnedInstanced
     pass Pass1
     {
         VertexShader = compile VS_SHADERMODEL VS_ObjectsSkinnedInstanced();
+        PixelShader = compile PS_SHADERMODEL PS_Objects();
+    }
+}
+
+technique DynamicLighting_SkinnedMultiPoseInstanced
+{
+    pass Pass1
+    {
+        VertexShader = compile VS_SHADERMODEL VS_ObjectsSkinnedMultiPoseInstanced();
         PixelShader = compile PS_SHADERMODEL PS_Objects();
     }
 }
