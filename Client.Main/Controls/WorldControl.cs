@@ -142,6 +142,9 @@ namespace Client.Main.Controls
         private bool _isUpdatingVisibleObjects;
         private bool _visibleObjectsNeedCompaction;
         private readonly HashSet<WorldObject> _positionDirtyObjects = [];
+        private WorldObject[] _dirtyVisibilityScratch = Array.Empty<WorldObject>();
+        private readonly List<WorldObject> _pendingVisibleAdd = new(256);
+        private readonly List<WorldObject> _pendingVisibleRemove = new(256);
         private readonly object _visibleMergeLock = new();
         private bool _dirtyVisibleObjects = true;
         private bool _hasVisibilitySnapshot;
@@ -161,15 +164,15 @@ namespace Client.Main.Controls
         private const float NearUpdateDistanceSq = 2200f * 2200f;
         private const float MidUpdateDistanceSq = 4200f * 4200f;
         private const float FarUpdateDistanceSq = 6200f * 6200f;
-        private const int ParallelVisibleRebuildThreshold = 768;
-        private const int ParallelDirtyRefreshThreshold = 256;
+        private const int ParallelVisibleRebuildThreshold = 1536;
+        private const int ParallelDirtyRefreshThreshold = 1024;
         private const int SpatialSectorTileSize = 16;
         private const int SpatialSectorsPerAxis = Constants.TERRAIN_SIZE / SpatialSectorTileSize;
         private const int SpatialInvalidSector = -1;
         private const int SpatialRebuildPaddingSectors = 1;
         private static readonly ParallelOptions VisibleParallelOptions = new()
         {
-            MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1)
+            MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 2)
         };
         private readonly List<WorldObject>[,] _spatialSectors = new List<WorldObject>[SpatialSectorsPerAxis, SpatialSectorsPerAxis];
         private readonly List<WorldObject> _spatialOffGridObjects = [];
@@ -1407,7 +1410,8 @@ namespace Client.Main.Controls
 
         private void RefreshDirtyVisibleObjects()
         {
-            if (_positionDirtyObjects.Count == 0)
+            int dirtyCount = _positionDirtyObjects.Count;
+            if (dirtyCount == 0)
                 return;
 
             _cullingStopwatch.Restart();
@@ -1417,32 +1421,36 @@ namespace Client.Main.Controls
             float maxViewDistance = camera.ViewFar + Constants.MAX_CAMERA_DISTANCE + 250f;
             float maxDistSq = maxViewDistance * maxViewDistance;
             var frustum = camera.Frustum;
-            var dirtySnapshot = new WorldObject[_positionDirtyObjects.Count];
-            _positionDirtyObjects.CopyTo(dirtySnapshot);
+
+            EnsureDirtyVisibilityScratchCapacity(dirtyCount);
+            _positionDirtyObjects.CopyTo(_dirtyVisibilityScratch);
             _positionDirtyObjects.Clear();
 
-            for (int i = 0; i < dirtySnapshot.Length; i++)
-                UpdateSpatialRegistration(dirtySnapshot[i]);
+            for (int i = 0; i < dirtyCount; i++)
+                UpdateSpatialRegistration(_dirtyVisibilityScratch[i]);
 
-            bool useParallel = Environment.ProcessorCount > 1 &&
-                               dirtySnapshot.Length >= ParallelDirtyRefreshThreshold;
+            bool useParallel = Environment.ProcessorCount > 2 &&
+                               dirtyCount >= ParallelDirtyRefreshThreshold;
 
             if (useParallel)
             {
-                var pendingAdd = new List<WorldObject>(dirtySnapshot.Length);
-                var pendingRemove = new List<WorldObject>(dirtySnapshot.Length);
+                _pendingVisibleAdd.Clear();
+                _pendingVisibleRemove.Clear();
+                if (_pendingVisibleAdd.Capacity < dirtyCount) _pendingVisibleAdd.Capacity = dirtyCount;
+                if (_pendingVisibleRemove.Capacity < dirtyCount) _pendingVisibleRemove.Capacity = dirtyCount;
 
                 Parallel.For(
                     0,
-                    dirtySnapshot.Length,
+                    dirtyCount,
                     VisibleParallelOptions,
-                    () => (add: new List<WorldObject>(16), remove: new List<WorldObject>(16)),
+                    () => (add: new List<WorldObject>(32), remove: new List<WorldObject>(32)),
                     (i, _, local) =>
                     {
-                        var obj = dirtySnapshot[i];
+                        var obj = _dirtyVisibilityScratch[i];
                         if (obj == null || !obj.Visible)
                         {
-                            local.remove.Add(obj);
+                            if (obj != null)
+                                local.remove.Add(obj);
                             return local;
                         }
 
@@ -1456,29 +1464,31 @@ namespace Client.Main.Controls
                     },
                     local =>
                     {
+                        if (local.add.Count == 0 && local.remove.Count == 0)
+                            return;
+
                         lock (_visibleMergeLock)
                         {
-                            if (local.add.Count > 0)
-                                pendingAdd.AddRange(local.add);
-                            if (local.remove.Count > 0)
-                                pendingRemove.AddRange(local.remove);
+                            _pendingVisibleAdd.AddRange(local.add);
+                            _pendingVisibleRemove.AddRange(local.remove);
                         }
                     });
 
-                for (int i = 0; i < pendingRemove.Count; i++)
-                    RemoveVisibleObject(pendingRemove[i]);
+                for (int i = 0; i < _pendingVisibleRemove.Count; i++)
+                    RemoveVisibleObject(_pendingVisibleRemove[i]);
 
-                for (int i = 0; i < pendingAdd.Count; i++)
-                    AddVisibleObject(pendingAdd[i]);
+                for (int i = 0; i < _pendingVisibleAdd.Count; i++)
+                    AddVisibleObject(_pendingVisibleAdd[i]);
             }
             else
             {
-                for (int i = 0; i < dirtySnapshot.Length; i++)
+                for (int i = 0; i < dirtyCount; i++)
                 {
-                    var obj = dirtySnapshot[i];
+                    var obj = _dirtyVisibilityScratch[i];
                     if (obj == null || !obj.Visible)
                     {
-                        RemoveVisibleObject(obj);
+                        if (obj != null)
+                            RemoveVisibleObject(obj);
                         continue;
                     }
 
@@ -1490,8 +1500,9 @@ namespace Client.Main.Controls
                 }
             }
 
+            Array.Clear(_dirtyVisibilityScratch, 0, dirtyCount);
             _cullingStopwatch.Stop();
-            LastCullCandidateCount = dirtySnapshot.Length;
+            LastCullCandidateCount = dirtyCount;
             LastCullVisibleCount = _visibleObjects.Count;
             LastCullRebuildMs = (float)_cullingStopwatch.Elapsed.TotalMilliseconds;
             LastCullWasRebuild = false;
@@ -1499,6 +1510,18 @@ namespace Client.Main.Controls
             FrameMetrics.VisibleObjects = LastCullVisibleCount;
             FrameMetrics.CullMs = LastCullRebuildMs;
             FrameMetrics.CullWasRebuild = false;
+        }
+
+        private void EnsureDirtyVisibilityScratchCapacity(int required)
+        {
+            if (_dirtyVisibilityScratch.Length >= required)
+                return;
+
+            int capacity = 256;
+            while (capacity < required)
+                capacity <<= 1;
+
+            _dirtyVisibilityScratch = new WorldObject[capacity];
         }
 
         private void UpdateVisibleObjects(GameTime time)

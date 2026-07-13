@@ -32,6 +32,8 @@ namespace Client.Main.Controllers
         public RenderTarget2D MainRenderTarget { get; private set; }
         public RenderTarget2D TempTarget1 { get; private set; }
         public RenderTarget2D TempTarget2 { get; private set; }
+        private SurfaceFormat _mainRenderTargetFormat;
+        private int _mainRenderTargetSampleCount = -1;
 
         public Effect ShadowEffect { get; private set; }
         public Effect ItemMaterialEffect { get; private set; }
@@ -62,7 +64,8 @@ namespace Client.Main.Controllers
             Pixel = new Texture2D(_graphicsDevice, 1, 1);
             Pixel.SetData(new[] { Color.White });
 
-            InitializeRenderTargets();
+            // Full-screen render targets are allocated lazily only when resolution
+            // scaling, MSAA or post-processing actually needs them.
 
             AlphaRGBEffect = LoadEffect("AlphaRGB");
             FXAAEffect = LoadEffect("FXAA");
@@ -119,13 +122,9 @@ namespace Client.Main.Controllers
 
         public void UpdateRenderScale()
         {
-            // Dispose old render targets
-            MainRenderTarget?.Dispose();
-            TempTarget1?.Dispose();
-            TempTarget2?.Dispose();
+            DisposeRenderTargets();
 
-            // Recreate with new scale
-            InitializeRenderTargets();
+            // Targets are recreated lazily on the next frame if required.
 
             // Update UiScaler with new render scale
             var settings = MuGame.AppSettings?.Graphics;
@@ -165,32 +164,63 @@ namespace Client.Main.Controllers
             return SamplerState.LinearClamp;
         }
 
-        private void InitializeRenderTargets()
+        public void EnsureRenderTargets(bool requireTempTarget1, bool requireTempTarget2)
         {
             PresentationParameters pp = _graphicsDevice.PresentationParameters;
-
-            int backBufferWidth = Math.Max(1, _graphicsDevice.PresentationParameters.BackBufferWidth);
-            int backBufferHeight = Math.Max(1, _graphicsDevice.PresentationParameters.BackBufferHeight);
-
+            int backBufferWidth = Math.Max(1, pp.BackBufferWidth);
+            int backBufferHeight = Math.Max(1, pp.BackBufferHeight);
             int targetWidth = Math.Max(1, (int)MathF.Round(backBufferWidth * Constants.RENDER_SCALE));
             int targetHeight = Math.Max(1, (int)MathF.Round(backBufferHeight * Constants.RENDER_SCALE));
-
-            // Apply render scale for internal resolution, guard against zero-sized targets on mobile
-
-            // POPRAWKA: Używamy SurfaceFormat.Color zamiast pp.BackBufferFormat dla MSAA
-            // to pomaga z problemem gamma
             SurfaceFormat renderTargetFormat = Constants.MSAA_ENABLED ? SurfaceFormat.Color : pp.BackBufferFormat;
+            int sampleCount = Constants.MSAA_ENABLED ? pp.MultiSampleCount : 0;
 
-            MainRenderTarget = new RenderTarget2D(_graphicsDevice, targetWidth, targetHeight, false,
-                renderTargetFormat, DepthFormat.Depth24,
-                Constants.MSAA_ENABLED ? pp.MultiSampleCount : 0,
-                RenderTargetUsage.DiscardContents);
+            bool recreateMain = !IsTargetValid(MainRenderTarget, targetWidth, targetHeight) ||
+                                _mainRenderTargetFormat != renderTargetFormat ||
+                                _mainRenderTargetSampleCount != sampleCount;
+            if (recreateMain)
+            {
+                DisposeRenderTargets();
+                MainRenderTarget = new RenderTarget2D(
+                    _graphicsDevice,
+                    targetWidth,
+                    targetHeight,
+                    false,
+                    renderTargetFormat,
+                    DepthFormat.Depth24,
+                    sampleCount,
+                    RenderTargetUsage.DiscardContents);
+                _mainRenderTargetFormat = renderTargetFormat;
+                _mainRenderTargetSampleCount = sampleCount;
+            }
 
-            // Temp targets don't need MSAA
-            TempTarget1 = new RenderTarget2D(_graphicsDevice, targetWidth, targetHeight, false,
-                SurfaceFormat.Color, DepthFormat.None);
-            TempTarget2 = new RenderTarget2D(_graphicsDevice, targetWidth, targetHeight, false,
-                SurfaceFormat.Color, DepthFormat.None);
+            if (requireTempTarget1 && !IsTargetValid(TempTarget1, targetWidth, targetHeight))
+            {
+                TempTarget1?.Dispose();
+                TempTarget1 = new RenderTarget2D(
+                    _graphicsDevice, targetWidth, targetHeight, false, SurfaceFormat.Color, DepthFormat.None);
+            }
+
+            if (requireTempTarget2 && !IsTargetValid(TempTarget2, targetWidth, targetHeight))
+            {
+                TempTarget2?.Dispose();
+                TempTarget2 = new RenderTarget2D(
+                    _graphicsDevice, targetWidth, targetHeight, false, SurfaceFormat.Color, DepthFormat.None);
+            }
+        }
+
+        private static bool IsTargetValid(RenderTarget2D target, int width, int height)
+            => target != null && !target.IsDisposed && target.Width == width && target.Height == height;
+
+        private void DisposeRenderTargets()
+        {
+            MainRenderTarget?.Dispose();
+            TempTarget1?.Dispose();
+            TempTarget2?.Dispose();
+            MainRenderTarget = null;
+            TempTarget1 = null;
+            TempTarget2 = null;
+            _mainRenderTargetFormat = default;
+            _mainRenderTargetSampleCount = -1;
         }
 
         private Effect LoadEffect(string effectName)
@@ -214,9 +244,7 @@ namespace Client.Main.Controllers
 
         public void Dispose()
         {
-            MainRenderTarget?.Dispose();
-            TempTarget1?.Dispose();
-            TempTarget2?.Dispose();
+            DisposeRenderTargets();
             Pixel?.Dispose();
             ShadowMapRenderer?.Dispose();
 

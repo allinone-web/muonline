@@ -1,4 +1,4 @@
-﻿﻿using Client.Main.Configuration;
+﻿using Client.Main.Configuration;
 using Client.Main.Content;
 using Client.Main.Controllers;
 using Client.Main.Controls;
@@ -37,6 +37,7 @@ namespace Client.Main
         private static Controllers.TaskScheduler _taskScheduler;
         private static readonly MainThreadDispatcher _mainThreadDispatcher = new(null, MaxMainThreadActionsPerFrame, MaxMainThreadActionTimePerFrame);
         private static int _mainThreadId;
+        private static readonly FrameProfiler _frameProfiler = new();
 
         // Static Properties
         public static MuGame Instance { get; private set; }
@@ -53,9 +54,11 @@ namespace Client.Main
         public static bool IsMainThread => _mainThreadId != 0 && Environment.CurrentManagedThreadId == _mainThreadId;
         public static int MainThreadProcessedActionsLastFrame => _mainThreadDispatcher.LastProcessedCount;
         public static long MainThreadProcessedActionsTotal => _mainThreadDispatcher.TotalProcessedCount;
+        public static double MainThreadProcessingMs => _mainThreadDispatcher.LastProcessDurationMs;
         public static int LastSimulationStepCount { get; private set; }
         public static double LastSimulationAcceptedElapsedMs { get; private set; }
         public static double LastSimulationAccumulationAlpha { get; private set; }
+        public static FrameProfiler.Snapshot FramePerformance => _frameProfiler.Current;
 
         // Instance Fields
         private readonly GraphicsDeviceManager _graphics;
@@ -65,6 +68,8 @@ namespace Client.Main
             SimulationMaxStepsPerFrame,
             SimulationMaxAcceptedElapsed);
         private bool _networkDisposed = false;
+        private readonly SemaphoreSlim _sceneChangeLock = new(1, 1);
+        private int _sceneChangeGeneration;
         private float _scaleFactor;
         private bool _effectCacheValid = false;
         private Point _lastEffectTargetSize;
@@ -157,25 +162,32 @@ namespace Client.Main
         /// Schedules an action to be executed on the main game thread during the next Update cycle.
         /// </summary>
         /// <param name="action">The action to execute.</param>
-        public static void ScheduleOnMainThread(Action action)
+        public static void ScheduleOnMainThread(
+            Action action,
+            MainThreadDispatcher.WorkPriority priority = MainThreadDispatcher.WorkPriority.Normal)
         {
-            _mainThreadDispatcher.Enqueue(action);
+            _mainThreadDispatcher.Enqueue(action, priority);
         }
 
         /// <summary>
         /// Schedules a stateful action to be executed on the main game thread without creating a closure.
         /// </summary>
-        public static void ScheduleOnMainThread<TState>(Action<TState> action, TState state)
+        public static void ScheduleOnMainThread<TState>(
+            Action<TState> action,
+            TState state,
+            MainThreadDispatcher.WorkPriority priority = MainThreadDispatcher.WorkPriority.Normal)
         {
-            _mainThreadDispatcher.Enqueue(action, state);
+            _mainThreadDispatcher.Enqueue(action, state, priority);
         }
 
         /// <summary>
         /// Schedules an async action to be started on the main game thread.
         /// </summary>
-        public static void ScheduleOnMainThread(Func<Task> action)
+        public static void ScheduleOnMainThread(
+            Func<Task> action,
+            MainThreadDispatcher.WorkPriority priority = MainThreadDispatcher.WorkPriority.Normal)
         {
-            _mainThreadDispatcher.Enqueue(action);
+            _mainThreadDispatcher.Enqueue(action, priority);
         }
 
         private static bool ValidateSettings(MuOnlineSettings settings, ILogger logger)
@@ -256,7 +268,7 @@ namespace Client.Main
             }
             _logger.LogInformation(">>> ChangeScene<{SceneType}>() called (generic)", typeof(T).Name);
             BaseScene newScene = new T(); // Creating an instance using the parameterless constructor
-            ChangeSceneInternal(newScene); // Calling the helper method
+            _ = ObserveSceneChangeAsync(ChangeSceneInternalAsync(newScene));
         }
 
         // NEW method accepting a scene instance
@@ -268,7 +280,7 @@ namespace Client.Main
                 throw new ArgumentNullException(nameof(newScene));
             }
             _logger.LogInformation(">>> ChangeScene(BaseScene newScene) called with scene type: {SceneType}", newScene.GetType().Name);
-            ChangeSceneInternal(newScene); // Calling the helper method
+            _ = ObserveSceneChangeAsync(ChangeSceneInternalAsync(newScene));
         }
 
         // Protected Instance Methods
@@ -372,7 +384,7 @@ namespace Client.Main
             bootLogger.LogInformation("✅ Network Manager initialized.");
 
             // Initialize TaskScheduler
-            _taskScheduler = new Controllers.TaskScheduler(AppLoggerFactory);
+            _taskScheduler = new Controllers.TaskScheduler(AppLoggerFactory, _mainThreadDispatcher);
             bootLogger.LogInformation("✅ TaskScheduler initialized.");
 
             IsMouseVisible = false; // Keep this if you want a custom cursor
@@ -451,6 +463,7 @@ namespace Client.Main
 
         protected override void Update(GameTime gameTime)
         {
+            _frameProfiler.BeginUpdate();
             UPSCounter.Instance.CalcUPS(gameTime);
 
             var simStep = _simulationClock.Advance(gameTime.ElapsedGameTime);
@@ -461,9 +474,6 @@ namespace Client.Main
             // Keep background/main-thread work on a fixed budget. Scaling it after a slow
             // frame creates a feedback loop that makes the next frame even slower.
             ProcessMainThreadActions();
-
-            // Process prioritized tasks using a fixed per-frame budget.
-            _taskScheduler?.ProcessFrame();
 
             try // outer try
             {
@@ -501,11 +511,17 @@ namespace Client.Main
                 _logger?.LogCritical(e, "Unhandled exception in MuGame.Update loop (outside scene/base update)!");
                 // Exit();
             }
+            finally
+            {
+                _frameProfiler.EndUpdate();
+            }
         }
 
         private void ProcessMainThreadActions()
         {
+            _taskScheduler?.BeginFrame();
             _mainThreadDispatcher.ProcessPending();
+            _taskScheduler?.EndFrame(_mainThreadDispatcher.LastProcessDurationMs);
         }
 
         protected override void LoadContent()
@@ -539,16 +555,13 @@ namespace Client.Main
             }
             // --- END NETWORK CONNECTION ---
 
-            // Load the initial scene (e.g., LoginScene) AFTER network connection starts
-            ChangeSceneAsync(Constants.ENTRY_SCENE).ContinueWith(t =>
-            {
-                if (t.Exception != null)
-                    _logger?.LogDebug($"Error changing scene: {t.Exception}");
-            });
+            // Load the initial scene (e.g., LoginScene) AFTER network connection starts.
+            _ = ObserveSceneChangeAsync(ChangeSceneAsync(Constants.ENTRY_SCENE));
         }
 
         protected override void Draw(GameTime gameTime)
         {
+            _frameProfiler.BeginDraw();
             try
             {
                 // Initialize frame-based optimizations
@@ -559,6 +572,13 @@ namespace Client.Main
                 FPSCounter.Instance.CalcFPS(gameTime);
                 if (ShouldUseIntermediateRenderTarget())
                 {
+                    bool alphaRgbEnabled = GraphicsManager.Instance.IsAlphaRGBEnabled && GraphicsManager.Instance.AlphaRGBEffect != null;
+                    bool fxaaEnabled = GraphicsManager.Instance.IsFXAAEnabled && GraphicsManager.Instance.FXAAEffect != null;
+                    int postProcessPasses = (alphaRgbEnabled ? 1 : 0) + (fxaaEnabled ? 1 : 0);
+                    GraphicsManager.Instance.EnsureRenderTargets(
+                        requireTempTarget1: postProcessPasses >= 1,
+                        requireTempTarget2: postProcessPasses >= 2);
+
                     DrawSceneToMainRenderTarget(gameTime);
                     ApplyPostProcessingEffects();
                 }
@@ -576,6 +596,7 @@ namespace Client.Main
             {
                 // Ensure that no render target is active to avoid the Present error
                 GraphicsDevice.SetRenderTarget(null);
+                _frameProfiler.EndDraw();
             }
         }
 
@@ -584,6 +605,7 @@ namespace Client.Main
             if (disposing)
             {
                 DisposeNetworkSafely();   // ← won't be called a second time
+                _taskScheduler?.Dispose();
                 AppLoggerFactory?.Dispose();
             }
             base.Dispose(disposing);
@@ -591,55 +613,84 @@ namespace Client.Main
         }
 
         // Private Instance Methods
-        // Private helper method for changing scenes
-        private async void ChangeSceneInternal(BaseScene newScene)
+        // Private helper method for changing scenes. Scene changes are serialized so two
+        // network/UI requests cannot dispose and initialize scenes concurrently.
+        private async Task ChangeSceneInternalAsync(BaseScene newScene)
         {
-            _logger.LogInformation("--- ChangeSceneInternal: Starting scene change to {SceneType}...", newScene.GetType().Name);
+            if (newScene == null)
+                throw new ArgumentNullException(nameof(newScene));
 
-            // Optional: Show loading screen before disposing the old scene
-            // ShowLoadingScreen();
-
-            // Dispose the old scene
-            if (ActiveScene != null)
-            {
-                _logger.LogDebug("--- ChangeSceneInternal: Disposing previous scene ({SceneType})...", ActiveScene.GetType().Name);
-                ActiveScene.Dispose();
-                _logger.LogDebug("--- ChangeSceneInternal: Previous scene disposed.");
-            }
-            ActiveScene = null; // Ensure there's no reference while loading the new one
-
-            // Set the new scene
-            ActiveScene = newScene;
-            _logger.LogDebug("--- ChangeSceneInternal: ActiveScene set to {SceneType}.", ActiveScene.GetType().Name);
-
-            // Initialize/Load the new scene (assuming Initialize/Load is asynchronous)
+            int requestGeneration = Interlocked.Increment(ref _sceneChangeGeneration);
+            await _sceneChangeLock.WaitAsync();
             try
             {
-                _logger.LogDebug("--- ChangeSceneInternal: Starting initialization for {SceneType}...", ActiveScene.GetType().Name);
-
-                if (ActiveScene is BaseScene baseScene)
+                // A newer request superseded this one before it acquired the lock.
+                if (requestGeneration != Volatile.Read(ref _sceneChangeGeneration))
                 {
-                    await baseScene.InitializeWithProgressReporting(null);
-                }
-                else
-                {
-                    await ActiveScene.Initialize();
+                    newScene.Dispose();
+                    return;
                 }
 
-                _logger.LogDebug("--- ChangeSceneInternal: Initialization completed for {SceneType}.", ActiveScene.GetType().Name);
+                string sceneName = newScene.GetType().Name;
+                _logger?.LogInformation("--- Scene change starting: {SceneType}", sceneName);
+
+                BaseScene previousScene = ActiveScene;
+                ActiveScene = null;
+                if (previousScene != null)
+                {
+                    try
+                    {
+                        previousScene.Dispose();
+                    }
+                    catch (Exception disposeException)
+                    {
+                        _logger?.LogError(disposeException, "Failed disposing previous scene {SceneType}.", previousScene.GetType().Name);
+                    }
+                }
+
+                ActiveScene = newScene;
+                try
+                {
+                    await newScene.InitializeWithProgressReporting(null);
+                }
+                catch (Exception ex)
+                {
+                    if (ReferenceEquals(ActiveScene, newScene))
+                        ActiveScene = null;
+
+                    try
+                    {
+                        newScene.Dispose();
+                    }
+                    catch (Exception disposeException)
+                    {
+                        _logger?.LogDebug(disposeException, "Failed disposing scene after initialization error.");
+                    }
+
+                    _logger?.LogError(ex, "Scene initialization failed for {SceneType}.", sceneName);
+                    return;
+                }
+
+                // If another request arrived during initialization, let it take over as soon
+                // as this serialized operation releases the lock.
+                _logger?.LogInformation("--- Scene change completed: {SceneType}", sceneName);
+            }
+            finally
+            {
+                _sceneChangeLock.Release();
+            }
+        }
+
+        private async Task ObserveSceneChangeAsync(Task sceneChangeTask)
+        {
+            try
+            {
+                await sceneChangeTask.ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "!!! ChangeSceneInternal: Exception during Initialize() for {SceneType}.", ActiveScene.GetType().Name);
-                // Handle error - maybe return to LoginScene?
-                // ActiveScene = new LoginScene(); // Emergency return
-                // await ActiveScene.Initialize();
-                return; // End scene change after error
+                _logger?.LogError(ex, "Unhandled scene change failure.");
             }
-
-            // Optional: Hide loading screen after the new scene is loaded
-            // HideLoadingScreen();
-            _logger.LogInformation("<<< ChangeSceneInternal: Scene change to {SceneType} complete.", ActiveScene.GetType().Name);
         }
 
         private void CheckShaderToggles()
@@ -672,11 +723,13 @@ namespace Client.Main
             _graphics.ApplyChanges();
         }
 
-        private async Task ChangeSceneAsync(Type sceneType)
+        private Task ChangeSceneAsync(Type sceneType)
         {
-            ActiveScene?.Dispose();
-            ActiveScene = (BaseScene)Activator.CreateInstance(sceneType);
-            await ActiveScene.Initialize();
+            if (sceneType == null)
+                throw new ArgumentNullException(nameof(sceneType));
+
+            var scene = (BaseScene)Activator.CreateInstance(sceneType);
+            return ChangeSceneInternalAsync(scene);
         }
 
         private void UpdateInputInfo(GameTime gameTime)
@@ -914,18 +967,21 @@ namespace Client.Main
         private void ApplyPostProcessingEffects()
         {
             RenderTarget2D sourceTarget = GraphicsManager.Instance.MainRenderTarget;
-            RenderTarget2D destTarget = GraphicsManager.Instance.TempTarget1;
 
             if (GraphicsManager.Instance.IsAlphaRGBEnabled && GraphicsManager.Instance.AlphaRGBEffect != null)
             {
-                ApplyEffect(GraphicsManager.Instance.AlphaRGBEffect, sourceTarget, destTarget);
-                GraphicsManager.Instance.SwapTargets(ref sourceTarget, ref destTarget);
+                RenderTarget2D destination = GraphicsManager.Instance.TempTarget1;
+                ApplyEffect(GraphicsManager.Instance.AlphaRGBEffect, sourceTarget, destination);
+                sourceTarget = destination;
             }
 
             if (GraphicsManager.Instance.IsFXAAEnabled && GraphicsManager.Instance.FXAAEffect != null)
             {
-                ApplyEffect(GraphicsManager.Instance.FXAAEffect, sourceTarget, destTarget);
-                GraphicsManager.Instance.SwapTargets(ref sourceTarget, ref destTarget);
+                RenderTarget2D destination = ReferenceEquals(sourceTarget, GraphicsManager.Instance.MainRenderTarget)
+                    ? GraphicsManager.Instance.TempTarget1
+                    : GraphicsManager.Instance.TempTarget2;
+                ApplyEffect(GraphicsManager.Instance.FXAAEffect, sourceTarget, destination);
+                sourceTarget = destination;
             }
 
             DrawFinalImageToScreen(sourceTarget);

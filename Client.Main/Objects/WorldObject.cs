@@ -1,4 +1,4 @@
-﻿// Client.Main/Objects/WorldObject.cs
+// Client.Main/Objects/WorldObject.cs
 
 using Client.Main.Controllers;
 using Client.Main.Controls;
@@ -46,7 +46,6 @@ namespace Client.Main.Objects
         public DepthStencilState DepthState { get; set; } = DepthStencilState.Default;
 
         private SpriteFont _font;
-        private Texture2D _whiteTexture;
 
         // PERFORMANCE: Static bbox indices to avoid per-frame allocation
         private static readonly int[] BoundingBoxIndices = new int[]
@@ -302,17 +301,16 @@ namespace Client.Main.Objects
             void draw()
             {
                 // Draw background rectangle directly (no border for hover names)
-                if (_whiteTexture == null)
-                {
-                    _whiteTexture = new Texture2D(GraphicsDevice, 1, 1);
-                    _whiteTexture.SetData([Color.White]);
-                }
+                Texture2D whiteTexture = GraphicsManager.Instance.Pixel;
+                if (whiteTexture == null || whiteTexture.IsDisposed)
+                    return;
+
                 var bgRect = new Rectangle(
                     (int)(textPos.X - 4),
                     (int)(textPos.Y - 2),
                     (int)(size.X + 8),
                     (int)(size.Y + 4));
-                sb.Draw(_whiteTexture, bgRect, bgColor);
+                sb.Draw(whiteTexture, bgRect, bgColor);
 
                 // Draw text on top
                 sb.DrawString(_font, name, textPos, textColor, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
@@ -367,7 +365,6 @@ namespace Client.Main.Objects
             Parent?.Children.Remove(this);
             Parent = null;
 
-            _whiteTexture?.Dispose();
         }
 
         protected virtual void OnPositionChanged()
@@ -459,10 +456,10 @@ namespace Client.Main.Objects
 
             GraphicsDevice.DepthStencilState = DepthStencilState.Default;
 
-            Vector3[] corners = BoundingBoxWorld.GetCorners();
+            BoundingBoxWorld.GetCorners(_bboxCorners);
 
             for (int i = 0; i < 8; i++)
-                _bboxVerts[i] = new VertexPositionColor(corners[i], BoundingBoxColor);
+                _bboxVerts[i] = new VertexPositionColor(_bboxCorners[i], BoundingBoxColor);
 
             GraphicsManager.Instance.BoundingBoxEffect3D.View = Camera.Instance.View;
             GraphicsManager.Instance.BoundingBoxEffect3D.Projection = Camera.Instance.Projection;
@@ -561,20 +558,16 @@ namespace Client.Main.Objects
         }
 
 
-        private void DrawTextBackground(SpriteBatch spriteBatch, Rectangle rect, Color color, float layerDepth = 0f)
+        private static void DrawTextBackground(SpriteBatch spriteBatch, Rectangle rect, Color color, float layerDepth = 0f)
         {
-            if (_whiteTexture == null)
-            {
-                _whiteTexture = new Texture2D(GraphicsDevice, 1, 1);
-                _whiteTexture.SetData([Color.White]);
-            }
-            // Draw border first (even deeper/earlier)
+            Texture2D whiteTexture = GraphicsManager.Instance.Pixel;
+            if (whiteTexture == null || whiteTexture.IsDisposed)
+                return;
+
             var borderColor = Color.White * 0.3f;
             var borderRect = new Rectangle(rect.X - 1, rect.Y - 1, rect.Width + 2, rect.Height + 2);
-            spriteBatch.Draw(_whiteTexture, borderRect, null, borderColor, 0f, Vector2.Zero, SpriteEffects.None, layerDepth + 0.0001f);
-
-            // Draw background on top of border
-            spriteBatch.Draw(_whiteTexture, rect, null, color, 0f, Vector2.Zero, SpriteEffects.None, layerDepth);
+            spriteBatch.Draw(whiteTexture, borderRect, null, borderColor, 0f, Vector2.Zero, SpriteEffects.None, layerDepth + 0.0001f);
+            spriteBatch.Draw(whiteTexture, rect, null, color, 0f, Vector2.Zero, SpriteEffects.None, layerDepth);
         }
 
         internal void SetLowQuality(bool value)

@@ -1,4 +1,4 @@
-using Client.Data.ATT;
+﻿using Client.Data.ATT;
 using Client.Data.MAP;
 using Client.Data.OBJS;
 using Client.Data.OZB;
@@ -10,6 +10,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using static Client.Main.Core.Utilities.Utils;
+using Client.Main.Controllers;
 
 namespace Client.Main.Controls.Terrain
 {
@@ -171,7 +172,7 @@ namespace Client.Main.Controls.Terrain
             if (MuGame.IsMainThread)
                 UploadTextures();
             else
-                MuGame.ScheduleOnMainThread(UploadTextures);
+                MuGame.ScheduleOnMainThread(UploadTextures, MainThreadDispatcher.WorkPriority.High);
 
             return completion.Task;
         }

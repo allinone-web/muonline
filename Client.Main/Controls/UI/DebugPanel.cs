@@ -165,9 +165,9 @@ namespace Client.Main.Controls.UI
                     var terrainMetrics = walkableWorld.Terrain.FrameMetrics;
                     int queuedMainThreadActions = MuGame.MainThreadPendingActions;
                     int processedMainThreadActions = MuGame.MainThreadProcessedActionsLastFrame;
-                    int simulationSteps = MuGame.LastSimulationStepCount;
                     int queuedSchedulerTasks = MuGame.TaskScheduler?.QueuedTaskCount ?? 0;
                     int processedSchedulerTasks = MuGame.TaskScheduler?.LastFrameProcessedTasks ?? 0;
+                    var framePerformance = MuGame.FramePerformance;
                     _sb.Clear()
                        .Append($"Terrain: Drw:{terrainMetrics.DrawCalls} ")
                        .Append($"Tri:{terrainMetrics.DrawnTriangles} ")
@@ -177,9 +177,9 @@ namespace Client.Main.Controls.UI
                        .Append($"C:{walkableWorld.LastCullCandidateCount} ")
                        .Append($"V:{walkableWorld.LastCullVisibleCount} ")
                        .Append($"Ms:{walkableWorld.LastCullRebuildMs:F2} ")
-                       .Append($"CamV:{walkableWorld.LastCullCameraVersion} ")
-                       .Append($"| Sim:{simulationSteps} ")
-                       .Append($"MT:{processedMainThreadActions}/{queuedMainThreadActions} ")
+                       .Append($"| FT:{framePerformance.P95Ms:F1}/{framePerformance.P99Ms:F1}ms ")
+                       .Append($"GC:{framePerformance.AllocatedKb:F0}KB/{framePerformance.Gen0Collections} ")
+                       .Append($"MT:{processedMainThreadActions}/{queuedMainThreadActions}@{MuGame.MainThreadProcessingMs:F1}ms ")
                        .Append($"TS:{processedSchedulerTasks}/{queuedSchedulerTasks}");
                     SetLabelTextIfChanged(_performanceMetricsLabel, _sb.ToString());
 

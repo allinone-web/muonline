@@ -1,5 +1,6 @@
-using Client.Main.Objects;
+﻿using Client.Main.Objects;
 using System;
+using Client.Main.Controllers;
 
 namespace Client.Main.Controls
 {
@@ -37,7 +38,9 @@ namespace Client.Main.Controls
 
         public static void ScheduleRemoveAndRecycle(WorldControl world, DroppedItemObject obj)
         {
-            MuGame.ScheduleOnMainThread(() => RemoveAndRecycle(world, obj));
+            MuGame.ScheduleOnMainThread(
+                () => RemoveAndRecycle(world, obj),
+                MainThreadDispatcher.WorkPriority.Critical);
         }
 
         public static void ScheduleRemoveAndRecycle(WorldControl world, DroppedItemObject obj, Action afterMutation)
@@ -46,7 +49,7 @@ namespace Client.Main.Controls
             {
                 RemoveAndRecycle(world, obj);
                 afterMutation?.Invoke();
-            });
+            }, MainThreadDispatcher.WorkPriority.Critical);
         }
     }
 }

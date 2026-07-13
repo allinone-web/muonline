@@ -16,10 +16,13 @@ namespace Client.Main.Controls.Terrain
         public bool IsVisible;
         public int Xi, Yi;
 
-        // Hierarchical culling data
-        public bool[] TileVisibility = new bool[16]; // 4x4 tiles per block
+        // 16 tiles fit in a single mask, avoiding one heap allocation per terrain block.
+        public ushort TileVisibilityMask;
         public int VisibleTileCount;
         public bool FullyVisible; // All tiles in block are visible (skip individual tile tests)
+
+        public bool IsTileVisible(int tileIndex)
+            => (uint)tileIndex < 16u && (((uint)TileVisibilityMask) & (1u << tileIndex)) != 0;
     }
 
     /// <summary>
@@ -50,10 +53,10 @@ namespace Client.Main.Controls.Terrain
         private bool _hasVisibilitySnapshot;
         private readonly int[] _lodSteps = { 1, 2, 4 };
         private bool _cullingDataReady;
-        private const int ParallelBlockCullingThreshold = 512;
+        private const int ParallelBlockCullingThreshold = 1024;
         private static readonly ParallelOptions CullingParallelOptions = new()
         {
-            MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1)
+            MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 2)
         };
 
         public IReadOnlyList<TerrainBlock> VisibleBlocks => _visibleBlocks;
@@ -264,8 +267,7 @@ namespace Client.Main.Controls.Terrain
             {
                 block.FullyVisible = true;
                 block.VisibleTileCount = 16;
-                for (int i = 0; i < 16; i++)
-                    block.TileVisibility[i] = true;
+                block.TileVisibilityMask = ushort.MaxValue;
             }
             else
             {
@@ -290,7 +292,8 @@ namespace Client.Main.Controls.Terrain
 
         private void PerformTileCulling(TerrainBlock block, BoundingFrustum frustum)
         {
-            block.VisibleTileCount = 0;
+            int visibleCount = 0;
+            ushort visibilityMask = 0;
 
             for (int tileY = 0; tileY < BlockSize; tileY++)
             {
@@ -299,17 +302,18 @@ namespace Client.Main.Controls.Terrain
                     int x = block.Xi + tileX;
                     int y = block.Yi + tileY;
                     int tileIndex = y * Constants.TERRAIN_SIZE + x;
-                    bool visible = frustum.Contains(_tilePaddedBounds[tileIndex]) != ContainmentType.Disjoint;
+                    if (frustum.Contains(_tilePaddedBounds[tileIndex]) == ContainmentType.Disjoint)
+                        continue;
 
-                    int idx = tileY * BlockSize + tileX;
-                    block.TileVisibility[idx] = visible;
-                    if (visible) block.VisibleTileCount++;
+                    int indexInBlock = tileY * BlockSize + tileX;
+                    visibilityMask |= (ushort)(1 << indexInBlock);
+                    visibleCount++;
                 }
             }
 
-            // If all tiles ended up visible, mark FullyVisible to skip per-tile checks next frame
-            // Block is 4x4 tiles -> 16 total
-            block.FullyVisible = block.VisibleTileCount == 16;
+            block.TileVisibilityMask = visibilityMask;
+            block.VisibleTileCount = visibleCount;
+            block.FullyVisible = visibleCount == 16;
         }
 
         private static BoundingBox Inflate(BoundingBox bounds, float padXY, float padZ)

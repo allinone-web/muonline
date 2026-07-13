@@ -82,7 +82,7 @@ namespace Client.Main.Graphics
         public ShadowMapRenderer(GraphicsDevice graphicsDevice)
         {
             _graphicsDevice = graphicsDevice ?? throw new ArgumentNullException(nameof(graphicsDevice));
-            EnsureRenderTarget();
+            // Allocate the shadow target lazily when shadow mapping is actually rendered.
         }
 
         public void Dispose()

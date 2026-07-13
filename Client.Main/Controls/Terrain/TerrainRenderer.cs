@@ -774,7 +774,7 @@ namespace Client.Main.Controls.Terrain
                                     int ii = i + dy;
                                     int jj = j + dx;
                                     int idx = ii * 4 + jj;
-                                    if (idx >= 0 && idx < block.TileVisibility.Length && block.TileVisibility[idx])
+                                    if (block.IsTileVisible(idx))
                                     {
                                         anyVisible = true;
                                         break;
@@ -787,10 +787,7 @@ namespace Client.Main.Controls.Terrain
                         {
                             // lodStep == 1: per-tile visibility
                             int tileIdx = i * 4 + j;
-                            if (tileIdx < block.TileVisibility.Length)
-                            {
-                                shouldRender = block.TileVisibility[tileIdx];
-                            }
+                            shouldRender = block.IsTileVisible(tileIdx);
                         }
                     }
 

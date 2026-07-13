@@ -1,14 +1,25 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Threading;
 
 namespace Client.Main.Controllers
 {
     /// <summary>
-    /// Single main-thread dispatch queue with deterministic per-frame budgets and runtime metrics.
+    /// Single prioritized main-thread work queue shared by UI/network dispatch and
+    /// budgeted engine tasks. A single time budget prevents independent queues from
+    /// jointly overrunning the frame.
     /// </summary>
     public sealed class MainThreadDispatcher
     {
+        public enum WorkPriority
+        {
+            Critical = 0,
+            High = 1,
+            Normal = 2,
+            Low = 3,
+        }
+
         private interface IDispatchedAction
         {
             void Invoke(ILogger logger);
@@ -18,15 +29,9 @@ namespace Client.Main.Controllers
         {
             private readonly Action _action;
 
-            public SyncAction(Action action)
-            {
-                _action = action;
-            }
+            public SyncAction(Action action) => _action = action;
 
-            public void Invoke(ILogger logger)
-            {
-                _action();
-            }
+            public void Invoke(ILogger logger) => _action();
         }
 
         private sealed class StatefulAction<TState> : IDispatchedAction
@@ -40,28 +45,20 @@ namespace Client.Main.Controllers
                 _state = state;
             }
 
-            public void Invoke(ILogger logger)
-            {
-                _action(_state);
-            }
+            public void Invoke(ILogger logger) => _action(_state);
         }
 
         private sealed class AsyncAction : IDispatchedAction
         {
             private readonly Func<Task> _action;
 
-            public AsyncAction(Func<Task> action)
-            {
-                _action = action;
-            }
+            public AsyncAction(Func<Task> action) => _action = action;
 
             public void Invoke(ILogger logger)
             {
                 Task task = _action();
                 if (!task.IsCompletedSuccessfully)
-                {
                     _ = ObserveAsync(task, logger);
-                }
             }
 
             private static async Task ObserveAsync(Task task, ILogger logger)
@@ -77,10 +74,15 @@ namespace Client.Main.Controllers
             }
         }
 
-        private readonly ConcurrentQueue<IDispatchedAction> _queue = new();
+        private readonly ConcurrentQueue<IDispatchedAction>[] _queues =
+        {
+            new(), new(), new(), new()
+        };
+
         private readonly int _maxActionsPerFrame;
         private readonly TimeSpan _maxActionTimePerFrame;
         private ILogger _logger;
+        private int _pendingCount;
 
         public int LastProcessedCount { get; private set; }
         public double LastProcessDurationMs { get; private set; }
@@ -95,53 +97,61 @@ namespace Client.Main.Controllers
                 : maxActionTimePerFrame;
         }
 
-        public int PendingCount => _queue.Count;
+        public int PendingCount => Math.Max(0, Volatile.Read(ref _pendingCount));
 
-        public void SetLogger(ILogger logger)
-        {
-            _logger = logger;
-        }
+        public void SetLogger(ILogger logger) => _logger = logger;
 
-        public void Enqueue(Action action)
+        public void Enqueue(Action action, WorkPriority priority = WorkPriority.Normal)
         {
             if (action == null)
                 return;
 
-            _queue.Enqueue(new SyncAction(action));
+            EnqueueCore(new SyncAction(action), priority);
         }
 
-        public void Enqueue<TState>(Action<TState> action, TState state)
+        public void Enqueue<TState>(Action<TState> action, TState state, WorkPriority priority = WorkPriority.Normal)
         {
             if (action == null)
                 return;
 
-            _queue.Enqueue(new StatefulAction<TState>(action, state));
+            EnqueueCore(new StatefulAction<TState>(action, state), priority);
         }
 
-        public void Enqueue(Func<Task> action)
+        public void Enqueue(Func<Task> action, WorkPriority priority = WorkPriority.Normal)
         {
             if (action == null)
                 return;
 
-            _queue.Enqueue(new AsyncAction(action));
+            EnqueueCore(new AsyncAction(action), priority);
+        }
+
+        private void EnqueueCore(IDispatchedAction action, WorkPriority priority)
+        {
+            int index = Math.Clamp((int)priority, 0, _queues.Length - 1);
+            _queues[index].Enqueue(action);
+            Interlocked.Increment(ref _pendingCount);
         }
 
         public int ProcessPending()
+            => ProcessPending(_maxActionsPerFrame, _maxActionTimePerFrame);
+
+        public int ProcessPending(int maxActions, TimeSpan maxTime)
         {
-            if (_queue.IsEmpty)
+            if (PendingCount == 0)
             {
                 LastProcessedCount = 0;
                 LastProcessDurationMs = 0;
                 return 0;
             }
 
-            int maxActions = _maxActionsPerFrame;
-            TimeSpan maxTime = _maxActionTimePerFrame;
+            maxActions = Math.Max(1, maxActions);
+            if (maxTime <= TimeSpan.Zero)
+                maxTime = TimeSpan.FromMilliseconds(1);
 
             int processed = 0;
             long frameStart = Stopwatch.GetTimestamp();
 
-            while (processed < maxActions && _queue.TryDequeue(out var action))
+            while (processed < maxActions && TryDequeue(out var action))
             {
                 try
                 {
@@ -153,7 +163,6 @@ namespace Client.Main.Controllers
                 }
 
                 processed++;
-
                 if (Stopwatch.GetElapsedTime(frameStart) >= maxTime)
                     break;
             }
@@ -162,6 +171,21 @@ namespace Client.Main.Controllers
             LastProcessDurationMs = Stopwatch.GetElapsedTime(frameStart).TotalMilliseconds;
             TotalProcessedCount += processed;
             return processed;
+        }
+
+        private bool TryDequeue(out IDispatchedAction action)
+        {
+            for (int i = 0; i < _queues.Length; i++)
+            {
+                if (_queues[i].TryDequeue(out action))
+                {
+                    Interlocked.Decrement(ref _pendingCount);
+                    return true;
+                }
+            }
+
+            action = null;
+            return false;
         }
     }
 }

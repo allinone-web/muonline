@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic; // Added for Dictionary
 using System.IO;
@@ -10,6 +10,7 @@ using Client.Data.Texture;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Extensions.Logging;
+using Client.Main.Controllers;
 
 namespace Client.Main.Content
 {
@@ -27,6 +28,7 @@ namespace Client.Main.Content
         private readonly ConcurrentDictionary<string, string> _pathResolutionCache = new();
 
         private readonly CancellationTokenSource _cleanupCts = new();
+        private readonly SemaphoreSlim _decodeGate = new(Math.Clamp(Environment.ProcessorCount / 2, 1, 4));
         private readonly TimeSpan _cleanupInterval = TimeSpan.FromSeconds(60);
         private readonly TimeSpan _textureTtl = TimeSpan.FromMinutes(5);
         private GraphicsDevice _graphicsDevice;
@@ -70,9 +72,26 @@ namespace Client.Main.Content
             string normalizedKey = NormalizePathKey(path);
             var lazyTextureTask = _textureTasks.GetOrAdd(
                 normalizedKey,
-                key => new Lazy<Task<TextureData>>(() => Task.Run(() => InternalPrepare(path)))); // Pass original path to InternalPrepare
+                _ => new Lazy<Task<TextureData>>(
+                    () => PrepareBoundedAsync(path),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
 
             return lazyTextureTask.Value;
+        }
+
+        private async Task<TextureData> PrepareBoundedAsync(string path)
+        {
+            await _decodeGate.WaitAsync(_cleanupCts.Token).ConfigureAwait(false);
+            try
+            {
+                // Readers combine file I/O and CPU decoding. Keep both off the render thread
+                // and bound concurrency to avoid thread-pool, disk and GC spikes on map entry.
+                return await Task.Run(() => InternalPrepare(path), _cleanupCts.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                _decodeGate.Release();
+            }
         }
 
         public async Task<Texture2D> PrepareAndGetTexture(string path)
@@ -110,7 +129,7 @@ namespace Client.Main.Content
                     loader._gpuTextureTasks.TryRemove(cacheKey, out _);
                     source.TrySetException(ex);
                 }
-            }, (this, path, normalizedKey, completion));
+            }, (this, path, normalizedKey, completion), MainThreadDispatcher.WorkPriority.High);
 
             return completion.Task;
         }
@@ -493,7 +512,7 @@ namespace Client.Main.Content
                         _pathResolutionCache.TryRemove(key, out _); // Clean cache too
                     }
                 }
-            });
+            }, MainThreadDispatcher.WorkPriority.Low);
         }
     }
 }
