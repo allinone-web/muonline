@@ -78,30 +78,116 @@ namespace Client.Main.Objects
             public bool IsValid;
         }
 
-        // Reuse for grouping to avoid allocations
-        private readonly Dictionary<MeshStateKey, List<int>> _meshGroups = new Dictionary<MeshStateKey, List<int>>(32);
-        private readonly Dictionary<MeshStateKey, FastMeshBatchBuffer> _fastMeshBatchBuffers = new Dictionary<MeshStateKey, FastMeshBatchBuffer>(16);
-        private readonly Stack<List<int>> _meshGroupPool = new Stack<List<int>>(32);
+        // Persistent render plans. Mesh classification and state grouping are rebuilt only
+        // when material visibility or texture state changes, not once per object per frame.
+        private readonly Dictionary<MeshStateKey, List<int>> _opaqueMeshPlan = new(32);
+        private readonly Dictionary<MeshStateKey, List<int>> _transparentMeshPlan = new(32);
+        private readonly Dictionary<MeshStateKey, FastMeshBatchBuffer> _fastMeshBatchBuffers = new(16);
+        private readonly Stack<List<int>> _meshGroupPool = new(64);
+        private uint _meshRenderPlanVersion = 1;
+        private uint _builtMeshRenderPlanVersion;
+        private BlendState _plannedBlendState;
+        private BlendState _plannedBlendMeshState;
+        private bool _plannedLowQuality;
+        private bool _plannedPreserveBlendMeshes;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private List<int> RentMeshList()
             => _meshGroupPool.Count > 0 ? _meshGroupPool.Pop() : new List<int>(8);
 
-        private void ReleaseMeshGroups()
+        private void ReleaseMeshGroupDictionary(Dictionary<MeshStateKey, List<int>> groups)
         {
-            if (_meshGroups.Count == 0)
+            if (groups.Count == 0)
                 return;
 
-            foreach (var list in _meshGroups.Values)
+            foreach (var list in groups.Values)
             {
                 list.Clear();
-                // Avoid unbounded growth in extreme cases
                 if (list.Capacity > 128)
                     list.Capacity = 128;
                 _meshGroupPool.Push(list);
             }
 
-            _meshGroups.Clear();
+            groups.Clear();
+        }
+
+        private void ClearMeshRenderPlans()
+        {
+            ReleaseMeshGroupDictionary(_opaqueMeshPlan);
+            ReleaseMeshGroupDictionary(_transparentMeshPlan);
+            _builtMeshRenderPlanVersion = 0;
+        }
+
+        private void InvalidateMeshRenderPlan()
+        {
+            ReleaseFastMeshBatchBuffers();
+            unchecked { _meshRenderPlanVersion++; }
+            if (_meshRenderPlanVersion == 0)
+                _meshRenderPlanVersion = 1;
+            _sortTextureHintDirty = true;
+            _sortTextureHint = null;
+        }
+
+        private Dictionary<MeshStateKey, List<int>> GetMeshRenderPlan(bool isAfterDraw)
+        {
+            EnsureMeshRenderPlans();
+            return isAfterDraw ? _transparentMeshPlan : _opaqueMeshPlan;
+        }
+
+        private void EnsureMeshRenderPlans()
+        {
+            bool preserveBlendMeshes = RenderPolicy.PreserveBlendMeshesInLowQuality;
+            if (_builtMeshRenderPlanVersion == _meshRenderPlanVersion &&
+                ReferenceEquals(_plannedBlendState, BlendState) &&
+                ReferenceEquals(_plannedBlendMeshState, BlendMeshState) &&
+                _plannedLowQuality == LowQuality &&
+                _plannedPreserveBlendMeshes == preserveBlendMeshes)
+            {
+                return;
+            }
+
+            RebuildMeshRenderPlans(preserveBlendMeshes);
+        }
+
+        private void RebuildMeshRenderPlans(bool preserveBlendMeshes)
+        {
+            ReleaseMeshGroupDictionary(_opaqueMeshPlan);
+            ReleaseMeshGroupDictionary(_transparentMeshPlan);
+
+            if (Model?.Meshes != null && _meshes != null)
+            {
+                int meshCount = Math.Min(Model.Meshes.Length, _meshes.Length);
+                for (int meshIndex = 0; meshIndex < meshCount; meshIndex++)
+                {
+                    if (IsHiddenMesh(meshIndex))
+                        continue;
+
+                    bool isBlend = IsBlendMesh(meshIndex);
+                    bool isRgba = _meshes[meshIndex].IsRgba;
+                    if (LowQuality && isBlend && !preserveBlendMeshes)
+                        continue;
+
+                    var target = (isRgba || isBlend) ? _transparentMeshPlan : _opaqueMeshPlan;
+                    Texture2D texture = _meshes[meshIndex].Texture;
+                    bool twoSided = IsMeshTwoSided(meshIndex, isBlend);
+                    BlendState blend = GetMeshBlendState(meshIndex, isBlend);
+                    var key = new MeshStateKey(texture, blend, twoSided);
+
+                    if (!target.TryGetValue(key, out List<int> list))
+                    {
+                        list = RentMeshList();
+                        target.Add(key, list);
+                    }
+
+                    list.Add(meshIndex);
+                }
+            }
+
+            _plannedBlendState = BlendState;
+            _plannedBlendMeshState = BlendMeshState;
+            _plannedLowQuality = LowQuality;
+            _plannedPreserveBlendMeshes = preserveBlendMeshes;
+            _builtMeshRenderPlanVersion = _meshRenderPlanVersion;
         }
 
         // Hint for world-level batching: returns first visible mesh texture (if any)
@@ -424,11 +510,10 @@ namespace Client.Main.Objects
                         shadowOpacity *= MathHelper.Clamp(1f - lum * 0.6f, 0.35f, 1f);
                     }
 
-                    GroupMeshesByState(false);
-                    try
+                    var meshGroups = GroupMeshesByState(false);
                     {
                         bool drewBlobShadow = false;
-                        foreach (var kvp in _meshGroups)
+                        foreach (var kvp in meshGroups)
                         {
                             if (kvp.Value.Count == 0)
                                 continue;
@@ -449,10 +534,6 @@ namespace Client.Main.Objects
                             if (highlightAllowed)
                                 DrawMeshesHighlight(kvp.Value, highlightMatrix, highlightColor);
                         }
-                    }
-                    finally
-                    {
-                        ReleaseMeshGroups();
                     }
                 }
             }
@@ -483,17 +564,11 @@ namespace Client.Main.Objects
         public virtual void DrawModel(bool isAfterDraw)
         {
             if (Model?.Meshes == null || _meshes == null)
-            {
-                ReleaseMeshGroups();
                 return;
-            }
 
             int meshCount = Model.Meshes.Length;
             if (meshCount == 0)
-            {
-                ReleaseMeshGroups();
                 return;
-            }
 
             _drawModelInvocationId = ++_drawModelInvocationCounter;
 
@@ -536,10 +611,9 @@ namespace Client.Main.Objects
             }
 
             // Group meshes by render state to minimize state changes
-            GroupMeshesByState(isAfterDraw);
+            var meshGroups = GroupMeshesByState(isAfterDraw);
 
-            // Render each group with minimal state changes
-            try
+            // Render each persistent group with minimal state changes.
             {
                 var gd = GraphicsDevice;
                 var effect = GraphicsManager.Instance.AlphaTestEffect3D;
@@ -548,7 +622,7 @@ namespace Client.Main.Objects
                     effect.Alpha = TotalAlpha;
                 bool drewBlobShadow = false;
 
-                foreach (var kvp in _meshGroups)
+                foreach (var kvp in meshGroups)
                 {
                     var stateKey = kvp.Key;
                     var meshIndices = kvp.Value;
@@ -635,11 +709,6 @@ namespace Client.Main.Objects
                         }
                     }
                 }
-            }
-            finally
-            {
-                // Drop state groups promptly to avoid retaining stale texture references between frames/passes.
-                ReleaseMeshGroups();
             }
         }
 
@@ -795,51 +864,21 @@ namespace Client.Main.Objects
             gd.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, primitiveCount);
         }
 
-        private void GroupMeshesByState(bool isAfterDraw)
+        private Dictionary<MeshStateKey, List<int>> GroupMeshesByState(bool isAfterDraw)
         {
-            // Release previous frame state to avoid retaining textures/blend states longer than needed
-            ReleaseMeshGroups();
-
-            if (Model?.Meshes == null)
-                return;
-
-            int meshCount = Model.Meshes.Length;
-
-            for (int i = 0; i < meshCount; i++)
-            {
-                if (IsHiddenMesh(i)) continue;
-                if (!isAfterDraw && IsStaticMapMeshQueuedForInstancing(i)) continue;
-
-                bool isBlend = IsBlendMesh(i);
-                bool isRGBA = _meshes != null && i < _meshes.Length && _meshes[i].IsRgba;
-
-                // Skip based on pass and low quality settings
-                if (LowQuality && isBlend && !RenderPolicy.PreserveBlendMeshesInLowQuality) continue;
-                bool shouldDraw = isAfterDraw ? (isRGBA || isBlend) : (!isRGBA && !isBlend);
-                if (!shouldDraw) continue;
-
-                if (_meshes == null || i >= _meshes.Length)
-                    continue;
-
-                var tex = _meshes[i].Texture;
-                bool twoSided = IsMeshTwoSided(i, isBlend);
-                BlendState blend = GetMeshBlendState(i, isBlend);
-
-                var key = new MeshStateKey(tex, blend, twoSided);
-                if (!_meshGroups.TryGetValue(key, out var list))
-                {
-                    list = RentMeshList();
-                    _meshGroups[key] = list;
-                }
-
-                list.Add(i);
-            }
+            return GetMeshRenderPlan(isAfterDraw);
         }
 
         private void DrawMeshesShadow(List<int> meshIndices, Matrix shadowMatrix, Matrix view, Matrix projection, float shadowOpacity)
         {
             for (int n = 0; n < meshIndices.Count; n++)
-                DrawShadowMesh(meshIndices[n], view, projection, shadowMatrix, shadowOpacity);
+            {
+                int meshIndex = meshIndices[n];
+                if (IsStaticMapMeshQueuedForInstancing(meshIndex))
+                    continue;
+
+                DrawShadowMesh(meshIndex, view, projection, shadowMatrix, shadowOpacity);
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -866,10 +905,9 @@ namespace Client.Main.Objects
                 int mi = meshIndices[n];
                 if (_meshes == null || mi >= _meshes.Length)
                     return;
-                if (mi < 0)
-                {
+                if (mi < 0 || IsStaticMapMeshQueuedForInstancing(mi))
                     continue;
-                }
+
                 DrawMeshHighlight(mi, highlightMatrix, highlightColor);
             }
         }

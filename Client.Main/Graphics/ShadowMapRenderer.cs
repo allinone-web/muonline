@@ -21,6 +21,7 @@ namespace Client.Main.Graphics
         private int _frameCounter = 0;
         private readonly List<WorldObject> _nearbyObjects = new(256);
         private readonly PriorityQueue<ModelObject, float> _closestCasters = new();
+        private readonly List<ModelObject> _selectedCasters = new(128);
         private readonly BoundingFrustum _lightFrustum = new BoundingFrustum(Matrix.Identity);
         private readonly ConditionalWeakTable<Effect, ShadowEffectBindings> _effectBindings = new();
         private Vector3 _lastCameraPosition = new(float.NaN, float.NaN, float.NaN);
@@ -29,6 +30,9 @@ namespace Client.Main.Graphics
         private bool _forceRender = true;
         private bool _shadowCasterSupported;
         private int _lastWorldGeometryTick = int.MinValue;
+        private ulong _currentCasterSignature;
+        private ulong _renderedCasterSignature = ulong.MaxValue;
+        private bool _casterSelectionValid;
 
 
         private sealed class ShadowEffectBindings
@@ -153,14 +157,30 @@ namespace Client.Main.Graphics
             float frustumGuardBand = Math.Max(5f, shadowDistance * 0.01f);
 
             int worldTick = Controls.WorldControl.WorldGeometryTick;
-            bool geometryChanged = worldTick != _lastWorldGeometryTick;
+            bool worldGeometryChanged = worldTick != _lastWorldGeometryTick;
 
-            // Skip entirely when nothing changed: cached shadow map is still valid for sampling.
-            if (!_forceRender && !cameraChanged && !geometryChanged)
+            // The global geometry tick also changes for moving objects outside the current
+            // shadow area. Refresh the bounded local selection and compare a quantized caster
+            // signature before deciding to rebuild the expensive map.
+            if (_forceRender || cameraChanged || worldGeometryChanged || !_casterSelectionValid)
+            {
+                BuildCasterSelection(world, camera, shadowDistance, frustumGuardBand, cameraChanged);
+                _lastWorldGeometryTick = worldTick;
+            }
+            else
+            {
+                // Animation and rotation changes do not necessarily increment the world's
+                // spatial geometry tick. Rehash only the already bounded caster list so
+                // animated nearby shadows remain current without scanning the whole world.
+                _currentCasterSignature = ComputeCasterSignature(_selectedCasters);
+            }
+
+            bool relevantCastersChanged = _currentCasterSignature != _renderedCasterSignature;
+            if (!_forceRender && !cameraChanged && !relevantCastersChanged)
                 return;
 
-            // Throttle by preset interval. Even when camera/geometry changed, render every Nth frame
-            // (Ultra=1 = every frame, Low=4 = ~15 fps shadow at 60 fps).
+            // Throttle by preset interval. A pending signature remains different from the
+            // rendered signature, so a deferred update is not accidentally lost.
             if (!_forceRender && _frameCounter % updateInterval != 0)
                 return;
 
@@ -174,18 +194,17 @@ namespace Client.Main.Graphics
             _shadowCasterSupported = bindings.ShadowCasterTechnique != null;
             if (!_shadowCasterSupported)
             {
-                _lastWorldGeometryTick = worldTick;
+                _renderedCasterSignature = _currentCasterSignature;
                 _forceRender = false;
                 return;
             }
 
-            _lastWorldGeometryTick = worldTick;
             UpdateLightMatrices(camera, shadowDistance);
+            BuildCasterSelection(world, camera, shadowDistance, frustumGuardBand, skipLightFrustum: false);
             _lastCameraPosition = camera.Position;
             _lastCameraTarget = camera.Target;
             _forceRender = false;
             _lightFrustum.Matrix = LightViewProjection;
-            var lightFrustum = _lightFrustum;
 
             var previousTargets = _graphicsDevice.GetRenderTargets();
             var previousViewport = _graphicsDevice.Viewport;
@@ -206,32 +225,10 @@ namespace Client.Main.Graphics
                 // Terrain as caster
                 world.Terrain?.RenderShadowMap(shadowEffect, LightViewProjection);
 
-                // Query only nearby spatial sectors and keep a bounded set of the closest casters.
-                float maxDistance = Math.Min(shadowDistance, Math.Max(100f, Constants.SHADOW_DISTANCE));
-                float maxDistanceSq = maxDistance * maxDistance;
-                Vector3 focus = camera.Target;
-                if (focus == Vector3.Zero)
-                    focus = camera.Position;
+                for (int i = 0; i < _selectedCasters.Count; i++)
+                    _selectedCasters[i].DrawShadowCaster(shadowEffect, LightViewProjection);
 
-                int maxCasters = Math.Max(1, Constants.SHADOW_MAX_CASTERS);
-                _nearbyObjects.Clear();
-                _closestCasters.Clear();
-                world.CollectObjectsNear(focus, maxDistance + frustumGuardBand, _nearbyObjects);
-
-                for (int i = 0; i < _nearbyObjects.Count; i++)
-                {
-                    TryQueueCasterCandidate(
-                        _nearbyObjects[i],
-                        lightFrustum,
-                        frustumGuardBand,
-                        focus,
-                        maxDistanceSq,
-                        maxCasters,
-                        _closestCasters);
-                }
-
-                while (_closestCasters.TryDequeue(out ModelObject model, out _))
-                    model.DrawShadowCaster(shadowEffect, LightViewProjection);
+                _renderedCasterSignature = _currentCasterSignature;
 
                 // Restore the regular technique when this effect exposes one.
                 if (bindings.DynamicLightingTechnique != null)
@@ -246,6 +243,98 @@ namespace Client.Main.Graphics
                     _graphicsDevice.SetRenderTargets(previousTargets);
                 _graphicsDevice.Viewport = previousViewport;
             }
+        }
+
+        private void BuildCasterSelection(
+            WorldControl world,
+            Camera camera,
+            float shadowDistance,
+            float frustumGuardBand,
+            bool skipLightFrustum)
+        {
+            _lightFrustum.Matrix = LightViewProjection;
+            float maxDistance = Math.Min(shadowDistance, Math.Max(100f, Constants.SHADOW_DISTANCE));
+            float maxDistanceSq = maxDistance * maxDistance;
+            Vector3 focus = camera.Target;
+            if (focus == Vector3.Zero)
+                focus = camera.Position;
+
+            int maxCasters = Math.Max(1, Constants.SHADOW_MAX_CASTERS);
+            _nearbyObjects.Clear();
+            _closestCasters.Clear();
+            _selectedCasters.Clear();
+            world.CollectObjectsNear(focus, maxDistance + frustumGuardBand, _nearbyObjects);
+
+            for (int i = 0; i < _nearbyObjects.Count; i++)
+            {
+                TryQueueCasterCandidate(
+                    _nearbyObjects[i],
+                    _lightFrustum,
+                    frustumGuardBand,
+                    focus,
+                    maxDistanceSq,
+                    maxCasters,
+                    _closestCasters,
+                    !skipLightFrustum);
+            }
+
+            while (_closestCasters.TryDequeue(out ModelObject model, out _))
+                _selectedCasters.Add(model);
+
+            _selectedCasters.Sort(static (left, right) =>
+                RuntimeHelpers.GetHashCode(left).CompareTo(RuntimeHelpers.GetHashCode(right)));
+            _currentCasterSignature = ComputeCasterSignature(_selectedCasters);
+            _casterSelectionValid = true;
+        }
+
+        private static ulong ComputeCasterSignature(List<ModelObject> casters)
+        {
+            const ulong offset = 1469598103934665603UL;
+            const ulong prime = 1099511628211UL;
+            const float quantization = 4f;
+            ulong hash = offset;
+
+            for (int i = 0; i < casters.Count; i++)
+            {
+                ModelObject caster = casters[i];
+                Matrix world = caster.WorldPosition;
+                Vector3 position = world.Translation;
+                uint identity = unchecked((uint)RuntimeHelpers.GetHashCode(caster));
+                uint modelIdentity = unchecked((uint)(caster.Model != null
+                    ? RuntimeHelpers.GetHashCode(caster.Model)
+                    : 0));
+                int qx = (int)MathF.Round(position.X / quantization);
+                int qy = (int)MathF.Round(position.Y / quantization);
+                int qz = (int)MathF.Round(position.Z / quantization);
+                int qM11 = (int)MathF.Round(world.M11 * 128f);
+                int qM12 = (int)MathF.Round(world.M12 * 128f);
+                int qM21 = (int)MathF.Round(world.M21 * 128f);
+                int qM22 = (int)MathF.Round(world.M22 * 128f);
+
+                hash ^= identity;
+                hash *= prime;
+                hash ^= modelIdentity;
+                hash *= prime;
+                hash ^= caster.AnimationPoseVersion;
+                hash *= prime;
+                hash ^= unchecked((uint)qx);
+                hash *= prime;
+                hash ^= unchecked((uint)qy);
+                hash *= prime;
+                hash ^= unchecked((uint)qz);
+                hash *= prime;
+                hash ^= unchecked((uint)qM11);
+                hash *= prime;
+                hash ^= unchecked((uint)qM12);
+                hash *= prime;
+                hash ^= unchecked((uint)qM21);
+                hash *= prime;
+                hash ^= unchecked((uint)qM22);
+                hash *= prime;
+            }
+
+            hash ^= unchecked((uint)casters.Count);
+            return hash * prime;
         }
 
         public void ApplyShadowParameters(Effect effect)
@@ -360,7 +449,8 @@ namespace Client.Main.Graphics
             Vector3 focus,
             float maxDistanceSq,
             int maxCasters,
-            PriorityQueue<ModelObject, float> destination)
+            PriorityQueue<ModelObject, float> destination,
+            bool testLightFrustum)
         {
             if (worldObject is not ModelObject model)
                 return;
@@ -373,9 +463,12 @@ namespace Client.Main.Graphics
             if (distanceSquared > maxDistanceSq)
                 return;
 
-            BoundingBox bounds = ExpandBoundingBox(model.BoundingBoxWorld, frustumGuardBand);
-            if (lightFrustum.Contains(bounds) == ContainmentType.Disjoint)
-                return;
+            if (testLightFrustum)
+            {
+                BoundingBox bounds = ExpandBoundingBox(model.BoundingBoxWorld, frustumGuardBand);
+                if (lightFrustum.Contains(bounds) == ContainmentType.Disjoint)
+                    return;
+            }
 
             // PriorityQueue dequeues the smallest priority. Negating distance keeps the
             // farthest selected caster at the head, so it can be replaced in O(log N).

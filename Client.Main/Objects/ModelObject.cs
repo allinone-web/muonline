@@ -215,6 +215,8 @@ namespace Client.Main.Objects
 
         private Matrix[] _gpuSkinBoneUploadBuffer = Array.Empty<Matrix>();
         private int _gpuSkinBoneUploadCount;
+        private Matrix[] _gpuSkinPreparedBoneSource;
+        private uint _gpuSkinPreparedPoseVersion = uint.MaxValue;
 
         #endregion
 
@@ -276,6 +278,7 @@ namespace Client.Main.Objects
                 if (_model != value)
                 {
                     _model = value;
+                    InvalidateMeshRenderPlan();
                     // If the model changes after the object has already been loaded,
                     // we need to re-run the content loading logic to update buffers, textures, etc.
                     if (Status is GameControlStatus.Ready or GameControlStatus.Error)
@@ -315,18 +318,36 @@ namespace Client.Main.Objects
                     return;
 
                 _hiddenMesh = value;
-                _sortTextureHintDirty = true;
-                _sortTextureHint = null;
+                InvalidateMeshRenderPlan();
             }
         }
 
         public int BlendMesh
         {
             get => _blendMesh;
-            set => _blendMesh = value;
+            set
+            {
+                if (_blendMesh == value)
+                    return;
+
+                _blendMesh = value;
+                InvalidateMeshRenderPlan();
+            }
         }
 
-        public BlendState BlendMeshState { get; set; } = BlendState.Additive;
+        private BlendState _blendMeshState = BlendState.Additive;
+        public BlendState BlendMeshState
+        {
+            get => _blendMeshState;
+            set
+            {
+                if (ReferenceEquals(_blendMeshState, value))
+                    return;
+
+                _blendMeshState = value;
+                InvalidateMeshRenderPlan();
+            }
+        }
 
         public float BlendMeshLight
         {
@@ -460,8 +481,7 @@ namespace Client.Main.Objects
                 _meshes[meshIndex].BlendByScript = _meshes[meshIndex].Script?.Bright ?? false;
             }
 
-            _sortTextureHintDirty = true;
-            _sortTextureHint = null;
+            InvalidateMeshRenderPlan();
 
             _blendMeshIndicesScratch = new int[meshCount];
             _staticMapInstancedMeshFrameTags = new int[meshCount];
@@ -647,6 +667,8 @@ namespace Client.Main.Objects
             _boneMatrixCacheValid = false;
             _gpuSkinBoneUploadBuffer = Array.Empty<Matrix>();
             _gpuSkinBoneUploadCount = 0;
+            _gpuSkinPreparedBoneSource = null;
+            _gpuSkinPreparedPoseVersion = uint.MaxValue;
             _animationStateValid = false;
             _animationStepAccumulatorSeconds = 0f;
             _animationPoseVersion = 0;
@@ -654,7 +676,7 @@ namespace Client.Main.Objects
             _lastLinkedParentModel = null;
 
             ReleaseFastMeshBatchBuffers();
-            ReleaseMeshGroups();
+            ClearMeshRenderPlans();
             _meshGroupPool.Clear();
         }
 

@@ -464,8 +464,7 @@ namespace Client.Main.Objects
             if (!ReferenceEquals(ms.Texture, resolvedTexture))
             {
                 ms.Texture = resolvedTexture;
-                _sortTextureHintDirty = true;
-                _sortTextureHint = null;
+                InvalidateMeshRenderPlan();
             }
 
             bool needsMetadataRefresh = allowLazyLoad || ms.Script == null || ms.Data == null;
@@ -474,11 +473,23 @@ namespace Client.Main.Objects
 
             var script = TextureLoader.Instance.GetScript(texturePath);
             var data = TextureLoader.Instance.Get(texturePath);
+            bool isRgba = data?.Components == 4;
+            bool hiddenByScript = script?.HiddenMesh ?? false;
+            bool blendByScript = script?.Bright ?? false;
+            bool renderPlanChanged = !ReferenceEquals(ms.Script, script) ||
+                                     !ReferenceEquals(ms.Data, data) ||
+                                     ms.IsRgba != isRgba ||
+                                     ms.HiddenByScript != hiddenByScript ||
+                                     ms.BlendByScript != blendByScript;
+
             ms.Script = script;
             ms.Data = data;
-            ms.IsRgba = data?.Components == 4;
-            ms.HiddenByScript = script?.HiddenMesh ?? false;
-            ms.BlendByScript = script?.Bright ?? false;
+            ms.IsRgba = isRgba;
+            ms.HiddenByScript = hiddenByScript;
+            ms.BlendByScript = blendByScript;
+
+            if (renderPlanChanged)
+                InvalidateMeshRenderPlan();
 
             return ms.Texture != null;
         }

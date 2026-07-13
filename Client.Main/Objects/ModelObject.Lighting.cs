@@ -92,6 +92,14 @@ namespace Client.Main.Objects
             public EffectParameter UseProceduralTerrainUv { get; }
             public EffectParameter IsWaterTexture { get; }
 
+            // Tracks the palette currently resident in this shared Effect instance.
+            // Rendering another object invalidates the owner, while consecutive meshes of
+            // the same object and pose can reuse the existing 256-matrix constant upload.
+            public ModelObject BonePaletteOwner;
+            public Matrix[] BonePaletteSource;
+            public uint BonePalettePoseVersion = uint.MaxValue;
+            public int BonePaletteCount;
+
             public EffectTechnique GetTechnique(string name)
             {
                 if (string.IsNullOrEmpty(name))
@@ -140,41 +148,60 @@ namespace Client.Main.Objects
                 return false;
             }
 
-            Matrix[] bones = (LinkParentAnimation && Parent is ModelObject parentModel && parentModel.BoneTransform != null)
-                ? parentModel.BoneTransform
-                : BoneTransform;
+            ModelObject paletteOwner = LinkParentAnimation && Parent is ModelObject parentModel && parentModel.BoneTransform != null
+                ? parentModel
+                : this;
+            Matrix[] bones = paletteOwner.BoneTransform;
             bones = GetRenderBoneTransforms(bones) ?? bones;
+            uint poseVersion = paletteOwner._animationPoseVersion;
 
-            // HLSL declares BoneMatrices[256]. Uploading arrays whose length changed
-            // between meshes/actions was backend-dependent and could fail or leave stale
-            // values. Keep one fixed-size palette and always upload the full declaration.
+            if (ReferenceEquals(bindings.BonePaletteOwner, paletteOwner) &&
+                ReferenceEquals(bindings.BonePaletteSource, bones) &&
+                bindings.BonePalettePoseVersion == poseVersion &&
+                bindings.BonePaletteCount >= requiredBoneCount)
+            {
+                return true;
+            }
+
             if (_gpuSkinBoneUploadBuffer == null || _gpuSkinBoneUploadBuffer.Length != MaxGpuSkinBones)
             {
                 _gpuSkinBoneUploadBuffer = new Matrix[MaxGpuSkinBones];
                 for (int i = 0; i < MaxGpuSkinBones; i++)
                     _gpuSkinBoneUploadBuffer[i] = Matrix.Identity;
                 _gpuSkinBoneUploadCount = 0;
+                _gpuSkinPreparedBoneSource = null;
+                _gpuSkinPreparedPoseVersion = uint.MaxValue;
             }
 
-            if (bones != null && bones.Length > 0)
+            bool paletteChanged = !ReferenceEquals(_gpuSkinPreparedBoneSource, bones) ||
+                                  _gpuSkinPreparedPoseVersion != poseVersion;
+            if (paletteChanged)
             {
-                int copyCount = Math.Min(MaxGpuSkinBones, bones.Length);
-                Array.Copy(bones, 0, _gpuSkinBoneUploadBuffer, 0, copyCount);
+                if (bones != null && bones.Length > 0)
+                {
+                    int copyCount = Math.Min(MaxGpuSkinBones, bones.Length);
+                    Array.Copy(bones, 0, _gpuSkinBoneUploadBuffer, 0, copyCount);
 
-                int clearFrom = Math.Max(copyCount, _gpuSkinBoneUploadCount);
-                for (int i = copyCount; i < clearFrom && i < MaxGpuSkinBones; i++)
-                    _gpuSkinBoneUploadBuffer[i] = Matrix.Identity;
+                    int clearTo = Math.Max(copyCount, _gpuSkinBoneUploadCount);
+                    for (int i = copyCount; i < clearTo && i < MaxGpuSkinBones; i++)
+                        _gpuSkinBoneUploadBuffer[i] = Matrix.Identity;
 
-                _gpuSkinBoneUploadCount = copyCount;
-            }
-            else if (_gpuSkinBoneUploadCount == 0)
-            {
-                // Before the first animation sample, identity is a valid deterministic
-                // palette and keeps the geometry on the GPU instead of changing paths.
-                _gpuSkinBoneUploadCount = requiredBoneCount;
+                    _gpuSkinBoneUploadCount = copyCount;
+                }
+                else if (_gpuSkinBoneUploadCount == 0)
+                {
+                    _gpuSkinBoneUploadCount = requiredBoneCount;
+                }
+
+                _gpuSkinPreparedBoneSource = bones;
+                _gpuSkinPreparedPoseVersion = poseVersion;
             }
 
             bindings.BoneMatrices.SetValue(_gpuSkinBoneUploadBuffer);
+            bindings.BonePaletteOwner = paletteOwner;
+            bindings.BonePaletteSource = bones;
+            bindings.BonePalettePoseVersion = poseVersion;
+            bindings.BonePaletteCount = Math.Max(requiredBoneCount, _gpuSkinBoneUploadCount);
             return true;
         }
 
