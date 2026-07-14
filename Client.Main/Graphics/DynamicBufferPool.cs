@@ -1,4 +1,4 @@
-﻿using Microsoft.Xna.Framework.Graphics;
+using Microsoft.Xna.Framework.Graphics;
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -7,13 +7,18 @@ namespace Client.Main.Graphics
 {
     /// <summary>
     /// Lightweight pool for dynamic vertex and index buffers that hides GPU allocation latency.
-    /// Buffers are kept in exact-capacity buckets because several render paths derive primitive
-    /// counts from the physical index-buffer size.
+    /// Vertex capacities are normalized into coarse buckets because draw paths use explicit logical
+    /// vertex counts. Index buffers remain exact-sized because some legacy paths still derive the
+    /// primitive count from the physical index-buffer size.
     /// </summary>
     public static class DynamicBufferPool
     {
         private const int MaxBuffersPerBucket = 8;
         private const int PruneIntervalFrames = 120;
+        private const int SmallVertexBucketStep = 128;
+        private const int MediumVertexBucketStep = 512;
+        private const int LargeVertexBucketStep = 2048;
+        private const int HugeVertexBucketStep = 8192;
 
         // DX needs extra breathing room to avoid reusing buffers the GPU still references.
 #if WINDOWS_DX
@@ -139,14 +144,15 @@ namespace Client.Main.Graphics
                     BufferUsage.WriteOnly);
             }
 
-            var pooled = RentFromPool(_vertexPools, _vertexLock, requiredVertexCount);
+            int bucketSize = NormalizeVertexCapacity(requiredVertexCount);
+            var pooled = RentFromPool(_vertexPools, _vertexLock, bucketSize);
             if (pooled != null)
                 return pooled;
 
             return new DynamicVertexBuffer(
                 _graphicsDevice,
                 GetExplicitVertexDeclaration(),
-                requiredVertexCount,
+                bucketSize,
                 BufferUsage.WriteOnly);
         }
 
@@ -219,6 +225,20 @@ namespace Client.Main.Graphics
             var targetLock = buffer.IndexElementSize == IndexElementSize.SixteenBits ? _index16Lock : _index32Lock;
 
             ReturnToPool(pools, targetLock, buffer.IndexCount, buffer);
+        }
+
+        private static int NormalizeVertexCapacity(int requiredCount)
+        {
+            int step = requiredCount switch
+            {
+                <= 1024 => SmallVertexBucketStep,
+                <= 8192 => MediumVertexBucketStep,
+                <= 65536 => LargeVertexBucketStep,
+                _ => HugeVertexBucketStep,
+            };
+
+            long rounded = ((long)requiredCount + step - 1L) / step * step;
+            return rounded > int.MaxValue ? requiredCount : (int)rounded;
         }
 
         private static void ClearPools()

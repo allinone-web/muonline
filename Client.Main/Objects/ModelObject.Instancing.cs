@@ -1,4 +1,4 @@
-﻿using Client.Data.BMD;
+using Client.Data.BMD;
 using Client.Main.Content;
 using Client.Main.Controls;
 using Client.Main.Controllers;
@@ -435,6 +435,18 @@ namespace Client.Main.Objects
 
         internal static bool HasPendingStaticMapInstancingBatches() => _staticMapInstancingActiveBatches.Count > 0;
         private static bool HasPendingWalkerCrowdLegacyInstancingBatches() => _walkerCrowdInstancingActiveBatches.Count > 0;
+
+        /// <summary>
+        /// Clears only per-frame, world-scoped instance queues. Persistent geometry buffers stay
+        /// cached, but no transform, pose row or side-pass from the disposed world can be drawn
+        /// by the next scene. This must run on the main/render thread during world transitions.
+        /// </summary>
+        internal static void ResetWorldScopedInstancingState()
+        {
+            ClearStaticMapInstancingQueues();
+            ClearWalkerCrowdLegacyInstancingQueues();
+            ClearWalkerCrowdMultiPoseQueues();
+        }
 
         private static void EnsureInstanceUploadBuffer(StaticMapInstancingBatch batch, int instanceCount)
         {

@@ -55,11 +55,13 @@ namespace Client.Main.Objects
         private Color _labelColor;
         private readonly List<ModelObject> _coinModels = new List<ModelObject>(); // Multiple coins for money piles
         private readonly DroppedItemVisual _visual = new();
-private int _loadGeneration;
+        private int _loadGeneration;
+        private bool _visualContentReady;
+        private bool _terrainPlacementReady;
 
         // ─────────────────── public helpers
-public ushort RawId => _scope?.RawId ?? 0;
-internal int LoadGeneration => _loadGeneration;
+        public ushort RawId => _scope?.RawId ?? 0;
+        internal int LoadGeneration => _loadGeneration;
         public new string DisplayName { get; private set; }
 
         // Pool
@@ -79,17 +81,17 @@ internal int LoadGeneration => _loadGeneration;
             return new DroppedItemObject(scope, mainPlayerId, charSvc, logger);
         }
 
-public void Recycle()
-{
-_loadGeneration++;
-try
-{
-Dispose();
-            }
-            finally
-            {
+        public void Recycle()
+        {
+            _loadGeneration++;
+
+            // Never return an object to the pool while an old asynchronous Load() can still
+            // write to it. Such an object is simply left for normal GC after its load exits.
+            bool canReturnToPool = !IsLoadInProgress;
+            Dispose();
+
+            if (canReturnToPool && !IsLoadInProgress)
                 _pool.Add(this);
-            }
         }
 
         // =====================================================================
@@ -108,9 +110,12 @@ Dispose();
             CharacterService charSvc,
             ILogger<DroppedItemObject> logger)
         {
-_scope = scope ?? throw new ArgumentNullException(nameof(scope));
-_loadGeneration++;
-_mainPlayerId = mainPlayerId;
+            if (!TryResetLifecycleForReuse())
+                throw new InvalidOperationException("A dropped item was reused while its previous load was still running.");
+
+            _scope = scope ?? throw new ArgumentNullException(nameof(scope));
+            _loadGeneration++;
+            _mainPlayerId = mainPlayerId;
             _charSvc = charSvc ?? throw new ArgumentNullException(nameof(charSvc));
             _log = logger ?? ModelObject.AppLoggerFactory?.CreateLogger<DroppedItemObject>() ?? NullLogger<DroppedItemObject>.Instance;
 
@@ -124,6 +129,8 @@ _mainPlayerId = mainPlayerId;
             _isMoney = false;
             _coinModels.Clear();
             _visual.Reset();
+            _visualContentReady = false;
+            _terrainPlacementReady = false;
             RenderVisuals = true;
 
             // Initialize position at ground level (will be adjusted in Load() after terrain height is known)
@@ -162,13 +169,10 @@ var world = World;
 if (Status != GameControlStatus.Ready || !CanContinueLoad(world, loadGeneration))
 return;
 
-            if (World != null)
-            {
-                // Terrain height is already in renderer/world coordinates. The old +55
-                // compensated for the previously unscaled height query and now caused levitation.
-                float z = world.Terrain.RequestTerrainHeight(Position.X, Position.Y);
-                Position = new(Position.X, Position.Y, z);
-            }
+            // Terrain can still be loading when scope objects begin initialization. Do not
+            // permanently lock the drop to Z=0; placement is retried from Update until both
+            // terrain and the visual model are ready.
+            TryFinalizeTerrainPlacement(world);
 
             _font = GraphicsManager.Instance.Font;
 
@@ -226,7 +230,8 @@ _coinModels.Add(model);
                     }
 
                     RecenterCoinsAndFitBoundingBox();
-                    LiftVisualsAboveTerrain();
+                    _visualContentReady = true;
+                    TryFinalizeTerrainPlacement(world);
                     _log.LogDebug("Gold coin pile loaded with {Count} coins at position {Pos}", coinCount, Position);
                     AttachShineEffect();
                     return; // 3D model loaded
@@ -271,7 +276,8 @@ _modelObj = model;
                         // Position model so its bottom touches the parent ground plane, then
                         // lift the complete rotated model only when a terrain triangle penetrates it.
                         PositionModelOnGround(model);
-                        LiftVisualsAboveTerrain();
+                        _visualContentReady = true;
+                        TryFinalizeTerrainPlacement(world);
 
                         AttachShineEffect();
                         return; // 3D model loaded
@@ -283,6 +289,8 @@ _modelObj = model;
                 }
             }
 
+            _visualContentReady = true;
+            TryFinalizeTerrainPlacement(world);
             AttachShineEffect();
         }
 
@@ -307,6 +315,38 @@ _modelObj = model;
 
             await model.Load();
             return model.Status == GameControlStatus.Ready && CanContinueLoad(expectedWorld, loadGeneration);
+        }
+
+        /// <summary>
+        /// Places the parent drop on the current terrain and then applies a geometry-aware lift.
+        /// The operation is retried while TerrainControl is still loading, so a temporary height
+        /// value of zero can never become the permanent world position of the item.
+        /// </summary>
+        private bool TryFinalizeTerrainPlacement(Client.Main.Controls.WorldControl expectedWorld)
+        {
+            if (!_visualContentReady ||
+                expectedWorld == null ||
+                !ReferenceEquals(World, expectedWorld) ||
+                expectedWorld.Terrain == null ||
+                expectedWorld.Terrain.Status != GameControlStatus.Ready)
+            {
+                _terrainPlacementReady = false;
+                return false;
+            }
+
+            float groundZ = expectedWorld.Terrain.RequestTerrainHeight(Position.X, Position.Y);
+            if (float.IsNaN(groundZ) || float.IsInfinity(groundZ))
+            {
+                _terrainPlacementReady = false;
+                return false;
+            }
+
+            // Always restart from the terrain height at the drop center. LiftVisualsAboveTerrain
+            // then accounts for slopes under every transformed vertex of the item model.
+            Position = new Vector3(Position.X, Position.Y, groundZ);
+            LiftVisualsAboveTerrain();
+            _terrainPlacementReady = true;
+            return true;
         }
 
         /// <summary>
@@ -516,12 +556,15 @@ _modelObj = model;
         public override void Update(GameTime gameTime)
         {
             base.Update(gameTime);
+
+            if (!_terrainPlacementReady && _visualContentReady && World != null)
+                TryFinalizeTerrainPlacement(World);
         }
 
         // =====================================================================
         public override void Draw(GameTime gameTime)
         {
-            if (!Visible) return;
+            if (!Visible || !_terrainPlacementReady) return;
 
             DrawBoundingBox3D();
 
@@ -542,7 +585,7 @@ _modelObj = model;
         // =====================================================================
         public override void DrawAfter(GameTime gameTime)
         {
-            if (!Visible) return;
+            if (!Visible || !_terrainPlacementReady) return;
 
             if (!RenderVisuals)
                 return;
@@ -654,6 +697,9 @@ _modelObj = model;
 
         public override void DrawHoverName()
         {
+            if (!_terrainPlacementReady)
+                return;
+
             if (_font == null)
                 _font = GraphicsManager.Instance.Font;
 
@@ -695,7 +741,8 @@ _modelObj = model;
 
         internal void DrawShineEffect(GameTime gameTime)
         {
-            _visual.DrawShineEffect(this, gameTime, _pickedUp, RenderVisuals);
+            if (_terrainPlacementReady)
+                _visual.DrawShineEffect(this, gameTime, _pickedUp, RenderVisuals);
         }
 
     }

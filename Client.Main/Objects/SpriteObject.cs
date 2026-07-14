@@ -103,6 +103,9 @@ namespace Client.Main.Objects
         public override void Dispose()
         {
             base.Dispose();
+            if (IsLoadInProgress)
+                return;
+
             SpriteBatch = null;
             SpriteTexture = null;
         }

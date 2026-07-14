@@ -1,4 +1,4 @@
-﻿﻿using Client.Main.Content;
+﻿using Client.Main.Content;
 using Client.Main.Controls;
 using Client.Main.Data;
 using Client.Main.Models;
@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Xna.Framework;
 using MUnique.OpenMU.Network.Packets; // CharacterClassNumber enum
 using System.Threading.Tasks;
+using System.Threading;
 using Client.Main.Core.Utilities;
 using Client.Main.Networking.Services;
 using Client.Main.Networking;
@@ -104,6 +105,7 @@ namespace Client.Main.Objects.Player
         private const float NpcInteractionRangeTiles = 4f;
         private const int NpcApproachSearchRadius = 6;
         private ushort _pendingNpcNetworkId;
+        private CancellationTokenSource _npcApproachCancellation;
 
         private const byte BuffCursedTempleQuickness = 32;
         private const byte DebuffFreeze = 56;
@@ -3025,6 +3027,15 @@ namespace Client.Main.Objects.Player
 
         public float GetAttackRangeTiles() => GetAttackRangeForAction(GetAttackAnimation(false));
 
+        public override void MoveTo(Vector2 targetLocation, bool sendToServer = true, bool usePathfinding = true)
+        {
+            // A direct movement request supersedes a pending NPC approach calculation.
+            if (_pendingNpcNetworkId != 0)
+                ClearPendingNpcInteraction();
+
+            base.MoveTo(targetLocation, sendToServer, usePathfinding);
+        }
+
         public bool TryQueueNpcInteraction(NPCObject npc)
         {
             if (!IsMainWalker || npc == null)
@@ -3057,16 +3068,65 @@ namespace Client.Main.Objects.Player
 
             Vector2 start = new((int)Location.X, (int)Location.Y);
             Vector2 npcTile = new((int)npc.Location.X, (int)npc.Location.Y);
+            ushort npcNetworkId = npc.NetworkId;
 
-            _ = Task.Run(() =>
+            CancelPendingNpcApproach();
+            var cancellation = new CancellationTokenSource();
+            _npcApproachCancellation = cancellation;
+            _ = ComputeNpcApproachPathAsync(
+                start,
+                npcTile,
+                npcNetworkId,
+                world,
+                cancellation);
+        }
+
+        private async Task ComputeNpcApproachPathAsync(
+            Vector2 start,
+            Vector2 npcTile,
+            ushort npcNetworkId,
+            WalkableWorldControl world,
+            CancellationTokenSource cancellation)
+        {
+            CancellationToken token = cancellation.Token;
+            try
             {
-                var path = BuildNpcApproachPath(start, npcTile, world);
+                List<Vector2> path = await Pathfinding.RunBoundedAsync(
+                    ct => BuildNpcApproachPath(start, npcTile, world, ct),
+                    token).ConfigureAwait(false);
 
+                token.ThrowIfCancellationRequested();
                 MuGame.ScheduleOnMainThread(() =>
                 {
-                    ApplyPathOnMainThread(path, sendToServer: true, world, start, 0);
+                    if (!token.IsCancellationRequested &&
+                        _pendingNpcNetworkId == npcNetworkId &&
+                        ReferenceEquals(World, world))
+                    {
+                        ApplyPathOnMainThread(path, sendToServer: true, world, start, 0);
+                    }
                 });
-            });
+            }
+            catch (OperationCanceledException)
+            {
+                // A newer NPC interaction or movement request superseded this search.
+            }
+            catch (Exception ex)
+            {
+                AppLoggerFactory?.CreateLogger<PlayerObject>()?.LogDebug(
+                    ex,
+                    "Failed to build an NPC approach path");
+            }
+            finally
+            {
+                if (ReferenceEquals(Interlocked.CompareExchange(
+                        ref _npcApproachCancellation,
+                        null,
+                        cancellation),
+                    cancellation))
+                {
+                    cancellation.Dispose();
+                }
+            }
         }
 
         private void UpdatePendingNpcInteraction(WalkableWorldControl world)
@@ -3105,11 +3165,33 @@ namespace Client.Main.Objects.Player
         private void ClearPendingNpcInteraction()
         {
             _pendingNpcNetworkId = 0;
+            CancelPendingNpcApproach();
         }
 
-        private static List<Vector2> BuildNpcApproachPath(Vector2 start, Vector2 npcTile, WalkableWorldControl world)
+        private void CancelPendingNpcApproach()
         {
-            var directPath = Pathfinding.FindPath(start, npcTile, world);
+            var previous = Interlocked.Exchange(ref _npcApproachCancellation, null);
+            if (previous == null)
+                return;
+
+            try
+            {
+                previous.Cancel();
+            }
+            finally
+            {
+                previous.Dispose();
+            }
+        }
+
+        private static List<Vector2> BuildNpcApproachPath(
+            Vector2 start,
+            Vector2 npcTile,
+            WalkableWorldControl world,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var directPath = Pathfinding.FindPath(start, npcTile, world, cancellationToken);
             if (directPath != null && directPath.Count > 0)
             {
                 TrimPathBeforeNpc(directPath, npcTile);
@@ -3117,7 +3199,7 @@ namespace Client.Main.Objects.Player
                     return directPath;
             }
 
-            var nearbyPath = FindPathToNearbyNpcTile(start, npcTile, world);
+            var nearbyPath = FindPathToNearbyNpcTile(start, npcTile, world, cancellationToken);
             if (nearbyPath != null && nearbyPath.Count > 0)
                 return nearbyPath;
 
@@ -3133,25 +3215,30 @@ namespace Client.Main.Objects.Player
             }
         }
 
-        private static List<Vector2> FindPathToNearbyNpcTile(Vector2 start, Vector2 npcTile, WalkableWorldControl world)
+        private static List<Vector2> FindPathToNearbyNpcTile(
+            Vector2 start,
+            Vector2 npcTile,
+            WalkableWorldControl world,
+            CancellationToken cancellationToken)
         {
             for (int radius = 1; radius <= NpcApproachSearchRadius; radius++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 // Top/bottom edges of the square ring
                 for (int dx = -radius; dx <= radius; dx++)
                 {
-                    if (TryFindPathToCandidate(start, new Vector2(npcTile.X + dx, npcTile.Y + radius), world, out var path))
+                    if (TryFindPathToCandidate(start, new Vector2(npcTile.X + dx, npcTile.Y + radius), world, cancellationToken, out var path))
                         return path;
-                    if (TryFindPathToCandidate(start, new Vector2(npcTile.X + dx, npcTile.Y - radius), world, out path))
+                    if (TryFindPathToCandidate(start, new Vector2(npcTile.X + dx, npcTile.Y - radius), world, cancellationToken, out path))
                         return path;
                 }
 
                 // Left/right edges (excluding corners already checked)
                 for (int dy = -radius + 1; dy <= radius - 1; dy++)
                 {
-                    if (TryFindPathToCandidate(start, new Vector2(npcTile.X + radius, npcTile.Y + dy), world, out var path))
+                    if (TryFindPathToCandidate(start, new Vector2(npcTile.X + radius, npcTile.Y + dy), world, cancellationToken, out var path))
                         return path;
-                    if (TryFindPathToCandidate(start, new Vector2(npcTile.X - radius, npcTile.Y + dy), world, out path))
+                    if (TryFindPathToCandidate(start, new Vector2(npcTile.X - radius, npcTile.Y + dy), world, cancellationToken, out path))
                         return path;
                 }
             }
@@ -3159,8 +3246,14 @@ namespace Client.Main.Objects.Player
             return null;
         }
 
-        private static bool TryFindPathToCandidate(Vector2 start, Vector2 candidate, WalkableWorldControl world, out List<Vector2> path)
+        private static bool TryFindPathToCandidate(
+            Vector2 start,
+            Vector2 candidate,
+            WalkableWorldControl world,
+            CancellationToken cancellationToken,
+            out List<Vector2> path)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             path = null;
 
             if (!IsWithinMapBounds(candidate))
@@ -3169,8 +3262,15 @@ namespace Client.Main.Objects.Player
             if (!world.IsWalkable(candidate))
                 return false;
 
-            path = Pathfinding.FindPath(start, candidate, world);
+            path = Pathfinding.FindPath(start, candidate, world, cancellationToken);
             return path != null && path.Count > 0;
+        }
+
+
+        public override void Dispose()
+        {
+            CancelPendingNpcApproach();
+            base.Dispose();
         }
 
         private static bool IsWithinMapBounds(Vector2 position)

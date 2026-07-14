@@ -1,8 +1,10 @@
-﻿using Client.Main.Configuration;
+using Client.Main.Configuration;
 using Client.Main.Content;
 using Client.Main.Controllers;
 using Client.Main.Controls;
+using Client.Main.Controls.UI.Game.Inventory;
 using Client.Main.Core.Client;
+using Client.Main.Core.Utilities;
 using Client.Main.Data;
 using Client.Main.Graphics;
 using Client.Main.Networking;
@@ -68,6 +70,7 @@ namespace Client.Main
             SimulationMaxStepsPerFrame,
             SimulationMaxAcceptedElapsed);
         private bool _networkDisposed = false;
+        private ScopeManager _scopeManager;
         private readonly SemaphoreSlim _sceneChangeLock = new(1, 1);
         private int _sceneChangeGeneration;
         private float _scaleFactor;
@@ -379,8 +382,8 @@ namespace Client.Main
             // Needs CharacterState and ScopeManager - create basic instances for now
             // You'll likely manage these more centrally later
             var characterState = new CharacterState(AppLoggerFactory);
-            var scopeManager = new ScopeManager(AppLoggerFactory, characterState);
-            Network = new NetworkManager(AppLoggerFactory, AppSettings, characterState, scopeManager);
+            _scopeManager = new ScopeManager(AppLoggerFactory, characterState);
+            Network = new NetworkManager(AppLoggerFactory, AppSettings, characterState, _scopeManager);
             bootLogger.LogInformation("✅ Network Manager initialized.");
 
             // Initialize TaskScheduler
@@ -455,6 +458,8 @@ namespace Client.Main
 
         protected override void UnloadContent()
         {
+            BmdPreviewRenderer.ClearCache(releaseGpuResources: true);
+            UiRenderTargetPool.Clear();
             base.UnloadContent();
             GraphicsManager.Instance.Dispose();
             DisposeNetworkSafely();   // ← only place called in UnloadContent
@@ -527,6 +532,14 @@ namespace Client.Main
         protected override void LoadContent()
         {
             GraphicsManager.Instance.Init(GraphicsDevice, Content);
+
+            // Warm up the item database before inventory/NPC shop packets arrive. Public
+            // lookups remain synchronous for compatibility, but normally complete from memory.
+            _ = ItemDatabase.PreloadAsync().ContinueWith(t =>
+            {
+                if (t.Exception != null)
+                    _logger?.LogWarning(t.Exception, "Failed to preload item database");
+            }, System.Threading.Tasks.TaskScheduler.Default);
 
             // --- LOAD PLAYER IDLE POSE DATA ---
             // Load bone transformations from Player.bmd for inventory item rendering
@@ -634,6 +647,18 @@ namespace Client.Main
                 string sceneName = newScene.GetType().Name;
                 _logger?.LogInformation("--- Scene change starting: {SceneType}", sceneName);
 
+                // Scope packets do not always contain OutOfScope entries for every monster,
+                // NPC and dropped item during a warp. Start a map-aware transition barrier
+                // before disposing the old scene so delayed old-world packets cannot recreate
+                // NPCs inside the new WorldControl.
+                ushort? sourceMapId = ActiveScene?.World?.MapId;
+                _scopeManager?.BeginWorldTransition(sourceMapId);
+
+                // A scene switch may happen between queueing and flushing an instanced draw.
+                // Never let instance transforms or pose rows from the previous world survive
+                // into the first draw of the new world.
+                ModelObject.ResetWorldScopedInstancingState();
+
                 BaseScene previousScene = ActiveScene;
                 ActiveScene = null;
                 if (previousScene != null)
@@ -647,6 +672,11 @@ namespace Client.Main
                         _logger?.LogError(disposeException, "Failed disposing previous scene {SceneType}.", previousScene.GetType().Name);
                     }
                 }
+
+                // Preview targets and CPU-skinned preview geometry are scene-local UI resources.
+                // Release them at transitions so visiting shops on multiple characters/maps does
+                // not retain stale render targets and dynamic buffers for the whole process.
+                BmdPreviewRenderer.ClearCache(releaseGpuResources: true);
 
                 ActiveScene = newScene;
                 try
@@ -667,9 +697,15 @@ namespace Client.Main
                         _logger?.LogDebug(disposeException, "Failed disposing scene after initialization error.");
                     }
 
+                    _scopeManager?.CompleteWorldTransition();
                     _logger?.LogError(ex, "Scene initialization failed for {SceneType}.", sceneName);
                     return;
                 }
+
+                // Finish the scope barrier only after the new scene and its world are ready.
+                // Entries stamped for another map are discarded; valid new-world entries
+                // received during loading remain available to the scene.
+                _scopeManager?.CompleteWorldTransition();
 
                 // If another request arrived during initialization, let it take over as soon
                 // as this serialized operation releases the lock.

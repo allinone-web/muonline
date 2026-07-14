@@ -10,6 +10,7 @@ using Microsoft.Xna.Framework.Input;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Client.Main.Objects
@@ -26,6 +27,7 @@ namespace Client.Main.Objects
         private bool _targetPositionDirty = true;
         protected Queue<Vector2> _currentPath;   // FIFO – cheaper removal than List.RemoveAt(0)
         private uint _moveRequestVersion;
+        private CancellationTokenSource _pathRequestCancellation;
 
     private readonly MainPlayerCameraController _mainPlayerCameraController = new();
     public bool MouseScrollToZoom
@@ -273,34 +275,23 @@ namespace Client.Main.Objects
 
         public virtual void MoveTo(Vector2 targetLocation, bool sendToServer = true, bool usePathfinding = true)
         {
-            if (World == null) return;
-
-            if (targetLocation == Location)
+            if (World == null || targetLocation == Location || !this.IsAlive())
                 return;
 
-            // Don't allow movement if player is dead
-            if (!this.IsAlive()) return;
-
-            // Don't allow movement while teleporting (waiting for server response)
             if (IsMainWalker && MuGame.Network?.GetCharacterState()?.IsTeleporting == true)
                 return;
 
             _movementIntent = true;
-
             UpdateFacingFromVector(targetLocation - Location);
 
             if (this is PlayerObject player)
-            {
                 player.OnPlayerMoved();
-            }
 
-            Vector2 startPos = new Vector2((int)Location.X, (int)Location.Y);
+            Vector2 startPos = new((int)Location.X, (int)Location.Y);
             WorldControl currentWorld = World;
-            uint requestVersion = 0;
-            if (sendToServer && IsMainWalker)
-            {
-                requestVersion = ++_moveRequestVersion;
-            }
+            uint requestVersion = unchecked(++_moveRequestVersion);
+
+            CancelPendingPathRequest();
 
             if (!usePathfinding)
             {
@@ -309,24 +300,87 @@ namespace Client.Main.Objects
                 return;
             }
 
-            _ = Task.Run(() =>
-            {
-                List<Vector2> path = usePathfinding
-                    ? Pathfinding.FindPath(startPos, targetLocation, currentWorld)
-                    : Pathfinding.BuildDirectPath(startPos, targetLocation);
+            var cancellation = new CancellationTokenSource();
+            _pathRequestCancellation = cancellation;
+            _ = ComputePathAsync(
+                startPos,
+                targetLocation,
+                sendToServer,
+                currentWorld,
+                requestVersion,
+                cancellation);
+        }
 
-                // If no path was found for a remote object, fall back to a simple
-                // straight-line path so that the character still moves visibly
-                if ((path == null || path.Count == 0) && !sendToServer && usePathfinding)
-                {
+        private async Task ComputePathAsync(
+            Vector2 startPos,
+            Vector2 targetLocation,
+            bool sendToServer,
+            WorldControl expectedWorld,
+            uint requestVersion,
+            CancellationTokenSource cancellation)
+        {
+            CancellationToken token = cancellation.Token;
+            try
+            {
+                List<Vector2> path = await Pathfinding.FindPathAsync(
+                    startPos,
+                    targetLocation,
+                    expectedWorld,
+                    token).ConfigureAwait(false);
+
+                token.ThrowIfCancellationRequested();
+
+                if ((path == null || path.Count == 0) && !sendToServer)
                     path = Pathfinding.BuildDirectPath(startPos, targetLocation);
-                }
 
                 MuGame.ScheduleOnMainThread(() =>
                 {
-                    ApplyPathOnMainThread(path, sendToServer, currentWorld, startPos, requestVersion);
+                    if (!token.IsCancellationRequested)
+                    {
+                        ApplyPathOnMainThread(
+                            path,
+                            sendToServer,
+                            expectedWorld,
+                            startPos,
+                            requestVersion);
+                    }
                 });
-            });
+            }
+            catch (OperationCanceledException)
+            {
+                // A newer movement request superseded this path.
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[WalkerObject] Pathfinding failed: {ex}");
+            }
+            finally
+            {
+                if (ReferenceEquals(Interlocked.CompareExchange(
+                        ref _pathRequestCancellation,
+                        null,
+                        cancellation),
+                    cancellation))
+                {
+                    cancellation.Dispose();
+                }
+            }
+        }
+
+        private void CancelPendingPathRequest()
+        {
+            var previous = Interlocked.Exchange(ref _pathRequestCancellation, null);
+            if (previous == null)
+                return;
+
+            try
+            {
+                previous.Cancel();
+            }
+            finally
+            {
+                previous.Dispose();
+            }
         }
 
         protected void ApplyPathOnMainThread(List<Vector2> path, bool sendToServer, WorldControl expectedWorld, Vector2? pathStart = null, uint requestVersion = 0)
@@ -334,9 +388,9 @@ namespace Client.Main.Objects
             if (MuGame.Instance.ActiveScene?.World != expectedWorld || Status == GameControlStatus.Disposed)
                 return;
 
-            if (sendToServer && IsMainWalker && requestVersion != 0 && requestVersion != _moveRequestVersion)
+            if (requestVersion != 0 && requestVersion != _moveRequestVersion)
             {
-                // Ignore stale async path results from older click requests.
+                // Ignore stale async path results from older movement requests.
                 return;
             }
 
@@ -354,13 +408,25 @@ namespace Client.Main.Objects
             if (sendToServer && IsMainWalker)
             {
                 var start = pathStart ?? new Vector2((int)Location.X, (int)Location.Y);
-                Task.Run(() => SendWalkPathToServerAsync(path, start));
+                _ = SendWalkPathToServerSafelyAsync(path, start);
             }
         }
 
         public void FaceTowards(Vector2 targetLocation, bool immediate = false)
         {
             UpdateFacingFromVector(targetLocation - Location, immediate);
+        }
+
+        private async Task SendWalkPathToServerSafelyAsync(List<Vector2> path, Vector2 startPos)
+        {
+            try
+            {
+                await SendWalkPathToServerAsync(path, startPos).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[WalkerObject] Failed to send walk path: {ex}");
+            }
         }
 
         private async Task SendWalkPathToServerAsync(List<Vector2> path, Vector2 startPos)
@@ -668,6 +734,12 @@ namespace Client.Main.Objects
         protected bool _movementIntent;
         public bool MovementIntent => _movementIntent;
 
+        public override void Dispose()
+        {
+            CancelPendingPathRequest();
+            base.Dispose();
+        }
+
         // protected override void Dispose(bool disposing)
         // {
         //     if (disposing)
@@ -679,6 +751,9 @@ namespace Client.Main.Objects
 
         protected override void OnWorldChanged(WorldControl newWorld, WorldControl prevWorld)
         {
+            if (!ReferenceEquals(newWorld, prevWorld))
+                CancelPendingPathRequest();
+
             base.OnWorldChanged(newWorld, prevWorld);
             UpdateCameraPosition(Position);
             UpdatePosition(new GameTime());

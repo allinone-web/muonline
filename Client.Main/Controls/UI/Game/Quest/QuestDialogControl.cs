@@ -234,7 +234,7 @@ namespace Client.Main.Controls.UI.Game.Quest
         public override void Dispose()
         {
             base.Dispose();
-            _staticSurface?.Dispose();
+            Client.Main.Graphics.UiRenderTargetPool.Return(_staticSurface);
             _staticSurface = null;
         }
 
@@ -412,8 +412,8 @@ namespace Client.Main.Controls.UI.Game.Quest
             var gd = GraphicsManager.Instance?.GraphicsDevice;
             if (gd == null) return;
 
-            _staticSurface?.Dispose();
-            _staticSurface = new RenderTarget2D(gd, ControlSize.X, ControlSize.Y, false, SurfaceFormat.Color, DepthFormat.None);
+            Client.Main.Graphics.UiRenderTargetPool.Return(_staticSurface);
+            _staticSurface = Client.Main.Graphics.UiRenderTargetPool.Rent(gd, ControlSize.X, ControlSize.Y);
 
             var prev = gd.GetRenderTargets();
             gd.SetRenderTarget(_staticSurface);

@@ -15,6 +15,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Client.Main.Controls
@@ -193,6 +194,9 @@ namespace Client.Main.Controls
         public TerrainControl Terrain { get; }
         public WorldFrameMetrics FrameMetrics { get; } = new();
 
+        private static long s_nextWorldInstanceId;
+
+        public long WorldInstanceId { get; }
         public short WorldIndex { get; private set; }
         public bool IsSunWorld { get; protected set; } = true;
 
@@ -220,6 +224,7 @@ namespace Client.Main.Controls
 
         public WorldControl(short worldIndex)
         {
+            WorldInstanceId = Interlocked.Increment(ref s_nextWorldInstanceId);
             AutoViewSize = false;
             ViewSize = new(MuGame.Instance.Width, MuGame.Instance.Height);
             WorldIndex = worldIndex;
@@ -514,8 +519,38 @@ namespace Client.Main.Controls
 
         private void OnObjectAdded(object sender, ChildrenEventArgs<WorldObject> e)
         {
-            e.Control.World = this;
-            e.Control.HiddenChanged += Object_HiddenChanged;
+            WorldObject worldObject = e.Control;
+
+            // NPC roots are world-local. A stale asynchronous spawn or a retained scene
+            // reference must never attach an NPC created for another WorldControl instance
+            // to the new map. Hide it immediately and remove it through the main-thread queue.
+            if (worldObject is NPCObject &&
+                worldObject.OwningWorldInstanceId != 0 &&
+                worldObject.OwningWorldInstanceId != WorldInstanceId)
+            {
+                long previousWorldInstanceId = worldObject.OwningWorldInstanceId;
+                worldObject.Hidden = true;
+
+                _logger?.LogWarning(
+                    "Rejected stale NPC {NpcType} ({NetworkId:X4}) from world instance {OldWorld}; current world instance is {CurrentWorld}.",
+                    worldObject.GetType().Name,
+                    worldObject.NetworkId,
+                    previousWorldInstanceId,
+                    WorldInstanceId);
+
+                MuGame.ScheduleOnMainThread(() =>
+                {
+                    Objects.Remove(worldObject);
+                    worldObject.Dispose();
+                }, MainThreadDispatcher.WorkPriority.Critical);
+                return;
+            }
+
+            if (worldObject.OwningWorldInstanceId == 0 || worldObject is PlayerObject)
+                worldObject.OwningWorldInstanceId = WorldInstanceId;
+
+            worldObject.World = this;
+            worldObject.HiddenChanged += Object_HiddenChanged;
             e.Control.PositionChanged += Object_PositionChanged;
             e.Control.StatusChanged += Object_StatusChanged;
 
@@ -1724,6 +1759,11 @@ namespace Client.Main.Controls
         public override void Dispose()
         {
             var sw = Stopwatch.StartNew();
+
+            // Dispose can occur after objects were queued for a later instanced flush. Clear
+            // those per-frame queues before releasing world objects to prevent one-frame ghosts
+            // or persistent stale batches after a teleport.
+            ModelObject.ResetWorldScopedInstancingState();
 
             // Dispose and remove all objects except the local player
             foreach (var obj in Objects.ToArray())

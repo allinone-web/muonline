@@ -14,6 +14,7 @@ using Microsoft.Xna.Framework.Graphics;
 using System;
 using System.Diagnostics;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using static LEA.Symmetric.Lea;
 
@@ -31,6 +32,8 @@ namespace Client.Main.Objects
         private bool _isTransformDirty = true;
         private bool _hidden = false;
         private GameControlStatus _status = GameControlStatus.NonInitialized;
+        private int _disposeRequested;
+        private int _loadInProgress;
 
         private ILogger _logger = ModelObject.AppLoggerFactory?.CreateLogger<WorldObject>();
 
@@ -100,7 +103,32 @@ namespace Client.Main.Objects
                 : WorldObjectRenderPolicy.Default;
         internal int UpdateOffset => _updateOffset;
         public bool Visible => Status == GameControlStatus.Ready && !Hidden;
+
+        /// <summary>
+        /// Identifies the concrete WorldControl instance which first owned this object. NPC
+        /// roots are not transferable between worlds; retaining this value lets the next
+        /// world reject a stale object which survived an asynchronous scene transition.
+        /// </summary>
+        internal long OwningWorldInstanceId { get; set; }
+
+        protected bool IsDisposeRequested => Volatile.Read(ref _disposeRequested) != 0;
+        protected bool IsLoadInProgress => Volatile.Read(ref _loadInProgress) != 0;
         public WorldControl World { get => _world; set { if (_world != value) { var prev = _world; _world = value; OnWorldChanged(value, prev); } } }
+
+        /// <summary>
+        /// Resets the lifecycle flags of an object which is explicitly owned by a safe object pool.
+        /// The object must not be returned to the pool while asynchronous loading is still active.
+        /// </summary>
+        protected bool TryResetLifecycleForReuse()
+        {
+            if (IsLoadInProgress)
+                return false;
+
+            Interlocked.Exchange(ref _disposeRequested, 0);
+            Interlocked.Exchange(ref _loadInProgress, 0);
+            Status = GameControlStatus.NonInitialized;
+            return true;
+        }
         public short Type { get; set; }
         public bool IsMapPlacementObject { get; set; }
         public Color BoundingBoxColor { get; set; } = Color.GreenYellow;
@@ -146,8 +174,8 @@ namespace Client.Main.Objects
 
         protected virtual void OnWorldChanged(WorldControl newWorld, WorldControl prevWorld)
         {
-            var children = Children.ToArray();
-            for (var i = 0; i < children.Length; i++)
+            var children = Children.GetSnapshot();
+            for (var i = 0; i < children.Count; i++)
                 children[i].World = newWorld;
 
             if (newWorld is WalkableWorldControl && this is WalkerObject walker)
@@ -159,43 +187,69 @@ namespace Client.Main.Objects
 
         public virtual async Task Load()
         {
+            if (IsDisposeRequested || Status == GameControlStatus.Disposed)
+                return;
+
             if (Status != GameControlStatus.NonInitialized)
                 return;
 
+            Interlocked.Exchange(ref _loadInProgress, 1);
             try
             {
                 Status = GameControlStatus.Initializing;
 
-                if (World == null)
+                if (World == null || IsDisposeRequested)
                 {
-                    Status = GameControlStatus.NonInitialized;
+                    Interlocked.Exchange(ref _loadInProgress, 0);
+                    if (IsDisposeRequested)
+                        Dispose();
+                    else
+                        Status = GameControlStatus.NonInitialized;
                     return;
                 }
 
-                var tasks = new Task[Children.Count + 1];
-
-                tasks[0] = LoadContent();
-
                 var snapshot = Children.GetSnapshot();
+                var tasks = new Task[snapshot.Count + 1];
+                tasks[0] = LoadContent();
 
                 for (var i = 0; i < snapshot.Count; i++)
                     tasks[i + 1] = snapshot[i].Load();
 
                 await Task.WhenAll(tasks);
 
+                // Dispose may be requested while asynchronous content is still loading.
+                // Never block the render thread waiting for that work. Instead, let it
+                // finish and invoke the virtual Dispose path again so derived classes can
+                // release resources that completed after the first disposal request.
+                if (IsDisposeRequested || Status == GameControlStatus.Disposed)
+                {
+                    Interlocked.Exchange(ref _loadInProgress, 0);
+                    Dispose();
+                    return;
+                }
+
                 if (World == null)
                 {
+                    Interlocked.Exchange(ref _loadInProgress, 0);
                     Status = GameControlStatus.NonInitialized;
                     return;
                 }
 
                 RecalculateWorldPosition();
                 UpdateWorldBoundingBox();
-
+                Interlocked.Exchange(ref _loadInProgress, 0);
                 Status = GameControlStatus.Ready;
             }
             catch (Exception e)
             {
+                if (IsDisposeRequested || Status == GameControlStatus.Disposed)
+                {
+                    Interlocked.Exchange(ref _loadInProgress, 0);
+                    Dispose();
+                    return;
+                }
+
+                Interlocked.Exchange(ref _loadInProgress, 0);
                 _logger?.LogDebug(e, "Exception in WorldObject");
                 Status = GameControlStatus.Error;
             }
@@ -344,12 +398,14 @@ namespace Client.Main.Objects
 
         public virtual void Dispose()
         {
-            while (Status == GameControlStatus.Initializing)
-                Thread.Sleep(100);
+            Interlocked.Exchange(ref _disposeRequested, 1);
 
             if (Status == GameControlStatus.Disposed)
                 return;
 
+            // Disposal must never wait for asynchronous loading on the main/render thread.
+            // Load() observes the request after its current await and re-enters the virtual
+            // Dispose path, allowing derived classes to clean up resources created late.
             Status = GameControlStatus.Disposed;
 
             // Centralized safeguard: detach any terrain dynamic lights owned by this object.
@@ -357,14 +413,18 @@ namespace Client.Main.Objects
 
             Children.ControlAdded -= Children_ControlAdded;
 
-            var children = Children.ToArray();
-            for (int i = 0; i < children.Length; i++)
+            var children = Children.GetSnapshot();
+            for (int i = 0; i < children.Count; i++)
                 children[i].Dispose();
             Children.Clear();
 
             Parent?.Children.Remove(this);
             Parent = null;
 
+            // Break the reference to the disposed world. Besides preventing old scenes from
+            // being retained, this makes all late asynchronous continuations fail their
+            // expected-world checks instead of publishing data into a new scene.
+            World = null;
         }
 
         protected virtual void OnPositionChanged()

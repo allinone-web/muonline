@@ -6,6 +6,7 @@ using Client.Main.Core.Utilities;
 using System;
 using System.Collections.Generic;
 using System.Linq; // For ItemDatabase
+using System.Threading;
 using MUnique.OpenMU.Network.Packets;
 
 namespace Client.Main.Core.Client
@@ -24,6 +25,13 @@ namespace Client.Main.Core.Client
         private readonly Stack<MoneyScopeObject> _moneyPool = new();
         private readonly object _poolLock = new();
 
+        private long _worldGeneration = 1;
+        private int _worldTransitionActive;
+        private ushort _transitionSourceMapId = ushort.MaxValue;
+
+        public long CurrentWorldGeneration => Volatile.Read(ref _worldGeneration);
+        public bool IsWorldTransitionActive => Volatile.Read(ref _worldTransitionActive) != 0;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="ScopeManager"/> class.
         /// </summary>
@@ -33,6 +41,89 @@ namespace Client.Main.Core.Client
         {
             _logger = loggerFactory.CreateLogger<ScopeManager>();
             _characterState = characterState;
+        }
+
+        /// <summary>
+        /// Starts a world transition. Remote entries from the old map are removed without
+        /// returning them to the pools because old scene objects may still reference them
+        /// until asynchronous disposal has completed. Updates received while CharacterState
+        /// still points at the source map are treated as delayed packets from the old world.
+        /// </summary>
+        public void BeginWorldTransition(ushort? sourceMapId = null)
+        {
+            _transitionSourceMapId = sourceMapId ?? _characterState.MapId;
+            Interlocked.Increment(ref _worldGeneration);
+            Volatile.Write(ref _worldTransitionActive, 1);
+            ClearScope(clearSelf: false, recycleRemovedObjects: false);
+
+            _logger.LogInformation(
+                "Scope world transition started. SourceMap={SourceMap}, Generation={Generation}.",
+                _transitionSourceMapId,
+                CurrentWorldGeneration);
+        }
+
+        /// <summary>
+        /// Completes a world transition and removes any entries which were stamped for a map
+        /// other than the character's current map. Valid packets received for the new map
+        /// during scene initialization are retained.
+        /// </summary>
+        public void CompleteWorldTransition()
+        {
+            ushort currentMapId = _characterState.MapId;
+            int removed = RemoveEntriesFromOtherMaps(currentMapId, recycleRemovedObjects: false);
+            Volatile.Write(ref _worldTransitionActive, 0);
+
+            _logger.LogInformation(
+                "Scope world transition completed. CurrentMap={CurrentMap}, removed stale entries={Removed}, Generation={Generation}.",
+                currentMapId,
+                removed,
+                CurrentWorldGeneration);
+        }
+
+        private bool ShouldIgnoreRemoteUpdateDuringTransition()
+        {
+            return IsWorldTransitionActive && _characterState.MapId == _transitionSourceMapId;
+        }
+
+        private void StampCurrentWorld(ScopeObject scopeObject)
+        {
+            scopeObject.MapId = _characterState.MapId;
+            scopeObject.WorldGeneration = CurrentWorldGeneration;
+            scopeObject.LastUpdate = DateTime.UtcNow;
+        }
+
+        private bool IsEntryForCurrentWorld(ScopeObject scopeObject)
+        {
+            if (scopeObject == null)
+                return false;
+
+            if (scopeObject.Id == _characterState.Id)
+                return true;
+
+            ushort currentMapId = _characterState.MapId;
+            return scopeObject.MapId == ushort.MaxValue || scopeObject.MapId == currentMapId;
+        }
+
+        private int RemoveEntriesFromOtherMaps(ushort currentMapId, bool recycleRemovedObjects)
+        {
+            int removedCount = 0;
+            ushort selfId = _characterState.Id;
+
+            foreach (var entry in _objectsInScope)
+            {
+                ScopeObject scopeObject = entry.Value;
+                if (entry.Key == selfId || scopeObject.MapId == ushort.MaxValue || scopeObject.MapId == currentMapId)
+                    continue;
+
+                if (_objectsInScope.TryRemove(entry.Key, out ScopeObject removedObject))
+                {
+                    if (recycleRemovedObjects)
+                        ReturnScopeObject(removedObject);
+                    removedCount++;
+                }
+            }
+
+            return removedCount;
         }
 
         /// <summary>
@@ -46,13 +137,17 @@ namespace Client.Main.Core.Client
         /// <param name="name">The name of the player.</param>
         public void AddOrUpdatePlayerInScope(ushort maskedId, ushort rawId, byte x, byte y, string name)
         {
+            bool isSelf = maskedId == _characterState.Id;
+            if (!isSelf && ShouldIgnoreRemoteUpdateDuringTransition())
+                return;
+
             if (_objectsInScope.TryGetValue(maskedId, out var existing) && existing is PlayerScopeObject existingPlayer)
             {
                 // Fast-path: mutate existing to avoid allocations
                 existingPlayer.PositionX = x;
                 existingPlayer.PositionY = y;
                 existingPlayer.Name = name;
-                existingPlayer.LastUpdate = DateTime.UtcNow;
+                StampCurrentWorld(existingPlayer);
             }
             else
             {
@@ -62,6 +157,7 @@ namespace Client.Main.Core.Client
                     ReturnScopeObject(existing);
                 }
                 var player = RentPlayer(maskedId, rawId, x, y, name);
+                StampCurrentWorld(player);
                 _objectsInScope[maskedId] = player;
             }
             _logger.LogTrace("Scope Add/Update: Player {Name} ({Id:X4}, Raw: {RawId:X4}) at [{X},{Y}]", name, maskedId, rawId, x, y);
@@ -79,13 +175,16 @@ namespace Client.Main.Core.Client
         /// <param name="name">The optional name of the NPC.</param>
         public void AddOrUpdateNpcInScope(ushort maskedId, ushort rawId, byte x, byte y, ushort typeNumber, string name = null)
         {
+            if (ShouldIgnoreRemoteUpdateDuringTransition())
+                return;
+
             if (_objectsInScope.TryGetValue(maskedId, out var existing) && existing is NpcScopeObject existingNpc)
             {
                 existingNpc.PositionX = x;
                 existingNpc.PositionY = y;
                 existingNpc.TypeNumber = typeNumber;
                 existingNpc.Name = name;
-                existingNpc.LastUpdate = DateTime.UtcNow;
+                StampCurrentWorld(existingNpc);
             }
             else
             {
@@ -94,6 +193,7 @@ namespace Client.Main.Core.Client
                     ReturnScopeObject(existing);
                 }
                 var npc = RentNpc(maskedId, rawId, x, y, typeNumber, name);
+                StampCurrentWorld(npc);
                 _objectsInScope[maskedId] = npc;
             }
             _logger.LogTrace("Scope Add/Update: NPC Type {Type} ({Id:X4}, Raw: {RawId:X4}) at [{X},{Y}]", typeNumber, maskedId, rawId, x, y);
@@ -110,16 +210,23 @@ namespace Client.Main.Core.Client
         /// <param name="itemData">The raw data of the item.</param>
         public void AddOrUpdateItemInScope(ushort maskedId, ushort rawId, byte x, byte y, ReadOnlySpan<byte> itemData)
         {
+            if (ShouldIgnoreRemoteUpdateDuringTransition())
+                return;
+
             if (_objectsInScope.TryGetValue(maskedId, out var existing) && existing is ItemScopeObject existingItem)
             {
                 existingItem.PositionX = x;
                 existingItem.PositionY = y;
                 // Item data itself usually doesn't change while on the ground, so no update needed for ItemData/Description
-                existingItem.LastUpdate = DateTime.UtcNow;
+                StampCurrentWorld(existingItem);
             }
             else
             {
+                if (existing != null)
+                    ReturnScopeObject(existing);
+
                 var item = new ItemScopeObject(maskedId, rawId, x, y, itemData);
+                StampCurrentWorld(item);
                 _objectsInScope[maskedId] = item;
             }
             _logger.LogTrace("Scope Add/Update: Item ({Id:X4}, Raw: {RawId:X4}) at [{X},{Y}]", maskedId, rawId, x, y);
@@ -136,12 +243,15 @@ namespace Client.Main.Core.Client
         /// <param name="amount">The amount of money.</param>
         public void AddOrUpdateMoneyInScope(ushort maskedId, ushort rawId, byte x, byte y, uint amount)
         {
+            if (ShouldIgnoreRemoteUpdateDuringTransition())
+                return;
+
             if (_objectsInScope.TryGetValue(maskedId, out var existing) && existing is MoneyScopeObject existingMoney)
             {
                 existingMoney.PositionX = x;
                 existingMoney.PositionY = y;
                 existingMoney.Amount = amount;
-                existingMoney.LastUpdate = DateTime.UtcNow;
+                StampCurrentWorld(existingMoney);
             }
             else
             {
@@ -150,6 +260,7 @@ namespace Client.Main.Core.Client
                     ReturnScopeObject(existing);
                 }
                 var money = RentMoney(maskedId, rawId, x, y, amount);
+                StampCurrentWorld(money);
                 _objectsInScope[maskedId] = money;
             }
             _logger.LogTrace("Scope Add/Update: Money ({Id:X4}, Raw: {RawId:X4}) Amount {Amount} at [{X},{Y}]", maskedId, rawId, amount, x, y);
@@ -188,11 +299,11 @@ namespace Client.Main.Core.Client
         /// <returns><c>true</c> if the object's position was updated; otherwise, <c>false</c> if the object was not found in scope.</returns>
         public bool TryUpdateScopeObjectPosition(ushort maskedId, byte x, byte y)
         {
-            if (_objectsInScope.TryGetValue(maskedId, out ScopeObject scopeObject))
+            if (_objectsInScope.TryGetValue(maskedId, out ScopeObject scopeObject) && IsEntryForCurrentWorld(scopeObject))
             {
                 scopeObject.PositionX = x;
                 scopeObject.PositionY = y;
-                scopeObject.LastUpdate = DateTime.UtcNow; // Update the last update timestamp
+                StampCurrentWorld(scopeObject);
                 return true;
             }
             return false;
@@ -245,6 +356,9 @@ namespace Client.Main.Core.Client
         {
             if (obj == null) return;
 
+            obj.MapId = ushort.MaxValue;
+            obj.WorldGeneration = 0;
+
             lock (_poolLock)
             {
                 switch (obj)
@@ -275,7 +389,7 @@ namespace Client.Main.Core.Client
         /// <returns><c>true</c> if an object with the given ID is in the scope; otherwise, <c>false</c>.</returns>
         public bool ScopeContains(ushort maskedId)
         {
-            return _objectsInScope.ContainsKey(maskedId);
+            return _objectsInScope.TryGetValue(maskedId, out ScopeObject scopeObject) && IsEntryForCurrentWorld(scopeObject);
         }
 
         /// <summary>
@@ -286,7 +400,9 @@ namespace Client.Main.Core.Client
         public IEnumerable<ScopeObject> GetScopeItems(ScopeObjectType type)
         {
             // Return a snapshot to avoid issues with collection modification during iteration
-            return _objectsInScope.Values.Where(obj => obj.ObjectType == type).ToList();
+            return _objectsInScope.Values
+                .Where(obj => obj.ObjectType == type && IsEntryForCurrentWorld(obj))
+                .ToList();
         }
 
         /// <summary>
@@ -297,7 +413,7 @@ namespace Client.Main.Core.Client
         public ScopeObject GetScopeObjectByMaskedId(ushort maskedId)
         {
             _objectsInScope.TryGetValue(maskedId, out var scopeObject);
-            return scopeObject;
+            return IsEntryForCurrentWorld(scopeObject) ? scopeObject : null;
         }
 
         /// <summary>
@@ -333,28 +449,40 @@ namespace Client.Main.Core.Client
         /// Clears the scope, removing all objects. Optionally keeps the player's own character in scope.
         /// </summary>
         /// <param name="clearSelf">If set to <c>true</c>, clears even the player's own character from scope. Default is <c>false</c>.</param>
-        public void ClearScope(bool clearSelf = false)
+        public void ClearScope(bool clearSelf = false, bool recycleRemovedObjects = true)
         {
-            if (clearSelf || _characterState.Id == 0xFFFF)
+            ushort selfId = _characterState.Id;
+            bool keepSelf = !clearSelf && selfId != 0xFFFF;
+            int removedCount = 0;
+
+            // Remove entries individually so pooled scope objects are returned correctly. A
+            // ConcurrentDictionary.Clear() would drop pooled NPC/player/money instances without
+            // resetting them and makes stale world data much harder to diagnose.
+            foreach (ushort maskedId in _objectsInScope.Keys)
             {
-                _objectsInScope.Clear();
-                _logger.LogInformation("🔭 Scope Cleared (All).");
+                if (keepSelf && maskedId == selfId)
+                    continue;
+
+                if (_objectsInScope.TryRemove(maskedId, out ScopeObject removedObject))
+                {
+                    if (recycleRemovedObjects)
+                        ReturnScopeObject(removedObject);
+                    removedCount++;
+                }
+            }
+
+            if (keepSelf && _objectsInScope.ContainsKey(selfId))
+            {
+                _logger.LogInformation(
+                    "🔭 Scope Cleared ({Count} objects). Kept Self ({Id:X4}).",
+                    removedCount,
+                    selfId);
             }
             else
             {
-                // Keep self, remove others
-                if (_objectsInScope.TryGetValue(_characterState.Id, out var self))
-                {
-                    _objectsInScope.Clear();
-                    _objectsInScope.TryAdd(_characterState.Id, self); // Re-add self to scope
-                    _logger.LogInformation("🔭 Scope Cleared (Others). Kept Self ({Id:X4})", _characterState.Id);
-                }
-                else
-                {
-                    // This case should ideally not happen if Id is set, but handle defensively
-                    _objectsInScope.Clear();
-                    _logger.LogWarning("🔭 Scope Cleared (All - Self ID {Id:X4} not found in scope).", _characterState.Id);
-                }
+                _logger.LogInformation(
+                    "🔭 Scope Cleared ({Count} objects). No self object retained.",
+                    removedCount);
             }
         }
 
@@ -391,7 +519,7 @@ namespace Client.Main.Core.Client
         {
             ushort maskedId = (ushort)(rawId & 0x7FFF); // Always mask the raw ID before lookup
 
-            if (_objectsInScope.TryGetValue(maskedId, out ScopeObject scopeObject))
+            if (_objectsInScope.TryGetValue(maskedId, out ScopeObject scopeObject) && IsEntryForCurrentWorld(scopeObject))
             {
                 switch (scopeObject.ObjectType)
                 {

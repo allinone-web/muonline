@@ -51,6 +51,19 @@ namespace Client.Main.Core.Models
         public abstract ScopeObjectType ObjectType { get; }
 
         /// <summary>
+        /// Gets or sets the map on which this entry was received. Scope packets do not carry
+        /// a scene object reference, so the manager stamps them with CharacterState.MapId.
+        /// Consumers must ignore entries from another map during and after a warp.
+        /// </summary>
+        public ushort MapId { get; set; } = ushort.MaxValue;
+
+        /// <summary>
+        /// Monotonic world-transition generation assigned by ScopeManager. It is primarily
+        /// diagnostic and prevents pooled entries from being mistaken for an older world.
+        /// </summary>
+        public long WorldGeneration { get; set; }
+
+        /// <summary>
         /// Gets or sets the timestamp of the last update received for this scope object.
         /// </summary>
         public DateTime LastUpdate { get; set; } = DateTime.UtcNow;
@@ -77,7 +90,7 @@ namespace Client.Main.Core.Models
         /// <inheritdoc />
         public override string ToString()
         {
-            return $"ID: {Id:X4} (Raw: {RawId:X4}) ({ObjectType}) at [{PositionX},{PositionY}]";
+            return $"ID: {Id:X4} (Raw: {RawId:X4}) ({ObjectType}) Map:{MapId} Gen:{WorldGeneration} at [{PositionX},{PositionY}]";
         }
     }
 

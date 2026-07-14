@@ -79,7 +79,7 @@ namespace Client.Main.Controls.UI.Game.Hud
         public override void Dispose()
         {
             _characterState.DuelStateChanged -= OnDuelStateChanged;
-            _staticSurface?.Dispose();
+            Client.Main.Graphics.UiRenderTargetPool.Return(_staticSurface);
             _staticSurface = null;
             base.Dispose();
         }
@@ -151,8 +151,8 @@ namespace Client.Main.Controls.UI.Game.Hud
 
             var gd = GraphicsManager.Instance.GraphicsDevice;
 
-            _staticSurface?.Dispose();
-            _staticSurface = new RenderTarget2D(gd, WIDTH, HEIGHT, false, SurfaceFormat.Color, DepthFormat.None);
+            Client.Main.Graphics.UiRenderTargetPool.Return(_staticSurface);
+            _staticSurface = Client.Main.Graphics.UiRenderTargetPool.Rent(gd, WIDTH, HEIGHT);
 
             var previousTargets = gd.GetRenderTargets();
             gd.SetRenderTarget(_staticSurface);

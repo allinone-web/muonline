@@ -187,18 +187,12 @@ namespace Client.Main.Controls.UI.SelectCharacter
 
         private void RegenerateBackgroundSurface()
         {
-            _backgroundSurface?.Dispose();
+            Client.Main.Graphics.UiRenderTargetPool.Return(_backgroundSurface);
 
             int width = ViewSize.X;
             int height = ViewSize.Y;
 
-            _backgroundSurface = new RenderTarget2D(
-                GraphicsDevice,
-                width,
-                height,
-                false,
-                SurfaceFormat.Color,
-                DepthFormat.None);
+            _backgroundSurface = Client.Main.Graphics.UiRenderTargetPool.Rent(GraphicsDevice, width, height);
 
             // Render background to surface
             var oldTargets = GraphicsDevice.GetRenderTargets();
@@ -286,7 +280,7 @@ namespace Client.Main.Controls.UI.SelectCharacter
 
         public override void Dispose()
         {
-            _backgroundSurface?.Dispose();
+            Client.Main.Graphics.UiRenderTargetPool.Return(_backgroundSurface);
             _backgroundSurface = null;
 
             if (_confirmButton != null)
