@@ -71,6 +71,7 @@ namespace Client.Main.Content
             public required VertexBuffer VertexBuffer { get; init; }
             public required IndexBuffer IndexBuffer { get; init; }
             public int BoneCount { get; init; }
+            public int LastUsedFrame;
         }
 
         private readonly struct MeshCornerKey : IEquatable<MeshCornerKey>
@@ -123,13 +124,21 @@ namespace Client.Main.Content
         // Immutable indexed topology per mesh. It removes duplicated triangle-corner vertices
         // from CPU skinning, GPU skinning, VRAM storage and vertex-shader work.
         private readonly Dictionary<MeshCacheKey, MeshTopology> _meshTopologyCache = [];
+        private readonly Dictionary<MeshCacheKey, int> _meshTopologyLastUsedFrames = [];
+        private readonly List<MeshCacheKey> _staleMeshTopologyKeys = new(64);
         private readonly object _meshTopologyLock = new();
         // Static buffers for GPU skinning path (no per-frame vertex uploads)
         private readonly Dictionary<MeshCacheKey, VertexBuffer> _gpuSkinVertexBuffers = [];
         private readonly Dictionary<MeshCacheKey, IndexBuffer> _gpuSkinIndexBuffers = [];
         private readonly Dictionary<MeshCacheKey, int> _gpuSkinBoneCounts = [];
+        private readonly Dictionary<MeshCacheKey, int> _gpuSkinLastUsedFrames = [];
         private readonly Dictionary<GpuSkinBatchCacheKey, GpuSkinBatchCacheEntry> _gpuSkinBatchBuffers = [];
+        private readonly List<MeshCacheKey> _staleGpuMeshKeys = new(64);
+        private readonly List<GpuSkinBatchCacheKey> _staleGpuBatchKeys = new(32);
         private readonly object _gpuSkinBufferLock = new();
+        private const int GpuCachePruneIntervalFrames = 300;
+        private const int GpuCacheRetentionFrames = 3600;
+        private int _lastGpuCachePruneFrame;
         // Parallel.For has a measurable setup/synchronization cost. Keep small and
         // medium meshes on the calling thread and parallelize only genuinely large jobs.
         private const int ParallelCpuSkinningVertexThreshold = 24000;
@@ -159,6 +168,21 @@ namespace Client.Main.Content
         public int LastFrameCacheMisses { get; private set; }
         public int LastFrameMeshBatchBuilds { get; private set; }
         public int LastFrameMeshBatchMeshes { get; private set; }
+        public int LastFrameGpuMeshBuffersPruned { get; private set; }
+        public int LastFrameGpuBatchBuffersPruned { get; private set; }
+        public int LastFrameMeshTopologiesPruned { get; private set; }
+        public int GpuMeshBufferCacheCount
+        {
+            get { lock (_gpuSkinBufferLock) return _gpuSkinVertexBuffers.Count; }
+        }
+        public int GpuBatchBufferCacheCount
+        {
+            get { lock (_gpuSkinBufferLock) return _gpuSkinBatchBuffers.Count; }
+        }
+        public int MeshTopologyCacheCount
+        {
+            get { lock (_meshTopologyLock) return _meshTopologyCache.Count; }
+        }
 
         private sealed class BufferCacheEntry
         {
@@ -285,6 +309,18 @@ namespace Client.Main.Content
             FrameCacheMisses = 0;
             FrameMeshBatchBuilds = 0;
             FrameMeshBatchMeshes = 0;
+
+            LastFrameGpuMeshBuffersPruned = 0;
+            LastFrameGpuBatchBuffersPruned = 0;
+            LastFrameMeshTopologiesPruned = 0;
+            int frame = MuGame.FrameIndex;
+            if (frame >= _lastGpuCachePruneFrame &&
+                frame - _lastGpuCachePruneFrame >= GpuCachePruneIntervalFrames)
+            {
+                _lastGpuCachePruneFrame = frame;
+                PruneUnusedGpuSkinBuffers(frame);
+                PruneUnusedMeshTopologies(frame);
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -428,7 +464,10 @@ namespace Client.Main.Content
             lock (_meshTopologyLock)
             {
                 if (_meshTopologyCache.TryGetValue(cacheKey, out var cached))
+                {
+                    _meshTopologyLastUsedFrames[cacheKey] = MuGame.FrameIndex;
                     return cached;
+                }
 
                 int estimatedCornerCount = 0;
                 var triangles = mesh.Triangles;
@@ -467,6 +506,7 @@ namespace Client.Main.Content
                     Indices = indices
                 };
                 _meshTopologyCache.Add(cacheKey, topology);
+                _meshTopologyLastUsedFrames[cacheKey] = MuGame.FrameIndex;
                 return topology;
             }
         }
@@ -1010,6 +1050,7 @@ namespace Client.Main.Content
                     out indexBuffer,
                     out boneCount))
                 {
+                    _gpuSkinLastUsedFrames[cacheKey] = MuGame.FrameIndex;
                     return true;
                 }
             }
@@ -1100,6 +1141,7 @@ namespace Client.Main.Content
                         out indexBuffer,
                         out boneCount))
                     {
+                        _gpuSkinLastUsedFrames[cacheKey] = MuGame.FrameIndex;
                         newVertexBuffer.Dispose();
                         newIndexBuffer.Dispose();
                         return true;
@@ -1113,6 +1155,7 @@ namespace Client.Main.Content
                     _gpuSkinVertexBuffers[cacheKey] = newVertexBuffer;
                     _gpuSkinIndexBuffers[cacheKey] = newIndexBuffer;
                     _gpuSkinBoneCounts[cacheKey] = maxBoneIndex + 1;
+                    _gpuSkinLastUsedFrames[cacheKey] = MuGame.FrameIndex;
 
                     vertexBuffer = newVertexBuffer;
                     indexBuffer = newIndexBuffer;
@@ -1164,6 +1207,7 @@ namespace Client.Main.Content
                         cached.IndexBuffer != null && !cached.IndexBuffer.IsDisposed &&
                         cached.BoneCount > 0)
                     {
+                        cached.LastUsedFrame = MuGame.FrameIndex;
                         vertexBuffer = cached.VertexBuffer;
                         indexBuffer = cached.IndexBuffer;
                         boneCount = cached.BoneCount;
@@ -1171,6 +1215,8 @@ namespace Client.Main.Content
                     }
 
                     _gpuSkinBatchBuffers.Remove(cacheKey);
+                    cached.VertexBuffer?.Dispose();
+                    cached.IndexBuffer?.Dispose();
                 }
             }
 
@@ -1324,6 +1370,7 @@ namespace Client.Main.Content
                                 {
                                     newVertexBuffer.Dispose();
                                     newIndexBuffer.Dispose();
+                                    existing.LastUsedFrame = MuGame.FrameIndex;
                                     vertexBuffer = existing.VertexBuffer;
                                     indexBuffer = existing.IndexBuffer;
                                     boneCount = existing.BoneCount;
@@ -1340,7 +1387,8 @@ namespace Client.Main.Content
                                 MeshIndices = cachedMeshIndices,
                                 VertexBuffer = newVertexBuffer,
                                 IndexBuffer = newIndexBuffer,
-                                BoneCount = resolvedBoneCount
+                                BoneCount = resolvedBoneCount,
+                                LastUsedFrame = MuGame.FrameIndex
                             };
                             _gpuSkinBatchBuffers.Add(cacheKey, entry);
                             vertexBuffer = newVertexBuffer;
@@ -1420,6 +1468,86 @@ namespace Client.Main.Content
             return true;
         }
 
+        public void TouchGpuSkinnedMeshBuffers(BMD asset, int meshIndex)
+        {
+            if (asset == null || meshIndex < 0)
+                return;
+
+            var cacheKey = new MeshCacheKey(RuntimeHelpers.GetHashCode(asset), meshIndex);
+            lock (_gpuSkinBufferLock)
+            {
+                if (_gpuSkinVertexBuffers.ContainsKey(cacheKey))
+                    _gpuSkinLastUsedFrames[cacheKey] = MuGame.FrameIndex;
+            }
+        }
+
+        private void PruneUnusedGpuSkinBuffers(int currentFrame)
+        {
+            lock (_gpuSkinBufferLock)
+            {
+                _staleGpuMeshKeys.Clear();
+                foreach (var pair in _gpuSkinLastUsedFrames)
+                {
+                    int age = currentFrame - pair.Value;
+                    if (age >= 0 && age > GpuCacheRetentionFrames)
+                        _staleGpuMeshKeys.Add(pair.Key);
+                }
+
+                for (int i = 0; i < _staleGpuMeshKeys.Count; i++)
+                {
+                    MeshCacheKey key = _staleGpuMeshKeys[i];
+                    if (_gpuSkinVertexBuffers.Remove(key, out var vb))
+                        vb?.Dispose();
+                    if (_gpuSkinIndexBuffers.Remove(key, out var ib))
+                        ib?.Dispose();
+                    _gpuSkinBoneCounts.Remove(key);
+                    _gpuSkinLastUsedFrames.Remove(key);
+                    LastFrameGpuMeshBuffersPruned++;
+                }
+
+                _staleGpuBatchKeys.Clear();
+                foreach (var pair in _gpuSkinBatchBuffers)
+                {
+                    int age = currentFrame - pair.Value.LastUsedFrame;
+                    if (age >= 0 && age > GpuCacheRetentionFrames)
+                        _staleGpuBatchKeys.Add(pair.Key);
+                }
+
+                for (int i = 0; i < _staleGpuBatchKeys.Count; i++)
+                {
+                    GpuSkinBatchCacheKey key = _staleGpuBatchKeys[i];
+                    if (_gpuSkinBatchBuffers.Remove(key, out var entry))
+                    {
+                        entry.VertexBuffer?.Dispose();
+                        entry.IndexBuffer?.Dispose();
+                        LastFrameGpuBatchBuffersPruned++;
+                    }
+                }
+            }
+        }
+
+        private void PruneUnusedMeshTopologies(int currentFrame)
+        {
+            lock (_meshTopologyLock)
+            {
+                _staleMeshTopologyKeys.Clear();
+                foreach (var pair in _meshTopologyLastUsedFrames)
+                {
+                    int age = currentFrame - pair.Value;
+                    if (age >= 0 && age > GpuCacheRetentionFrames)
+                        _staleMeshTopologyKeys.Add(pair.Key);
+                }
+
+                for (int i = 0; i < _staleMeshTopologyKeys.Count; i++)
+                {
+                    MeshCacheKey key = _staleMeshTopologyKeys[i];
+                    if (_meshTopologyCache.Remove(key))
+                        LastFrameMeshTopologiesPruned++;
+                    _meshTopologyLastUsedFrames.Remove(key);
+                }
+            }
+        }
+
         public string GetTexturePath(BMD bmd, string texturePath)
         {
             texturePath = texturePath.ToLowerInvariant();
@@ -1441,7 +1569,11 @@ namespace Client.Main.Content
             _bufferCacheState = new ConditionalWeakTable<DynamicVertexBuffer, BufferCacheEntry>();
             _indexBufferCacheState = new ConditionalWeakTable<DynamicIndexBuffer, IndexBufferCacheEntry>();
             lock (_meshTopologyLock)
+            {
                 _meshTopologyCache.Clear();
+                _meshTopologyLastUsedFrames.Clear();
+                _staleMeshTopologyKeys.Clear();
+            }
             DisposeGpuSkinnedBuffers();
         }
 
@@ -1464,7 +1596,10 @@ namespace Client.Main.Content
                 _gpuSkinVertexBuffers.Clear();
                 _gpuSkinIndexBuffers.Clear();
                 _gpuSkinBoneCounts.Clear();
+                _gpuSkinLastUsedFrames.Clear();
                 _gpuSkinBatchBuffers.Clear();
+                _staleGpuMeshKeys.Clear();
+                _staleGpuBatchKeys.Clear();
             }
         }
     }

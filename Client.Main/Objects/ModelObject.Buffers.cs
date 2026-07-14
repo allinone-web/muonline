@@ -398,6 +398,13 @@ namespace Client.Main.Objects
                 ms.GpuIndexBuffer != null && !ms.GpuIndexBuffer.IsDisposed &&
                 ms.GpuBoneCount > 0)
             {
+                int frame = MuGame.FrameIndex;
+                int age = frame - ms.LastGpuCacheTouchFrame;
+                if (age < 0 || age >= 300)
+                {
+                    BMDLoader.Instance.TouchGpuSkinnedMeshBuffers(Model, meshIndex);
+                    ms.LastGpuCacheTouchFrame = frame;
+                }
                 return true;
             }
 
@@ -430,6 +437,7 @@ namespace Client.Main.Objects
             _meshes[meshIndex].GpuIndexBuffer = indexBuffer;
             _meshes[meshIndex].GpuBoneCount = boneCount;
             _meshes[meshIndex].GpuSkinEnabled = true;
+            _meshes[meshIndex].LastGpuCacheTouchFrame = MuGame.FrameIndex;
 
             // Normally GPU skinning replaces CPU buffers. When projected mesh shadows are
             // active, retain/build the CPU path only for that side pass.

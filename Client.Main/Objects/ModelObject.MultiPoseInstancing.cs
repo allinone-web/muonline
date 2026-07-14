@@ -143,6 +143,29 @@ namespace Client.Main.Objects
             public Texture2D Texture;
             public int Width;
             public int Height;
+            public Matrix[][] UploadedSources = Array.Empty<Matrix[]>();
+            public uint[] UploadedVersions = Array.Empty<uint>();
+            public int[] UploadedWidths = Array.Empty<int>();
+
+            public void EnsureMetadataCapacity(int rowCount)
+            {
+                if (UploadedSources.Length >= rowCount)
+                    return;
+
+                int newSize = Math.Max(rowCount, UploadedSources.Length == 0
+                    ? InitialCrowdPoseCapacity
+                    : UploadedSources.Length * 2);
+                Array.Resize(ref UploadedSources, newSize);
+                Array.Resize(ref UploadedVersions, newSize);
+                Array.Resize(ref UploadedWidths, newSize);
+            }
+
+            public void InvalidateMetadata()
+            {
+                Array.Clear(UploadedSources, 0, UploadedSources.Length);
+                Array.Clear(UploadedVersions, 0, UploadedVersions.Length);
+                Array.Clear(UploadedWidths, 0, UploadedWidths.Length);
+            }
 
             public void Dispose()
             {
@@ -150,6 +173,9 @@ namespace Client.Main.Objects
                 Texture = null;
                 Width = 0;
                 Height = 0;
+                UploadedSources = Array.Empty<Matrix[]>();
+                UploadedVersions = Array.Empty<uint>();
+                UploadedWidths = Array.Empty<int>();
             }
         }
 
@@ -173,19 +199,28 @@ namespace Client.Main.Objects
         private static Texture2D _walkerCrowdActiveBonePaletteTexture;
         private static int _walkerCrowdMaxBonesThisFlush;
         private static Vector4[] _walkerCrowdBonePaletteUpload = Array.Empty<Vector4>();
+        private static Vector4[] _walkerCrowdBonePaletteRowUpload = Array.Empty<Vector4>();
+        private static int[] _walkerCrowdDirtyPoseRows = Array.Empty<int>();
         private static bool _walkerCrowdMultiPoseInstancingFailed;
+        private static bool _walkerCrowdPartialPaletteUpdatesSupported = true;
 
         private static int _walkerCrowdMultiPoseObjectsThisFrame;
         private static int _walkerCrowdMultiPoseMeshInstancesThisFrame;
         private static int _walkerCrowdMultiPoseDrawCallsThisFrame;
         private static int _walkerCrowdMultiPoseUniquePosesThisFrame;
         private static int _walkerCrowdMultiPosePaletteUploadsThisFrame;
+        private static int _walkerCrowdMultiPoseDirtyRowsThisFrame;
+        private static long _walkerCrowdMultiPosePaletteBytesThisFrame;
+        private static int _walkerCrowdMultiPosePaletteCacheHitsThisFrame;
 
         public static int LastFrameWalkerCrowdMultiPoseObjects { get; private set; }
         public static int LastFrameWalkerCrowdMultiPoseMeshInstances { get; private set; }
         public static int LastFrameWalkerCrowdMultiPoseDrawCalls { get; private set; }
         public static int LastFrameWalkerCrowdMultiPoseUniquePoses { get; private set; }
         public static int LastFrameWalkerCrowdMultiPosePaletteUploads { get; private set; }
+        public static int LastFrameWalkerCrowdMultiPoseDirtyRows { get; private set; }
+        public static long LastFrameWalkerCrowdMultiPosePaletteBytes { get; private set; }
+        public static int LastFrameWalkerCrowdMultiPosePaletteCacheHits { get; private set; }
         public static bool IsWalkerCrowdMultiPoseActive => IsWalkerCrowdMultiPoseInstancingSupported();
 
         private static void BeginFrameWalkerCrowdMultiPoseMetrics()
@@ -195,12 +230,18 @@ namespace Client.Main.Objects
             LastFrameWalkerCrowdMultiPoseDrawCalls = _walkerCrowdMultiPoseDrawCallsThisFrame;
             LastFrameWalkerCrowdMultiPoseUniquePoses = _walkerCrowdMultiPoseUniquePosesThisFrame;
             LastFrameWalkerCrowdMultiPosePaletteUploads = _walkerCrowdMultiPosePaletteUploadsThisFrame;
+            LastFrameWalkerCrowdMultiPoseDirtyRows = _walkerCrowdMultiPoseDirtyRowsThisFrame;
+            LastFrameWalkerCrowdMultiPosePaletteBytes = _walkerCrowdMultiPosePaletteBytesThisFrame;
+            LastFrameWalkerCrowdMultiPosePaletteCacheHits = _walkerCrowdMultiPosePaletteCacheHitsThisFrame;
 
             _walkerCrowdMultiPoseObjectsThisFrame = 0;
             _walkerCrowdMultiPoseMeshInstancesThisFrame = 0;
             _walkerCrowdMultiPoseDrawCallsThisFrame = 0;
             _walkerCrowdMultiPoseUniquePosesThisFrame = 0;
             _walkerCrowdMultiPosePaletteUploadsThisFrame = 0;
+            _walkerCrowdMultiPoseDirtyRowsThisFrame = 0;
+            _walkerCrowdMultiPosePaletteBytesThisFrame = 0;
+            _walkerCrowdMultiPosePaletteCacheHitsThisFrame = 0;
         }
 
         private static bool IsWalkerCrowdInstancingSupported() =>
@@ -397,6 +438,7 @@ namespace Client.Main.Objects
             BlendState previousBlend = gd.BlendState;
             RasterizerState previousRasterizer = gd.RasterizerState;
             SamplerState previousSampler = gd.SamplerStates[0];
+            EffectTechnique previousTechnique = effect.CurrentTechnique;
 
             try
             {
@@ -459,7 +501,6 @@ namespace Client.Main.Objects
                 }
 
                 _walkerCrowdMultiPoseUniquePosesThisFrame += poseCount;
-                _walkerCrowdMultiPosePaletteUploadsThisFrame++;
             }
             catch (Exception ex)
             {
@@ -473,6 +514,7 @@ namespace Client.Main.Objects
             }
             finally
             {
+                effect.CurrentTechnique = previousTechnique;
                 gd.BlendState = previousBlend;
                 gd.RasterizerState = previousRasterizer;
                 gd.SamplerStates[0] = previousSampler;
@@ -484,12 +526,80 @@ namespace Client.Main.Objects
         {
             int paletteBoneCapacity = ResolveCrowdPaletteBoneCapacity(_walkerCrowdMaxBonesThisFlush);
             int uploadWidth = paletteBoneCapacity * 4;
-            _walkerCrowdActiveBonePaletteTexture = AcquireWalkerCrowdBonePaletteTexture(
+            WalkerCrowdPaletteTextureSlot slot = AcquireWalkerCrowdBonePaletteTextureSlot(
                 gd,
                 uploadWidth,
                 poseCount);
-            if (_walkerCrowdActiveBonePaletteTexture == null || _walkerCrowdActiveBonePaletteTexture.IsDisposed)
+            if (slot?.Texture == null || slot.Texture.IsDisposed)
                 return false;
+
+            _walkerCrowdActiveBonePaletteTexture = slot.Texture;
+            slot.EnsureMetadataCapacity(poseCount);
+
+            if (_walkerCrowdDirtyPoseRows.Length < poseCount)
+                _walkerCrowdDirtyPoseRows = new int[RoundUpToPowerOfTwo(poseCount)];
+
+            int dirtyCount = 0;
+            for (int poseIndex = 0; poseIndex < poseCount; poseIndex++)
+            {
+                WalkerCrowdPoseUpload pose = _walkerCrowdPoseUploads[poseIndex];
+                bool isDirty = !ReferenceEquals(slot.UploadedSources[poseIndex], pose.Bones) ||
+                               slot.UploadedVersions[poseIndex] != pose.PoseVersion ||
+                               slot.UploadedWidths[poseIndex] < uploadWidth;
+                if (isDirty)
+                    _walkerCrowdDirtyPoseRows[dirtyCount++] = poseIndex;
+            }
+
+            if (dirtyCount == 0)
+            {
+                _walkerCrowdMultiPosePaletteCacheHitsThisFrame += poseCount;
+                return true;
+            }
+
+            _walkerCrowdMultiPoseDirtyRowsThisFrame += dirtyCount;
+            _walkerCrowdMultiPosePaletteCacheHitsThisFrame += poseCount - dirtyCount;
+
+            // A few changed poses are cheaper as row-sized updates. When many rows changed,
+            // one contiguous upload avoids a large number of D3D UpdateSubresource calls.
+            bool usePartialRows = _walkerCrowdPartialPaletteUpdatesSupported &&
+                                  (dirtyCount <= 4 || dirtyCount * 3 <= poseCount);
+            if (usePartialRows)
+            {
+                if (_walkerCrowdBonePaletteRowUpload.Length < uploadWidth)
+                    _walkerCrowdBonePaletteRowUpload = new Vector4[RoundUpToPowerOfTwo(uploadWidth)];
+
+                try
+                {
+                    for (int i = 0; i < dirtyCount; i++)
+                    {
+                        int poseIndex = _walkerCrowdDirtyPoseRows[i];
+                        WalkerCrowdPoseUpload pose = _walkerCrowdPoseUploads[poseIndex];
+                        PackWalkerCrowdPoseRow(pose, uploadWidth, _walkerCrowdBonePaletteRowUpload, 0);
+                        slot.Texture.SetData(
+                            0,
+                            new Rectangle(0, poseIndex, uploadWidth, 1),
+                            _walkerCrowdBonePaletteRowUpload,
+                            0,
+                            uploadWidth);
+                        MarkWalkerCrowdPaletteRowUploaded(slot, poseIndex, pose, uploadWidth);
+                    }
+
+                    _walkerCrowdMultiPosePaletteUploadsThisFrame += dirtyCount;
+                    _walkerCrowdMultiPosePaletteBytesThisFrame += dirtyCount * uploadWidth * 16L;
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    // Some backends implement full texture uploads but reject sub-rect updates.
+                    // Disable only the partial optimization and immediately fall back to the
+                    // proven full-atlas path instead of disabling multi-pose instancing.
+                    _walkerCrowdPartialPaletteUpdatesSupported = false;
+                    slot.InvalidateMetadata();
+                    MuGame.AppLoggerFactory?
+                        .CreateLogger<ModelObject>()?
+                        .LogDebug(ex, "Partial crowd palette updates are unavailable; using full atlas uploads.");
+                }
+            }
 
             int vectorCount = checked(uploadWidth * poseCount);
             if (_walkerCrowdBonePaletteUpload.Length < vectorCount)
@@ -498,54 +608,82 @@ namespace Client.Main.Objects
             for (int poseIndex = 0; poseIndex < poseCount; poseIndex++)
             {
                 WalkerCrowdPoseUpload pose = _walkerCrowdPoseUploads[poseIndex];
-                Matrix[] bones = pose.Bones;
-                int rowOffset = poseIndex * uploadWidth;
-                int boneCount = Math.Min(bones?.Length ?? 0, paletteBoneCapacity);
-                int copiedRows = 0;
-
-                if (pose.PoseVersion == uint.MaxValue && bones != null)
-                {
-                    PackedImmutableCrowdPose packed = _packedImmutableCrowdPoses.GetValue(
-                        bones,
-                        static source => new PackedImmutableCrowdPose(source));
-                    copiedRows = Math.Min(packed.Rows.Length, boneCount * 4);
-                    if (copiedRows > 0)
-                        Array.Copy(packed.Rows, 0, _walkerCrowdBonePaletteUpload, rowOffset, copiedRows);
-                }
-                else
-                {
-                    for (int boneIndex = 0; boneIndex < boneCount; boneIndex++)
-                    {
-                        Matrix matrix = bones[boneIndex];
-                        int texel = rowOffset + (boneIndex * 4);
-                        _walkerCrowdBonePaletteUpload[texel + 0] = new Vector4(matrix.M11, matrix.M12, matrix.M13, matrix.M14);
-                        _walkerCrowdBonePaletteUpload[texel + 1] = new Vector4(matrix.M21, matrix.M22, matrix.M23, matrix.M24);
-                        _walkerCrowdBonePaletteUpload[texel + 2] = new Vector4(matrix.M31, matrix.M32, matrix.M33, matrix.M34);
-                        _walkerCrowdBonePaletteUpload[texel + 3] = new Vector4(matrix.M41, matrix.M42, matrix.M43, matrix.M44);
-                    }
-                    copiedRows = boneCount * 4;
-                }
-
-                for (int texel = copiedRows; texel < uploadWidth; texel += 4)
-                {
-                    int target = rowOffset + texel;
-                    _walkerCrowdBonePaletteUpload[target + 0] = new Vector4(1f, 0f, 0f, 0f);
-                    _walkerCrowdBonePaletteUpload[target + 1] = new Vector4(0f, 1f, 0f, 0f);
-                    _walkerCrowdBonePaletteUpload[target + 2] = new Vector4(0f, 0f, 1f, 0f);
-                    _walkerCrowdBonePaletteUpload[target + 3] = new Vector4(0f, 0f, 0f, 1f);
-                }
+                PackWalkerCrowdPoseRow(
+                    pose,
+                    uploadWidth,
+                    _walkerCrowdBonePaletteUpload,
+                    poseIndex * uploadWidth);
+                MarkWalkerCrowdPaletteRowUploaded(slot, poseIndex, pose, uploadWidth);
             }
 
-            _walkerCrowdActiveBonePaletteTexture.SetData(
+            slot.Texture.SetData(
                 0,
                 new Rectangle(0, 0, uploadWidth, poseCount),
                 _walkerCrowdBonePaletteUpload,
                 0,
                 vectorCount);
+            _walkerCrowdMultiPosePaletteUploadsThisFrame++;
+            _walkerCrowdMultiPosePaletteBytesThisFrame += vectorCount * 16L;
             return true;
         }
 
-        private static Texture2D AcquireWalkerCrowdBonePaletteTexture(
+        private static void PackWalkerCrowdPoseRow(
+            WalkerCrowdPoseUpload pose,
+            int uploadWidth,
+            Vector4[] destination,
+            int destinationOffset)
+        {
+            Matrix[] bones = pose.Bones;
+            int boneCapacity = uploadWidth / 4;
+            int boneCount = Math.Min(bones?.Length ?? 0, boneCapacity);
+            int copiedRows = 0;
+
+            if (pose.PoseVersion == uint.MaxValue && bones != null)
+            {
+                PackedImmutableCrowdPose packed = _packedImmutableCrowdPoses.GetValue(
+                    bones,
+                    static source => new PackedImmutableCrowdPose(source));
+                copiedRows = Math.Min(packed.Rows.Length, boneCount * 4);
+                if (copiedRows > 0)
+                    Array.Copy(packed.Rows, 0, destination, destinationOffset, copiedRows);
+            }
+            else if (bones != null)
+            {
+                for (int boneIndex = 0; boneIndex < boneCount; boneIndex++)
+                {
+                    Matrix matrix = bones[boneIndex];
+                    int texel = destinationOffset + (boneIndex * 4);
+                    destination[texel + 0] = new Vector4(matrix.M11, matrix.M12, matrix.M13, matrix.M14);
+                    destination[texel + 1] = new Vector4(matrix.M21, matrix.M22, matrix.M23, matrix.M24);
+                    destination[texel + 2] = new Vector4(matrix.M31, matrix.M32, matrix.M33, matrix.M34);
+                    destination[texel + 3] = new Vector4(matrix.M41, matrix.M42, matrix.M43, matrix.M44);
+                }
+                copiedRows = boneCount * 4;
+            }
+
+            for (int texel = copiedRows; texel < uploadWidth; texel += 4)
+            {
+                int target = destinationOffset + texel;
+                destination[target + 0] = new Vector4(1f, 0f, 0f, 0f);
+                destination[target + 1] = new Vector4(0f, 1f, 0f, 0f);
+                destination[target + 2] = new Vector4(0f, 0f, 1f, 0f);
+                destination[target + 3] = new Vector4(0f, 0f, 0f, 1f);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void MarkWalkerCrowdPaletteRowUploaded(
+            WalkerCrowdPaletteTextureSlot slot,
+            int poseIndex,
+            WalkerCrowdPoseUpload pose,
+            int uploadWidth)
+        {
+            slot.UploadedSources[poseIndex] = pose.Bones;
+            slot.UploadedVersions[poseIndex] = pose.PoseVersion;
+            slot.UploadedWidths[poseIndex] = uploadWidth;
+        }
+
+        private static WalkerCrowdPaletteTextureSlot AcquireWalkerCrowdBonePaletteTextureSlot(
             GraphicsDevice gd,
             int requiredWidth,
             int poseCount)
@@ -574,9 +712,15 @@ namespace Client.Main.Objects
                     SurfaceFormat.Vector4);
                 slot.Width = textureWidth;
                 slot.Height = textureHeight;
+                slot.EnsureMetadataCapacity(textureHeight);
+                slot.InvalidateMetadata();
+            }
+            else
+            {
+                slot.EnsureMetadataCapacity(slot.Height);
             }
 
-            return slot.Texture;
+            return slot;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -655,6 +799,9 @@ namespace Client.Main.Objects
             _walkerCrowdActiveBonePaletteTexture = null;
             _walkerCrowdMaxBonesThisFlush = 0;
             _walkerCrowdBonePaletteUpload = Array.Empty<Vector4>();
+            _walkerCrowdBonePaletteRowUpload = Array.Empty<Vector4>();
+            _walkerCrowdDirtyPoseRows = Array.Empty<int>();
+            _walkerCrowdPartialPaletteUpdatesSupported = true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

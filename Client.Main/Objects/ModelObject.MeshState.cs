@@ -1,4 +1,4 @@
-using Client.Data.Texture;
+﻿using Client.Data.Texture;
 using Client.Main.Content;
 using Microsoft.Xna.Framework.Graphics;
 
@@ -27,6 +27,7 @@ namespace Client.Main.Objects
             public IndexBuffer GpuIndexBuffer;
             public int GpuBoneCount;
             public bool GpuSkinEnabled;
+            public int LastGpuCacheTouchFrame;
 
             public Texture2D Texture;
             public TextureScript Script;

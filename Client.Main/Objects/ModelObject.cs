@@ -781,13 +781,44 @@ namespace Client.Main.Objects
             }
         }
 
+        private int ResolveBoundingUpdateInterval()
+        {
+            if (IsMouseHover)
+                return BoundingUpdateInterval;
+
+            if (this is WalkerObject walker && (walker.IsMainWalker || walker.IsOneShotPlaying))
+                return BoundingUpdateInterval;
+
+            var camera = Camera.Instance;
+            if (camera == null)
+                return BoundingUpdateInterval;
+
+            Vector3 position = WorldPosition.Translation;
+            Vector3 cameraPosition = camera.Position;
+            float dx = position.X - cameraPosition.X;
+            float dy = position.Y - cameraPosition.Y;
+            float distanceSquared = dx * dx + dy * dy;
+
+            const float mediumDistanceSquared = 900f * 900f;
+            const float farDistanceSquared = 1500f * 1500f;
+            if (distanceSquared > farDistanceSquared)
+                return 30;
+            if (distanceSquared > mediumDistanceSquared)
+                return 12;
+
+            return BoundingUpdateInterval;
+        }
+
         private void UpdateBoundings()
         {
             if (!RequiresPerFrameAnimation && _contentLoaded && _boundingComputed)
                 return;
 
-            // Recalculate bounding box only every few frames
-            if (_boundingFrameCounter++ < BoundingUpdateInterval)
+            // Animated local bounds change much less than the object transform itself.
+            // Keep nearby/interactive actors accurate, but avoid sampling every animated
+            // mesh at the same frequency when it occupies only a few pixels on screen.
+            int boundingUpdateInterval = ResolveBoundingUpdateInterval();
+            if (_boundingComputed && _boundingFrameCounter++ < boundingUpdateInterval)
                 return;
 
             _boundingFrameCounter = 0;

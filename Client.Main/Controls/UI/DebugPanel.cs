@@ -193,7 +193,10 @@ namespace Client.Main.Controls.UI
                     _sb.Clear()
                       .Append($"BMD: VB:{bmd.LastFrameVBUpdates} IB:{bmd.LastFrameIBUploads} ")
                       .Append($"Vtx:{bmd.LastFrameVerticesTransformed} Mesh:{bmd.LastFrameMeshesProcessed} ")
-                      .Append($"Cache:{bmd.LastFrameCacheHits}/{bmd.LastFrameCacheMisses}");
+                      .Append($"Cache:{bmd.LastFrameCacheHits}/{bmd.LastFrameCacheMisses} ")
+                      .Append($"GPU:{bmd.GpuMeshBufferCacheCount}/{bmd.GpuBatchBufferCacheCount} ")
+                      .Append($"Topo:{bmd.MeshTopologyCacheCount} ")
+                      .Append($"Prn:{bmd.LastFrameGpuMeshBuffersPruned}/{bmd.LastFrameGpuBatchBuffersPruned}/{bmd.LastFrameMeshTopologiesPruned}");
                     SetLabelTextIfChanged(_bmdMetricsLabel, _sb.ToString());
 
                     // Update batch sorting status
@@ -231,7 +234,13 @@ namespace Client.Main.Controls.UI
                       .Append(" D:")
                       .Append(ModelObject.LastFrameWalkerCrowdMultiPoseDrawCalls)
                       .Append(" U:")
-                      .Append(ModelObject.LastFrameWalkerCrowdMultiPosePaletteUploads);
+                      .Append(ModelObject.LastFrameWalkerCrowdMultiPosePaletteUploads)
+                      .Append(" DR:")
+                      .Append(ModelObject.LastFrameWalkerCrowdMultiPoseDirtyRows)
+                      .Append(" H:")
+                      .Append(ModelObject.LastFrameWalkerCrowdMultiPosePaletteCacheHits)
+                      .Append(" KB:")
+                      .Append(ModelObject.LastFrameWalkerCrowdMultiPosePaletteBytes / 1024L);
                     SetLabelTextIfChanged(_instancingStatusLabel, _sb.ToString());
                 }
             }

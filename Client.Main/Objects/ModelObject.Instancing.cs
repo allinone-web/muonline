@@ -270,6 +270,7 @@ namespace Client.Main.Objects
             var prevBlend = gd.BlendState;
             var prevRaster = gd.RasterizerState;
             var prevSampler = gd.SamplerStates[0];
+            var prevTechnique = effect.CurrentTechnique;
 
             try
             {
@@ -331,6 +332,7 @@ namespace Client.Main.Objects
             }
             finally
             {
+                effect.CurrentTechnique = prevTechnique;
                 gd.BlendState = prevBlend;
                 gd.RasterizerState = prevRaster;
                 gd.SamplerStates[0] = prevSampler;
@@ -362,6 +364,7 @@ namespace Client.Main.Objects
             var prevBlend = gd.BlendState;
             var prevRaster = gd.RasterizerState;
             var prevSampler = gd.SamplerStates[0];
+            var prevTechnique = effect.CurrentTechnique;
 
             try
             {
@@ -426,6 +429,7 @@ namespace Client.Main.Objects
             }
             finally
             {
+                effect.CurrentTechnique = prevTechnique;
                 gd.BlendState = prevBlend;
                 gd.RasterizerState = prevRaster;
                 gd.SamplerStates[0] = prevSampler;
