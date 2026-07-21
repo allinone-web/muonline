@@ -212,6 +212,13 @@ namespace Client.Main.Objects
         private static int _walkerCrowdMultiPoseDirtyRowsThisFrame;
         private static long _walkerCrowdMultiPosePaletteBytesThisFrame;
         private static int _walkerCrowdMultiPosePaletteCacheHitsThisFrame;
+        private static int _walkerCrowdMultiPoseAttemptsThisFrame;
+        private static int _walkerCrowdMultiPoseQueuedObjectsThisFrame;
+        private static int _walkerCrowdMultiPoseRejectedObjectThisFrame;
+        private static int _walkerCrowdMultiPoseRejectedMeshThisFrame;
+        private static int _walkerCrowdMultiPoseRejectedBuffersThisFrame;
+        private static int _walkerCrowdMultiPoseRejectedBonesThisFrame;
+        private static int _walkerCrowdMultiPoseRejectedPaletteThisFrame;
 
         public static int LastFrameWalkerCrowdMultiPoseObjects { get; private set; }
         public static int LastFrameWalkerCrowdMultiPoseMeshInstances { get; private set; }
@@ -221,6 +228,13 @@ namespace Client.Main.Objects
         public static int LastFrameWalkerCrowdMultiPoseDirtyRows { get; private set; }
         public static long LastFrameWalkerCrowdMultiPosePaletteBytes { get; private set; }
         public static int LastFrameWalkerCrowdMultiPosePaletteCacheHits { get; private set; }
+        public static int LastFrameWalkerCrowdMultiPoseAttempts { get; private set; }
+        public static int LastFrameWalkerCrowdMultiPoseQueuedObjects { get; private set; }
+        public static int LastFrameWalkerCrowdMultiPoseRejectedObject { get; private set; }
+        public static int LastFrameWalkerCrowdMultiPoseRejectedMesh { get; private set; }
+        public static int LastFrameWalkerCrowdMultiPoseRejectedBuffers { get; private set; }
+        public static int LastFrameWalkerCrowdMultiPoseRejectedBones { get; private set; }
+        public static int LastFrameWalkerCrowdMultiPoseRejectedPalette { get; private set; }
         public static bool IsWalkerCrowdMultiPoseActive => IsWalkerCrowdMultiPoseInstancingSupported();
 
         private static void BeginFrameWalkerCrowdMultiPoseMetrics()
@@ -233,6 +247,13 @@ namespace Client.Main.Objects
             LastFrameWalkerCrowdMultiPoseDirtyRows = _walkerCrowdMultiPoseDirtyRowsThisFrame;
             LastFrameWalkerCrowdMultiPosePaletteBytes = _walkerCrowdMultiPosePaletteBytesThisFrame;
             LastFrameWalkerCrowdMultiPosePaletteCacheHits = _walkerCrowdMultiPosePaletteCacheHitsThisFrame;
+            LastFrameWalkerCrowdMultiPoseAttempts = _walkerCrowdMultiPoseAttemptsThisFrame;
+            LastFrameWalkerCrowdMultiPoseQueuedObjects = _walkerCrowdMultiPoseQueuedObjectsThisFrame;
+            LastFrameWalkerCrowdMultiPoseRejectedObject = _walkerCrowdMultiPoseRejectedObjectThisFrame;
+            LastFrameWalkerCrowdMultiPoseRejectedMesh = _walkerCrowdMultiPoseRejectedMeshThisFrame;
+            LastFrameWalkerCrowdMultiPoseRejectedBuffers = _walkerCrowdMultiPoseRejectedBuffersThisFrame;
+            LastFrameWalkerCrowdMultiPoseRejectedBones = _walkerCrowdMultiPoseRejectedBonesThisFrame;
+            LastFrameWalkerCrowdMultiPoseRejectedPalette = _walkerCrowdMultiPoseRejectedPaletteThisFrame;
 
             _walkerCrowdMultiPoseObjectsThisFrame = 0;
             _walkerCrowdMultiPoseMeshInstancesThisFrame = 0;
@@ -242,6 +263,13 @@ namespace Client.Main.Objects
             _walkerCrowdMultiPoseDirtyRowsThisFrame = 0;
             _walkerCrowdMultiPosePaletteBytesThisFrame = 0;
             _walkerCrowdMultiPosePaletteCacheHitsThisFrame = 0;
+            _walkerCrowdMultiPoseAttemptsThisFrame = 0;
+            _walkerCrowdMultiPoseQueuedObjectsThisFrame = 0;
+            _walkerCrowdMultiPoseRejectedObjectThisFrame = 0;
+            _walkerCrowdMultiPoseRejectedMeshThisFrame = 0;
+            _walkerCrowdMultiPoseRejectedBuffersThisFrame = 0;
+            _walkerCrowdMultiPoseRejectedBonesThisFrame = 0;
+            _walkerCrowdMultiPoseRejectedPaletteThisFrame = 0;
         }
 
         private static bool IsWalkerCrowdInstancingSupported() =>
@@ -298,8 +326,13 @@ namespace Client.Main.Objects
 
         private bool TryQueueWalkerCrowdMultiPoseForInstancing()
         {
+            _walkerCrowdMultiPoseAttemptsThisFrame++;
+
             if (!CanUseWalkerCrowdInstancing() || Model?.Meshes == null || _meshes == null)
+            {
+                _walkerCrowdMultiPoseRejectedObjectThisFrame++;
                 return false;
+            }
 
             int meshCount = Model.Meshes.Length;
             bool queuedAnyMesh = false;
@@ -313,7 +346,10 @@ namespace Client.Main.Objects
                     continue;
 
                 if (!CanUseWalkerCrowdMeshForInstancing(meshIndex))
+                {
+                    _walkerCrowdMultiPoseRejectedMeshThisFrame++;
                     return false;
+                }
 
                 if (!BMDLoader.Instance.TryGetGpuSkinnedMeshBuffers(
                     Model,
@@ -324,6 +360,7 @@ namespace Client.Main.Objects
                     boneCount <= 0 ||
                     boneCount > MaxGpuSkinBones)
                 {
+                    _walkerCrowdMultiPoseRejectedBuffersThisFrame++;
                     return false;
                 }
 
@@ -332,19 +369,28 @@ namespace Client.Main.Objects
             }
 
             if (!queuedAnyMesh)
+            {
+                _walkerCrowdMultiPoseRejectedMeshThisFrame++;
                 return false;
+            }
 
             Matrix[] bones = GetEffectiveBoneTransforms();
             bones = GetRenderBoneTransforms(bones) ?? bones;
             if (bones == null || bones.Length == 0 || bones.Length > MaxGpuSkinBones)
+            {
+                _walkerCrowdMultiPoseRejectedBonesThisFrame++;
                 return false;
+            }
 
             int paletteRow = RegisterWalkerCrowdPose(
                 bones,
                 GetEffectiveBonePoseVersion(),
                 requiredBoneCount);
             if (paletteRow < 0)
+            {
+                _walkerCrowdMultiPoseRejectedPaletteThisFrame++;
                 return false;
+            }
 
             var instanceData = new SkinnedCrowdInstanceData(
                 WorldPosition,
@@ -363,6 +409,7 @@ namespace Client.Main.Objects
                     out IndexBuffer geometryIB,
                     out _))
                 {
+                    _walkerCrowdMultiPoseRejectedBuffersThisFrame++;
                     return false;
                 }
 
@@ -390,6 +437,7 @@ namespace Client.Main.Objects
             }
 
             _walkerCrowdMultiPoseObjectsThisFrame++;
+            _walkerCrowdMultiPoseQueuedObjectsThisFrame++;
             return true;
         }
 

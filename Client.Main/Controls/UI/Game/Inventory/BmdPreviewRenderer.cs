@@ -939,6 +939,11 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 entry = null;
             }
 
+            if (entry != null)
+                RenderPassProfiler.RecordPreviewCacheHit();
+            else
+                RenderPassProfiler.RecordPreviewCacheMiss();
+
             if (!useCache && _failedRenders.Contains(key) && entry == null)
                 return null;
 
@@ -965,20 +970,33 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 return null;
 
             if (!TryReserveRenderBudget(requiresAnimation))
+            {
+                RenderPassProfiler.RecordPreviewBudgetSkip();
                 return entry?.Texture;
+            }
 
             try
             {
                 var target = entry?.Texture;
-                var rendered = Render(
-                    definition,
-                    width,
-                    height,
-                    rotationAngle,
-                    props,
-                    gameTime,
-                    target,
-                    out bool didRender);
+                RenderTarget2D rendered;
+                bool didRender;
+                long previewStarted = RenderPassProfiler.Start();
+                try
+                {
+                    rendered = Render(
+                        definition,
+                        width,
+                        height,
+                        rotationAngle,
+                        props,
+                        gameTime,
+                        target,
+                        out didRender);
+                }
+                finally
+                {
+                    RenderPassProfiler.AddPreviewRender(previewStarted);
+                }
 
                 if (!didRender)
                 {

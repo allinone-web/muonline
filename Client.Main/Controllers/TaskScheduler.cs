@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using System.Threading;
 
@@ -42,7 +42,7 @@ namespace Client.Main.Controllers
                       LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<TaskScheduler>();
         }
 
-        public bool QueueTask(Action action, Priority priority = Priority.Normal)
+        public bool QueueTask(Action action, Priority priority = Priority.Normal, string name = null)
         {
             if (action == null || _disposed)
                 return false;
@@ -56,7 +56,10 @@ namespace Client.Main.Controllers
             int generation = Volatile.Read(ref _generation);
             try
             {
-                _dispatcher.Enqueue(() => Execute(action, priority, generation), MapPriority(priority));
+                _dispatcher.Enqueue(
+                    () => Execute(action, priority, generation),
+                    MapPriority(priority),
+                    name ?? ResolveDelegateName(action));
                 return true;
             }
             catch
@@ -66,7 +69,7 @@ namespace Client.Main.Controllers
             }
         }
 
-        public bool QueueTask(Func<Task> asyncAction, Priority priority = Priority.Normal)
+        public bool QueueTask(Func<Task> asyncAction, Priority priority = Priority.Normal, string name = null)
         {
             if (asyncAction == null)
                 return false;
@@ -76,7 +79,7 @@ namespace Client.Main.Controllers
                 Task task = asyncAction();
                 if (!task.IsCompletedSuccessfully)
                     _ = ObserveTaskAsync(task, priority);
-            }, priority);
+            }, priority, name ?? ResolveDelegateName(asyncAction));
         }
 
         internal void BeginFrame()
@@ -177,6 +180,15 @@ namespace Client.Main.Controllers
 
             _disposed = true;
             ClearQueue();
+        }
+
+        private static string ResolveDelegateName(Delegate action)
+        {
+            string methodName = action.Method.Name;
+            string declaringType = action.Method.DeclaringType?.Name;
+            return string.IsNullOrEmpty(declaringType)
+                ? methodName
+                : $"{declaringType}.{methodName}";
         }
 
         private static MainThreadDispatcher.WorkPriority MapPriority(Priority priority)

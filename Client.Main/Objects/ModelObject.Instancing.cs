@@ -240,7 +240,10 @@ namespace Client.Main.Objects
 
         internal static bool TryQueueWalkerCrowdForInstancing(WorldObject obj)
         {
-            if (obj is not ModelObject modelObject)
+            // Crowd instancing is intentionally limited to monsters. NPCs frequently own
+            // equipment children (wings, weapons, body parts) whose attachment and transparent
+            // passes must remain in the normal per-object render lifecycle.
+            if (obj is not MonsterObject modelObject)
                 return false;
 
             return modelObject.TryQueueWalkerCrowdForInstancing();
@@ -787,13 +790,9 @@ namespace Client.Main.Objects
             if (!IsWalkerCrowdInstancingSupported())
                 return false;
 
-            // Allow any WalkerObject crowd member. Player characters intentionally excluded:
-            // they carry per-instance equipment children, weapon glow, and frequent action cancels
-            // that would either break the shared bone palette or split every player into its own batch.
-            if (this is not WalkerObject walker)
-                return false;
-
-            if (walker is Player.PlayerObject)
+            // Only monsters use the crowd path. NPCs and players can own independently loaded
+            // child visuals which need deterministic per-object draw and DrawAfter ordering.
+            if (this is not MonsterObject walker || Children.Count > 0)
                 return false;
 
             if (UsesMutableMeshData)

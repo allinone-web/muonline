@@ -11,8 +11,10 @@ using Client.Main.Core.Client; // ClientConnectionState
 using Client.Main;
 using Client.Main.Controllers;
 using Client.Main.Controls.UI.Game;
+using Client.Main.Controls.UI.Game.Common;
 using Client.Main.Graphics;
 using Client.Main.Helpers;
+using Client.Main.Models;
 using MUnique.OpenMU.Network.Packets; // LogOutType
 using Microsoft.Xna.Framework.Graphics;
 
@@ -23,9 +25,233 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
         private readonly ILogger _logger = MuGame.AppLoggerFactory?.CreateLogger<PauseMenuControl>();
         private EventHandler<System.Collections.Generic.List<(string Name, MUnique.OpenMU.Network.Packets.CharacterClassNumber Class, ushort Level, byte[] Appearance)>> _characterListHandler;
         private EventHandler<LogOutType> _logoutResponseHandler;
-        private sealed class PanelControl : UIControl { }
-        private PanelControl _panel;
+        private class PausePanelControl : UIControl
+        {
+            public int HeaderHeight { get; set; } = 96;
+            public int ContentTop { get; set; } = 0;
+            public bool DrawContentSurface { get; set; }
+
+            public PausePanelControl()
+            {
+                BackgroundColor = Color.Transparent;
+                BorderColor = Color.Transparent;
+                BorderThickness = 0;
+            }
+
+            public override void Draw(GameTime gameTime)
+            {
+                if (Status != GameControlStatus.Ready || !Visible)
+                    return;
+
+                var sprite = GraphicsManager.Instance.Sprite;
+                var pixel = GraphicsManager.Instance.Pixel;
+                var rect = DisplayRectangle;
+                if (pixel == null)
+                {
+                    base.Draw(gameTime);
+                    return;
+                }
+
+                sprite.Draw(pixel, new Rectangle(rect.X + 9, rect.Y + 12, rect.Width, rect.Height), new Color(0, 0, 0, 105));
+                sprite.Draw(pixel, new Rectangle(rect.X + 4, rect.Y + 6, rect.Width, rect.Height), new Color(0, 0, 0, 70));
+
+                UiDrawHelper.DrawVerticalGradient(
+                    sprite,
+                    rect,
+                    new Color(29, 35, 46, 250),
+                    new Color(8, 11, 17, 252),
+                    20);
+
+                var headerRect = new Rectangle(rect.X + 1, rect.Y + 1, rect.Width - 2, Math.Min(HeaderHeight, rect.Height - 2));
+                UiDrawHelper.DrawVerticalGradient(
+                    sprite,
+                    headerRect,
+                    new Color(50, 59, 73, 238),
+                    new Color(24, 30, 40, 222),
+                    12);
+
+                UiDrawHelper.DrawHorizontalGradient(
+                    sprite,
+                    new Rectangle(rect.X + 24, rect.Y + HeaderHeight - 2, rect.Width - 48, 2),
+                    Color.Transparent,
+                    ModernHudTheme.AccentBright,
+                    16);
+                UiDrawHelper.DrawHorizontalGradient(
+                    sprite,
+                    new Rectangle(rect.Center.X, rect.Y + HeaderHeight - 2, Math.Max(1, rect.Right - 24 - rect.Center.X), 2),
+                    ModernHudTheme.AccentBright,
+                    Color.Transparent,
+                    16);
+
+                if (DrawContentSurface && ContentTop > 0 && ContentTop < rect.Height - 30)
+                {
+                    var contentRect = new Rectangle(
+                        rect.X + 18,
+                        rect.Y + ContentTop,
+                        rect.Width - 36,
+                        rect.Height - ContentTop - 18);
+                    sprite.Draw(pixel, contentRect, new Color(5, 8, 13, 118));
+                    UiDrawHelper.DrawBorder(sprite, contentRect, new Color(91, 104, 124, 72));
+                }
+
+                UiDrawHelper.DrawBorder(sprite, rect, ModernHudTheme.BorderOuter, 2);
+                UiDrawHelper.DrawBorder(sprite, new Rectangle(rect.X + 2, rect.Y + 2, rect.Width - 4, rect.Height - 4), ModernHudTheme.BorderInner);
+                UiDrawHelper.DrawCornerAccents(sprite, rect, ModernHudTheme.Accent, 18, 2);
+
+                base.Draw(gameTime);
+            }
+        }
+
+        private sealed class PauseMenuButtonControl : ButtonControl
+        {
+            public string Subtitle { get; set; }
+            public Color AccentColor { get; set; } = ModernHudTheme.Accent;
+            public bool IsDanger { get; set; }
+            public bool Compact { get; set; }
+
+            public PauseMenuButtonControl()
+            {
+                BackgroundColor = Color.Transparent;
+                HoverBackgroundColor = Color.Transparent;
+                PressedBackgroundColor = Color.Transparent;
+                TextColor = ModernHudTheme.TextWhite;
+                HoverTextColor = ModernHudTheme.TextWhite;
+            }
+
+            public override void Draw(GameTime gameTime)
+            {
+                if (Status != GameControlStatus.Ready || !Visible)
+                    return;
+
+                var sprite = GraphicsManager.Instance.Sprite;
+                var pixel = GraphicsManager.Instance.Pixel;
+                var font = GraphicsManager.Instance.Font;
+                if (pixel == null || font == null)
+                    return;
+
+                var rect = DisplayRectangle;
+                Color accent = IsDanger ? ModernHudTheme.Danger : AccentColor;
+                Color top;
+                Color bottom;
+
+                if (!Enabled)
+                {
+                    top = new Color(25, 29, 36, 205);
+                    bottom = new Color(13, 16, 21, 215);
+                    accent = ModernHudTheme.TextDark;
+                }
+                else if (IsMousePressed)
+                {
+                    top = new Color(20, 25, 33, 252);
+                    bottom = new Color(8, 11, 16, 252);
+                }
+                else if (IsMouseOver)
+                {
+                    top = IsDanger ? new Color(83, 38, 41, 248) : new Color(52, 61, 76, 248);
+                    bottom = IsDanger ? new Color(42, 20, 24, 250) : new Color(20, 27, 37, 250);
+                }
+                else
+                {
+                    top = new Color(37, 44, 56, 238);
+                    bottom = new Color(16, 21, 29, 244);
+                }
+
+                sprite.Draw(pixel, new Rectangle(rect.X + 3, rect.Y + 4, rect.Width, rect.Height), new Color(0, 0, 0, 76));
+                UiDrawHelper.DrawVerticalGradient(sprite, rect, top, bottom, 12);
+
+                if (IsMouseOver && Enabled)
+                {
+                    sprite.Draw(pixel, new Rectangle(rect.X, rect.Y, rect.Width, rect.Height), new Color(accent.R, accent.G, accent.B, (byte)22));
+                    sprite.Draw(pixel, new Rectangle(rect.X, rect.Y, 5, rect.Height), accent);
+                }
+                else
+                {
+                    sprite.Draw(pixel, new Rectangle(rect.X, rect.Y, 3, rect.Height), new Color(accent.R, accent.G, accent.B, (byte)(Enabled ? 185 : 80)));
+                }
+
+                UiDrawHelper.DrawBorder(sprite, rect, IsMouseOver && Enabled ? new Color(accent.R, accent.G, accent.B, (byte)180) : new Color(91, 104, 124, 115));
+                sprite.Draw(pixel, new Rectangle(rect.X + 10, rect.Bottom - 1, rect.Width - 20, 1), new Color(255, 255, 255, 18));
+
+                float titleScale = (Compact ? 11.5f : 14f) / Constants.BASE_FONT_SIZE;
+                float subtitleScale = 9.5f / Constants.BASE_FONT_SIZE;
+                Color titleColor = Enabled ? ModernHudTheme.TextWhite : ModernHudTheme.TextDark;
+                Color subtitleColor = Enabled ? ModernHudTheme.TextGray : ModernHudTheme.TextDark;
+
+                if (Compact)
+                {
+                    Vector2 titleSize = font.MeasureString(Text ?? string.Empty) * titleScale;
+                    var titlePos = new Vector2(
+                        rect.X + (rect.Width - titleSize.X) * 0.5f,
+                        rect.Y + (rect.Height - titleSize.Y) * 0.5f);
+                    sprite.DrawString(font, Text ?? string.Empty, titlePos + Vector2.One, Color.Black * 0.7f, 0f, Vector2.Zero, titleScale, SpriteEffects.None, 0f);
+                    sprite.DrawString(font, Text ?? string.Empty, titlePos, titleColor * Alpha, 0f, Vector2.Zero, titleScale, SpriteEffects.None, 0f);
+                    return;
+                }
+
+                var titlePosition = new Vector2(rect.X + 18, rect.Y + 9);
+                sprite.DrawString(font, Text ?? string.Empty, titlePosition + Vector2.One, Color.Black * 0.75f, 0f, Vector2.Zero, titleScale, SpriteEffects.None, 0f);
+                sprite.DrawString(font, Text ?? string.Empty, titlePosition, titleColor * Alpha, 0f, Vector2.Zero, titleScale, SpriteEffects.None, 0f);
+
+                if (!string.IsNullOrWhiteSpace(Subtitle))
+                {
+                    sprite.DrawString(font, Subtitle, new Vector2(rect.X + 18, rect.Y + 31), subtitleColor * Alpha, 0f, Vector2.Zero, subtitleScale, SpriteEffects.None, 0f);
+                }
+
+                string arrow = ">";
+                float arrowScale = 13f / Constants.BASE_FONT_SIZE;
+                Vector2 arrowSize = font.MeasureString(arrow) * arrowScale;
+                Vector2 arrowPosition = new(rect.Right - 20 - arrowSize.X, rect.Y + (rect.Height - arrowSize.Y) * 0.5f);
+                sprite.DrawString(font, arrow, arrowPosition, new Color(accent.R, accent.G, accent.B, (byte)(IsMouseOver ? 255 : 150)) * Alpha, 0f, Vector2.Zero, arrowScale, SpriteEffects.None, 0f);
+            }
+        }
+
+        private sealed class MenuTabButtonControl : ButtonControl
+        {
+            public bool Active { get; set; }
+
+            public MenuTabButtonControl()
+            {
+                BackgroundColor = Color.Transparent;
+                HoverBackgroundColor = Color.Transparent;
+                PressedBackgroundColor = Color.Transparent;
+            }
+
+            public override void Draw(GameTime gameTime)
+            {
+                if (Status != GameControlStatus.Ready || !Visible)
+                    return;
+
+                var sprite = GraphicsManager.Instance.Sprite;
+                var pixel = GraphicsManager.Instance.Pixel;
+                var font = GraphicsManager.Instance.Font;
+                if (pixel == null || font == null)
+                    return;
+
+                var rect = DisplayRectangle;
+                Color fill = Active
+                    ? new Color(64, 55, 34, 225)
+                    : IsMouseOver
+                        ? new Color(46, 55, 69, 225)
+                        : new Color(20, 26, 35, 210);
+                sprite.Draw(pixel, rect, fill);
+                UiDrawHelper.DrawBorder(sprite, rect, Active ? new Color(ModernHudTheme.Accent.R, ModernHudTheme.Accent.G, ModernHudTheme.Accent.B, (byte)190) : new Color(91, 104, 124, 95));
+
+                if (Active)
+                    sprite.Draw(pixel, new Rectangle(rect.X + 8, rect.Bottom - 2, rect.Width - 16, 2), ModernHudTheme.AccentBright);
+
+                float scale = 10.5f / Constants.BASE_FONT_SIZE;
+                string label = Text ?? string.Empty;
+                Vector2 size = font.MeasureString(label) * scale;
+                Vector2 position = new(rect.X + (rect.Width - size.X) * 0.5f, rect.Y + (rect.Height - size.Y) * 0.5f);
+                Color color = Active ? ModernHudTheme.TextGold : ModernHudTheme.TextGray;
+                sprite.DrawString(font, label, position, color * Alpha, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+            }
+        }
+
+        private PausePanelControl _panel;
         private LabelControl _titleLabel;
+        private LabelControl _subtitleLabel;
+        private LabelControl _footerLabel;
         private ButtonControl _btnCharacterSelect;
         private ButtonControl _btnServerSelect;
         private ButtonControl _btnOptions;
@@ -46,59 +272,67 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             Visible = false;
             Interactive = true;
             AutoViewSize = false;
-            // Cover the full screen; BaseScene will position us at 0,0
             ViewSize = new Point(UiScaler.VirtualSize.X, UiScaler.VirtualSize.Y);
             ControlSize = ViewSize;
-            BackgroundColor = new Color(0, 0, 0, 180); // semi-transparent overlay
+            BackgroundColor = Color.Transparent;
 
-            // Center panel
-            _panel = new PanelControl
+            _panel = new PausePanelControl
             {
                 AutoViewSize = false,
-                ControlSize = new Point(360, 400),
-                ViewSize = new Point(360, 400),
+                ControlSize = new Point(430, 500),
+                ViewSize = new Point(430, 500),
                 Align = Models.ControlAlign.HorizontalCenter | Models.ControlAlign.VerticalCenter,
-                BackgroundColor = new Color(20, 20, 30, 230),
-                BorderColor = new Color(80, 80, 120, 255),
-                BorderThickness = 1,
+                HeaderHeight = 98,
                 Interactive = true
             };
             Controls.Add(_panel);
 
             _titleLabel = new LabelControl
             {
-                Text = "Menu",
-                FontSize = 18f,
-                TextColor = Color.White,
+                Text = "PAUSE MENU",
+                FontSize = 23f,
+                TextColor = ModernHudTheme.TextGold,
+                IsBold = true,
                 X = 0,
-                Y = 18,
+                Y = 22,
                 Align = Models.ControlAlign.HorizontalCenter
             };
             _panel.Controls.Add(_titleLabel);
 
-            int btnWidth = 280;
-            int btnHeight = 40;
-            int x = (_panel.ViewSize.X - btnWidth) / 2;
-            int y = 60;
-            int spacing = 18;
+            _subtitleLabel = new LabelControl
+            {
+                Text = "Take a breath. Your adventure is waiting.",
+                FontSize = 10.5f,
+                TextColor = ModernHudTheme.TextGray,
+                HasShadow = false,
+                X = 0,
+                Y = 58,
+                Align = Models.ControlAlign.HorizontalCenter
+            };
+            _panel.Controls.Add(_subtitleLabel);
 
-            _btnResume = CreateButton("Resume", x, y, btnWidth, btnHeight);
+            int btnWidth = 342;
+            int btnHeight = 56;
+            int x = (_panel.ViewSize.X - btnWidth) / 2;
+            int y = 111;
+            int spacing = 10;
+
+            _btnResume = CreateButton("Continue", "Return to the game", x, y, btnWidth, btnHeight, ModernHudTheme.AccentBright);
             _btnResume.Click += (s, e) =>
             {
                 ResumeClicked?.Invoke(this, EventArgs.Empty);
                 Visible = false;
+                _panel.Visible = true;
                 if (_optionsPanel != null)
-                {
                     _optionsPanel.Visible = false;
-                }
             };
             _panel.Controls.Add(_btnResume);
             y += btnHeight + spacing;
 
-            _btnCharacterSelect = CreateButton("Return to Character Select", x, y, btnWidth, btnHeight);
+            _btnCharacterSelect = CreateButton("Character Select", "Leave the world and choose another hero", x, y, btnWidth, btnHeight, ModernHudTheme.SecondaryBright);
             _btnCharacterSelect.Click += async (s, e) =>
             {
-                if (_returnInProgress) return; // prevent reentrancy / double-requests
+                if (_returnInProgress) return;
                 _returnInProgress = true;
                 try
                 {
@@ -113,12 +347,16 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             _panel.Controls.Add(_btnCharacterSelect);
             y += btnHeight + spacing;
 
-            _btnServerSelect = CreateButton("Return to Server Select", x, y, btnWidth, btnHeight);
-            _btnServerSelect.Click += async (s, e) => { ServerSelectClicked?.Invoke(this, EventArgs.Empty); await HandleReturnToServerSelectAsync(); };
+            _btnServerSelect = CreateButton("Server Select", "Disconnect and return to the server list", x, y, btnWidth, btnHeight, ModernHudTheme.Secondary);
+            _btnServerSelect.Click += async (s, e) =>
+            {
+                ServerSelectClicked?.Invoke(this, EventArgs.Empty);
+                await HandleReturnToServerSelectAsync();
+            };
             _panel.Controls.Add(_btnServerSelect);
             y += btnHeight + spacing;
 
-            _btnOptions = CreateButton("Options", x, y, btnWidth, btnHeight);
+            _btnOptions = CreateButton("Settings", "Graphics, audio and performance options", x, y, btnWidth, btnHeight, new Color(150, 118, 210));
             _btnOptions.Click += (s, e) =>
             {
                 OptionsClicked?.Invoke(this, EventArgs.Empty);
@@ -127,7 +365,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             _panel.Controls.Add(_btnOptions);
             y += btnHeight + spacing;
 
-            _btnExit = CreateButton("Exit Game", x, y, btnWidth, btnHeight);
+            _btnExit = CreateButton("Exit Game", "Close the client", x, y, btnWidth, btnHeight, ModernHudTheme.Danger, isDanger: true);
             _btnExit.Click += async (s, e) =>
             {
                 if (_exitInProgress) return;
@@ -143,23 +381,55 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 }
             };
             _panel.Controls.Add(_btnExit);
+
+            _footerLabel = new LabelControl
+            {
+                Text = "ESC  ·  close menu",
+                FontSize = 9.5f,
+                TextColor = ModernHudTheme.TextDark,
+                HasShadow = false,
+                X = 0,
+                Y = 468,
+                Align = Models.ControlAlign.HorizontalCenter
+            };
+            _panel.Controls.Add(_footerLabel);
         }
 
-        private static ButtonControl CreateButton(string text, int x, int y, int width, int height)
+        public override void Draw(GameTime gameTime)
         {
-            return new ButtonControl
+            if (Status != GameControlStatus.Ready || !Visible)
+                return;
+
+            var sprite = GraphicsManager.Instance.Sprite;
+            var rect = DisplayRectangle;
+            UiDrawHelper.DrawVerticalGradient(sprite, rect, new Color(6, 8, 13, 205), new Color(0, 0, 0, 238), 20);
+
+            if (_panel?.Visible == true)
+            {
+                var panelRect = _panel.DisplayRectangle;
+                var glowRect = new Rectangle(panelRect.X - 92, panelRect.Y - 50, panelRect.Width + 184, panelRect.Height + 100);
+                UiDrawHelper.DrawHorizontalGradient(sprite, glowRect, Color.Transparent, new Color(93, 114, 150, 24), 20);
+                UiDrawHelper.DrawHorizontalGradient(sprite, new Rectangle(glowRect.Center.X, glowRect.Y, Math.Max(1, glowRect.Right - glowRect.Center.X), glowRect.Height), new Color(93, 114, 150, 24), Color.Transparent, 20);
+            }
+
+            base.Draw(gameTime);
+        }
+
+        private static ButtonControl CreateButton(string text, string subtitle, int x, int y, int width, int height, Color accent, bool isDanger = false)
+        {
+            return new PauseMenuButtonControl
             {
                 Text = text,
+                Subtitle = subtitle,
+                AccentColor = accent,
+                IsDanger = isDanger,
                 X = x,
                 Y = y,
                 ControlSize = new Point(width, height),
                 ViewSize = new Point(width, height),
                 AutoViewSize = false,
-                BackgroundColor = new Color(50, 50, 80, 200),
-                HoverBackgroundColor = new Color(70, 70, 110, 220),
-                PressedBackgroundColor = new Color(40, 40, 70, 220),
                 FontSize = 14f,
-                TextColor = Color.White
+                TextColor = ModernHudTheme.TextWhite
             };
         }
 
@@ -583,45 +853,59 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             _logoutResponseHandler = null;
         }
 
-        private sealed class OptionsPanelControl : UIControl
+        private sealed class OptionsPanelControl : PausePanelControl
         {
             private readonly PauseMenuControl _owner;
             private readonly List<IOptionRow> _options = new();
             private readonly List<GameControl> _dynamicControls = new();
-            private const int ContentStartY = 175;
-            private const int OptionRowHeight = 26;
+            private const int ContentStartY = 202;
+            private const int OptionRowHeight = 30;
             private readonly ButtonControl _closeButton;
             private readonly int _panelWidth;
+            private MenuTabButtonControl _activeCategoryButton;
 
             public OptionsPanelControl(PauseMenuControl owner)
             {
                 _owner = owner;
                 AutoViewSize = false;
-                ControlSize = new Point(480, 700);
+                ControlSize = new Point(560, 700);
                 ViewSize = ControlSize;
                 Align = Models.ControlAlign.HorizontalCenter | Models.ControlAlign.VerticalCenter;
-                BackgroundColor = new Color(20, 20, 30, 230);
-                BorderColor = new Color(80, 80, 120, 255);
-                BorderThickness = 1;
                 Interactive = true;
+                HeaderHeight = 184;
+                ContentTop = 190;
+                DrawContentSurface = true;
                 _panelWidth = ControlSize.X;
 
                 var title = new LabelControl
                 {
-                    Text = "Options",
-                    FontSize = 18f,
-                    TextColor = Color.White,
+                    Text = "SETTINGS",
+                    FontSize = 22f,
+                    TextColor = ModernHudTheme.TextGold,
+                    IsBold = true,
                     Align = Models.ControlAlign.HorizontalCenter,
                     X = 0,
                     Y = 18
                 };
                 Controls.Add(title);
 
-                int categoryStartY = 60;
+                var subtitle = new LabelControl
+                {
+                    Text = "Tune the client without leaving the game",
+                    FontSize = 10f,
+                    TextColor = ModernHudTheme.TextGray,
+                    HasShadow = false,
+                    Align = Models.ControlAlign.HorizontalCenter,
+                    X = 0,
+                    Y = 50
+                };
+                Controls.Add(subtitle);
+
+                int categoryStartY = 78;
                 int categoryX = 20;
-                int categoryWidth = 130;
-                int categoryHeight = 26;
-                int categorySpacing = 10;
+                int categoryWidth = 166;
+                int categoryHeight = 28;
+                int categorySpacing = 7;
                 int categoriesPerRow = 3;
                 int categoryIndex = 0;
 
@@ -644,19 +928,19 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 AddCategoryButton("Performance", () => BuildPerformanceCategory(), categoryStartY,
                     ref categoryX, categoryWidth, categoryHeight, categorySpacing, categoriesPerRow, ref categoryIndex);
 
-                _closeButton = new ButtonControl
+                _closeButton = new PauseMenuButtonControl
                 {
-                    Text = "Back",
-                    ControlSize = new Point(140, 32),
-                    ViewSize = new Point(140, 32),
-                    X = (ControlSize.X - 140) / 2,
+                    Text = "Back to Pause Menu",
+                    Subtitle = string.Empty,
+                    Compact = true,
+                    AccentColor = ModernHudTheme.Accent,
+                    ControlSize = new Point(190, 38),
+                    ViewSize = new Point(190, 38),
+                    X = (ControlSize.X - 190) / 2,
                     Y = ContentStartY,
                     AutoViewSize = false,
-                    BackgroundColor = new Color(50, 50, 80, 200),
-                    HoverBackgroundColor = new Color(70, 70, 110, 220),
-                    PressedBackgroundColor = new Color(40, 40, 70, 220),
-                    FontSize = 14f,
-                    TextColor = Color.White
+                    FontSize = 12f,
+                    TextColor = ModernHudTheme.TextWhite
                 };
                 _closeButton.Click += (s, e) => _owner.ToggleOptionsPanel();
                 Controls.Add(_closeButton);
@@ -1088,7 +1372,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 int x = 20 + col * (width + spacing);
                 int y = startY + row * (height + spacing);
 
-                var button = new ButtonControl
+                var button = new MenuTabButtonControl
                 {
                     Text = label,
                     X = x,
@@ -1096,14 +1380,23 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     ControlSize = new Point(width, height),
                     ViewSize = new Point(width, height),
                     AutoViewSize = false,
-                    BackgroundColor = new Color(50, 50, 80, 200),
-                    HoverBackgroundColor = new Color(70, 70, 110, 220),
-                    PressedBackgroundColor = new Color(40, 40, 70, 220),
-                    FontSize = 12f,
-                    TextColor = Color.White
+                    FontSize = 10.5f,
+                    TextColor = ModernHudTheme.TextGray
                 };
-                button.Click += (s, e) => onClick();
+                button.Click += (s, e) =>
+                {
+                    if (_activeCategoryButton != null)
+                        _activeCategoryButton.Active = false;
+                    _activeCategoryButton = button;
+                    _activeCategoryButton.Active = true;
+                    onClick();
+                };
                 Controls.Add(button);
+                if (_activeCategoryButton == null)
+                {
+                    _activeCategoryButton = button;
+                    _activeCategoryButton.Active = true;
+                }
 
                 currentX += width + spacing;
                 index++;
@@ -1153,7 +1446,9 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     X = 14,
                     Y = currentY,
                     FontSize = 13f,
-                    TextColor = new Color(180, 200, 255)
+                    TextColor = ModernHudTheme.TextGold,
+                    IsBold = true,
+                    HasShadow = false
                 };
                 Controls.Add(heading);
                 _dynamicControls.Add(heading);
@@ -1201,8 +1496,9 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                         Text = label,
                         X = 20,
                         Y = y,
-                        FontSize = 12f,
-                        TextColor = Color.White
+                        FontSize = 11.5f,
+                        TextColor = ModernHudTheme.TextWhite,
+                        HasShadow = false
                     };
 
                     _button = new ButtonControl
@@ -1212,11 +1508,12 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                         AutoViewSize = false,
                         X = panelWidth - 150,
                         Y = y - 4,
-                        BackgroundColor = new Color(50, 50, 80, 200),
-                        HoverBackgroundColor = new Color(70, 70, 110, 220),
-                        PressedBackgroundColor = new Color(40, 40, 70, 220),
-                        FontSize = 12f,
-                        TextColor = Color.White
+                        BackgroundColor = new Color(28, 35, 46, 230),
+                        HoverBackgroundColor = new Color(48, 58, 73, 240),
+                        PressedBackgroundColor = new Color(18, 23, 31, 245),
+                        FontSize = 11f,
+                        TextColor = ModernHudTheme.TextWhite,
+                        HoverTextColor = ModernHudTheme.TextGold
                     };
                     _button.Click += (s, e) =>
                     {
@@ -1237,7 +1534,11 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 public void Refresh()
                 {
                     bool value = _getter();
-                    _button.Text = value ? "On" : "Off";
+                    _button.Text = value ? "ENABLED" : "DISABLED";
+                    _button.BackgroundColor = value ? new Color(34, 74, 55, 225) : new Color(55, 37, 43, 220);
+                    _button.HoverBackgroundColor = value ? new Color(45, 96, 70, 240) : new Color(78, 47, 55, 238);
+                    _button.TextColor = value ? new Color(150, 235, 180) : new Color(210, 145, 150);
+                    _button.HoverTextColor = Color.White;
                 }
 
                 public void CollectControls(List<GameControl> controls)
@@ -1274,17 +1575,21 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                         Text = label,
                         X = 20,
                         Y = y,
-                        FontSize = 12f,
-                        TextColor = Color.White
+                        FontSize = 11.5f,
+                        TextColor = ModernHudTheme.TextWhite,
+                        HasShadow = false
                     };
 
                     _valueLabel = new LabelControl
                     {
                         X = panelWidth - 210,
                         Y = y,
-                        FontSize = 12f,
-                        TextColor = Color.LightGray,
-                        Align = Models.ControlAlign.HorizontalCenter,
+                        FontSize = 11f,
+                        TextColor = ModernHudTheme.TextGold,
+                        BackgroundColor = new Color(8, 12, 18, 180),
+                        UseControlSizeBackground = true,
+                        Padding = new Margin { Left = 6, Right = 6, Top = 2, Bottom = 2 },
+                        HasShadow = false,
                         ControlSize = new Point(70, 24),
                         ViewSize = new Point(70, 24)
                     };
@@ -1297,11 +1602,12 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                         AutoViewSize = false,
                         X = panelWidth - 130,
                         Y = y - 2,
-                        BackgroundColor = new Color(50, 50, 80, 200),
-                        HoverBackgroundColor = new Color(70, 70, 110, 220),
-                        PressedBackgroundColor = new Color(40, 40, 70, 220),
-                        FontSize = 12f,
-                        TextColor = Color.White
+                        BackgroundColor = new Color(28, 35, 46, 230),
+                        HoverBackgroundColor = new Color(48, 58, 73, 240),
+                        PressedBackgroundColor = new Color(18, 23, 31, 245),
+                        FontSize = 11f,
+                        TextColor = ModernHudTheme.TextWhite,
+                        HoverTextColor = ModernHudTheme.TextGold
                     };
 
                     _plusButton = new ButtonControl
@@ -1312,11 +1618,12 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                         AutoViewSize = false,
                         X = panelWidth - 96,
                         Y = y - 2,
-                        BackgroundColor = new Color(50, 50, 80, 200),
-                        HoverBackgroundColor = new Color(70, 70, 110, 220),
-                        PressedBackgroundColor = new Color(40, 40, 70, 220),
-                        FontSize = 12f,
-                        TextColor = Color.White
+                        BackgroundColor = new Color(28, 35, 46, 230),
+                        HoverBackgroundColor = new Color(48, 58, 73, 240),
+                        PressedBackgroundColor = new Color(18, 23, 31, 245),
+                        FontSize = 11f,
+                        TextColor = ModernHudTheme.TextWhite,
+                        HoverTextColor = ModernHudTheme.TextGold
                     };
 
                     _minusButton.Click += (s, e) => AdjustVolume(-_step);

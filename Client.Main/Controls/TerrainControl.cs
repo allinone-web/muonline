@@ -1,6 +1,7 @@
 ﻿using Client.Data.ATT;
 using Client.Data.MAP;
 using Client.Main.Controls.Terrain;
+using Client.Main.Controllers;
 using Client.Main.Graphics;
 using Client.Main.Objects;
 using Microsoft.Xna.Framework;
@@ -178,7 +179,9 @@ namespace Client.Main.Controls
                 return;
 
             FrameMetrics.Reset();
+            long terrainStarted = RenderPassProfiler.Start();
             _renderer.Draw(after: false);
+            RenderPassProfiler.AddTerrainOpaque(terrainStarted);
 
             // Aggregate metrics from renderers
             FrameMetrics.DrawCalls = _renderer.DrawCalls + _grassRenderer.Flushes; // Grass flush is a draw call
@@ -195,7 +198,9 @@ namespace Client.Main.Controls
             if (!Visible || Status != Models.GameControlStatus.Ready || _renderer == null || _grassRenderer == null)
                 return;
 
+            long terrainAfterStarted = RenderPassProfiler.Start();
             _renderer.Draw(after: true);
+            RenderPassProfiler.AddTerrainAfter(terrainAfterStarted);
             base.DrawAfter(gameTime);
         }
 

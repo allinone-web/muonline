@@ -1,6 +1,5 @@
 #nullable enable
 using System;
-using System.Reflection;
 using Client.Main.Controllers;
 using Client.Main.Graphics;
 using Client.Main.Helpers;
@@ -12,9 +11,6 @@ namespace Client.Main.Objects.Effects.Particles
 {
     public abstract class SourceParticleSystem : EffectObject
     {
-        private static readonly PropertyInfo? OutOfViewProperty =
-            typeof(WorldObject).GetProperty("OutOfView");
-
         private Matrix _viewProjection;
         private Vector3 _cameraPosition;
 
@@ -31,7 +27,6 @@ namespace Client.Main.Objects.Effects.Particles
 
         protected SourceParticle[] Particles { get; }
         protected int ActiveCount { get; private set; }
-        protected readonly Random Random = new();
 
         public float MaxDistance { get; set; } = 1500f;
         public float ReferenceDistance { get; set; } = 800f;
@@ -81,8 +76,6 @@ namespace Client.Main.Objects.Effects.Particles
         {
             if (Status != GameControlStatus.Ready || Camera.Instance == null)
                 return;
-
-            ForceVisible();
 
             float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
             OnBeforeParticlesUpdated(dt);
@@ -154,7 +147,7 @@ namespace Client.Main.Objects.Effects.Particles
         protected virtual float GetParticleRotation(in SourceParticle particle) => particle.Rotation;
 
         protected float RandomRange(float min, float max) =>
-            min + (float)Random.NextDouble() * (max - min);
+            min + (float)MuGame.Random.NextDouble() * (max - min);
 
         private void UpdateParticles(float dt)
         {
@@ -236,6 +229,5 @@ namespace Client.Main.Objects.Effects.Particles
             Particles[last] = default;
         }
 
-        private void ForceVisible() => OutOfViewProperty?.SetValue(this, false);
     }
 }

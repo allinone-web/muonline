@@ -1,8 +1,7 @@
-﻿using Client.Main.Objects.Particles.Effects;
+using Client.Main.Objects.Particles.Effects;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System;
-using System.Linq;
 using System.Threading.Tasks;
 
 namespace Client.Main.Objects.Particles
@@ -13,6 +12,7 @@ namespace Client.Main.Objects.Particles
         public BaseEffect[] Effects { get; set; } = [];
         public Type ParticleType { get; }
         public ParticleSystemRegister OwnerRegister { get; set; }
+        internal int EffectConfigurationVersion { get; set; } = -1;
 
         public Particle(Type particleType)
         {

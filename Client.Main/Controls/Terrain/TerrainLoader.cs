@@ -1,4 +1,4 @@
-﻿using Client.Data.ATT;
+using Client.Data.ATT;
 using Client.Data.MAP;
 using Client.Data.OBJS;
 using Client.Data.OZB;
@@ -19,9 +19,78 @@ namespace Client.Main.Controls.Terrain
     /// </summary>
     public class TerrainLoader
     {
+        private const int MaxTextureUploadsPerDispatch = 1;
+
         private readonly short _worldIndex;
         private readonly TerrainData _terrainData;
         private bool _replaceTextureMapping;
+
+        private readonly record struct TextureUploadEntry(int TextureIndex, string Path);
+
+        private sealed class TerrainTextureUploadState
+        {
+            private readonly TerrainLoader _owner;
+            private readonly TextureUploadEntry[] _entries;
+            private readonly TaskCompletionSource<bool> _completion;
+            private int _nextEntry;
+            private int _loadedCount;
+
+            public TerrainTextureUploadState(
+                TerrainLoader owner,
+                TextureUploadEntry[] entries,
+                TaskCompletionSource<bool> completion)
+            {
+                _owner = owner;
+                _entries = entries;
+                _completion = completion;
+            }
+
+            public void ProcessNextBatch()
+            {
+                try
+                {
+                    int uploadedThisDispatch = 0;
+                    while (_nextEntry < _entries.Length && uploadedThisDispatch < MaxTextureUploadsPerDispatch)
+                    {
+                        TextureUploadEntry entry = _entries[_nextEntry++];
+                        try
+                        {
+                            var texture = TextureLoader.Instance.GetTexture2D(entry.Path);
+                            if (texture != null && !texture.IsDisposed)
+                            {
+                                _owner._terrainData.Textures[entry.TextureIndex] = texture;
+                                _loadedCount++;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            // A single malformed texture must not prevent later terrain layers
+                            // from being uploaded on subsequent frames.
+                            Console.WriteLine($"[TerrainLoader] Failed to upload texture {entry.TextureIndex} '{entry.Path}': {ex.Message}");
+                        }
+
+                        uploadedThisDispatch++;
+                    }
+
+                    if (_nextEntry < _entries.Length)
+                    {
+                        MuGame.ScheduleOnMainThread(
+                            static state => state.ProcessNextBatch(),
+                            this,
+                            MainThreadDispatcher.WorkPriority.High,
+                            "TerrainLoader.UploadTextureBatch");
+                        return;
+                    }
+
+                    Console.WriteLine($"[TerrainLoader] Uploaded {_loadedCount}/{_entries.Length} terrain textures for World{_owner._worldIndex}.");
+                    _completion.TrySetResult(true);
+                }
+                catch (Exception ex)
+                {
+                    _completion.TrySetException(ex);
+                }
+            }
+        }
 
         public TerrainLoader(short worldIndex)
         {
@@ -128,53 +197,37 @@ namespace Client.Main.Controls.Terrain
         private Task UploadTerrainTexturesOnGraphicsThreadAsync(string[] texturePaths)
         {
             var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var entries = new List<TextureUploadEntry>();
 
-            void UploadTextures()
+            for (int textureIndex = 0; textureIndex < texturePaths.Length; textureIndex++)
             {
-                try
-                {
-                    int loadedCount = 0;
-                    int expectedCount = 0;
-
-                    for (int textureIndex = 0; textureIndex < texturePaths.Length; textureIndex++)
-                    {
-                        string path = texturePaths[textureIndex];
-                        if (string.IsNullOrEmpty(path) || !File.Exists(path))
-                            continue;
-
-                        expectedCount++;
-                        try
-                        {
-                            var texture = TextureLoader.Instance.GetTexture2D(path);
-                            if (texture != null && !texture.IsDisposed)
-                            {
-                                _terrainData.Textures[textureIndex] = texture;
-                                loadedCount++;
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            // A single malformed texture must not prevent all later terrain
-                            // layers from being uploaded. The renderer can retry this index.
-                            Console.WriteLine($"[TerrainLoader] Failed to upload texture {textureIndex} '{path}': {ex.Message}");
-                        }
-                    }
-
-                    Console.WriteLine($"[TerrainLoader] Uploaded {loadedCount}/{expectedCount} terrain textures for World{_worldIndex}.");
-                    completion.TrySetResult(true);
-                }
-                catch (Exception ex)
-                {
-                    completion.TrySetException(ex);
-                }
+                string path = texturePaths[textureIndex];
+                if (!string.IsNullOrEmpty(path) && File.Exists(path))
+                    entries.Add(new TextureUploadEntry(textureIndex, path));
             }
 
+            if (entries.Count == 0)
+            {
+                completion.TrySetResult(true);
+                return completion.Task;
+            }
+
+            var state = new TerrainTextureUploadState(this, entries.ToArray(), completion);
             if (MuGame.IsMainThread)
-                UploadTextures();
+            {
+                state.ProcessNextBatch();
+            }
             else
-                MuGame.ScheduleOnMainThread(UploadTextures, MainThreadDispatcher.WorkPriority.High);
+            {
+                MuGame.ScheduleOnMainThread(
+                    static uploadState => uploadState.ProcessNextBatch(),
+                    state,
+                    MainThreadDispatcher.WorkPriority.High,
+                    "TerrainLoader.UploadTextureBatch");
+            }
 
             return completion.Task;
         }
+
     }
 }

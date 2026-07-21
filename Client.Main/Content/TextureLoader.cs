@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic; // Added for Dictionary
 using System.IO;
@@ -129,7 +129,10 @@ namespace Client.Main.Content
                     loader._gpuTextureTasks.TryRemove(cacheKey, out _);
                     source.TrySetException(ex);
                 }
-            }, (this, path, normalizedKey, completion), MainThreadDispatcher.WorkPriority.High);
+            },
+            (this, path, normalizedKey, completion),
+            MainThreadDispatcher.WorkPriority.High,
+            "TextureLoader.UploadTexture");
 
             return completion.Task;
         }
@@ -512,7 +515,9 @@ namespace Client.Main.Content
                         _pathResolutionCache.TryRemove(key, out _); // Clean cache too
                     }
                 }
-            }, MainThreadDispatcher.WorkPriority.Low);
+            },
+            MainThreadDispatcher.WorkPriority.Low,
+            "TextureLoader.CleanupStaleTextures");
         }
     }
 }

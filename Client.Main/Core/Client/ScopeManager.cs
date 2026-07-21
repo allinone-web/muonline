@@ -49,17 +49,32 @@ namespace Client.Main.Core.Client
         /// until asynchronous disposal has completed. Updates received while CharacterState
         /// still points at the source map are treated as delayed packets from the old world.
         /// </summary>
-        public void BeginWorldTransition(ushort? sourceMapId = null)
+        public void BeginWorldTransition(ushort? sourceMapId = null, bool preserveCurrentMapEntries = false)
         {
             _transitionSourceMapId = sourceMapId ?? _characterState.MapId;
-            Interlocked.Increment(ref _worldGeneration);
+            long generation = Interlocked.Increment(ref _worldGeneration);
             Volatile.Write(ref _worldTransitionActive, 1);
-            ClearScope(clearSelf: false, recycleRemovedObjects: false);
+
+            int preservedCount = 0;
+            int removedCount;
+            if (preserveCurrentMapEntries)
+            {
+                ushort currentMapId = _characterState.MapId;
+                removedCount = RetainEntriesForMap(currentMapId, generation, out preservedCount);
+            }
+            else
+            {
+                removedCount = ClearRemoteScope(recycleRemovedObjects: false);
+            }
 
             _logger.LogInformation(
-                "Scope world transition started. SourceMap={SourceMap}, Generation={Generation}.",
+                "Scope world transition started. SourceMap={SourceMap}, CurrentMap={CurrentMap}, PreserveCurrent={PreserveCurrent}, Preserved={Preserved}, Removed={Removed}, Generation={Generation}.",
                 _transitionSourceMapId,
-                CurrentWorldGeneration);
+                _characterState.MapId,
+                preserveCurrentMapEntries,
+                preservedCount,
+                removedCount,
+                generation);
         }
 
         /// <summary>
@@ -116,6 +131,62 @@ namespace Client.Main.Core.Client
                     continue;
 
                 if (_objectsInScope.TryRemove(entry.Key, out ScopeObject removedObject))
+                {
+                    if (recycleRemovedObjects)
+                        ReturnScopeObject(removedObject);
+                    removedCount++;
+                }
+            }
+
+            return removedCount;
+        }
+
+        /// <summary>
+        /// Keeps entries which were already received for the destination map before the scene
+        /// transition reached the main thread. This closes the character-select race where fresh
+        /// scope packets can arrive immediately after CharacterInformation and would otherwise be
+        /// erased by BeginWorldTransition.
+        /// </summary>
+        private int RetainEntriesForMap(ushort currentMapId, long generation, out int preservedCount)
+        {
+            int removedCount = 0;
+            preservedCount = 0;
+            ushort selfId = _characterState.Id;
+
+            foreach (var entry in _objectsInScope)
+            {
+                ScopeObject scopeObject = entry.Value;
+                if (entry.Key == selfId)
+                {
+                    scopeObject.WorldGeneration = generation;
+                    continue;
+                }
+
+                if (scopeObject.MapId == currentMapId)
+                {
+                    scopeObject.WorldGeneration = generation;
+                    preservedCount++;
+                    continue;
+                }
+
+                if (_objectsInScope.TryRemove(entry.Key, out _))
+                    removedCount++;
+            }
+
+            return removedCount;
+        }
+
+        private int ClearRemoteScope(bool recycleRemovedObjects)
+        {
+            int removedCount = 0;
+            ushort selfId = _characterState.Id;
+
+            foreach (ushort maskedId in _objectsInScope.Keys)
+            {
+                if (maskedId == selfId)
+                    continue;
+
+                if (_objectsInScope.TryRemove(maskedId, out ScopeObject removedObject))
                 {
                     if (recycleRemovedObjects)
                         ReturnScopeObject(removedObject);

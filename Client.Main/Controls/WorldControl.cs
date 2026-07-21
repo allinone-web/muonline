@@ -481,14 +481,21 @@ namespace Client.Main.Controls
 
             OverheadNameplateRenderer.BeginFrame();
 
-            // Build shadow map before any backbuffer drawing so terrain tiles aren't lost
+            // Build shadow map before any backbuffer drawing so terrain tiles aren't lost.
             if (EnableShadows && Constants.ENABLE_SHADOW_MAPPING && GraphicsManager.Instance.ShadowMapRenderer != null)
             {
+                long shadowStarted = RenderPassProfiler.Start();
                 GraphicsManager.Instance.ShadowMapRenderer.RenderShadowMap(this);
+                RenderPassProfiler.AddShadow(shadowStarted);
             }
 
+            long worldBaseStarted = RenderPassProfiler.Start();
             base.Draw(time);
+            RenderPassProfiler.AddWorldBase(worldBaseStarted);
+
+            long objectsStarted = RenderPassProfiler.Start();
             RenderObjects(time);
+            RenderPassProfiler.AddWorldObjects(objectsStarted);
         }
 
         // --- Object Management ---
@@ -884,8 +891,11 @@ namespace Client.Main.Controls
                 {
                     FrameMetrics.SpriteBatchObjects++;
 
-                    if (canUseWalkerCrowdInstancing)
+                    if (canUseWalkerCrowdInstancing &&
+                        (ModelObject.HasPendingWalkerCrowdInstancingBatches() || _queuedCrowdSidePasses.Count > 0))
+                    {
                         FlushWalkerCrowdBatchesAndSidePasses(time);
+                    }
 
                     if (canUseMapInstancing && ModelObject.HasPendingStaticMapInstancingBatches())
                         ModelObject.FlushStaticMapInstancingBatches(this);
@@ -966,8 +976,11 @@ namespace Client.Main.Controls
 
             scope?.Dispose();
 
-            if (canUseWalkerCrowdInstancing)
+            if (canUseWalkerCrowdInstancing &&
+                (ModelObject.HasPendingWalkerCrowdInstancingBatches() || _queuedCrowdSidePasses.Count > 0))
+            {
                 FlushWalkerCrowdBatchesAndSidePasses(time);
+            }
 
             if (canUseMapInstancing && ModelObject.HasPendingStaticMapInstancingBatches())
                 ModelObject.FlushStaticMapInstancingBatches(this);

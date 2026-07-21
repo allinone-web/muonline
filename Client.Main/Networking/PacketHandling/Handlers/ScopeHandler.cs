@@ -52,10 +52,13 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         private static readonly ConcurrentQueue<NpcSpawnRequest> _npcSpawnQueue = new();
         private static readonly ConcurrentQueue<PlayerSpawnRequest> _playerSpawnQueue = new();
         private static readonly ConcurrentDictionary<ushort, int> _npcSpawnGenerations = new();
+        private static readonly ConcurrentDictionary<ushort, int> _scheduledNpcSpawnGenerations = new();
         private static int _npcSpawnsInFlight;
+        private static long _nextNpcScopeReconcileTick;
         private static int _playerSpawnWorkerRunning;
         private const int MaxNpcSpawnsPerFrame = 8;
         private const int MaxConcurrentNpcSpawns = 8;
+        private const int NpcScopeReconcileIntervalMs = 750;
         private static ScopeHandler _activeInstance;
 
         // ─────────────────────── Constructors ────────────────────────
@@ -140,6 +143,36 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             _npcSpawnGenerations.AddOrUpdate(maskedId, 1, static (_, previous) => unchecked(previous + 1));
         }
 
+        private void QueueNpcSpawn(
+            ushort maskedId,
+            ushort rawId,
+            byte x,
+            byte y,
+            byte direction,
+            ushort type,
+            string name,
+            ushort mapId)
+        {
+            int spawnGeneration = BumpNpcSpawnGeneration(maskedId);
+            _scheduledNpcSpawnGenerations[maskedId] = spawnGeneration;
+            _npcSpawnQueue.Enqueue(new NpcSpawnRequest(
+                maskedId,
+                rawId,
+                x,
+                y,
+                direction,
+                type,
+                name,
+                mapId,
+                spawnGeneration));
+        }
+
+        private static void ClearScheduledNpcSpawn(ushort maskedId, int spawnGeneration)
+        {
+            var entry = new KeyValuePair<ushort, int>(maskedId, spawnGeneration);
+            ((ICollection<KeyValuePair<ushort, int>>)_scheduledNpcSpawnGenerations).Remove(entry);
+        }
+
         /// <summary>
         /// Maps a server direction byte (0-7) to the client Direction enum using the inverse direction map.
         /// </summary>
@@ -215,9 +248,8 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     continue;
                 }
 
-                int spawnGeneration = BumpNpcSpawnGeneration(maskedId);
                 byte serverDirection = MapClientDirectionToServer(npc.Direction);
-                _npcSpawnQueue.Enqueue(new NpcSpawnRequest(
+                QueueNpcSpawn(
                     maskedId,
                     npc.RawId,
                     npc.PositionX,
@@ -225,8 +257,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     serverDirection,
                     npc.TypeNumber,
                     npc.Name,
-                    _characterState.MapId,
-                    spawnGeneration));
+                    _characterState.MapId);
                 queued++;
             }
 
@@ -291,9 +322,8 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 if (world != null && world.FindWalkerById(maskedId) != null)
                     continue;
 
-                int spawnGeneration = BumpNpcSpawnGeneration(maskedId);
                 byte serverDirection = handler.MapClientDirectionToServer(npc.Direction);
-                _npcSpawnQueue.Enqueue(new NpcSpawnRequest(
+                handler.QueueNpcSpawn(
                     maskedId,
                     npc.RawId,
                     npc.PositionX,
@@ -301,8 +331,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     serverDirection,
                     npc.TypeNumber,
                     npc.Name,
-                    mapId,
-                    spawnGeneration));
+                    mapId);
             }
         }
 
@@ -826,9 +855,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 string name = NpcDatabase.GetNpcName(type);
 
                 _scopeManager.AddOrUpdateNpcInScope(maskedId, rawId, x, y, type, name);
-                int spawnGeneration = BumpNpcSpawnGeneration(maskedId);
-
-                _npcSpawnQueue.Enqueue(new NpcSpawnRequest(maskedId, rawId, x, y, direction, type, name, currentMapId, spawnGeneration));
+                QueueNpcSpawn(maskedId, rawId, x, y, direction, type, name, currentMapId);
             }
         }
 
@@ -840,7 +867,17 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             }
 
             var handler = _activeInstance;
-            if (handler == null || _npcSpawnQueue.IsEmpty)
+            if (handler == null)
+            {
+                return;
+            }
+
+            // Reconciliation is internally throttled and scheduled-generation tracking
+            // prevents duplicates even while other NPCs are still loading. Running it here
+            // avoids starving a missing stationary NPC behind unrelated spawn work.
+            handler.ReconcileMissingScopedNpcs(world);
+
+            if (_npcSpawnQueue.IsEmpty)
             {
                 return;
             }
@@ -852,7 +889,14 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             {
                 if (request.MapId != handler._characterState.MapId)
                 {
+                    ClearScheduledNpcSpawn(request.MaskedId, request.SpawnGeneration);
                     handler._logger.LogDebug("Discarding queued NPC/Monster spawn {SpawnId:X4} for map {RequestMap} after map changed to {CurrentMap}.", request.MaskedId, request.MapId, handler._characterState.MapId);
+                    continue;
+                }
+
+                if (!IsCurrentNpcSpawnGeneration(request.MaskedId, request.SpawnGeneration))
+                {
+                    ClearScheduledNpcSpawn(request.MaskedId, request.SpawnGeneration);
                     continue;
                 }
 
@@ -861,16 +905,82 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             }
         }
 
+        private void ReconcileMissingScopedNpcs(WalkableWorldControl world)
+        {
+            long now = Environment.TickCount64;
+            long next = Volatile.Read(ref _nextNpcScopeReconcileTick);
+            if (now < next)
+                return;
+
+            if (Interlocked.CompareExchange(
+                    ref _nextNpcScopeReconcileTick,
+                    now + NpcScopeReconcileIntervalMs,
+                    next) != next)
+            {
+                return;
+            }
+
+            int queued = 0;
+            ushort currentMapId = _characterState.MapId;
+            foreach (var scopeObject in _scopeManager.GetScopeItems(ScopeObjectType.Npc))
+            {
+                if (scopeObject is not NpcScopeObject npc)
+                    continue;
+
+                ushort maskedId = (ushort)(npc.Id & 0x7FFF);
+                if (world.TryGetWalkerById(maskedId, out WalkerObject existing))
+                {
+                    bool validExisting =
+                        existing.World == world &&
+                        existing.Status is not (GameControlStatus.Error or GameControlStatus.Disposed);
+
+                    if (validExisting)
+                    {
+                        if (existing.Hidden)
+                            existing.Hidden = false;
+                        continue;
+                    }
+
+                    world.RemoveObject(existing);
+                    existing.Dispose();
+                }
+
+                if (_scheduledNpcSpawnGenerations.ContainsKey(maskedId))
+                    continue;
+
+                byte serverDirection = MapClientDirectionToServer(npc.Direction);
+                QueueNpcSpawn(
+                    maskedId,
+                    npc.RawId,
+                    npc.PositionX,
+                    npc.PositionY,
+                    serverDirection,
+                    npc.TypeNumber,
+                    npc.Name,
+                    currentMapId);
+                queued++;
+            }
+
+            if (queued > 0)
+            {
+                _logger.LogInformation(
+                    "Reconciled {Count} scoped NPC/monster entries missing from the ready world.",
+                    queued);
+            }
+        }
+
         private void StartNpcSpawn(NpcSpawnRequest request)
         {
             if (request.MapId != _characterState.MapId)
             {
+                ClearScheduledNpcSpawn(request.MaskedId, request.SpawnGeneration);
                 _logger.LogDebug("Skipping queued NPC/Monster spawn {SpawnId:X4} for stale map {RequestMap} (current: {CurrentMap}).", request.MaskedId, request.MapId, _characterState.MapId);
                 return;
             }
 
             if (!IsCurrentNpcSpawnGeneration(request.MaskedId, request.SpawnGeneration))
             {
+                ClearScheduledNpcSpawn(request.MaskedId, request.SpawnGeneration);
                 _logger.LogDebug("Skipping stale NPC/Monster spawn {SpawnId:X4} (generation {Generation}).", request.MaskedId, request.SpawnGeneration);
                 return;
             }
@@ -884,6 +994,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     _logger.LogError(t.Exception, "ScopeHandler: Error processing NPC/Monster spawn {SpawnId:X4}.", request.MaskedId);
                 }
 
+                ClearScheduledNpcSpawn(request.MaskedId, request.SpawnGeneration);
                 Interlocked.Decrement(ref _npcSpawnsInFlight);
             }, global::System.Threading.Tasks.TaskScheduler.Default);
         }
@@ -974,76 +1085,95 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 return;
             }
 
-            // Add to world on main thread
+            // Keep the spawn marked as scheduled until the main-thread insertion has
+            // completed. Otherwise the reconciliation pass can enqueue the same NPC again
+            // in the small window between background loading and world insertion.
+            var insertionCompletion = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
             MuGame.ScheduleOnMainThread(() =>
             {
-                // Double-check world is still valid and object doesn't already exist
-                if (MuGame.Instance.ActiveScene?.World != worldRef || worldRef.Status != GameControlStatus.Ready)
+                try
                 {
-                    obj.Dispose();
-                    return;
-                }
-
-                if (!IsCurrentNpcSpawnGeneration(maskedId, spawnGeneration) || !_scopeManager.ScopeContains(maskedId))
-                {
-                    obj.Dispose();
-                    return;
-                }
-
-                // Check and remove stale objects quickly
-                if (worldRef.WalkerObjectsById.TryGetValue(maskedId, out WalkerObject existingWalker))
-                {
-                    _logger.LogWarning(
-                        "ScopeHandler: Stale/Duplicate NPC/Monster ID {MaskedId:X4} ({ExistingWalkerType}) found in WalkerObjectsById. Removing it before adding new {Name} (Type: {TypeId}).",
-                        maskedId,
-                        existingWalker.GetType().Name,
-                        name,
-                        type);
-
-                    existingWalker.Dispose();
-                    worldRef.Objects.Remove(existingWalker);
-                }
-
-                // Quick check for duplicates using cached walkers
-                if (worldRef.FindWalkerById(maskedId) != null)
-                {
-                    obj.Dispose();
-                    return;
-                }
-
-                worldRef.Objects.Add(obj);
-
-                // Set final position
-                if (obj.World?.Terrain != null)
-                {
-                    obj.MoveTargetPosition = obj.TargetPosition;
-                    obj.Position = obj.TargetPosition;
-                }
-                else
-                {
-                    _logger.LogError(
-                        "ScopeHandler: obj.World or obj.World.Terrain is null for NPC/Monster {MaskedId:X4} ({WalkerType}) AFTER loading and adding. This indicates a problem.",
-                        maskedId,
-                        obj.GetType().Name);
-                    float worldX = obj.Location.X * Constants.TERRAIN_SCALE + 0.5f * Constants.TERRAIN_SCALE;
-                    float worldY = obj.Location.Y * Constants.TERRAIN_SCALE + 0.5f * Constants.TERRAIN_SCALE;
-                    obj.MoveTargetPosition = new Vector3(worldX, worldY, 0);
-                    obj.Position = obj.MoveTargetPosition;
-                }
-
-                // Play Appear animation for monsters that have MonsterActionType.Appear mapped
-                if (obj is MonsterObject monster && obj is ModelObject modelObj)
-                {
-                    // Check if monster has Appear animation available
-                    if (modelObj.Model?.Actions != null &&
-                        (int)MonsterActionType.Appear < modelObj.Model.Actions.Length &&
-                        modelObj.Model.Actions[(int)MonsterActionType.Appear] != null)
+                    // Double-check world is still valid and object doesn't already exist
+                    if (MuGame.Instance.ActiveScene?.World != worldRef || worldRef.Status != GameControlStatus.Ready)
                     {
-                        // Play MonsterActionType.Appear animation for dramatic spawn effect
-                        monster.PlayAction((ushort)MonsterActionType.Appear);
+                        obj.Dispose();
+                        return;
+                    }
+
+                    if (!IsCurrentNpcSpawnGeneration(maskedId, spawnGeneration) || !_scopeManager.ScopeContains(maskedId))
+                    {
+                        obj.Dispose();
+                        return;
+                    }
+
+                    // Check and remove stale objects quickly
+                    if (worldRef.WalkerObjectsById.TryGetValue(maskedId, out WalkerObject existingWalker))
+                    {
+                        _logger.LogWarning(
+                            "ScopeHandler: Stale/Duplicate NPC/Monster ID {MaskedId:X4} ({ExistingWalkerType}) found in WalkerObjectsById. Removing it before adding new {Name} (Type: {TypeId}).",
+                            maskedId,
+                            existingWalker.GetType().Name,
+                            name,
+                            type);
+
+                        existingWalker.Dispose();
+                        worldRef.Objects.Remove(existingWalker);
+                    }
+
+                    // Quick check for duplicates using cached walkers
+                    if (worldRef.FindWalkerById(maskedId) != null)
+                    {
+                        obj.Dispose();
+                        return;
+                    }
+
+                    worldRef.Objects.Add(obj);
+
+                    // Set final position
+                    if (obj.World?.Terrain != null)
+                    {
+                        obj.MoveTargetPosition = obj.TargetPosition;
+                        obj.Position = obj.TargetPosition;
+                    }
+                    else
+                    {
+                        _logger.LogError(
+                            "ScopeHandler: obj.World or obj.World.Terrain is null for NPC/Monster {MaskedId:X4} ({WalkerType}) AFTER loading and adding. This indicates a problem.",
+                            maskedId,
+                            obj.GetType().Name);
+                        float worldX = obj.Location.X * Constants.TERRAIN_SCALE + 0.5f * Constants.TERRAIN_SCALE;
+                        float worldY = obj.Location.Y * Constants.TERRAIN_SCALE + 0.5f * Constants.TERRAIN_SCALE;
+                        obj.MoveTargetPosition = new Vector3(worldX, worldY, 0);
+                        obj.Position = obj.MoveTargetPosition;
+                    }
+
+                    // Play Appear animation for monsters that have MonsterActionType.Appear mapped
+                    if (obj is MonsterObject monster && obj is ModelObject modelObj)
+                    {
+                        // Check if monster has Appear animation available
+                        if (modelObj.Model?.Actions != null &&
+                            (int)MonsterActionType.Appear < modelObj.Model.Actions.Length &&
+                            modelObj.Model.Actions[(int)MonsterActionType.Appear] != null)
+                        {
+                            // Play MonsterActionType.Appear animation for dramatic spawn effect
+                            monster.PlayAction((ushort)MonsterActionType.Appear);
+                        }
                     }
                 }
-            });
+                catch (Exception ex)
+                {
+                    insertionCompletion.TrySetException(ex);
+                    return;
+                }
+                finally
+                {
+                    insertionCompletion.TrySetResult(true);
+                }
+            }, MainThreadDispatcher.WorkPriority.High);
+
+            await insertionCompletion.Task;
         }
 
         private readonly struct NpcSpawnRequest

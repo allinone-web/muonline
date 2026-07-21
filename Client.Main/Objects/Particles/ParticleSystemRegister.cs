@@ -3,7 +3,6 @@ using Client.Main.Objects.Particles.Effects;
 using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace Client.Main.Objects.Particles
 {
@@ -18,17 +17,17 @@ namespace Client.Main.Objects.Particles
         public bool Rotation { get; set; }
         public List<BaseEffect> Effects { get; set; } = [];
         private readonly Queue<Particle> _pool = new();
+        private int _effectConfigurationVersion;
 
-        public Particle Emit()
-        {
-            var particle = RentParticle();
-
-            return particle;
-        }
+        public Particle Emit() => RentParticle();
 
         public ParticleSystemRegister UseEffect(BaseEffect effect)
         {
+            if (effect == null)
+                return this;
+
             Effects.Add(effect);
+            _effectConfigurationVersion++;
             return this;
         }
 
@@ -69,7 +68,7 @@ namespace Client.Main.Objects.Particles
         private Vector3 RandomAngle()
         {
             if (!Rotation)
-                return new Vector3(0, 0, 0);
+                return Vector3.Zero;
 
             return new Vector3(
                 (float)(MuGame.Random.NextDouble() * MathF.PI * 2),
@@ -83,15 +82,6 @@ namespace Client.Main.Objects.Particles
             var position = RandomPosition();
             var angle = RandomAngle();
             var scale = RandomScale();
-            var effects = Effects.Select(x => x.Copy()).ToArray();
-
-            for (int i = 0; i < effects.Length; i++)
-            {
-                if (effects[i] is DurationEffect duration)
-                {
-                    duration.OnExpired = System.RecycleParticle;
-                }
-            }
 
             Particle particle;
             if (_pool.Count > 0)
@@ -99,8 +89,6 @@ namespace Client.Main.Objects.Particles
                 particle = _pool.Dequeue();
                 particle.OwnerRegister = this;
                 particle.Hidden = false;
-                bool initNow = particle.Status == Models.GameControlStatus.Ready;
-                particle.ConfigureForReuse(position, angle, scale, effects, initNow);
             }
             else
             {
@@ -108,10 +96,35 @@ namespace Client.Main.Objects.Particles
                 {
                     OwnerRegister = this
                 };
-                particle.ConfigureForReuse(position, angle, scale, effects, initializeEffects: false);
             }
 
+            if (particle.EffectConfigurationVersion != _effectConfigurationVersion)
+            {
+                particle.Effects = CreateEffectInstances();
+                particle.EffectConfigurationVersion = _effectConfigurationVersion;
+            }
+
+            bool initializeEffects = particle.Status == GameControlStatus.Ready;
+            particle.ConfigureForReuse(position, angle, scale, particle.Effects, initializeEffects);
             return particle;
+        }
+
+        private BaseEffect[] CreateEffectInstances()
+        {
+            if (Effects.Count == 0)
+                return Array.Empty<BaseEffect>();
+
+            var result = new BaseEffect[Effects.Count];
+            for (int i = 0; i < Effects.Count; i++)
+            {
+                BaseEffect effect = Effects[i].Copy();
+                if (effect is DurationEffect duration)
+                    duration.OnExpired = System.RecycleParticle;
+
+                result[i] = effect;
+            }
+
+            return result;
         }
 
         internal void ReturnToPool(Particle particle)
@@ -119,8 +132,9 @@ namespace Client.Main.Objects.Particles
             if (particle == null)
                 return;
 
+            // Keep the per-particle effect instances. Init() resets their mutable state on
+            // the next rent, avoiding a new effect array and effect objects on every emission.
             particle.Hidden = true;
-            particle.Effects = Array.Empty<BaseEffect>();
             particle.OwnerRegister = this;
             _pool.Enqueue(particle);
         }

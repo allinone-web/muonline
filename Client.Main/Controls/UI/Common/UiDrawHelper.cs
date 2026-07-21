@@ -6,12 +6,12 @@ namespace Client.Main.Controls.UI.Common
 {
     public static class UiDrawHelper
     {
-        public static void DrawVerticalGradient(SpriteBatch spriteBatch, Rectangle rect, Color top, Color bottom)
+        public static void DrawVerticalGradient(SpriteBatch spriteBatch, Rectangle rect, Color top, Color bottom, int maxSteps = 64)
         {
             var pixel = GraphicsManager.Instance.Pixel;
             if (pixel == null) return;
 
-            int steps = Math.Min(rect.Height, 64);
+            int steps = Math.Min(rect.Height, Math.Max(1, maxSteps));
             int stepHeight = Math.Max(1, rect.Height / steps);
 
             if (steps <= 1 || rect.Height <= 1)
@@ -30,12 +30,12 @@ namespace Client.Main.Controls.UI.Common
             }
         }
 
-        public static void DrawHorizontalGradient(SpriteBatch spriteBatch, Rectangle rect, Color left, Color right)
+        public static void DrawHorizontalGradient(SpriteBatch spriteBatch, Rectangle rect, Color left, Color right, int maxSteps = 64)
         {
             var pixel = GraphicsManager.Instance.Pixel;
             if (pixel == null) return;
 
-            int steps = Math.Min(rect.Width, 64);
+            int steps = Math.Min(rect.Width, Math.Max(1, maxSteps));
             int stepWidth = Math.Max(1, rect.Width / steps);
 
             if (steps <= 1 || rect.Width <= 1)

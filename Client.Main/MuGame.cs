@@ -6,6 +6,7 @@ using Client.Main.Controls.UI.Game.Inventory;
 using Client.Main.Core.Client;
 using Client.Main.Core.Utilities;
 using Client.Main.Data;
+using Client.Main.Diagnostics;
 using Client.Main.Graphics;
 using Client.Main.Networking;
 using Client.Main.Objects;
@@ -23,6 +24,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using Client.Telemetry;
 
 
 namespace Client.Main
@@ -57,10 +59,17 @@ namespace Client.Main
         public static int MainThreadProcessedActionsLastFrame => _mainThreadDispatcher.LastProcessedCount;
         public static long MainThreadProcessedActionsTotal => _mainThreadDispatcher.TotalProcessedCount;
         public static double MainThreadProcessingMs => _mainThreadDispatcher.LastProcessDurationMs;
+        public static double MainThreadLongestActionMs => _mainThreadDispatcher.LastLongestActionDurationMs;
+        public static double MainThreadLongestActionQueueMs => _mainThreadDispatcher.LastLongestActionQueueMs;
+        public static string MainThreadLongestActionName => _mainThreadDispatcher.LastLongestActionName;
+        public static bool MainThreadBudgetExceeded => _mainThreadDispatcher.LastBudgetExceeded;
+        public static double MainThreadBudgetOverrunMs => _mainThreadDispatcher.LastBudgetOverrunMs;
+        public static MainThreadDispatcher.SlowActionSnapshot MainThreadLatestSlowAction => _mainThreadDispatcher.LatestSlowAction;
         public static int LastSimulationStepCount { get; private set; }
         public static double LastSimulationAcceptedElapsedMs { get; private set; }
         public static double LastSimulationAccumulationAlpha { get; private set; }
         public static FrameProfiler.Snapshot FramePerformance => _frameProfiler.Current;
+        public static TelemetryPublisher Diagnostics => Instance?._telemetryPublisher;
 
         // Instance Fields
         private readonly GraphicsDeviceManager _graphics;
@@ -70,10 +79,12 @@ namespace Client.Main
             SimulationMaxStepsPerFrame,
             SimulationMaxAcceptedElapsed);
         private bool _networkDisposed = false;
+        private CharacterState _characterState;
         private ScopeManager _scopeManager;
         private readonly SemaphoreSlim _sceneChangeLock = new(1, 1);
         private int _sceneChangeGeneration;
         private float _scaleFactor;
+        private TelemetryPublisher _telemetryPublisher;
         private bool _effectCacheValid = false;
         private Point _lastEffectTargetSize;
         private Matrix _cachedEffectOrtho;
@@ -85,6 +96,7 @@ namespace Client.Main
         public BaseScene ActiveScene { get; private set; }
         public int Width => _graphics.PreferredBackBufferWidth;
         public int Height => _graphics.PreferredBackBufferHeight;
+        public bool IsVSyncEnabled => _graphics.SynchronizeWithVerticalRetrace;
         public GameWindow GameWindow => this.Window;
         public MouseState PrevMouseState { get; private set; }
         public MouseState Mouse { get; set; }
@@ -167,9 +179,10 @@ namespace Client.Main
         /// <param name="action">The action to execute.</param>
         public static void ScheduleOnMainThread(
             Action action,
-            MainThreadDispatcher.WorkPriority priority = MainThreadDispatcher.WorkPriority.Normal)
+            MainThreadDispatcher.WorkPriority priority = MainThreadDispatcher.WorkPriority.Normal,
+            string name = null)
         {
-            _mainThreadDispatcher.Enqueue(action, priority);
+            _mainThreadDispatcher.Enqueue(action, priority, name);
         }
 
         /// <summary>
@@ -178,9 +191,10 @@ namespace Client.Main
         public static void ScheduleOnMainThread<TState>(
             Action<TState> action,
             TState state,
-            MainThreadDispatcher.WorkPriority priority = MainThreadDispatcher.WorkPriority.Normal)
+            MainThreadDispatcher.WorkPriority priority = MainThreadDispatcher.WorkPriority.Normal,
+            string name = null)
         {
-            _mainThreadDispatcher.Enqueue(action, state, priority);
+            _mainThreadDispatcher.Enqueue(action, state, priority, name);
         }
 
         /// <summary>
@@ -188,9 +202,10 @@ namespace Client.Main
         /// </summary>
         public static void ScheduleOnMainThread(
             Func<Task> action,
-            MainThreadDispatcher.WorkPriority priority = MainThreadDispatcher.WorkPriority.Normal)
+            MainThreadDispatcher.WorkPriority priority = MainThreadDispatcher.WorkPriority.Normal,
+            string name = null)
         {
-            _mainThreadDispatcher.Enqueue(action, priority);
+            _mainThreadDispatcher.Enqueue(action, priority, name);
         }
 
         private static bool ValidateSettings(MuOnlineSettings settings, ILogger logger)
@@ -381,14 +396,33 @@ namespace Client.Main
             // --- Initialize Network Manager ---
             // Needs CharacterState and ScopeManager - create basic instances for now
             // You'll likely manage these more centrally later
-            var characterState = new CharacterState(AppLoggerFactory);
-            _scopeManager = new ScopeManager(AppLoggerFactory, characterState);
-            Network = new NetworkManager(AppLoggerFactory, AppSettings, characterState, _scopeManager);
+            _characterState = new CharacterState(AppLoggerFactory);
+            _scopeManager = new ScopeManager(AppLoggerFactory, _characterState);
+            Network = new NetworkManager(AppLoggerFactory, AppSettings, _characterState, _scopeManager);
             bootLogger.LogInformation("✅ Network Manager initialized.");
 
             // Initialize TaskScheduler
             _taskScheduler = new Controllers.TaskScheduler(AppLoggerFactory, _mainThreadDispatcher);
             bootLogger.LogInformation("✅ TaskScheduler initialized.");
+
+            var diagnosticsOptions = AppConfiguration.GetSection("Diagnostics").Get<TelemetryPublisherOptions>()
+                ?? new TelemetryPublisherOptions();
+            if (OperatingSystem.IsAndroid() || OperatingSystem.IsIOS())
+                diagnosticsOptions.Enabled = false;
+
+            if (diagnosticsOptions.Enabled)
+            {
+                _telemetryPublisher = new TelemetryPublisher(
+                    diagnosticsOptions,
+                    AppLoggerFactory.CreateLogger<TelemetryPublisher>());
+                _telemetryPublisher.Start();
+                bootLogger.LogInformation("✅ Diagnostics telemetry enabled. Pipe={PipeName}", diagnosticsOptions.PipeName);
+            }
+            else
+            {
+                _telemetryPublisher = null;
+                bootLogger.LogInformation("Diagnostics telemetry is disabled.");
+            }
 
             IsMouseVisible = false; // Keep this if you want a custom cursor
 
@@ -463,12 +497,13 @@ namespace Client.Main
             base.UnloadContent();
             GraphicsManager.Instance.Dispose();
             DisposeNetworkSafely();   // ← only place called in UnloadContent
+            DisposeTelemetrySafely();
             AppLoggerFactory?.Dispose(); // AppLoggerFactory can be null if Initialize failed early
         }
 
         protected override void Update(GameTime gameTime)
         {
-            _frameProfiler.BeginUpdate();
+            _frameProfiler.BeginUpdate(FrameIndex + 1L);
             UPSCounter.Instance.CalcUPS(gameTime);
 
             var simStep = _simulationClock.Advance(gameTime.ElapsedGameTime);
@@ -574,7 +609,9 @@ namespace Client.Main
 
         protected override void Draw(GameTime gameTime)
         {
+            bool publishTelemetry = _telemetryPublisher?.TryBeginSnapshot() == true;
             _frameProfiler.BeginDraw();
+            RenderPassProfiler.BeginFrame(publishTelemetry);
             try
             {
                 // Initialize frame-based optimizations
@@ -593,13 +630,17 @@ namespace Client.Main
                         requireTempTarget2: postProcessPasses >= 2);
 
                     DrawSceneToMainRenderTarget(gameTime);
+                    long postProcessStarted = RenderPassProfiler.Start();
                     ApplyPostProcessingEffects();
+                    RenderPassProfiler.AddPostProcess(postProcessStarted);
                 }
                 else
                 {
                     DrawSceneDirectToBackBuffer(gameTime);
                 }
+                long frameworkDrawStarted = RenderPassProfiler.Start();
                 base.Draw(gameTime);
+                RenderPassProfiler.AddFrameworkDraw(frameworkDrawStarted);
             }
             catch (Exception e)
             {
@@ -610,6 +651,8 @@ namespace Client.Main
                 // Ensure that no render target is active to avoid the Present error
                 GraphicsDevice.SetRenderTarget(null);
                 _frameProfiler.EndDraw();
+                if (publishTelemetry)
+                    _telemetryPublisher?.PublishSnapshot(this);
             }
         }
 
@@ -619,6 +662,7 @@ namespace Client.Main
             {
                 DisposeNetworkSafely();   // ← won't be called a second time
                 _taskScheduler?.Dispose();
+                DisposeTelemetrySafely();
                 AppLoggerFactory?.Dispose();
             }
             base.Dispose(disposing);
@@ -646,13 +690,18 @@ namespace Client.Main
 
                 string sceneName = newScene.GetType().Name;
                 _logger?.LogInformation("--- Scene change starting: {SceneType}", sceneName);
+                _telemetryPublisher?.PublishEvent("scene", $"Loading {sceneName}", TelemetrySeverity.Info);
 
                 // Scope packets do not always contain OutOfScope entries for every monster,
                 // NPC and dropped item during a warp. Start a map-aware transition barrier
                 // before disposing the old scene so delayed old-world packets cannot recreate
                 // NPCs inside the new WorldControl.
                 ushort? sourceMapId = ActiveScene?.World?.MapId;
-                _scopeManager?.BeginWorldTransition(sourceMapId);
+                bool preserveCurrentMapScope =
+                    newScene is GameScene &&
+                    sourceMapId.HasValue &&
+                    sourceMapId.Value != _characterState.MapId;
+                _scopeManager?.BeginWorldTransition(sourceMapId, preserveCurrentMapScope);
 
                 // A scene switch may happen between queueing and flushing an instanced draw.
                 // Never let instance transforms or pose rows from the previous world survive
@@ -699,6 +748,7 @@ namespace Client.Main
 
                     _scopeManager?.CompleteWorldTransition();
                     _logger?.LogError(ex, "Scene initialization failed for {SceneType}.", sceneName);
+                    _telemetryPublisher?.PublishEvent("scene", $"Failed to load {sceneName}: {ex.Message}", TelemetrySeverity.Error);
                     return;
                 }
 
@@ -710,6 +760,7 @@ namespace Client.Main
                 // If another request arrived during initialization, let it take over as soon
                 // as this serialized operation releases the lock.
                 _logger?.LogInformation("--- Scene change completed: {SceneType}", sceneName);
+                _telemetryPublisher?.PublishEvent("scene", $"Loaded {sceneName}", TelemetrySeverity.Info);
             }
             finally
             {
@@ -965,8 +1016,13 @@ namespace Client.Main
             GraphicsDevice.DepthStencilState = DepthStencilState.Default;
             GraphicsDevice.BlendState = BlendState.AlphaBlend;
 
+            long sceneDrawStarted = RenderPassProfiler.Start();
             ActiveScene?.Draw(gameTime);
+            RenderPassProfiler.AddSceneDraw(sceneDrawStarted);
+
+            long sceneAfterStarted = RenderPassProfiler.Start();
             ActiveScene?.DrawAfter(gameTime);
+            RenderPassProfiler.AddSceneAfter(sceneAfterStarted);
 
             GraphicsDevice.SetRenderTarget(null);
         }
@@ -981,8 +1037,13 @@ namespace Client.Main
             GraphicsDevice.DepthStencilState = DepthStencilState.Default;
             GraphicsDevice.BlendState = BlendState.AlphaBlend;
 
+            long sceneDrawStarted = RenderPassProfiler.Start();
             ActiveScene?.Draw(gameTime);
+            RenderPassProfiler.AddSceneDraw(sceneDrawStarted);
+
+            long sceneAfterStarted = RenderPassProfiler.Start();
             ActiveScene?.DrawAfter(gameTime);
+            RenderPassProfiler.AddSceneAfter(sceneAfterStarted);
         }
 
         private static bool ShouldUseIntermediateRenderTarget()
@@ -1172,6 +1233,22 @@ namespace Client.Main
         /// swallowing <see cref="ObjectDisposedException"/> which occurs,
         /// if the CancellationTokenSource inside NetworkManager was already disposed.
         /// </summary>
+        private void DisposeTelemetrySafely()
+        {
+            var publisher = Interlocked.Exchange(ref _telemetryPublisher, null);
+            if (publisher == null)
+                return;
+
+            try
+            {
+                publisher.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+            catch (Exception telemetryDisposeException)
+            {
+                _logger?.LogDebug(telemetryDisposeException, "Failed disposing diagnostics telemetry publisher.");
+            }
+        }
+
         private void DisposeNetworkSafely()
         {
             if (_networkDisposed || Network == null)
