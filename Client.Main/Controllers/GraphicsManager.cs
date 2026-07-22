@@ -1,4 +1,4 @@
-﻿using Client.Main.Content;
+using Client.Main.Content;
 using Client.Main.Graphics;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Content;
@@ -30,6 +30,8 @@ namespace Client.Main.Controllers
         public Effect GammaCorrectionEffect { get; private set; }
 
         public RenderTarget2D MainRenderTarget { get; private set; }
+        public RenderTarget2D RecoveryRenderTarget { get; private set; }
+        public bool HasRecoveryFrame { get; private set; }
         public RenderTarget2D TempTarget1 { get; private set; }
         public RenderTarget2D TempTarget2 { get; private set; }
         private SurfaceFormat _mainRenderTargetFormat;
@@ -164,7 +166,7 @@ namespace Client.Main.Controllers
             return SamplerState.LinearClamp;
         }
 
-        public void EnsureRenderTargets(bool requireTempTarget1, bool requireTempTarget2)
+        public void EnsureRenderTargets(bool requireTempTarget1, bool requireTempTarget2, bool requireRecoveryTarget = false)
         {
             PresentationParameters pp = _graphicsDevice.PresentationParameters;
             int backBufferWidth = Math.Max(1, pp.BackBufferWidth);
@@ -175,20 +177,32 @@ namespace Client.Main.Controllers
             int sampleCount = Constants.MSAA_ENABLED ? pp.MultiSampleCount : 0;
 
             bool recreateMain = !IsTargetValid(MainRenderTarget, targetWidth, targetHeight) ||
+                                (requireRecoveryTarget && !IsTargetValid(RecoveryRenderTarget, targetWidth, targetHeight)) ||
                                 _mainRenderTargetFormat != renderTargetFormat ||
                                 _mainRenderTargetSampleCount != sampleCount;
             if (recreateMain)
             {
                 DisposeRenderTargets();
-                MainRenderTarget = new RenderTarget2D(
-                    _graphicsDevice,
+                MainRenderTarget = CreateSceneRenderTarget(
                     targetWidth,
                     targetHeight,
-                    false,
                     renderTargetFormat,
-                    DepthFormat.Depth24,
-                    sampleCount,
-                    RenderTargetUsage.DiscardContents);
+                    sampleCount);
+
+                if (requireRecoveryTarget)
+                {
+                    RecoveryRenderTarget = CreateSceneRenderTarget(
+                        targetWidth,
+                        targetHeight,
+                        renderTargetFormat,
+                        sampleCount);
+                }
+
+                InitializeSceneTarget(MainRenderTarget, targetWidth, targetHeight);
+                if (RecoveryRenderTarget != null)
+                    InitializeSceneTarget(RecoveryRenderTarget, targetWidth, targetHeight);
+
+                HasRecoveryFrame = false;
                 _mainRenderTargetFormat = renderTargetFormat;
                 _mainRenderTargetSampleCount = sampleCount;
             }
@@ -208,15 +222,64 @@ namespace Client.Main.Controllers
             }
         }
 
+
+        private RenderTarget2D CreateSceneRenderTarget(
+            int width,
+            int height,
+            SurfaceFormat format,
+            int sampleCount)
+        {
+            return new RenderTarget2D(
+                _graphicsDevice,
+                width,
+                height,
+                false,
+                format,
+                DepthFormat.Depth24,
+                sampleCount,
+                RenderTargetUsage.PreserveContents);
+        }
+
+        private void InitializeSceneTarget(RenderTarget2D target, int width, int height)
+        {
+            if (target == null)
+                return;
+
+            RenderTargetBinding[] previousTargets = _graphicsDevice.GetRenderTargets();
+            Viewport previousViewport = _graphicsDevice.Viewport;
+            _graphicsDevice.SetRenderTarget(target);
+            _graphicsDevice.Viewport = new Viewport(0, 0, width, height);
+            _graphicsDevice.Clear(new Color(12, 12, 20));
+            if (previousTargets == null || previousTargets.Length == 0)
+                _graphicsDevice.SetRenderTarget(null);
+            else
+                _graphicsDevice.SetRenderTargets(previousTargets);
+            _graphicsDevice.Viewport = previousViewport;
+        }
+
+        public void CommitSceneFrame()
+        {
+            if (MainRenderTarget == null || RecoveryRenderTarget == null)
+                return;
+
+            RenderTarget2D completedFrame = MainRenderTarget;
+            MainRenderTarget = RecoveryRenderTarget;
+            RecoveryRenderTarget = completedFrame;
+            HasRecoveryFrame = true;
+        }
+
         private static bool IsTargetValid(RenderTarget2D target, int width, int height)
             => target != null && !target.IsDisposed && target.Width == width && target.Height == height;
 
         private void DisposeRenderTargets()
         {
             MainRenderTarget?.Dispose();
+            RecoveryRenderTarget?.Dispose();
             TempTarget1?.Dispose();
             TempTarget2?.Dispose();
             MainRenderTarget = null;
+            RecoveryRenderTarget = null;
+            HasRecoveryFrame = false;
             TempTarget1 = null;
             TempTarget2 = null;
             _mainRenderTargetFormat = default;

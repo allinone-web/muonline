@@ -1,4 +1,4 @@
-using Client.Main.Controls;
+﻿using Client.Main.Controls;
 using Client.Main.Controls.UI;
 using Client.Main.Controllers;
 using Client.Main.Graphics;
@@ -25,6 +25,7 @@ namespace Client.Main.Worlds
         public SelectWorld() : base(worldIndex: 94)
         {
             EnableShadows = false;
+            Terrain.PreferIndexBatching = true;
             _logger = MuGame.AppLoggerFactory?.CreateLogger<SelectWorld>() ?? throw new System.InvalidOperationException("LoggerFactory not initialized in MuGame");
             Camera.Instance.ViewFar = 5500f;
         }
@@ -71,9 +72,12 @@ namespace Client.Main.Worlds
             base.Update(time);
             if (!Visible) return;
 
-            // Update label positions using controller data
+            // Keep the selected cinematic actor published even if a body-part model swap
+            // or first-frame recovery temporarily invalidated its visibility.
             if (Status == GameControlStatus.Ready && _controller != null)
             {
+                _controller.EnsureActiveCharacterVisible(this);
+
                 foreach (var (player, label) in _controller.Labels)
                 {
                     if (player.Status != GameControlStatus.Ready || player.Hidden)
@@ -134,7 +138,6 @@ namespace Client.Main.Worlds
 
         public override void Draw(GameTime gameTime)
         {
-            // Ensure correct render states for DirectX (and OpenGL for consistency)
             var gd = GraphicsManager.Instance.GraphicsDevice;
             gd.BlendState = BlendState.AlphaBlend;
             gd.DepthStencilState = DepthStencilState.Default;
@@ -142,5 +145,6 @@ namespace Client.Main.Worlds
 
             base.Draw(gameTime);
         }
+
     }
 }

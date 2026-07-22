@@ -1303,7 +1303,12 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                                     world.Objects.Add(effect);
 
                                 if (effect.Status == GameControlStatus.NonInitialized)
-                                    _ = effect.Load();
+                                {
+                                    MuGame.TaskScheduler?.QueueTask(
+                                        async () => await effect.Load(),
+                                        Controllers.TaskScheduler.Priority.High,
+                                        $"SkillEffect.Load.{effect.GetType().Name}");
+                                }
                             }
                         }
                     }
@@ -1396,7 +1401,12 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                                     world.Objects.Add(effect);
 
                                 if (effect.Status == GameControlStatus.NonInitialized)
-                                    _ = effect.Load();
+                                {
+                                    MuGame.TaskScheduler?.QueueTask(
+                                        async () => await effect.Load(),
+                                        Controllers.TaskScheduler.Priority.High,
+                                        $"SkillEffect.Load.{effect.GetType().Name}");
+                                }
                             }
                         }
                     }

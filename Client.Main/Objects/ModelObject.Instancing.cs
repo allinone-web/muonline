@@ -14,6 +14,34 @@ namespace Client.Main.Objects
 {
     public abstract partial class ModelObject
     {
+        private static readonly Dictionary<Type, bool> NpcCrowdRenderingCompatibility = new();
+
+        private static bool UsesDefaultNpcCrowdRendering(NPCObject npc)
+        {
+            Type type = npc.GetType();
+            lock (NpcCrowdRenderingCompatibility)
+            {
+                if (NpcCrowdRenderingCompatibility.TryGetValue(type, out bool compatible))
+                    return compatible;
+
+                compatible = IsInheritedFromModelObject(type, "Draw", typeof(GameTime))
+                    && IsInheritedFromModelObject(type, "DrawAfter", typeof(GameTime))
+                    && IsInheritedFromModelObject(type, "DrawMesh", typeof(int))
+                    && IsInheritedFromModelObject(type, "DrawMeshWithItemMaterial", typeof(int))
+                    && IsInheritedFromModelObject(type, "DrawMeshWithMonsterMaterial", typeof(int))
+                    && IsInheritedFromModelObject(type, "DrawMeshWithDynamicLighting", typeof(int));
+
+                NpcCrowdRenderingCompatibility[type] = compatible;
+                return compatible;
+            }
+        }
+
+        private static bool IsInheritedFromModelObject(Type type, string methodName, Type parameterType)
+        {
+            var method = type.GetMethod(methodName, new[] { parameterType });
+            return method?.DeclaringType == typeof(ModelObject);
+        }
+
         internal enum StaticMapInstancingQueueResult
         {
             None,
@@ -238,12 +266,15 @@ namespace Client.Main.Objects
             return modelObject.TryQueueStaticMapObjectForInstancing();
         }
 
+        internal static bool IsWalkerCrowdInstancingCandidate(WorldObject obj)
+        {
+            return obj is MonsterObject ||
+                   obj is NPCObject npc && UsesDefaultNpcCrowdRendering(npc);
+        }
+
         internal static bool TryQueueWalkerCrowdForInstancing(WorldObject obj)
         {
-            // Crowd instancing is intentionally limited to monsters. NPCs frequently own
-            // equipment children (wings, weapons, body parts) whose attachment and transparent
-            // passes must remain in the normal per-object render lifecycle.
-            if (obj is not MonsterObject modelObject)
+            if (obj is not ModelObject modelObject || !IsWalkerCrowdInstancingCandidate(obj))
                 return false;
 
             return modelObject.TryQueueWalkerCrowdForInstancing();
@@ -785,45 +816,81 @@ namespace Client.Main.Objects
             return true;
         }
 
-        private bool CanUseWalkerCrowdInstancing()
+        private enum WalkerCrowdRejectionReason
+        {
+            None,
+            Unsupported,
+            Children,
+            TypeOrRenderer,
+            MutableMesh,
+            Visibility,
+            Animation,
+            OneShot,
+            Material
+        }
+
+        private bool CanUseWalkerCrowdInstancing() =>
+            CanUseWalkerCrowdInstancing(out _);
+
+        private bool CanUseWalkerCrowdInstancing(out WalkerCrowdRejectionReason reason)
         {
             if (!IsWalkerCrowdInstancingSupported())
+            {
+                reason = WalkerCrowdRejectionReason.Unsupported;
                 return false;
+            }
 
-            // Only monsters use the crowd path. NPCs and players can own independently loaded
-            // child visuals which need deterministic per-object draw and DrawAfter ordering.
-            if (this is not MonsterObject walker || Children.Count > 0)
+            if (Children.Count > 0)
+            {
+                reason = WalkerCrowdRejectionReason.Children;
                 return false;
+            }
+
+            WalkerObject walker;
+            bool isMonster = this is MonsterObject;
+            if (isMonster)
+                walker = (MonsterObject)this;
+            else if (this is NPCObject npc && UsesDefaultNpcCrowdRendering(npc))
+                walker = npc;
+            else
+            {
+                reason = WalkerCrowdRejectionReason.TypeOrRenderer;
+                return false;
+            }
 
             if (UsesMutableMeshData)
+            {
+                reason = WalkerCrowdRejectionReason.MutableMesh;
                 return false;
+            }
 
-            // Hover must not evict a walker from the GPU-instanced crowd path.
-            // A separate GPU highlight pass is rendered by DrawQueuedCrowdInstancingSidePasses.
             if (!Visible || Model?.Meshes == null || Model.Meshes.Length == 0)
+            {
+                reason = WalkerCrowdRejectionReason.Visibility;
                 return false;
+            }
 
-            if (LinkParentAnimation || ParentBoneLink >= 0 || ContinuousAnimation || !_animationSampleValid)
+            if (LinkParentAnimation || ParentBoneLink >= 0 || ContinuousAnimation || !_animationSampleValid ||
+                _animationSampleActionIndex < 0)
+            {
+                reason = WalkerCrowdRejectionReason.Animation;
                 return false;
+            }
 
-            // Attack and skill one-shots are safe on the multi-pose path because every
-            // instance selects its own palette row. Keep death, shock, and other special
-            // one-shots on the individual renderer because they often need custom handling.
-            if (walker.IsOneShotPlaying && !walker.IsAttackOrSkillAnimationPlaying())
+            if (walker.IsOneShotPlaying &&
+                (!isMonster || !walker.IsAttackOrSkillAnimationPlaying()))
+            {
+                reason = WalkerCrowdRejectionReason.OneShot;
                 return false;
+            }
 
-            if (TotalAlpha < 0.999f || EnableCustomShader)
+            if (TotalAlpha < 0.999f || EnableCustomShader || HasVisibleTransparentMapMesh())
+            {
+                reason = WalkerCrowdRejectionReason.Material;
                 return false;
+            }
 
-            // The crowd path currently batches opaque dynamic-lighting meshes only.
-            // Keep the entire object on the individual renderer when it owns any
-            // visible transparent or custom-blended mesh so no secondary mesh vanishes.
-            if (HasVisibleTransparentMapMesh())
-                return false;
-
-            if (_animationSampleActionIndex < 0)
-                return false;
-
+            reason = WalkerCrowdRejectionReason.None;
             return true;
         }
 

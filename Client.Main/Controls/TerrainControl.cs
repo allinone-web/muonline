@@ -1,4 +1,4 @@
-﻿using Client.Data.ATT;
+using Client.Data.ATT;
 using Client.Data.MAP;
 using Client.Main.Controls.Terrain;
 using Client.Main.Controllers;
@@ -46,6 +46,7 @@ namespace Client.Main.Controls
         public Texture2D HeightMapTexture => _data?.HeightMapTexture;
         private Dictionary<int, string> _pendingTextureMap = new();
         private bool _replaceTextureMapping;
+        private bool _preferIndexBatching;
 
         public Dictionary<int, string> TextureMappingFiles
         {
@@ -69,6 +70,16 @@ namespace Client.Main.Controls
         public HashSet<byte> GrassTextureIndices => _grassRenderer.GrassTextureIndices;
         public bool IsGpuTerrainLighting => _renderer?.IsGpuLightingActive == true;
         public bool IsDynamicLightingShaderAvailable => _renderer?.IsDynamicLightingShaderAvailable == true;
+        public bool PreferIndexBatching
+        {
+            get => _renderer?.PreferIndexBatching ?? _preferIndexBatching;
+            set
+            {
+                _preferIndexBatching = value;
+                if (_renderer != null)
+                    _renderer.PreferIndexBatching = value;
+            }
+        }
 
         /// <summary>
         /// Configures grass settings for specific world requirements.
@@ -139,7 +150,8 @@ namespace Client.Main.Controls
             _grassRenderer = new GrassRenderer(GraphicsDevice, _data, _physics, _wind, _lightManager);
             _renderer = new TerrainRenderer(GraphicsDevice, _data, _visibility, _lightManager, _grassRenderer)
             {
-                WorldIndex = this.WorldIndex
+                WorldIndex = this.WorldIndex,
+                PreferIndexBatching = _preferIndexBatching
             };
 
             // Post-load processing
@@ -173,13 +185,33 @@ namespace Client.Main.Controls
             _renderer.Update(time);
         }
 
+        internal void PrepareInitialRenderResources()
+        {
+            if (Status != Models.GameControlStatus.Ready || _visibility == null || _renderer == null)
+                return;
+
+            var camera = Camera.Instance;
+            _visibility.Update(new Vector2(camera.Position.X, camera.Position.Y));
+            _renderer.PrepareFirstDrawResources();
+        }
+
+        internal async Task PrepareInitialRenderResourcesAsync(string phaseName)
+        {
+            if (Status != Models.GameControlStatus.Ready || _visibility == null || _renderer == null)
+                return;
+
+            var camera = Camera.Instance;
+            _visibility.Update(new Vector2(camera.Position.X, camera.Position.Y));
+            await _renderer.PrepareFirstDrawResourcesAsync(phaseName);
+        }
+
         public override void Draw(GameTime time)
         {
             if (!Visible || Status != Models.GameControlStatus.Ready || _renderer == null || _grassRenderer == null)
                 return;
 
             FrameMetrics.Reset();
-            long terrainStarted = RenderPassProfiler.Start();
+            var terrainStarted = RenderPassProfiler.Start();
             _renderer.Draw(after: false);
             RenderPassProfiler.AddTerrainOpaque(terrainStarted);
 
@@ -189,6 +221,13 @@ namespace Client.Main.Controls
             FrameMetrics.DrawnBlocks = _renderer.DrawnBlocks;
             FrameMetrics.DrawnCells = _renderer.DrawnCells;
             FrameMetrics.GrassFlushes = _grassRenderer.Flushes;
+            FrameMetrics.IndexedCells = _renderer.IndexedCells;
+            FrameMetrics.StreamedCells = _renderer.StreamedCells;
+            FrameMetrics.IndexUploads = _renderer.IndexUploads;
+            FrameMetrics.VertexUploads = _renderer.VertexUploads;
+            FrameMetrics.UploadedIndices = _renderer.UploadedIndices;
+            FrameMetrics.UploadedVertices = _renderer.UploadedVertices;
+            FrameMetrics.UsedIndexBatching = _renderer.UsedIndexBatching;
 
             base.Draw(time);
         }
@@ -198,7 +237,7 @@ namespace Client.Main.Controls
             if (!Visible || Status != Models.GameControlStatus.Ready || _renderer == null || _grassRenderer == null)
                 return;
 
-            long terrainAfterStarted = RenderPassProfiler.Start();
+            var terrainAfterStarted = RenderPassProfiler.Start();
             _renderer.Draw(after: true);
             RenderPassProfiler.AddTerrainAfter(terrainAfterStarted);
             base.DrawAfter(gameTime);

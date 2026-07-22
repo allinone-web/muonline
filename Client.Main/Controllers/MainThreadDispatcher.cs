@@ -112,6 +112,14 @@ namespace Client.Main.Controllers
             new(), new(), new(), new()
         };
 
+        // Continuations which must not run in the same Update that scheduled them. They are
+        // promoted exactly once at the beginning of the next ProcessPending call, preventing
+        // async scene-loading phases from chaining together inside one dispatcher action.
+        private readonly ConcurrentQueue<QueuedAction>[] _nextFrameQueues =
+        {
+            new(), new(), new(), new()
+        };
+
         private readonly int _maxActionsPerFrame;
         private readonly TimeSpan _maxActionTimePerFrame;
         private ILogger _logger;
@@ -176,11 +184,30 @@ namespace Client.Main.Controllers
             EnqueueCore(new AsyncAction(action, name), priority);
         }
 
+        public void EnqueueNextFrame(
+            Action action,
+            WorkPriority priority = WorkPriority.Normal,
+            string name = null)
+        {
+            if (action == null)
+                return;
+
+            EnqueueNextFrameCore(new SyncAction(action, name), priority);
+        }
+
         private void EnqueueCore(IDispatchedAction action, WorkPriority priority)
         {
             int index = Math.Clamp((int)priority, 0, _queues.Length - 1);
             var normalizedPriority = (WorkPriority)index;
             _queues[index].Enqueue(new QueuedAction(action, normalizedPriority, Stopwatch.GetTimestamp()));
+            Interlocked.Increment(ref _pendingCount);
+        }
+
+        private void EnqueueNextFrameCore(IDispatchedAction action, WorkPriority priority)
+        {
+            int index = Math.Clamp((int)priority, 0, _nextFrameQueues.Length - 1);
+            var normalizedPriority = (WorkPriority)index;
+            _nextFrameQueues[index].Enqueue(new QueuedAction(action, normalizedPriority, Stopwatch.GetTimestamp()));
             Interlocked.Increment(ref _pendingCount);
         }
 
@@ -190,6 +217,7 @@ namespace Client.Main.Controllers
         public int ProcessPending(int maxActions, TimeSpan maxTime)
         {
             ResetLastFrameMetrics();
+            PromoteNextFrameActions();
             if (PendingCount == 0)
                 return 0;
 
@@ -269,6 +297,15 @@ namespace Client.Main.Controllers
                 queued.Priority,
                 durationMs,
                 queueMs);
+        }
+
+        private void PromoteNextFrameActions()
+        {
+            for (int i = 0; i < _nextFrameQueues.Length; i++)
+            {
+                while (_nextFrameQueues[i].TryDequeue(out QueuedAction queued))
+                    _queues[i].Enqueue(queued);
+            }
         }
 
         private bool TryDequeue(out QueuedAction action)

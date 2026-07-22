@@ -457,6 +457,58 @@ namespace Client.Main.Objects
             return DetermineShaderForMesh(mesh).NeedsSpecialShader;
         }
 
+        private bool DrawRootBlobShadowIfNeeded(
+            bool isAfterDraw,
+            Matrix view,
+            Matrix projection,
+            Vector3 worldPosition)
+        {
+            bool representedInShadowMap = UsesRenderedShadowMapForCurrentObject();
+            bool persistentActorShadow = RequiresPersistentActorGroundShadow();
+            bool needsSafetyBlob = representedInShadowMap &&
+                                   (persistentActorShadow || NeedsModularShadowSafetyBlob());
+
+            if (isAfterDraw ||
+                !RenderShadow ||
+                (LowQuality && !persistentActorShadow) ||
+                (representedInShadowMap && !needsSafetyBlob) ||
+                (Constants.ENABLE_DAY_NIGHT_CYCLE && SunCycleManager.IsNight) ||
+                !ShouldUseBlobShadowForCurrentPass() ||
+                !TryGetGroundBlobShadowMatrix(out Matrix shadowMatrix))
+            {
+                return false;
+            }
+
+            // Modular player/NPC actors can temporarily have only a subset of body-part
+            // casters ready. Keep a subtle root footprint under the detailed shadow-map
+            // result so the shadow never degenerates to a single helmet or weapon.
+            float shadowOpacity;
+            if (!representedInShadowMap)
+            {
+                shadowOpacity = ShadowOpacity;
+            }
+            else if (persistentActorShadow)
+            {
+                // Keep player/NPC grounding clearly visible even when the detailed shadow map
+                // contains only a subset of modular body parts.
+                shadowOpacity = ShadowOpacity * 0.65f;
+            }
+            else
+            {
+                shadowOpacity = ShadowOpacity * 0.35f;
+            }
+            if (World?.Terrain != null)
+            {
+                var dyn = World.Terrain.EvaluateDynamicLight(
+                    new Vector2(worldPosition.X, worldPosition.Y));
+                float lum = (0.2126f * dyn.X + 0.7152f * dyn.Y + 0.0722f * dyn.Z) / 255f;
+                shadowOpacity *= MathHelper.Clamp(1f - lum * 0.6f, 0.35f, 1f);
+            }
+
+            DrawBlobShadow(view, projection, shadowMatrix, shadowOpacity);
+            return true;
+        }
+
         private void DrawProjectedShadowPass(
             List<int> meshIndices,
             bool doShadow,
@@ -470,11 +522,17 @@ namespace Client.Main.Objects
             if (!doShadow || useShadowMap)
                 return;
 
+            // Non-actor attachments can share the parent's cheap fallback. Player/NPC body
+            // parts, however, form the actor silhouette and must participate when the root
+            // was omitted from the shadow map.
+            if ((LinkParentAnimation || ParentBoneLink >= 0) && !IsPlayerOrNpcShadowPart())
+                return;
+
             if (ShouldUseBlobShadowForCurrentPass())
             {
-                if (!drewBlobShadow)
+                if (!drewBlobShadow && TryGetGroundBlobShadowMatrix(out Matrix blobShadowMatrix))
                 {
-                    DrawBlobShadow(view, projection, shadowMatrix, shadowOpacity);
+                    DrawBlobShadow(view, projection, blobShadowMatrix, shadowOpacity);
                     drewBlobShadow = true;
                 }
             }
@@ -498,8 +556,7 @@ namespace Client.Main.Objects
                 var projection = Camera.Instance.Projection;
                 var worldPos = WorldPosition;
 
-                bool useShadowMap = Constants.ENABLE_DYNAMIC_LIGHTING_SHADER &&
-                                    GraphicsManager.Instance.ShadowMapRenderer?.IsReady == true;
+                bool useShadowMap = UsesRenderedShadowMapForCurrentObject();
                 bool isNight = Constants.ENABLE_DAY_NIGHT_CYCLE && SunCycleManager.IsNight;
                 bool doShadow = false;
                 Matrix shadowMatrix = Matrix.Identity;
@@ -520,6 +577,12 @@ namespace Client.Main.Objects
                     highlightColor = this is MonsterObject ? _redHighlight : _greenHighlight;
                 }
 
+                bool rootBlobDrawn = DrawRootBlobShadowIfNeeded(
+                    isAfterDraw: false,
+                    view,
+                    projection,
+                    worldPos.Translation);
+
                 if (doShadow || highlightAllowed)
                 {
                     float shadowOpacity = ShadowOpacity;
@@ -533,7 +596,7 @@ namespace Client.Main.Objects
 
                     var meshGroups = GroupMeshesByState(false);
                     {
-                        bool drewBlobShadow = false;
+                        bool drewBlobShadow = rootBlobDrawn;
                         foreach (var kvp in meshGroups)
                         {
                             if (kvp.Value.Count == 0)
@@ -564,9 +627,24 @@ namespace Client.Main.Objects
 
         public override void Draw(GameTime gameTime)
         {
-            if (!Visible || _meshes == null) return;
+            if (!Visible)
+                return;
 
             SetDrawShaderTimeSeconds((float)gameTime.TotalGameTime.TotalSeconds);
+
+            // Modular actors can temporarily have no drawable root mesh while their body
+            // parts are already ready. Do not suppress children or the stable ground shadow
+            // just because the root model has no buffer set.
+            if (_meshes == null || Model?.Meshes == null)
+            {
+                DrawRootBlobShadowIfNeeded(
+                    isAfterDraw: false,
+                    Camera.Instance.View,
+                    Camera.Instance.Projection,
+                    WorldPosition.Translation);
+                base.Draw(gameTime);
+                return;
+            }
 
             var gd = GraphicsDevice;
             var prevCull = gd.RasterizerState;
@@ -593,16 +671,26 @@ namespace Client.Main.Objects
 
             _drawModelInvocationId = ++_drawModelInvocationCounter;
 
-            // Cache commonly used values
+            // Cache commonly used values before resolving mesh groups. Modular player-model
+            // NPCs can have no visible root mesh at all; their root blob must still be drawn.
             var view = Camera.Instance.View;
             var projection = Camera.Instance.Projection;
             var worldPos = WorldPosition;
+            bool rootBlobDrawn = DrawRootBlobShadowIfNeeded(
+                isAfterDraw,
+                view,
+                projection,
+                worldPos.Translation);
+
+            // Resolve the persistent plan before touching the remaining graphics state.
+            var meshGroups = GroupMeshesByState(isAfterDraw);
+            if (meshGroups.Count == 0)
+                return;
 
             // Pre-calculate shadow and highlight states at object level
             bool doShadow = false;
             Matrix shadowMatrix = Matrix.Identity;
-            bool useShadowMap = Constants.ENABLE_DYNAMIC_LIGHTING_SHADER &&
-                                GraphicsManager.Instance.ShadowMapRenderer?.IsReady == true;
+            bool useShadowMap = UsesRenderedShadowMapForCurrentObject();
             // Skip blob shadows at night when day-night cycle is active
             bool isNight = Constants.ENABLE_DAY_NIGHT_CYCLE && SunCycleManager.IsNight;
             if (!isAfterDraw && RenderShadow && !LowQuality && !useShadowMap && !isNight)
@@ -631,9 +719,6 @@ namespace Client.Main.Objects
                 highlightColor = this is MonsterObject ? _redHighlight : _greenHighlight;
             }
 
-            // Group meshes by render state to minimize state changes
-            var meshGroups = GroupMeshesByState(isAfterDraw);
-
             // Render each persistent group with minimal state changes.
             {
                 var gd = GraphicsDevice;
@@ -641,7 +726,7 @@ namespace Client.Main.Objects
                 // Object-level alpha is constant; set once for the pass
                 if (effect != null && effect.Alpha != TotalAlpha)
                     effect.Alpha = TotalAlpha;
-                bool drewBlobShadow = false;
+                bool drewBlobShadow = rootBlobDrawn;
 
                 foreach (var kvp in meshGroups)
                 {
@@ -1096,6 +1181,9 @@ namespace Client.Main.Objects
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool ShouldUseBlobShadowForCurrentPass()
         {
+            if (IsPlayerOrNpcShadowPart())
+                return false;
+
             if (this is not WalkerObject)
                 return false;
 
@@ -1706,20 +1794,28 @@ namespace Client.Main.Objects
         {
             if (!Visible) return;
 
-            SetDrawShaderTimeSeconds((float)gameTime.TotalGameTime.TotalSeconds);
+            EnsureMeshRenderPlans();
+            if (_transparentMeshPlan.Count > 0)
+            {
+                SetDrawShaderTimeSeconds((float)gameTime.TotalGameTime.TotalSeconds);
 
-            var gd = GraphicsDevice;
-            var prevCull = gd.RasterizerState;
-            gd.RasterizerState = RasterizerState.CullCounterClockwise;
+                var gd = GraphicsDevice;
+                var prevCull = gd.RasterizerState;
+                gd.RasterizerState = RasterizerState.CullCounterClockwise;
 
-            GraphicsManager.Instance.AlphaTestEffect3D.View = Camera.Instance.View;
-            GraphicsManager.Instance.AlphaTestEffect3D.Projection = Camera.Instance.Projection;
-            GraphicsManager.Instance.AlphaTestEffect3D.World = WorldPosition;
+                GraphicsManager.Instance.AlphaTestEffect3D.View = Camera.Instance.View;
+                GraphicsManager.Instance.AlphaTestEffect3D.Projection = Camera.Instance.Projection;
+                GraphicsManager.Instance.AlphaTestEffect3D.World = WorldPosition;
 
-            DrawModel(true);    // RGBA / blend mesh
-            base.DrawAfter(gameTime);
+                DrawModel(true);
+                gd.RasterizerState = prevCull;
+            }
 
-            gd.RasterizerState = prevCull;
+#if ANDROID
+            DrawBoundingBox2D();
+            DrawHoverName();
+#endif
+            DrawChildrenAfterOnly(gameTime);
         }
     }
 }

@@ -3,6 +3,7 @@ using Client.Data.Texture;
 using Client.Main.Content;
 using Client.Main.Controllers;
 using Client.Main.Graphics;
+using Client.Main.Models;
 using Client.Main.Objects.Player;
 using Microsoft.Extensions.Logging;
 using Microsoft.Xna.Framework;
@@ -10,6 +11,7 @@ using Microsoft.Xna.Framework.Graphics;
 using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Client.Main.Objects
 {
@@ -35,7 +37,7 @@ namespace Client.Main.Objects
             return null;
         }
 
-        private void SetDynamicBuffers()
+        private void SetDynamicBuffers(bool allowHidden = false)
         {
             if (_invalidatedBufferFlags == MeshDirtyFlags.None || Model?.Meshes == null)
                 return;
@@ -43,7 +45,7 @@ namespace Client.Main.Objects
             try
             {
                 int meshCount = Model.Meshes.Length;
-                if (ShouldSkipDynamicBufferUpdate(meshCount))
+                if (ShouldSkipDynamicBufferUpdate(meshCount, allowHidden))
                     return;
 
                 uint currentFrame = unchecked((uint)MuGame.FrameIndex);
@@ -259,12 +261,12 @@ namespace Client.Main.Objects
             EnsureArraySize(ref _blendMeshIndicesScratch, meshCount);
         }
 
-        private bool ShouldSkipDynamicBufferUpdate(int meshCount)
+        private bool ShouldSkipDynamicBufferUpdate(int meshCount, bool allowHidden)
         {
             if (meshCount == 0)
                 return true;
 
-            if (!Visible)
+            if (!Visible && !allowHidden)
             {
                 _invalidatedBufferFlags = MeshDirtyFlags.None;
                 return true;
@@ -284,15 +286,40 @@ namespace Client.Main.Objects
 
         private bool RequiresCpuProjectedShadowBuffers()
         {
-            bool useShadowMap = Constants.ENABLE_DYNAMIC_LIGHTING_SHADER &&
-                                GraphicsManager.Instance.ShadowMapRenderer?.IsReady == true;
             bool isNight = Constants.ENABLE_DAY_NIGHT_CYCLE && SunCycleManager.IsNight;
+            if (!RenderShadow || LowQuality || isNight)
+                return false;
 
-            if (!RenderShadow || LowQuality || useShadowMap || isNight)
+            bool shadowMapReady = Constants.ENABLE_DYNAMIC_LIGHTING_SHADER &&
+                                  GraphicsManager.Instance.ShadowMapRenderer?.IsReady == true;
+            bool representedInShadowMap = UsesRenderedShadowMapForCurrentObject();
+            bool actorMeshShadow = IsPlayerOrNpcShadowPart();
+
+            if (representedInShadowMap)
+            {
+                // The shadow-map pass normally consumes immutable GPU geometry. When the
+                // effect lacks ShadowCaster_Skinned, keep CPU buffers as a correctness
+                // fallback instead of silently dropping armor/body-part shadows.
+                return !SupportsGpuSkinnedShadowCaster();
+            }
+
+            // Player and NPC actors must retain a real projected-mesh fallback whenever
+            // they were omitted from the bounded shadow-map caster list. This includes
+            // linked armor and bone-attached weapons, otherwise the actor loses its shadow
+            // or casts only the one child which happened to own CPU buffers.
+            if (actorMeshShadow)
+                return true;
+
+            // A ready map can still omit this actor because of caster limits or a stale
+            // selection. Other walkers use one root blob shadow and do not need duplicate
+            // CPU-skinned copies for linked equipment.
+            if (shadowMapReady && (ShouldUseBlobShadowForCurrentPass() || LinkParentAnimation || ParentBoneLink >= 0))
+                return false;
+
+            if (LinkParentAnimation || ParentBoneLink >= 0)
                 return false;
 
             // Blob shadows use a static quad and do not consume the model's CPU-skinned mesh.
-            // Do not force a GPU -> CPU fallback when this cheaper path is selected.
             if (ShouldUseBlobShadowForCurrentPass())
                 return false;
 
@@ -356,6 +383,44 @@ namespace Client.Main.Objects
                 return true;
 
             return false;
+        }
+
+        internal async Task PrepareGpuTexturesForFirstFrameAsync()
+        {
+            if (!_contentLoaded || Status == GameControlStatus.Disposed || _meshes == null)
+                return;
+
+            // ModelObject.LoadContent decodes texture data off-thread. Complete the GPU upload
+            // before publishing a newly spawned object so its first Draw cannot cold-create
+            // Texture2D resources inside the render pass.
+            for (int i = 0; i < _meshes.Length; i++)
+            {
+                string texturePath = _meshes[i]?.TexturePath;
+                if (string.IsNullOrEmpty(texturePath))
+                    continue;
+
+                await TextureLoader.Instance.PrepareAndGetTexture(texturePath).ConfigureAwait(false);
+            }
+
+            for (int i = 0; i < Children.Count; i++)
+            {
+                if (Children[i] is ModelObject childModel)
+                    await childModel.PrepareGpuTexturesForFirstFrameAsync().ConfigureAwait(false);
+            }
+        }
+
+        internal void PrepareRenderResourcesForFirstFrame()
+        {
+            if (!_contentLoaded || Status == GameControlStatus.Disposed)
+                return;
+
+            SetDynamicBuffers(allowHidden: true);
+
+            for (int i = 0; i < Children.Count; i++)
+            {
+                if (Children[i] is ModelObject childModel)
+                    childModel.PrepareRenderResourcesForFirstFrame();
+            }
         }
 
         private void ReleaseCpuMeshBuffers(int meshIndex)

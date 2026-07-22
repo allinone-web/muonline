@@ -29,6 +29,33 @@ namespace Client.Main.Helpers
         /// </summary>
         public static bool BatchIsBegun => Stack.Count > 0;
 
+        /// <summary>
+        /// Clears a corrupted nested SpriteBatch scope after a contained render exception.
+        /// Only the currently active batch is ended; all bookkeeping entries are then removed
+        /// so the next object starts from a known state.
+        /// </summary>
+        internal static void ForceReset()
+        {
+            var stack = Stack;
+            if (stack.Count == 0)
+                return;
+
+            try
+            {
+                ScopeEntry current = stack.Peek();
+                current.State.End(current.Batch);
+            }
+            catch
+            {
+                // The batch may already have been ended by the failing object. Clearing the
+                // bookkeeping stack is still required to allow recovery on the next draw.
+            }
+            finally
+            {
+                stack.Clear();
+            }
+        }
+
         public SpriteBatchScope(
             SpriteBatch batch,
             SpriteSortMode sort = SpriteSortMode.Deferred,

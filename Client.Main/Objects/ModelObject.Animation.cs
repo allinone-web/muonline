@@ -108,6 +108,46 @@ namespace Client.Main.Objects
             return _sharedAnimationRenderBones != null ? uint.MaxValue : _animationPoseVersion;
         }
 
+        /// <summary>
+        /// Keeps the currently generated bone palette unchanged. This is used by cinematic
+        /// preview actors which must remain stable while their scene is being constructed and
+        /// while UI selection changes are applied. Linked children continue to consume the
+        /// parent's frozen palette.
+        /// </summary>
+        public bool FreezeAnimationPose { get; set; }
+
+        internal void SetStaticAnimationPose(int actionIndex, int frameIndex = 0)
+        {
+            if (Model?.Actions == null || Model.Actions.Length == 0 || Model.Bones == null)
+                return;
+
+            int resolvedAction = Math.Clamp(actionIndex, 0, Model.Actions.Length - 1);
+            var action = Model.Actions[resolvedAction];
+            if (action == null)
+                return;
+
+            int totalFrames = Math.Max(
+                action.LockPositions ? action.NumAnimationKeys - 1 : action.NumAnimationKeys,
+                1);
+            int resolvedFrame = Math.Clamp(frameIndex, 0, totalFrames - 1);
+            int nextFrame = totalFrames > 1 ? (resolvedFrame + 1) % totalFrames : resolvedFrame;
+
+            CurrentAction = resolvedAction;
+            CurrentFrame = resolvedFrame;
+            _animTime = resolvedFrame;
+            _priorActionIndex = resolvedAction;
+            _blendFromAction = -1;
+            _blendFromTime = 0d;
+            _blendElapsed = 0f;
+            _isBlending = false;
+            _lastAnimationTotalSeconds = 0d;
+            _animationStepAccumulatorSeconds = 0f;
+
+            GenerateBoneMatrix(resolvedAction, resolvedFrame, nextFrame, 0f);
+            InvalidateBuffers(MeshDirtyFlags.Animation);
+            UpdateBoundings();
+        }
+
         private const int MaxSharedAnimationPaletteEntries = 512;
         private const int SharedAnimationPaletteMaxIdleFrames = 180;
         private static readonly Dictionary<SharedAnimationPaletteKey, SharedAnimationPaletteEntry> _sharedAnimationPalettes = new(256);

@@ -13,6 +13,7 @@ using Client.Main.Objects.Player;
 using Microsoft.Extensions.Logging;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -133,7 +134,10 @@ namespace Client.Main.Controls
         private readonly DroppedItemRenderSelector _droppedItemSelector = new();
         private readonly Queue<WorldObject> _objectsToInitialize = [];
         private readonly HashSet<WorldObject> _queuedForInitialization = [];
+        private readonly ConcurrentDictionary<WorldObject, bool> _initializationHiddenStates = new();
         private readonly List<WorldObject> _visibleObjects = [];
+        private readonly Dictionary<WorldObject, RenderFaultState> _renderFaults = [];
+        private long _renderFailureSequence;
 
         // Snapshot of objects that survived this frame's visibility/culling pass.
         // Overlay/UI passes (nameplates, bbox, hover) should iterate this rather than the
@@ -185,6 +189,13 @@ namespace Client.Main.Controls
         public Dictionary<ushort, WalkerObject> WalkerObjectsById { get; } = [];
 
         private ILogger _logger = ModelObject.AppLoggerFactory?.CreateLogger<WorldControl>();
+
+        private sealed class RenderFaultState
+        {
+            public int FailureCount;
+            public int RetryFrame;
+            public string Phase;
+        }
 
         // --- Properties ---
 
@@ -359,7 +370,9 @@ namespace Client.Main.Controls
 
         public override void Update(GameTime time)
         {
+            long worldBaseStarted = UpdatePassProfiler.Start();
             base.Update(time);
+            UpdatePassProfiler.AddWorldBase(worldBaseStarted);
 
             if (Status != GameControlStatus.Ready) return;
             FrameMetrics.Reset();
@@ -368,6 +381,7 @@ namespace Client.Main.Controls
             FrameMetrics.CullMs = LastCullRebuildMs;
             LastCullWasRebuild = false;
 
+            long initializationStarted = UpdatePassProfiler.Start();
             if (_objectsToInitialize.Count > 0)
             {
                 int availableSlots = Math.Max(0, MaxConcurrentObjectInitializations - Volatile.Read(ref _activeObjectInitializations));
@@ -379,14 +393,16 @@ namespace Client.Main.Controls
                     var obj = _objectsToInitialize.Dequeue();
                     _queuedForInitialization.Remove(obj);
 
-                    if (obj == null || !ReferenceEquals(obj.World, this) || obj.Status != GameControlStatus.NonInitialized)
+                    if (!IsRegisteredRootObject(obj) || obj.Status != GameControlStatus.NonInitialized)
                         continue;
 
                     if (!QueueObjectInitialization(obj))
                         EnqueueObjectInitialization(obj);
                 }
             }
+            UpdatePassProfiler.AddWorldInitialization(initializationStarted);
 
+            long visibilityStarted = UpdatePassProfiler.Start();
             // Keep update list current for object movement, but defer full camera recull to end of update
             // so rendering uses the latest camera state from this frame.
             if (_positionDirtyObjects.Count > 0 && !_dirtyVisibleObjects)
@@ -395,7 +411,9 @@ namespace Client.Main.Controls
             }
 
             UpdateVisibleObjects(time);
+            UpdatePassProfiler.AddWorldVisibility(visibilityStarted);
 
+            long cullStarted = UpdatePassProfiler.Start();
             var camera = Camera.Instance;
             ulong cameraVersion = camera.CullingStateVersion;
             bool needsFullRebuild =
@@ -414,65 +432,251 @@ namespace Client.Main.Controls
             {
                 RefreshDirtyVisibleObjects();
             }
+            UpdatePassProfiler.AddWorldCull(cullStarted);
 
+            long hoverStarted = UpdatePassProfiler.Start();
             WorldHoverSystem.UpdateHover(_visibleObjects, Scene);
+            UpdatePassProfiler.AddWorldHover(hoverStarted);
+        }
+
+        internal void PrepareInitialVisibilitySnapshot()
+        {
+            if (Status != GameControlStatus.Ready)
+                return;
+
+            var camera = Camera.Instance;
+            RebuildVisibleObjects();
+            _dirtyVisibleObjects = false;
+            CaptureCulledCameraState(camera, camera.CullingStateVersion);
+        }
+
+        /// <summary>
+        /// Publishes an already initialized object to rendering and immediately refreshes
+        /// its spatial/culling state. Scene workflows can therefore keep a model hidden
+        /// until all CPU/GPU resources are ready without risking a stale culling snapshot.
+        /// </summary>
+        internal bool ActivateObjectForRendering(WorldObject obj, bool forceFullVisibilityRebuild = false)
+        {
+            if (obj == null ||
+                obj.Status != GameControlStatus.Ready ||
+                !ReferenceEquals(obj.World, this) ||
+                !Objects.Contains(obj))
+            {
+                return false;
+            }
+
+            _initializationHiddenStates.TryRemove(obj, out _);
+            _renderFaults.Remove(obj);
+            obj.Hidden = false;
+            RegisterSpatialObject(obj);
+            UpdateSpatialRegistration(obj);
+            _positionDirtyObjects.Add(obj);
+
+            if (forceFullVisibilityRebuild || !_hasVisibilitySnapshot)
+                _dirtyVisibleObjects = true;
+
+            MarkWorldGeometryChanged();
+            return true;
+        }
+
+        internal bool IsObjectVisibleInSnapshot(WorldObject obj) =>
+            obj != null && _visibleObjectSet.Contains(obj);
+
+        internal void ClearObjectRenderFault(WorldObject obj)
+        {
+            if (obj != null)
+                _renderFaults.Remove(obj);
+        }
+
+        internal bool IsObjectInitializationPending(WorldObject obj) =>
+            obj != null &&
+            (_queuedForInitialization.Contains(obj) ||
+             _initializationHiddenStates.ContainsKey(obj));
+
+        internal async Task PrepareInitialRenderResourcesAsync(string phaseName)
+        {
+            PrepareInitialVisibilitySnapshot();
+            if (Terrain != null)
+            {
+                await Terrain.PrepareInitialRenderResourcesAsync($"{phaseName}.Terrain");
+                await MuGame.YieldToNextFrameAsync(
+                    $"{phaseName}.Models",
+                    MainThreadDispatcher.WorkPriority.High);
+            }
+
+            long sliceStarted = Stopwatch.GetTimestamp();
+            int preparedInSlice = 0;
+            int preparedTotal = 0;
+            for (int i = 0; i < _visibleObjects.Count; i++)
+            {
+                if (_visibleObjects[i] is not ModelObject model || !model.Visible)
+                    continue;
+
+                model.PrepareRenderResourcesForFirstFrame();
+                preparedInSlice++;
+                preparedTotal++;
+
+                if (preparedInSlice < 4 &&
+                    Stopwatch.GetElapsedTime(sliceStarted).TotalMilliseconds < 2d)
+                {
+                    continue;
+                }
+
+                preparedInSlice = 0;
+                sliceStarted = Stopwatch.GetTimestamp();
+                await MuGame.YieldToNextFrameAsync(
+                    $"{phaseName}.{preparedTotal}",
+                    MainThreadDispatcher.WorkPriority.High);
+            }
         }
 
         private bool QueueObjectInitialization(WorldObject obj)
         {
-            if (obj == null || obj.Status != GameControlStatus.NonInitialized)
+            if (!IsRegisteredRootObject(obj) || obj.Status != GameControlStatus.NonInitialized)
                 return true;
 
             var scheduler = MuGame.TaskScheduler;
             if (scheduler == null || Volatile.Read(ref _activeObjectInitializations) >= MaxConcurrentObjectInitializations)
                 return false;
 
+            // Objects inserted into a live world stay hidden until CPU decode, GPU texture
+            // upload and first-frame buffers are all ready. This prevents a cold-loaded
+            // monster or effect from interrupting the first Draw in which it appears.
+            _initializationHiddenStates.TryAdd(obj, obj.Hidden);
+            obj.Hidden = true;
+
             Interlocked.Increment(ref _activeObjectInitializations);
             bool queued = scheduler.QueueTask(
                 () => LoadInitializedObjectAsync(obj),
-                Controllers.TaskScheduler.Priority.Low);
+                Controllers.TaskScheduler.Priority.Low,
+                $"WorldObject.Initialize.{obj.GetType().Name}.{obj.NetworkId:X4}");
 
             if (!queued)
+            {
                 Interlocked.Decrement(ref _activeObjectInitializations);
+                if (_initializationHiddenStates.TryRemove(obj, out bool originalHidden))
+                    obj.Hidden = originalHidden;
+            }
 
             return queued;
         }
 
         private void EnqueueObjectInitialization(WorldObject obj)
         {
-            if (obj == null || obj.Status != GameControlStatus.NonInitialized)
+            // Status changes are also raised by child models and by roots which are assigned
+            // a World before they are published in World.Objects. Only registered root objects
+            // may use the world's asynchronous initialization pipeline; otherwise PlayerObject
+            // body parts and character-selection actors can be loaded twice concurrently.
+            if (!IsRegisteredRootObject(obj) || obj.Status != GameControlStatus.NonInitialized)
                 return;
 
             if (_queuedForInitialization.Add(obj))
                 _objectsToInitialize.Enqueue(obj);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool IsRegisteredRootObject(WorldObject obj)
+        {
+            return obj != null &&
+                   obj.Parent == null &&
+                   ReferenceEquals(obj.World, this) &&
+                   Objects.Contains(obj);
+        }
+
         private async Task LoadInitializedObjectAsync(WorldObject obj)
         {
             try
             {
-                await obj.Load();
+                await obj.Load().ConfigureAwait(false);
+                if (obj is ModelObject model)
+                    await model.PrepareGpuTexturesForFirstFrameAsync().ConfigureAwait(false);
+
+                if (obj.Status != GameControlStatus.Ready)
+                {
+                    // WorldObject.Load() reports content failures through Status=Error and does
+                    // not rethrow. Treat that as a normal failed initialization instead of
+                    // manufacturing a first-chance exception which breaks the debugger and can
+                    // race a manually managed scene object.
+                    _logger?.LogWarning(
+                        "World object {ObjectType} ({NetworkId:X4}) finished Load() with status {Status}; removing it from world {WorldIndex}.",
+                        obj.GetType().Name,
+                        obj.NetworkId,
+                        obj.Status,
+                        WorldIndex);
+                    ScheduleFailedObjectRemoval(obj);
+                    return;
+                }
+
+                var publishCompletion = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                MuGame.ScheduleOnMainThread(() =>
+                {
+                    try
+                    {
+                        if (!ReferenceEquals(obj.World, this) ||
+                            obj.Status == GameControlStatus.Disposed ||
+                            !Objects.Contains(obj))
+                        {
+                            publishCompletion.TrySetResult(false);
+                            return;
+                        }
+
+                        if (obj is WalkerObject walker && Terrain?.Status == GameControlStatus.Ready)
+                            walker.SnapToTerrainHeight(updateCamera: false);
+
+                        if (obj is ModelObject readyModel)
+                            readyModel.PrepareRenderResourcesForFirstFrame();
+
+                        bool restoreHidden =
+                            _initializationHiddenStates.TryRemove(obj, out bool originalHidden) &&
+                            originalHidden;
+
+                        if (restoreHidden)
+                        {
+                            obj.Hidden = true;
+                        }
+                        else
+                        {
+                            ActivateObjectForRendering(
+                                obj,
+                                forceFullVisibilityRebuild: true);
+                        }
+
+                        publishCompletion.TrySetResult(true);
+                    }
+                    catch (Exception ex)
+                    {
+                        publishCompletion.TrySetException(ex);
+                    }
+                }, MainThreadDispatcher.WorkPriority.High, $"WorldObject.Publish.{obj.GetType().Name}.{obj.NetworkId:X4}");
+
+                await publishCompletion.Task.ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 _logger?.LogError(ex, "Failed to initialize world object {ObjectType} ({NetworkId:X4}).", obj.GetType().Name, obj.NetworkId);
-                MuGame.ScheduleOnMainThread(() =>
-                {
-                    if (ReferenceEquals(obj.World, this))
-                    {
-                        RemoveObject(obj);
-                    }
-
-                    if (obj.Status != GameControlStatus.Disposed)
-                    {
-                        obj.Dispose();
-                    }
-                });
+                ScheduleFailedObjectRemoval(obj);
             }
             finally
             {
                 Interlocked.Decrement(ref _activeObjectInitializations);
             }
+        }
+
+        private void ScheduleFailedObjectRemoval(WorldObject obj)
+        {
+            MuGame.ScheduleOnMainThread(() =>
+            {
+                _initializationHiddenStates.TryRemove(obj, out _);
+                _queuedForInitialization.Remove(obj);
+
+                if (ReferenceEquals(obj.World, this) && Objects.Contains(obj))
+                    RemoveObject(obj);
+
+                if (obj.Status != GameControlStatus.Disposed)
+                    obj.Dispose();
+            }, MainThreadDispatcher.WorkPriority.High,
+               $"WorldObject.RemoveFailed.{obj.GetType().Name}.{obj.NetworkId:X4}");
         }
 
         public override void Draw(GameTime time)
@@ -481,21 +685,72 @@ namespace Client.Main.Controls
 
             OverheadNameplateRenderer.BeginFrame();
 
-            // Build shadow map before any backbuffer drawing so terrain tiles aren't lost.
+            // Build shadow map before any scene drawing. A newly published modular actor can
+            // still expose a bad shader/buffer combination; contain that pass so it cannot
+            // abort the whole frame after the target was cleared.
             if (EnableShadows && Constants.ENABLE_SHADOW_MAPPING && GraphicsManager.Instance.ShadowMapRenderer != null)
             {
-                long shadowStarted = RenderPassProfiler.Start();
-                GraphicsManager.Instance.ShadowMapRenderer.RenderShadowMap(this);
-                RenderPassProfiler.AddShadow(shadowStarted);
+                var shadowStarted = RenderPassProfiler.Start();
+                try
+                {
+                    GraphicsManager.Instance.ShadowMapRenderer.RenderShadowMap(this);
+                }
+                catch (Exception ex)
+                {
+                    RecordRenderFailure(null, "Draw.ShadowMap", ex);
+                    RestoreSafeWorldRenderState();
+                }
+                finally
+                {
+                    RenderPassProfiler.AddShadow(shadowStarted);
+                }
             }
 
-            long worldBaseStarted = RenderPassProfiler.Start();
-            base.Draw(time);
-            RenderPassProfiler.AddWorldBase(worldBaseStarted);
+            var worldBaseStarted = RenderPassProfiler.Start();
+            try
+            {
+                base.Draw(time);
+            }
+            catch (Exception ex)
+            {
+                RecordRenderFailure(null, "Draw.WorldBase", ex);
+                RestoreSafeWorldRenderState();
+            }
+            finally
+            {
+                RenderPassProfiler.AddWorldBase(worldBaseStarted);
+            }
 
-            long objectsStarted = RenderPassProfiler.Start();
-            RenderObjects(time);
-            RenderPassProfiler.AddWorldObjects(objectsStarted);
+            var objectsStarted = RenderPassProfiler.Start();
+            try
+            {
+                RenderObjects(time);
+            }
+            catch (Exception ex)
+            {
+                RecordRenderFailure(null, "Draw.WorldObjects", ex);
+                RestoreSafeWorldRenderState();
+            }
+            finally
+            {
+                RenderPassProfiler.AddWorldObjects(objectsStarted);
+            }
+        }
+
+        private void RestoreSafeWorldRenderState()
+        {
+            try
+            {
+                Helpers.SpriteBatchScope.ForceReset();
+                GraphicsDevice.BlendState = BlendState.AlphaBlend;
+                GraphicsDevice.DepthStencilState = DepthStencilState.Default;
+                GraphicsDevice.RasterizerState = RasterizerState.CullCounterClockwise;
+                GraphicsDevice.SamplerStates[0] = SamplerState.LinearClamp;
+            }
+            catch (Exception stateException)
+            {
+                _logger?.LogDebug(stateException, "Failed to restore safe world render state.");
+            }
         }
 
         // --- Object Management ---
@@ -572,7 +827,12 @@ namespace Client.Main.Controls
                     {
                         _logger?.LogWarning("Replacing WalkerObject ID {Id:X4} - old: {OldType}, new: {NewType}",
                                            walker.NetworkId, existing.GetType().Name, walker.GetType().Name);
-                        existing.Dispose(); // Dispose the old one
+
+                        // Disposing without removing leaves a stale entry in Objects/_walkers.
+                        // A later lookup can then suppress publication of the replacement.
+                        RemoveObject(existing);
+                        if (existing.Status != GameControlStatus.Disposed)
+                            existing.Dispose();
                     }
                 }
                 WalkerObjectsById[walker.NetworkId] = walker; // Always update/add
@@ -628,6 +888,8 @@ namespace Client.Main.Controls
             RemoveVisibleObject(e.Control);
             _positionDirtyObjects.Remove(e.Control);
             _queuedForInitialization.Remove(e.Control);
+            _initializationHiddenStates.TryRemove(e.Control, out _);
+            _renderFaults.Remove(e.Control);
             UnregisterSpatialObject(e.Control);
             MarkWorldGeometryChanged();
         }
@@ -691,36 +953,51 @@ namespace Client.Main.Controls
         /// </summary>
         public virtual bool TryGetWalkerById(ushort networkId, out WalkerObject walker)
         {
-            // First check: local player in WalkableWorldControl
+            static bool IsUsable(WorldControl world, WalkerObject candidate) =>
+                candidate != null &&
+                ReferenceEquals(candidate.World, world) &&
+                candidate.Status is not (GameControlStatus.Error or GameControlStatus.Disposed) &&
+                world.Objects.Contains(candidate);
+
+            // First check: local player in WalkableWorldControl.
             if (this is WalkableWorldControl walkable &&
-                walkable.Walker?.NetworkId == networkId)
+                walkable.Walker?.NetworkId == networkId &&
+                IsUsable(this, walkable.Walker))
             {
                 walker = walkable.Walker;
                 return true;
             }
 
-            // Second check: WalkerObjectsById dictionary
+            // Second check: dictionary, but never return a disposed/stale instance.
             if (WalkerObjectsById.TryGetValue(networkId, out walker))
             {
+                if (IsUsable(this, walker))
+                    return true;
+
+                WalkerObjectsById.Remove(networkId);
+                walker = null;
+            }
+
+            // Third check: fallback search in tracked walkers list.
+            for (int i = _walkers.Count - 1; i >= 0; i--)
+            {
+                var candidate = _walkers[i];
+                if (candidate == null || candidate.NetworkId != networkId)
+                    continue;
+
+                if (!IsUsable(this, candidate))
+                {
+                    _walkers.RemoveAt(i);
+                    continue;
+                }
+
+                walker = candidate;
+                WalkerObjectsById[networkId] = walker;
+                _logger?.LogDebug("Sync fix: Added walker {Id:X4} to dictionary during lookup.", networkId);
                 return true;
             }
 
-            // Third check: fallback search in tracked walkers list
-            for (int i = 0; i < _walkers.Count; i++)
-            {
-                var candidate = _walkers[i];
-                if (candidate != null && candidate.NetworkId == networkId)
-                {
-                    walker = candidate;
-                    if (!WalkerObjectsById.ContainsKey(networkId))
-                    {
-                        WalkerObjectsById[networkId] = walker;
-                        _logger?.LogDebug("Sync fix: Added walker {Id:X4} to dictionary during lookup.", networkId);
-                    }
-                    return true;
-                }
-            }
-
+            walker = null;
             return false;
         }
 
@@ -780,6 +1057,12 @@ namespace Client.Main.Controls
 
         // --- Rendering Helpers ---
 
+        /// <summary>
+        /// Allows a specialized world to own the final draw of selected objects while still
+        /// keeping them in the regular update, spatial and culling pipelines.
+        /// </summary>
+        protected virtual bool IsExternallyRenderedObject(WorldObject obj) => false;
+
         private void RenderObjects(GameTime time)
         {
             _droppedItemSelector.SelectRenderableItems(_droppedItems, time);
@@ -794,7 +1077,7 @@ namespace Client.Main.Controls
             {
                 var obj = objects[i];
 
-                if (!obj.Visible)
+                if (!obj.Visible || IsExternallyRenderedObject(obj))
                     continue;
 
                 if (obj.IsTransparent)
@@ -829,7 +1112,15 @@ namespace Client.Main.Controls
             DrawAfterPass(_solidBehind, DepthStateDefault, time);
             DrawAfterPass(_transparentObjects, DepthStateDepthRead, time);
 
-            OverheadNameplateRenderer.FlushQueuedNameplates(GraphicsManager.Instance.Sprite);
+            try
+            {
+                OverheadNameplateRenderer.FlushQueuedNameplates(GraphicsManager.Instance.Sprite);
+            }
+            catch (Exception ex)
+            {
+                RecordRenderFailure(null, "OverheadNameplates", ex);
+            }
+
             LogRenderMetricsIfEnabled();
         }
 
@@ -882,6 +1173,12 @@ namespace Client.Main.Controls
                 if (obj == null)
                     continue;
 
+                if (ShouldSkipRender(obj))
+                {
+                    obj.RenderOrder = ++_renderCounter;
+                    continue;
+                }
+
                 bool usesSpriteBatch =
                     obj is SpriteObject ||
                     obj is WaterMistParticleSystem ||
@@ -898,7 +1195,7 @@ namespace Client.Main.Controls
                     }
 
                     if (canUseMapInstancing && ModelObject.HasPendingStaticMapInstancingBatches())
-                        ModelObject.FlushStaticMapInstancingBatches(this);
+                        FlushStaticMapBatchesSafely();
 
                     var blend = obj.BlendState ?? BlendState.AlphaBlend;
                     SamplerState sampler;
@@ -927,27 +1224,42 @@ namespace Client.Main.Controls
                         !ReferenceEquals(sampler, currentSampler) ||
                         !ReferenceEquals(batchDepth, currentBatchDepth))
                     {
-                        scope?.Dispose();
+                        CloseSpriteScopeSafely(ref scope, "Draw.SpriteBatchStateChange");
                         scope = new Helpers.SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, blend, sampler, batchDepth);
                         currentBlend = blend;
                         currentSampler = sampler;
                         currentBatchDepth = batchDepth;
                     }
 
-                    obj.Draw(time);
+                    try
+                    {
+                        obj.Draw(time);
+                        ClearRenderFault(obj, "Draw.Sprite");
+                    }
+                    catch (Exception ex)
+                    {
+                        // A failed SpriteBatch draw may leave the current batch in a
+                        // partially configured state. Close it before continuing.
+                        CloseSpriteScopeSafely(ref scope, "Draw.SpriteBatchRecovery");
+                        currentBlend = null;
+                        currentSampler = null;
+                        currentBatchDepth = null;
+                        RecordRenderFailure(obj, "Draw.Sprite", ex);
+                    }
                 }
                 else
                 {
                     if (obj is ModelObject)
                         FrameMetrics.ModelObjects++;
 
-                    scope?.Dispose();
-                    scope = null;
+                    CloseSpriteScopeSafely(ref scope, "Draw.SpriteBatchToModel");
                     currentBlend = null;
                     currentSampler = null;
                     currentBatchDepth = null;
 
-                    if (canUseWalkerCrowdInstancing && ModelObject.TryQueueWalkerCrowdForInstancing(obj))
+                    if (canUseWalkerCrowdInstancing &&
+                        ModelObject.IsWalkerCrowdInstancingCandidate(obj) &&
+                        ModelObject.TryQueueWalkerCrowdForInstancing(obj))
                     {
                         if (obj is ModelObject queuedMonster)
                             _queuedCrowdSidePasses.Add(queuedMonster);
@@ -968,13 +1280,21 @@ namespace Client.Main.Controls
                         ModelObject.RegisterStaticMapInstancingFallback();
 
                     SetDepthState(ResolveObjectDepthState(obj, depthState));
-                    obj.Draw(time);
+                    try
+                    {
+                        obj.Draw(time);
+                        ClearRenderFault(obj, "Draw.Model");
+                    }
+                    catch (Exception ex)
+                    {
+                        RecordRenderFailure(obj, "Draw.Model", ex);
+                    }
                 }
 
                 obj.RenderOrder = ++_renderCounter;
             }
 
-            scope?.Dispose();
+            CloseSpriteScopeSafely(ref scope, "Draw.SpriteBatchEnd");
 
             if (canUseWalkerCrowdInstancing &&
                 (ModelObject.HasPendingWalkerCrowdInstancingBatches() || _queuedCrowdSidePasses.Count > 0))
@@ -983,44 +1303,98 @@ namespace Client.Main.Controls
             }
 
             if (canUseMapInstancing && ModelObject.HasPendingStaticMapInstancingBatches())
-                ModelObject.FlushStaticMapInstancingBatches(this);
+                FlushStaticMapBatchesSafely();
         }
 
         private void FlushWalkerCrowdBatchesAndSidePasses(GameTime time)
         {
-            if (ModelObject.HasPendingWalkerCrowdInstancingBatches())
-                ModelObject.FlushWalkerCrowdInstancingBatches(this);
+            try
+            {
+                if (ModelObject.HasPendingWalkerCrowdInstancingBatches())
+                    ModelObject.FlushWalkerCrowdInstancingBatches(this);
 
-            for (int i = 0; i < _queuedCrowdSidePasses.Count; i++)
-                _queuedCrowdSidePasses[i]?.DrawQueuedCrowdInstancingSidePasses(time);
+                for (int i = 0; i < _queuedCrowdSidePasses.Count; i++)
+                {
+                    ModelObject model = _queuedCrowdSidePasses[i];
+                    if (model == null || ShouldSkipRender(model))
+                        continue;
 
-            _queuedCrowdSidePasses.Clear();
+                    try
+                    {
+                        model.DrawQueuedCrowdInstancingSidePasses(time);
+                        ClearRenderFault(model, "Draw.CrowdSidePass");
+                    }
+                    catch (Exception ex)
+                    {
+                        RecordRenderFailure(model, "Draw.CrowdSidePass", ex);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                RecordRenderFailure(null, "Draw.CrowdBatch", ex);
+                ModelObject.ResetWorldScopedInstancingState();
+            }
+            finally
+            {
+                _queuedCrowdSidePasses.Clear();
+            }
+        }
+
+        private void FlushStaticMapBatchesSafely()
+        {
+            try
+            {
+                ModelObject.FlushStaticMapInstancingBatches(this);
+            }
+            catch (Exception ex)
+            {
+                RecordRenderFailure(null, "Draw.StaticMapBatch", ex);
+                ModelObject.ResetWorldScopedInstancingState();
+            }
         }
 
         private void DrawAfterPass(List<WorldObject> list, DepthStencilState state, GameTime time)
         {
-            var objCount = list.Count;
-            if (objCount == 0) return;
+            int objCount = list.Count;
+            if (objCount == 0)
+                return;
+
             SetDepthState(state);
 
-            // Damage texts use identical sprite-batch state and are depth-disabled overlays.
-            // Defer them so we open one scope per pass rather than one per instance.
+            // Damage texts share one SpriteBatch, but an individual object is still
+            // contained so a bad newly loaded object cannot abort the entire frame.
             int damageCount = 0;
-            for (var i = 0; i < objCount; i++)
+            for (int i = 0; i < objCount; i++)
             {
-                var obj = list[i];
+                WorldObject obj = list[i];
+                if (obj == null || ShouldSkipRender(obj))
+                    continue;
+
                 if (obj is DamageTextObject)
                 {
                     damageCount++;
                     continue;
                 }
+
                 SetDepthState(ResolveObjectDepthState(obj, state));
-                obj.DrawAfter(time);
+                try
+                {
+                    obj.DrawAfter(time);
+                    ClearRenderFault(obj, "DrawAfter");
+                }
+                catch (Exception ex)
+                {
+                    RecordRenderFailure(obj, "DrawAfter", ex);
+                }
             }
 
-            if (damageCount > 0)
+            if (damageCount <= 0)
+                return;
+
+            var sb = GraphicsManager.Instance.Sprite;
+            try
             {
-                var sb = GraphicsManager.Instance.Sprite;
                 using (new Helpers.SpriteBatchScope(
                     sb,
                     SpriteSortMode.Deferred,
@@ -1031,12 +1405,144 @@ namespace Client.Main.Controls
                     null,
                     UiScaler.SpriteTransform))
                 {
-                    for (var i = 0; i < objCount; i++)
+                    for (int i = 0; i < objCount; i++)
                     {
-                        if (list[i] is DamageTextObject)
-                            list[i].DrawAfter(time);
+                        if (list[i] is not DamageTextObject damageText || ShouldSkipRender(damageText))
+                            continue;
+
+                        try
+                        {
+                            damageText.DrawAfter(time);
+                            ClearRenderFault(damageText, "DrawAfter.DamageText");
+                        }
+                        catch (Exception ex)
+                        {
+                            RecordRenderFailure(damageText, "DrawAfter.DamageText", ex);
+                        }
                     }
                 }
+            }
+            catch (Exception ex)
+            {
+                RecordRenderFailure(null, "DrawAfter.DamageBatch", ex);
+            }
+        }
+
+        private void CloseSpriteScopeSafely(ref Helpers.SpriteBatchScope? scope, string phase)
+        {
+            if (!scope.HasValue)
+                return;
+
+            try
+            {
+                scope.Value.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Helpers.SpriteBatchScope.ForceReset();
+                RecordRenderFailure(null, phase, ex);
+            }
+            finally
+            {
+                scope = null;
+            }
+        }
+
+        private bool ShouldSkipRender(WorldObject obj)
+        {
+            if (obj == null || !_renderFaults.TryGetValue(obj, out RenderFaultState state))
+                return false;
+
+            return MuGame.FrameIndex < state.RetryFrame;
+        }
+
+        private void ClearRenderFault(WorldObject obj, string phase)
+        {
+            if (obj != null &&
+                _renderFaults.TryGetValue(obj, out RenderFaultState state) &&
+                string.Equals(state.Phase, phase, StringComparison.Ordinal))
+            {
+                _renderFaults.Remove(obj);
+            }
+        }
+
+        private static string GetSafeRenderObjectName(WorldObject obj)
+        {
+            if (obj == null)
+                return null;
+
+            try
+            {
+                return string.IsNullOrWhiteSpace(obj.DisplayName)
+                    ? obj.ObjectName
+                    : obj.DisplayName;
+            }
+            catch
+            {
+                // Failure reporting must never throw a second exception while handling Draw.
+                return obj.ObjectName;
+            }
+        }
+
+        private void RecordRenderFailure(WorldObject obj, string phase, Exception exception)
+        {
+            string objectName = GetSafeRenderObjectName(obj);
+            FrameMetrics.RenderFailures++;
+            FrameMetrics.LastRenderFailureSequence = Interlocked.Increment(ref _renderFailureSequence);
+            FrameMetrics.LastRenderFailureFrameIndex = MuGame.FrameIndex;
+            FrameMetrics.LastRenderFailurePhase = phase;
+            FrameMetrics.LastRenderFailureType = obj?.GetType().FullName ?? "WorldRenderBatch";
+            FrameMetrics.LastRenderFailureName = objectName;
+            FrameMetrics.LastRenderFailureNetworkId = obj?.NetworkId ?? 0;
+            FrameMetrics.LastRenderFailureMessage = exception.Message;
+
+            int failureCount = 1;
+            int retryDelay = 1;
+            if (obj != null)
+            {
+                if (!_renderFaults.TryGetValue(obj, out RenderFaultState state))
+                {
+                    state = new RenderFaultState();
+                    _renderFaults[obj] = state;
+                }
+
+                if (!string.Equals(state.Phase, phase, StringComparison.Ordinal))
+                    state.FailureCount = 0;
+
+                state.Phase = phase;
+                state.FailureCount++;
+                failureCount = state.FailureCount;
+                retryDelay = Math.Min(120, 1 << Math.Min(6, state.FailureCount));
+                state.RetryFrame = MuGame.FrameIndex + retryDelay;
+            }
+
+            // Log the first failure and exponential checkpoints. Repeated failures are
+            // retried with backoff instead of flooding the log or blacking out the frame.
+            if (failureCount == 1 || (failureCount & (failureCount - 1)) == 0)
+            {
+                _logger?.LogError(
+                    exception,
+                    "Contained render failure in {Phase} for {ObjectType} '{ObjectName}' ({NetworkId:X4}); retry in {RetryFrames} frames.",
+                    phase,
+                    obj?.GetType().Name ?? "batch",
+                    objectName ?? "<unnamed>",
+                    obj?.NetworkId ?? 0,
+                    retryDelay);
+
+                MuGame.Diagnostics?.PublishEvent(
+                    "render-object",
+                    $"Contained {phase} failure for {obj?.GetType().Name ?? "batch"}",
+                    Client.Telemetry.TelemetrySeverity.Error,
+                    new Dictionary<string, string>
+                    {
+                        ["phase"] = phase,
+                        ["objectType"] = obj?.GetType().FullName ?? "WorldRenderBatch",
+                        ["objectName"] = objectName ?? string.Empty,
+                        ["networkId"] = (obj?.NetworkId ?? 0).ToString("X4"),
+                        ["retryFrames"] = retryDelay.ToString(),
+                        ["exceptionType"] = exception.GetType().FullName ?? exception.GetType().Name,
+                        ["message"] = exception.Message
+                    });
             }
         }
 
@@ -1087,6 +1593,12 @@ namespace Client.Main.Controls
             {
                 return true;
             }
+
+            // Character-selection actors are staged at a fixed cinematic position. Their
+            // modular bounding boxes can briefly be stale while body parts switch models,
+            // so they must not disappear because of a transient frustum result.
+            if (obj.World?.WorldIndex == 94 && obj is PlayerObject)
+                return true;
 
             return obj.World?.WorldIndex == 95
                 && (policy.ForceVisibleInLoginWorld || HasForceVisibleEffectChild(obj));
@@ -1594,6 +2106,7 @@ namespace Client.Main.Controls
             float camY = camPos.Y;
             int frame = MuGame.FrameIndex;
 
+            bool profileObjectUpdates = MuGame.Diagnostics?.Enabled == true;
             _isUpdatingVisibleObjects = true;
             try
             {
@@ -1635,7 +2148,23 @@ namespace Client.Main.Controls
 
                     // Movement, network interpolation and gameplay state still update every
                     // frame. ModelObject throttles only its expensive bone-pose calculation.
-                    obj.Update(time);
+                    if (!profileObjectUpdates)
+                    {
+                        obj.Update(time);
+                    }
+                    else
+                    {
+                        long objectStarted = Stopwatch.GetTimestamp();
+                        obj.Update(time);
+                        double objectMs = Stopwatch.GetElapsedTime(objectStarted).TotalMilliseconds;
+                        if (objectMs > FrameMetrics.LongestObjectUpdateMs)
+                        {
+                            FrameMetrics.LongestObjectUpdateMs = objectMs;
+                            FrameMetrics.LongestObjectUpdateType = obj.GetType().Name;
+                            FrameMetrics.LongestObjectUpdateName = obj.DisplayName;
+                            FrameMetrics.LongestObjectUpdateNetworkId = obj.NetworkId;
+                        }
+                    }
                 }
             }
             finally
@@ -1824,6 +2353,13 @@ namespace Client.Main.Controls
 
         public void OnWorldObjectStatusChanged(WorldObject worldObject)
         {
+            // WorldObject propagates status notifications through its World reference even
+            // before publication and for every child model. The world owns lifecycle only for
+            // roots present in Objects; manually preloaded selection actors and equipment must
+            // not be requeued here.
+            if (!IsRegisteredRootObject(worldObject))
+                return;
+
             if (worldObject.Status == GameControlStatus.NonInitialized)
             {
                 EnqueueObjectInitialization(worldObject);

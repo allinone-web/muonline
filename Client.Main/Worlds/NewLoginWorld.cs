@@ -1,4 +1,4 @@
-﻿using Client.Main.Controls;
+using Client.Main.Controls;
 using Client.Main.Graphics;
 using Client.Main.Objects.Player;
 using Client.Main.Objects.Worlds.Login;
@@ -15,6 +15,7 @@ namespace Client.Main.Worlds
         public NewLoginWorld() : base(worldIndex: 95)
         {
             EnableShadows = false;
+            Terrain.PreferIndexBatching = true;
             Camera.Instance.ViewFar = 50000f;
         }
 

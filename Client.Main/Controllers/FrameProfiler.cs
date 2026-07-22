@@ -31,6 +31,8 @@ namespace Client.Main.Controllers
             double WallP99Ms,
             double WallWorstMs,
             double AllocatedKb,
+            double UpdateAllocatedKb,
+            double DrawAllocatedKb,
             double ProcessAllocatedKb,
             int FramesOver16Ms,
             int FramesOver33Ms,
@@ -64,6 +66,7 @@ namespace Client.Main.Controllers
         private long _drawStart;
         private long _allocatedAtUpdateStartThread;
         private long _allocatedAtUpdateStartProcess;
+        private long _allocatedAtDrawStartThread;
 
         private double _lastUpdateMs;
         private double _lastDrawMs;
@@ -73,6 +76,8 @@ namespace Client.Main.Controllers
         private double _lastFrameIntervalUnaccountedMs;
         private double _lastAllocatedKb;
         private double _lastProcessAllocatedKb;
+        private double _lastUpdateAllocatedKb;
+        private double _lastDrawAllocatedKb;
 
         private double _p50Ms;
         private double _p95Ms;
@@ -92,6 +97,10 @@ namespace Client.Main.Controllers
         private int _gen0WindowStart = GC.CollectionCount(0);
         private int _gen1WindowStart = GC.CollectionCount(1);
         private int _gen2WindowStart = GC.CollectionCount(2);
+        private bool _skipNextFrameInterval;
+
+        public double LastUpdateAllocatedKb => _lastUpdateAllocatedKb;
+        public double LastDrawAllocatedKb => _lastDrawAllocatedKb;
 
         public Snapshot Current => new(
             _frameIndex,
@@ -115,6 +124,8 @@ namespace Client.Main.Controllers
             _wallP99Ms,
             _wallWorstMs,
             _lastAllocatedKb,
+            _lastUpdateAllocatedKb,
+            _lastDrawAllocatedKb,
             _lastProcessAllocatedKb,
             _framesOver16Ms,
             _framesOver33Ms,
@@ -128,13 +139,21 @@ namespace Client.Main.Controllers
         {
             long now = Stopwatch.GetTimestamp();
 
-            if (_frameStart != 0)
+            if (_frameStart != 0 && !_skipNextFrameInterval)
             {
                 _lastFrameIntervalMs = Stopwatch.GetElapsedTime(_frameStart, now).TotalMilliseconds;
                 _lastFrameIntervalCpuMs = _lastCpuFrameMs;
                 _lastFrameIntervalUnaccountedMs = Math.Max(0d, _lastFrameIntervalMs - _lastFrameIntervalCpuMs);
                 _frameIntervalFrameIndex = _frameIndex;
                 AddWallSample(_lastFrameIntervalMs);
+            }
+            else if (_skipNextFrameInterval)
+            {
+                _lastFrameIntervalMs = 0d;
+                _lastFrameIntervalCpuMs = 0d;
+                _lastFrameIntervalUnaccountedMs = 0d;
+                _frameIntervalFrameIndex = 0;
+                _skipNextFrameInterval = false;
             }
 
             _frameIndex = frameIndex;
@@ -150,10 +169,51 @@ namespace Client.Main.Controllers
                 return;
 
             _lastUpdateMs = Stopwatch.GetElapsedTime(_updateStart).TotalMilliseconds;
+            long updateAllocated = GC.GetAllocatedBytesForCurrentThread() - _allocatedAtUpdateStartThread;
+            _lastUpdateAllocatedKb = Math.Max(0L, updateAllocated) / 1024d;
             _updateStart = 0;
         }
 
-        public void BeginDraw() => _drawStart = Stopwatch.GetTimestamp();
+        public void BeginDraw()
+        {
+            _drawStart = Stopwatch.GetTimestamp();
+            _allocatedAtDrawStartThread = GC.GetAllocatedBytesForCurrentThread();
+        }
+
+        public void ResetRollingWindow()
+        {
+            _cpuSampleCount = 0;
+            _wallSampleCount = 0;
+            _cpuSampleWriteIndex = 0;
+            _wallSampleWriteIndex = 0;
+            _framesSinceRecompute = 0;
+            _rollingWindowStartFrameIndex = 0;
+            _rollingWindowEndFrameIndex = 0;
+
+            _p50Ms = 0d;
+            _p95Ms = 0d;
+            _p99Ms = 0d;
+            _worstMs = 0d;
+            _wallP50Ms = 0d;
+            _wallP95Ms = 0d;
+            _wallP99Ms = 0d;
+            _wallWorstMs = 0d;
+            _framesOver16Ms = 0;
+            _framesOver33Ms = 0;
+            _wallFramesOver16Ms = 0;
+            _wallFramesOver33Ms = 0;
+            _gen0Collections = 0;
+            _gen1Collections = 0;
+            _gen2Collections = 0;
+            _gen0WindowStart = GC.CollectionCount(0);
+            _gen1WindowStart = GC.CollectionCount(1);
+            _gen2WindowStart = GC.CollectionCount(2);
+            _rollingSequence++;
+
+            // A transition often spans hundreds of milliseconds outside the normal frame
+            // loop. Do not let that boundary contaminate the new scene's wall percentiles.
+            _skipNextFrameInterval = true;
+        }
 
         public void EndDraw()
         {
@@ -164,9 +224,12 @@ namespace Client.Main.Controllers
             _drawStart = 0;
             _lastCpuFrameMs = _lastUpdateMs + _lastDrawMs;
 
-            long threadAllocated = GC.GetAllocatedBytesForCurrentThread() - _allocatedAtUpdateStartThread;
+            long currentThreadAllocated = GC.GetAllocatedBytesForCurrentThread();
+            long threadAllocated = currentThreadAllocated - _allocatedAtUpdateStartThread;
+            long drawAllocated = currentThreadAllocated - _allocatedAtDrawStartThread;
             long processAllocated = GC.GetTotalAllocatedBytes(false) - _allocatedAtUpdateStartProcess;
             _lastAllocatedKb = Math.Max(0L, threadAllocated) / 1024d;
+            _lastDrawAllocatedKb = Math.Max(0L, drawAllocated) / 1024d;
             _lastProcessAllocatedKb = Math.Max(0L, processAllocated) / 1024d;
 
             AddCpuSample(_lastCpuFrameMs);

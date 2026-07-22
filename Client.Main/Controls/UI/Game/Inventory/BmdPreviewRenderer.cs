@@ -980,7 +980,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 var target = entry?.Texture;
                 RenderTarget2D rendered;
                 bool didRender;
-                long previewStarted = RenderPassProfiler.Start();
+                var previewStarted = RenderPassProfiler.Start();
                 try
                 {
                     rendered = Render(

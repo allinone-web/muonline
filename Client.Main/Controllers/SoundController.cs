@@ -1,4 +1,4 @@
-﻿// File: SoundController.cs
+// File: SoundController.cs
 using Microsoft.Xna.Framework.Audio;
 using NLayer;
 using System;
@@ -141,10 +141,15 @@ namespace Client.Main.Controllers
         /// </summary>
         public void PreloadSound(string relativePath)
         {
+            _ = PreloadSoundAsync(relativePath);
+        }
+
+        public async Task PreloadSoundAsync(string relativePath)
+        {
             if ((!Constants.BACKGROUND_MUSIC && !Constants.SOUND_EFFECTS) || string.IsNullOrEmpty(relativePath))
                 return;
 
-            _ = LoadSoundEffectDataAsync(Path.Combine(Constants.DataPath, relativePath));
+            await LoadSoundEffectDataAsync(Path.Combine(Constants.DataPath, relativePath)).ConfigureAwait(false);
         }
 
         /// <summary>

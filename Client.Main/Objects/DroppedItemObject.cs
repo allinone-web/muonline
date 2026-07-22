@@ -13,6 +13,7 @@ using Client.Main.Core.Utilities;
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading.Tasks;
 using Client.Main.Controls.UI.Game.Inventory;
 using Client.Main.Helpers;
 using Client.Main.Content;
@@ -63,6 +64,26 @@ namespace Client.Main.Objects
         public ushort RawId => _scope?.RawId ?? 0;
         internal int LoadGeneration => _loadGeneration;
         public new string DisplayName { get; private set; }
+
+        internal void PrepareRenderResourcesForFirstFrame()
+        {
+            _modelObj?.PrepareRenderResourcesForFirstFrame();
+            for (int i = 0; i < _coinModels.Count; i++)
+                _coinModels[i]?.PrepareRenderResourcesForFirstFrame();
+        }
+
+        internal async Task PrepareGpuTexturesForFirstFrameAsync()
+        {
+            if (_modelObj != null)
+                await _modelObj.PrepareGpuTexturesForFirstFrameAsync().ConfigureAwait(false);
+
+            for (int i = 0; i < _coinModels.Count; i++)
+            {
+                ModelObject coin = _coinModels[i];
+                if (coin != null)
+                    await coin.PrepareGpuTexturesForFirstFrameAsync().ConfigureAwait(false);
+            }
+        }
 
         // Pool
         private static readonly System.Collections.Concurrent.ConcurrentBag<DroppedItemObject> _pool = new();

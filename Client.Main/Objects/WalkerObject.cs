@@ -25,9 +25,17 @@ namespace Client.Main.Objects
         private Vector2 _location;
         private Vector3 _cachedTargetPosition;
         private bool _targetPositionDirty = true;
+        private bool _pendingTerrainSnap;
         protected Queue<Vector2> _currentPath;   // FIFO – cheaper removal than List.RemoveAt(0)
         private uint _moveRequestVersion;
         private CancellationTokenSource _pathRequestCancellation;
+
+        public static int LastPathLength { get; private set; }
+        public static double LastPathApplyMs { get; private set; }
+        public static double LastPathQueueMs { get; private set; }
+        public static double LastPathFacingMs { get; private set; }
+        public static double LastPathBuildDirectionsMs { get; private set; }
+        public static double LastPathSendScheduleMs { get; private set; }
 
     private readonly MainPlayerCameraController _mainPlayerCameraController = new();
     public bool MouseScrollToZoom
@@ -92,6 +100,60 @@ namespace Client.Main.Objects
         }
 
         public Vector3 MoveTargetPosition { get; set; }
+
+        /// <summary>
+        /// Invalidates the cached world-space target. The cache depends on the current
+        /// terrain and must not survive a world transition even when the tile coordinates
+        /// stay unchanged.
+        /// </summary>
+        internal void InvalidateTerrainTarget()
+        {
+            _targetPositionDirty = true;
+            _pendingTerrainSnap = true;
+        }
+
+        /// <summary>
+        /// Snaps the walker to the current world's terrain immediately. Teleports and map
+        /// changes must not use the interpolation path because the previous world's Z value
+        /// can otherwise remain visible until the first movement update.
+        /// </summary>
+        internal void SnapToTerrainHeight(bool updateCamera = true)
+        {
+            if (World == null)
+            {
+                _targetPositionDirty = true;
+                _pendingTerrainSnap = true;
+                return;
+            }
+
+            // Preview/cinematic worlds place walkers directly in world space. Applying the
+            // tile-based terrain position there moves actors (for example character selection)
+            // away from their authored display position on the first update.
+            if (World is not WalkableWorldControl walkableWorld)
+            {
+                _pendingTerrainSnap = false;
+                return;
+            }
+
+            if (walkableWorld.Terrain?.Status != GameControlStatus.Ready)
+            {
+                _targetPositionDirty = true;
+                _pendingTerrainSnap = true;
+                return;
+            }
+
+            _targetPositionDirty = true;
+            _pendingTerrainSnap = false;
+            Vector3 terrainTarget = TargetPosition;
+            float heightOffset = ExtraHeight + walkableWorld.ExtraHeight;
+
+            MoveTargetPosition = terrainTarget;
+            Position = new Vector3(terrainTarget.X, terrainTarget.Y, terrainTarget.Z + heightOffset);
+
+            if (updateCamera && IsMainWalker)
+                _mainPlayerCameraController.Apply(MoveTargetPosition);
+        }
+
         public float MoveSpeed { get; set; } = Constants.MOVE_SPEED;
         public bool IsMoving => Vector3.DistanceSquared(MoveTargetPosition, TargetPosition) > 0.0001f;
         public new ushort NetworkId { get; set; }
@@ -182,6 +244,9 @@ namespace Client.Main.Objects
 
         public override void Update(GameTime gameTime)
         {
+            if (_pendingTerrainSnap && World?.Terrain?.Status == GameControlStatus.Ready)
+                SnapToTerrainHeight(updateCamera: false);
+
             if (Status != GameControlStatus.Ready || World == null || !Visible)
             {
                 base.Update(gameTime);
@@ -333,18 +398,26 @@ namespace Client.Main.Objects
                 if ((path == null || path.Count == 0) && !sendToServer)
                     path = Pathfinding.BuildDirectPath(startPos, targetLocation);
 
-                MuGame.ScheduleOnMainThread(() =>
-                {
-                    if (!token.IsCancellationRequested)
+                byte[] preparedDirections = sendToServer
+                    ? BuildServerDirections(path, startPos)
+                    : null;
+
+                MuGame.ScheduleOnMainThread(
+                    () =>
                     {
-                        ApplyPathOnMainThread(
-                            path,
-                            sendToServer,
-                            expectedWorld,
-                            startPos,
-                            requestVersion);
-                    }
-                });
+                        if (!token.IsCancellationRequested)
+                        {
+                            ApplyPathOnMainThread(
+                                path,
+                                sendToServer,
+                                expectedWorld,
+                                startPos,
+                                requestVersion,
+                                preparedDirections);
+                        }
+                    },
+                    MainThreadDispatcher.WorkPriority.High,
+                    $"ComputePathAsync.ApplyPath[{path?.Count ?? 0}]");
             }
             catch (OperationCanceledException)
             {
@@ -383,7 +456,13 @@ namespace Client.Main.Objects
             }
         }
 
-        protected void ApplyPathOnMainThread(List<Vector2> path, bool sendToServer, WorldControl expectedWorld, Vector2? pathStart = null, uint requestVersion = 0)
+        protected void ApplyPathOnMainThread(
+            List<Vector2> path,
+            bool sendToServer,
+            WorldControl expectedWorld,
+            Vector2? pathStart = null,
+            uint requestVersion = 0,
+            byte[] preparedDirections = null)
         {
             if (MuGame.Instance.ActiveScene?.World != expectedWorld || Status == GameControlStatus.Disposed)
                 return;
@@ -401,15 +480,40 @@ namespace Client.Main.Objects
                 return;
             }
 
-            _currentPath = new Queue<Vector2>(path);
+            long applyStarted = Stopwatch.GetTimestamp();
+            long queueStarted = applyStarted;
+            _currentPath ??= new Queue<Vector2>(Math.Max(16, path.Count));
+            _currentPath.Clear();
+            _currentPath.EnsureCapacity(path.Count);
+            for (int i = 0; i < path.Count; i++)
+                _currentPath.Enqueue(path[i]);
+            LastPathQueueMs = Stopwatch.GetElapsedTime(queueStarted).TotalMilliseconds;
 
+            long facingStarted = Stopwatch.GetTimestamp();
             UpdateFacingFromVector(path[0] - Location);
+            LastPathFacingMs = Stopwatch.GetElapsedTime(facingStarted).TotalMilliseconds;
 
+            LastPathBuildDirectionsMs = 0d;
+            LastPathSendScheduleMs = 0d;
             if (sendToServer && IsMainWalker)
             {
                 var start = pathStart ?? new Vector2((int)Location.X, (int)Location.Y);
-                _ = SendWalkPathToServerSafelyAsync(path, start);
+                long directionsStarted = Stopwatch.GetTimestamp();
+                preparedDirections ??= BuildServerDirections(path, start);
+                LastPathBuildDirectionsMs = Stopwatch.GetElapsedTime(directionsStarted).TotalMilliseconds;
+
+                if (preparedDirections.Length > 0)
+                {
+                    // Packet construction and socket synchronization may run before the first
+                    // await. Defer the complete send so path publication remains a small mutation.
+                    long sendScheduleStarted = Stopwatch.GetTimestamp();
+                    _ = Task.Run(() => SendWalkDirectionsToServerSafelyAsync(preparedDirections, start));
+                    LastPathSendScheduleMs = Stopwatch.GetElapsedTime(sendScheduleStarted).TotalMilliseconds;
+                }
             }
+
+            LastPathLength = path.Count;
+            LastPathApplyMs = Stopwatch.GetElapsedTime(applyStarted).TotalMilliseconds;
         }
 
         public void FaceTowards(Vector2 targetLocation, bool immediate = false)
@@ -417,72 +521,75 @@ namespace Client.Main.Objects
             UpdateFacingFromVector(targetLocation - Location, immediate);
         }
 
-        private async Task SendWalkPathToServerSafelyAsync(List<Vector2> path, Vector2 startPos)
+        private static byte[] BuildServerDirections(List<Vector2> path, Vector2 startPos)
+        {
+            if (path == null || path.Count == 0)
+                return Array.Empty<byte>();
+
+            static byte GetClientDirectionCode(Vector2 from, Vector2 to)
+            {
+                int dx = (int)(to.X - from.X);
+                int dy = (int)(to.Y - from.Y);
+                return (dx, dy) switch
+                {
+                    (-1, 0) => 0,
+                    (-1, 1) => 1,
+                    (0, 1) => 2,
+                    (1, 1) => 3,
+                    (1, 0) => 4,
+                    (1, -1) => 5,
+                    (0, -1) => 6,
+                    (-1, -1) => 7,
+                    _ => 0xFF
+                };
+            }
+
+            int count = Math.Min(path.Count, 15);
+            var result = new byte[count];
+            var directionMap = MuGame.Network?.GetDirectionMap();
+            Vector2 current = startPos;
+            int written = 0;
+
+            for (int i = 0; i < count; i++)
+            {
+                Vector2 step = path[i];
+                byte clientDirection = GetClientDirectionCode(current, step);
+                if (clientDirection > 7)
+                    break;
+
+                result[written++] = directionMap != null &&
+                    directionMap.TryGetValue(clientDirection, out byte serverDirection)
+                        ? serverDirection
+                        : clientDirection;
+                current = step;
+            }
+
+            if (written == result.Length)
+                return result;
+            if (written == 0)
+                return Array.Empty<byte>();
+
+            Array.Resize(ref result, written);
+            return result;
+        }
+
+        private async Task SendWalkDirectionsToServerSafelyAsync(byte[] directions, Vector2 startPos)
         {
             try
             {
-                await SendWalkPathToServerAsync(path, startPos).ConfigureAwait(false);
+                var network = MuGame.Network;
+                if (network == null || directions == null || directions.Length == 0)
+                    return;
+
+                await network.SendWalkRequestAsync(
+                    (byte)startPos.X,
+                    (byte)startPos.Y,
+                    directions).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"[WalkerObject] Failed to send walk path: {ex}");
             }
-        }
-
-        private async Task SendWalkPathToServerAsync(List<Vector2> path, Vector2 startPos)
-        {
-            if (path == null || path.Count == 0) return;
-            var net = MuGame.Network;
-            if (net == null) return;
-
-            byte startX = (byte)startPos.X;
-            byte startY = (byte)startPos.Y;
-
-            //    Function returning CLIENT CODE (0-7) according to MU Online documentation
-            //    W=0, SW=1, S=2, SE=3, E=4, NE=5, N=6, NW=7
-            static byte GetClientDirectionCode(Vector2 from, Vector2 to)
-            {
-                int dx = (int)(to.X - from.X); // Horizontal (X): left / right – works correctly
-                int dy = (int)(to.Y - from.Y); // Vertical (Y): up / down – correction here
-
-                return (dx, dy) switch
-                {
-                    (-1, 0) => 0,  // West
-                    (-1, 1) => 1,  // South-West
-                    (0, 1) => 2,  // South
-                    (1, 1) => 3,  // South-East
-                    (1, 0) => 4,  // East
-                    (1, -1) => 5,  // North-East
-                    (0, -1) => 6,  // North
-                    (-1, -1) => 7,  // North-West
-                    _ => 0xFF      // Invalid direction
-                };
-            }
-
-            // stackalloc: no GC pressure for  ≤15-step MU packet
-            Span<byte> clientDirs = stackalloc byte[15];
-            int dirLen = 0;
-            Vector2 currentPos = startPos;
-            foreach (var step in path)
-            {
-                byte dirCode = GetClientDirectionCode(currentPos, step);
-                if (dirCode > 7) break;
-                clientDirs[dirLen++] = dirCode;
-                currentPos = step;
-                if (dirLen == 15) break;
-            }
-            if (dirLen == 0) return;
-
-            var directionMap = MuGame.Network?.GetDirectionMap();
-            Span<byte> serverDirs = stackalloc byte[dirLen];
-            for (int i = 0; i < dirLen; i++)
-            {
-                byte cd = clientDirs[i];
-                serverDirs[i] = directionMap != null && directionMap.TryGetValue(cd, out byte sd) ? sd : cd;
-            }
-
-            // Network API requires array – copy once, still cheaper than per-step List allocations
-            await net.SendWalkRequestAsync(startX, startY, serverDirs.ToArray());
         }
 
         // Private Methods
@@ -752,11 +859,27 @@ namespace Client.Main.Objects
         protected override void OnWorldChanged(WorldControl newWorld, WorldControl prevWorld)
         {
             if (!ReferenceEquals(newWorld, prevWorld))
+            {
                 CancelPendingPathRequest();
+                _targetPositionDirty = true;
+                _pendingTerrainSnap = newWorld is WalkableWorldControl;
+                MoveTargetPosition = Vector3.Zero;
+            }
 
             base.OnWorldChanged(newWorld, prevWorld);
-            UpdateCameraPosition(Position);
-            UpdatePosition(new GameTime());
+
+            // During initial world construction the terrain may not be ready yet. The scene
+            // and map controllers call SnapToTerrainHeight again after initialization.
+            if (newWorld is WalkableWorldControl &&
+                newWorld.Status == GameControlStatus.Ready &&
+                newWorld.Terrain?.Status == GameControlStatus.Ready)
+            {
+                SnapToTerrainHeight();
+            }
+            else
+            {
+                UpdateCameraPosition(Position);
+            }
         }
     }
 }

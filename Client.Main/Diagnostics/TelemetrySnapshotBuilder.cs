@@ -3,6 +3,7 @@ using Client.Main.Content;
 using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Graphics;
+using Client.Main.Models;
 using Client.Main.Objects;
 using Client.Telemetry;
 
@@ -40,7 +41,26 @@ internal sealed class TelemetrySnapshotBuilder : IDisposable
         var terrainMetrics = terrain?.FrameMetrics;
         var bmd = BMDLoader.Instance;
         var passes = RenderPassProfiler.Current;
+        var updatePasses = UpdatePassProfiler.Current;
+        var slowFrame = MuGame.LatestSlowFrame;
         var slowAction = MuGame.MainThreadLatestSlowAction;
+        var drawException = MuGame.LatestDrawException;
+        var player = walkableWorld?.Walker;
+
+        float? playerTerrainZ = null;
+        float? playerExpectedZ = null;
+        float? playerHeightError = null;
+        float? playerTargetZ = null;
+        float? playerMoveTargetZ = player?.MoveTargetPosition.Z;
+        if (player != null && terrain?.Status == GameControlStatus.Ready)
+        {
+            float terrainZ = terrain.RequestTerrainHeight(player.Position.X, player.Position.Y);
+            float expectedZ = terrainZ + walkableWorld.ExtraHeight + player.ExtraHeight;
+            playerTerrainZ = terrainZ;
+            playerExpectedZ = expectedZ;
+            playerHeightError = player.Position.Z - expectedZ;
+            playerTargetZ = player.TargetPosition.Z;
+        }
 
         ScheduleProcessMetricRefresh();
 
@@ -70,9 +90,14 @@ internal sealed class TelemetrySnapshotBuilder : IDisposable
                 WorldName = world is null ? null : $"World {world.WorldIndex}",
                 WorldIndex = world?.WorldIndex,
                 MapId = world?.MapId,
-                PlayerX = walkableWorld?.Walker?.Position.X,
-                PlayerY = walkableWorld?.Walker?.Position.Y,
-                PlayerZ = walkableWorld?.Walker?.Position.Z,
+                PlayerX = player?.Position.X,
+                PlayerY = player?.Position.Y,
+                PlayerZ = player?.Position.Z,
+                PlayerTerrainZ = playerTerrainZ,
+                PlayerExpectedZ = playerExpectedZ,
+                PlayerHeightError = playerHeightError,
+                PlayerTargetZ = playerTargetZ,
+                PlayerMoveTargetZ = playerMoveTargetZ,
                 FrameIndex = MuGame.FrameIndex,
                 UptimeSeconds = Stopwatch.GetElapsedTime(_startedTimestamp).TotalSeconds
             },
@@ -101,6 +126,8 @@ internal sealed class TelemetrySnapshotBuilder : IDisposable
                 WallP99Ms = frame.WallP99Ms,
                 WallWorstMs = frame.WallWorstMs,
                 AllocatedKb = frame.AllocatedKb,
+                UpdateAllocatedKb = frame.UpdateAllocatedKb,
+                DrawAllocatedKb = frame.DrawAllocatedKb,
                 ProcessAllocatedKb = frame.ProcessAllocatedKb,
                 FramesOver16Ms = frame.FramesOver16Ms,
                 FramesOver33Ms = frame.FramesOver33Ms,
@@ -126,7 +153,19 @@ internal sealed class TelemetrySnapshotBuilder : IDisposable
                 TransparentObjects = worldMetrics?.TransparentObjects ?? 0,
                 AnimationUpdates = worldMetrics?.AnimationUpdates ?? 0,
                 AnimationSkips = worldMetrics?.AnimationSkips ?? 0,
-                LowQualityObjects = worldMetrics?.LowQualityObjects ?? 0
+                LowQualityObjects = worldMetrics?.LowQualityObjects ?? 0,
+                LongestObjectUpdateMs = worldMetrics?.LongestObjectUpdateMs ?? 0d,
+                LongestObjectUpdateType = worldMetrics?.LongestObjectUpdateType,
+                LongestObjectUpdateName = worldMetrics?.LongestObjectUpdateName,
+                LongestObjectUpdateNetworkId = worldMetrics?.LongestObjectUpdateNetworkId ?? 0,
+                RenderFailures = worldMetrics?.RenderFailures ?? 0,
+                LastRenderFailureSequence = worldMetrics?.LastRenderFailureSequence ?? 0,
+                LastRenderFailureFrameIndex = worldMetrics?.LastRenderFailureFrameIndex ?? 0,
+                LastRenderFailurePhase = worldMetrics?.LastRenderFailurePhase,
+                LastRenderFailureType = worldMetrics?.LastRenderFailureType,
+                LastRenderFailureName = worldMetrics?.LastRenderFailureName,
+                LastRenderFailureNetworkId = worldMetrics?.LastRenderFailureNetworkId ?? 0,
+                LastRenderFailureMessage = worldMetrics?.LastRenderFailureMessage
             },
             Rendering = new RenderingTelemetry
             {
@@ -134,6 +173,13 @@ internal sealed class TelemetrySnapshotBuilder : IDisposable
                 TerrainTriangles = terrainMetrics?.DrawnTriangles ?? 0,
                 TerrainBlocks = terrainMetrics?.DrawnBlocks ?? 0,
                 TerrainCells = terrainMetrics?.DrawnCells ?? 0,
+                TerrainIndexBatching = terrainMetrics?.UsedIndexBatching ?? false,
+                TerrainIndexedCells = terrainMetrics?.IndexedCells ?? 0,
+                TerrainStreamedCells = terrainMetrics?.StreamedCells ?? 0,
+                TerrainIndexUploads = terrainMetrics?.IndexUploads ?? 0,
+                TerrainVertexUploads = terrainMetrics?.VertexUploads ?? 0,
+                TerrainUploadedIndices = terrainMetrics?.UploadedIndices ?? 0,
+                TerrainUploadedVertices = terrainMetrics?.UploadedVertices ?? 0,
                 GrassDrawCalls = terrainMetrics?.GrassFlushes ?? 0,
                 RegisteredLights = terrain?.LastFrameRegisteredDynamicLights ?? 0,
                 ActiveLights = terrain?.LastFrameActiveDynamicLights ?? 0,
@@ -174,24 +220,131 @@ internal sealed class TelemetrySnapshotBuilder : IDisposable
                 MultiPoseRejectedMesh = ModelObject.LastFrameWalkerCrowdMultiPoseRejectedMesh,
                 MultiPoseRejectedBuffers = ModelObject.LastFrameWalkerCrowdMultiPoseRejectedBuffers,
                 MultiPoseRejectedBones = ModelObject.LastFrameWalkerCrowdMultiPoseRejectedBones,
-                MultiPoseRejectedPalette = ModelObject.LastFrameWalkerCrowdMultiPoseRejectedPalette
+                MultiPoseRejectedPalette = ModelObject.LastFrameWalkerCrowdMultiPoseRejectedPalette,
+                MultiPoseRejectedUnsupported = ModelObject.LastFrameWalkerCrowdMultiPoseRejectedUnsupported,
+                MultiPoseRejectedChildren = ModelObject.LastFrameWalkerCrowdMultiPoseRejectedChildren,
+                MultiPoseRejectedTypeOrRenderer = ModelObject.LastFrameWalkerCrowdMultiPoseRejectedTypeOrRenderer,
+                MultiPoseRejectedMutableMesh = ModelObject.LastFrameWalkerCrowdMultiPoseRejectedMutableMesh,
+                MultiPoseRejectedVisibility = ModelObject.LastFrameWalkerCrowdMultiPoseRejectedVisibility,
+                MultiPoseRejectedAnimation = ModelObject.LastFrameWalkerCrowdMultiPoseRejectedAnimation,
+                MultiPoseRejectedOneShot = ModelObject.LastFrameWalkerCrowdMultiPoseRejectedOneShot,
+                MultiPoseRejectedMaterial = ModelObject.LastFrameWalkerCrowdMultiPoseRejectedMaterial
             },
             Passes = new RenderPassTelemetry
             {
                 SceneDrawMs = passes.SceneDrawMs,
+                SceneDrawAllocatedKb = passes.SceneDrawAllocatedKb,
                 SceneAfterMs = passes.SceneAfterMs,
+                SceneAfterAllocatedKb = passes.SceneAfterAllocatedKb,
                 PostProcessMs = passes.PostProcessMs,
+                PostProcessAllocatedKb = passes.PostProcessAllocatedKb,
                 FrameworkDrawMs = passes.FrameworkDrawMs,
+                FrameworkDrawAllocatedKb = passes.FrameworkDrawAllocatedKb,
                 ShadowMs = passes.ShadowMs,
+                ShadowAllocatedKb = passes.ShadowAllocatedKb,
                 WorldBaseMs = passes.WorldBaseMs,
+                WorldBaseAllocatedKb = passes.WorldBaseAllocatedKb,
                 WorldObjectsMs = passes.WorldObjectsMs,
+                WorldObjectsAllocatedKb = passes.WorldObjectsAllocatedKb,
                 TerrainOpaqueMs = passes.TerrainOpaqueMs,
+                TerrainOpaqueAllocatedKb = passes.TerrainOpaqueAllocatedKb,
                 TerrainAfterMs = passes.TerrainAfterMs,
+                TerrainAfterAllocatedKb = passes.TerrainAfterAllocatedKb,
                 PreviewMs = passes.PreviewMs,
+                PreviewAllocatedKb = passes.PreviewAllocatedKb,
                 PreviewRenders = passes.PreviewRenders,
                 PreviewCacheHits = passes.PreviewCacheHits,
                 PreviewCacheMisses = passes.PreviewCacheMisses,
                 PreviewBudgetSkips = passes.PreviewBudgetSkips
+            },
+            UpdatePasses = new UpdatePassTelemetry
+            {
+                DispatcherMs = updatePasses.DispatcherMs,
+                GlobalMs = updatePasses.GlobalMs,
+                SceneMs = updatePasses.SceneMs,
+                FrameworkMs = updatePasses.FrameworkMs,
+                UnaccountedMs = updatePasses.UnaccountedMs,
+                SceneExceptionMs = updatePasses.SceneExceptionMs,
+                SceneInputMs = updatePasses.SceneInputMs,
+                SceneControlTreeMs = updatePasses.SceneControlTreeMs,
+                ScenePostMs = updatePasses.ScenePostMs,
+                WorldBaseMs = updatePasses.WorldBaseMs,
+                WorldInitializationMs = updatePasses.WorldInitializationMs,
+                WorldVisibilityMs = updatePasses.WorldVisibilityMs,
+                WorldCullMs = updatePasses.WorldCullMs,
+                WorldHoverMs = updatePasses.WorldHoverMs,
+                GameBuffsMs = updatePasses.GameBuffsMs,
+                GameNotificationsMs = updatePasses.GameNotificationsMs,
+                GameScopePumpMs = updatePasses.GameScopePumpMs,
+                GameInteractionMs = updatePasses.GameInteractionMs,
+                GamePlayerMenuMs = updatePasses.GamePlayerMenuMs,
+                GameSkillUpdateMs = updatePasses.GameSkillUpdateMs,
+                GameAttackInputMs = updatePasses.GameAttackInputMs,
+                GameRightClickSkillMs = updatePasses.GameRightClickSkillMs,
+                GameHotkeysMs = updatePasses.GameHotkeysMs,
+                GameHousekeepingMs = updatePasses.GameHousekeepingMs,
+                SceneExceptionSequence = updatePasses.SceneExceptionSequence,
+                SceneExceptionFrameIndex = updatePasses.SceneExceptionFrameIndex,
+                SceneExceptionType = updatePasses.SceneExceptionType,
+                SceneExceptionMessage = updatePasses.SceneExceptionMessage
+            },
+            SlowFrame = new SlowFrameTelemetry
+            {
+                Sequence = slowFrame.Sequence,
+                FrameIndex = slowFrame.FrameIndex,
+                AgeMs = slowFrame.Sequence > 0
+                    ? Stopwatch.GetElapsedTime(slowFrame.ObservedTimestamp).TotalMilliseconds
+                    : 0d,
+                CpuFrameMs = slowFrame.CpuFrameMs,
+                UpdateMs = slowFrame.UpdateMs,
+                DrawMs = slowFrame.DrawMs,
+                AllocatedKb = slowFrame.AllocatedKb,
+                UpdateAllocatedKb = slowFrame.UpdateAllocatedKb,
+                DrawAllocatedKb = slowFrame.DrawAllocatedKb,
+                ProcessAllocatedKb = slowFrame.ProcessAllocatedKb,
+                UpdateDispatcherMs = slowFrame.UpdatePasses.DispatcherMs,
+                UpdateGlobalMs = slowFrame.UpdatePasses.GlobalMs,
+                UpdateSceneMs = slowFrame.UpdatePasses.SceneMs,
+                UpdateFrameworkMs = slowFrame.UpdatePasses.FrameworkMs,
+                SceneControlTreeMs = slowFrame.UpdatePasses.SceneControlTreeMs,
+                ScenePostMs = slowFrame.UpdatePasses.ScenePostMs,
+                WorldInitializationMs = slowFrame.UpdatePasses.WorldInitializationMs,
+                WorldVisibilityMs = slowFrame.UpdatePasses.WorldVisibilityMs,
+                WorldCullMs = slowFrame.UpdatePasses.WorldCullMs,
+                SceneDrawMs = slowFrame.RenderPasses.SceneDrawMs,
+                WorldObjectsMs = slowFrame.RenderPasses.WorldObjectsMs,
+                TerrainOpaqueMs = slowFrame.RenderPasses.TerrainOpaqueMs,
+                GameBuffsMs = slowFrame.UpdatePasses.GameBuffsMs,
+                GameNotificationsMs = slowFrame.UpdatePasses.GameNotificationsMs,
+                GameScopePumpMs = slowFrame.UpdatePasses.GameScopePumpMs,
+                GameInteractionMs = slowFrame.UpdatePasses.GameInteractionMs,
+                GamePlayerMenuMs = slowFrame.UpdatePasses.GamePlayerMenuMs,
+                GameSkillUpdateMs = slowFrame.UpdatePasses.GameSkillUpdateMs,
+                GameAttackInputMs = slowFrame.UpdatePasses.GameAttackInputMs,
+                GameRightClickSkillMs = slowFrame.UpdatePasses.GameRightClickSkillMs,
+                GameHotkeysMs = slowFrame.UpdatePasses.GameHotkeysMs,
+                GameHousekeepingMs = slowFrame.UpdatePasses.GameHousekeepingMs,
+                SceneInputMs = slowFrame.UpdatePasses.SceneInputMs,
+                LongestObjectUpdateMs = slowFrame.LongestObjectUpdateMs,
+                LongestObjectUpdateType = slowFrame.LongestObjectUpdateType,
+                LongestObjectUpdateName = slowFrame.LongestObjectUpdateName,
+                LongestObjectUpdateNetworkId = slowFrame.LongestObjectUpdateNetworkId,
+                UpdateUnaccountedMs = slowFrame.UpdatePasses.UnaccountedMs,
+                SceneExceptionMs = slowFrame.UpdatePasses.SceneExceptionMs,
+                SceneExceptionSequence = slowFrame.UpdatePasses.SceneExceptionSequence,
+                SceneExceptionFrameIndex = slowFrame.UpdatePasses.SceneExceptionFrameIndex,
+                SceneExceptionType = slowFrame.UpdatePasses.SceneExceptionType,
+                SceneExceptionMessage = slowFrame.UpdatePasses.SceneExceptionMessage,
+                SceneDrawAllocatedKb = slowFrame.RenderPasses.SceneDrawAllocatedKb,
+                SceneAfterAllocatedKb = slowFrame.RenderPasses.SceneAfterAllocatedKb,
+                PostProcessAllocatedKb = slowFrame.RenderPasses.PostProcessAllocatedKb,
+                FrameworkDrawAllocatedKb = slowFrame.RenderPasses.FrameworkDrawAllocatedKb,
+                ShadowAllocatedKb = slowFrame.RenderPasses.ShadowAllocatedKb,
+                WorldBaseAllocatedKb = slowFrame.RenderPasses.WorldBaseAllocatedKb,
+                WorldObjectsAllocatedKb = slowFrame.RenderPasses.WorldObjectsAllocatedKb,
+                TerrainOpaqueAllocatedKb = slowFrame.RenderPasses.TerrainOpaqueAllocatedKb,
+                TerrainAfterAllocatedKb = slowFrame.RenderPasses.TerrainAfterAllocatedKb,
+                PreviewAllocatedKb = slowFrame.RenderPasses.PreviewAllocatedKb
             },
             Runtime = new RuntimeTelemetry
             {
@@ -221,7 +374,21 @@ internal sealed class TelemetrySnapshotBuilder : IDisposable
                 PrivateMemoryMb = Volatile.Read(ref _lastPrivateMemoryMb),
                 ManagedMemoryMb = GC.GetTotalMemory(false) / 1048576d,
                 ThreadCount = Volatile.Read(ref _lastThreadCount),
-                TelemetryDroppedMessages = telemetryDroppedMessages
+                TelemetryDroppedMessages = telemetryDroppedMessages,
+                LastPathLength = WalkerObject.LastPathLength,
+                LastPathApplyMs = WalkerObject.LastPathApplyMs,
+                LastPathQueueMs = WalkerObject.LastPathQueueMs,
+                LastPathFacingMs = WalkerObject.LastPathFacingMs,
+                LastPathBuildDirectionsMs = WalkerObject.LastPathBuildDirectionsMs,
+                LastPathSendScheduleMs = WalkerObject.LastPathSendScheduleMs,
+                DrawExceptionSequence = drawException.Sequence,
+                DrawExceptionFrameIndex = drawException.FrameIndex,
+                DrawExceptionAgeMs = drawException.Sequence > 0
+                    ? Stopwatch.GetElapsedTime(drawException.ObservedTimestamp).TotalMilliseconds
+                    : 0d,
+                DrawExceptionPhase = drawException.Phase,
+                DrawExceptionType = drawException.ExceptionType,
+                DrawExceptionMessage = drawException.Message
             },
             Assets = new AssetTelemetry
             {
@@ -231,6 +398,18 @@ internal sealed class TelemetrySnapshotBuilder : IDisposable
                 MeshesProcessed = bmd.LastFrameMeshesProcessed,
                 CacheHits = bmd.LastFrameCacheHits,
                 CacheMisses = bmd.LastFrameCacheMisses,
+                CacheMissIndexUpload = bmd.LastFrameCacheMissIndexUpload,
+                CacheMissMissingEntry = bmd.LastFrameCacheMissMissingEntry,
+                CacheMissInvalidEntry = bmd.LastFrameCacheMissInvalidEntry,
+                CacheMissOwner = bmd.LastFrameCacheMissOwner,
+                CacheMissAsset = bmd.LastFrameCacheMissAsset,
+                CacheMissMesh = bmd.LastFrameCacheMissMesh,
+                CacheMissPose = bmd.LastFrameCacheMissPose,
+                CacheMissVertexCount = bmd.LastFrameCacheMissVertexCount,
+                CacheMissColor = bmd.LastFrameCacheMissColor,
+                CacheBypasses = bmd.LastFrameCacheBypasses,
+                TopCacheMissModelName = bmd.LastFrameTopCacheMissModelName,
+                TopCacheMissModelCount = bmd.LastFrameTopCacheMissModelCount,
                 GpuMeshBuffers = bmd.GpuMeshBufferCacheCount,
                 GpuBatchBuffers = bmd.GpuBatchBufferCacheCount,
                 MeshTopologies = bmd.MeshTopologyCacheCount,

@@ -53,6 +53,15 @@ namespace Client.Main.Controls.UI.Game.Map
             UpdateLabelPosition();
         }
 
+        public void ShowMapName(string mapName)
+        {
+            _displayTimer = 0f;
+            Alpha = 1f;
+            Visible = true;
+            _label.Visible = true;
+            LabelText = mapName ?? string.Empty;
+        }
+
         public string LabelText
         {
             get => _label.Text;

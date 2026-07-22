@@ -1,4 +1,4 @@
-﻿using Client.Main.Controllers;
+using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Controls.UI;
 using Client.Main.Helpers;
@@ -82,18 +82,13 @@ namespace Client.Main.Scenes
                 Status = GameControlStatus.Initializing;
                 Report($"Initializing {GetType().Name}...", 0.05f);
 
-                var controlsToInitialize = Controls.Where(c => c.Status == GameControlStatus.NonInitialized).ToArray();
-                if (controlsToInitialize.Any())
+                var controlsToInitialize = Controls
+                    .Where(control => control.Status == GameControlStatus.NonInitialized)
+                    .ToArray();
+                if (controlsToInitialize.Length > 0)
                 {
-                    // This part is usually very fast, so one report is fine.
-                    // If individual controls become heavy, this might need more detail.
                     Report($"Initializing UI Controls for {GetType().Name}...", 0.10f);
-                    var controlTasks = new List<Task>(controlsToInitialize.Length);
-                    foreach (var control in controlsToInitialize)
-                    {
-                        controlTasks.Add(control.Initialize());
-                    }
-                    await Task.WhenAll(controlTasks);
+                    await InitializeControlsInBatchesAsync(controlsToInitialize, Report);
                     Report($"UI Controls Initialized for {GetType().Name}.", 0.15f);
                 }
                 else
@@ -101,13 +96,28 @@ namespace Client.Main.Scenes
                     Report($"No new UI Controls to initialize for {GetType().Name}.", 0.15f);
                 }
 
+                await MuGame.YieldToNextFrameAsync(
+                    $"SceneInit.{GetType().Name}.Content",
+                    MainThreadDispatcher.WorkPriority.Critical);
                 await LoadSceneContentWithProgress(progressCallback);
+
+                // A completed child Task can resume parent async methods inline inside the
+                // dispatcher action which finished the child phase. Break that continuation
+                // chain before scheduling the final scene work back on the game thread.
+                await Task.Yield();
+                await MuGame.YieldToNextFrameAsync(
+                    $"SceneInit.{GetType().Name}.Finalize",
+                    MainThreadDispatcher.WorkPriority.Critical);
 
                 Report($"Finalizing {GetType().Name}...", 0.95f);
                 AfterLoad();
 
                 Status = GameControlStatus.Ready;
                 Report($"{GetType().Name} Ready.", 1.0f);
+
+                // Complete this workflow outside the current dispatcher action so the parent
+                // scene-change state machine cannot inherit the complete finalization cost.
+                await Task.Yield();
             }
             catch (Exception e)
             {
@@ -115,6 +125,36 @@ namespace Client.Main.Scenes
                 Status = GameControlStatus.Error;
                 Report($"Error initializing {GetType().Name}: {e.Message}", 1.0f);
                 throw;
+            }
+        }
+
+
+        private async Task InitializeControlsInBatchesAsync(
+            GameControl[] controls,
+            Action<string, float> report)
+        {
+            int initialized = 0;
+            for (int i = 0; i < controls.Length; i++)
+            {
+                var control = controls[i];
+                if (control == null || control.Status != GameControlStatus.NonInitialized)
+                    continue;
+
+                // Initialize only one root control per frame. Many controls perform a sizeable
+                // synchronous prefix before their first await, so Task.WhenAll over a batch still
+                // produced 20-60 ms scene-transition actions.
+                await control.Initialize();
+                initialized++;
+
+                // Initialize() may complete on a worker thread. Resume through the dispatcher
+                // before touching scene progress state or starting the next GPU/UI control.
+                await MuGame.YieldToNextFrameAsync(
+                    $"SceneInit.{GetType().Name}.Control.{control.GetType().Name}[{initialized}/{controls.Length}]",
+                    MainThreadDispatcher.WorkPriority.High);
+
+                report?.Invoke(
+                    $"Initializing UI Controls for {GetType().Name} ({initialized}/{controls.Length})...",
+                    0.10f + 0.05f * initialized / Math.Max(1, controls.Length));
             }
         }
 
@@ -128,6 +168,15 @@ namespace Client.Main.Scenes
 
         public override void Update(GameTime gameTime)
         {
+            if (Status != GameControlStatus.Ready)
+            {
+                long initializingControlTreeStarted = UpdatePassProfiler.Start();
+                base.Update(gameTime);
+                UpdatePassProfiler.AddSceneControlTree(initializingControlTreeStarted);
+                return;
+            }
+
+            long sceneInputStarted = UpdatePassProfiler.Start();
             var currentFocusControl = FocusControl;
             var currentMouseControl = MouseControl;
 
@@ -215,17 +264,28 @@ namespace Client.Main.Scenes
                 IsMouseInputConsumedThisFrame = true;
             }
 
-            if (World is WalkableWorldControl walkableWorld)
+            if (World is WalkableWorldControl { Walker: not null } walkableWorld)
             {
                 walkableWorld.Walker.MouseScrollToZoom = World == MouseHoverControl;
             }
 
+            UpdatePassProfiler.AddSceneInput(sceneInputStarted);
+            long controlTreeStarted = UpdatePassProfiler.Start();
             base.Update(gameTime);
+            UpdatePassProfiler.AddSceneControlTree(controlTreeStarted);
+            long scenePostStarted = UpdatePassProfiler.Start();
 
             if (Status != GameControlStatus.Ready)
+            {
+                UpdatePassProfiler.AddScenePost(scenePostStarted);
                 return;
+            }
 
-            if (World == null) return;
+            if (World == null)
+            {
+                UpdatePassProfiler.AddScenePost(scenePostStarted);
+                return;
+            }
 
             // Clear MouseHoverObject if no object is currently being hovered
             if (MouseHoverObject != null && !MouseHoverObject.IsMouseHover)
@@ -289,6 +349,7 @@ namespace Client.Main.Scenes
 
             DebugPanel.BringToFront();
             Cursor.BringToFront();
+            UpdatePassProfiler.AddScenePost(scenePostStarted);
         }
 
         public void FocusControlIfInteractive(GameControl control)

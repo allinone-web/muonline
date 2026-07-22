@@ -745,6 +745,14 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
 
         private void ApplyQualityPreset(GraphicsQualityPreset preset, Action onComplete = null)
         {
+            // Radio-button refreshes can invoke the selected option again. Reapplying the
+            // same preset needlessly resets the graphics device and can present a black frame.
+            if (GraphicsQualityManager.UserPreset == preset)
+            {
+                onComplete?.Invoke();
+                return;
+            }
+
             MuGame.ScheduleOnMainThread(() =>
             {
                 var adapter = GraphicsManager.Instance?.GraphicsDevice?.Adapter ?? GraphicsAdapter.DefaultAdapter;

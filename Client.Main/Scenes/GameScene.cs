@@ -9,6 +9,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 using MUnique.OpenMU.Network.Packets.ServerToClient;
 using Client.Main.Objects;
+using Client.Main.Objects.Effects.Skills;
 using Client.Main.Core.Utilities;
 using Client.Main.Networking.PacketHandling.Handlers; // For CharacterClassNumber
 using Microsoft.Extensions.Logging;
@@ -72,6 +73,14 @@ namespace Client.Main.Scenes
         private GameSceneChatController _chatController;
         private GameSceneUiPreloadController _uiPreloadController;
         private GameSceneWindowCloseController _windowCloseController;
+        private Task _sceneShellInitializationTask;
+        private bool _sceneShellInitialized;
+        private Action _pendingWorldActivation;
+        private TaskCompletionSource<bool> _pendingWorldActivationCompletion;
+        private bool _pendingWorldActivationScheduled;
+        private bool _pendingWorldActivationCleansLoadingUi;
+        private string _pendingWorldActivationName;
+        private bool _initialWorldActivationCooldown;
 
         // Performance optimization fields - track object IDs for O(1) lookups
         // ───────────────────────── Properties ─────────────────────────
@@ -108,13 +117,34 @@ namespace Client.Main.Scenes
         public GameScene((string Name, CharacterClassNumber Class, ushort Level, byte[] Appearance) characterInfo)
         {
             _characterInfo = characterInfo;
-            _logger?.LogDebug($"GameScene constructor called for Character: {_characterInfo.Name} ({_characterInfo.Class})");
-            var characterState = MuGame.Network.GetCharacterState();
+            _logger?.LogDebug(
+                "GameScene shell created for Character: {Name} ({Class})",
+                _characterInfo.Name,
+                _characterInfo.Class);
 
-            // Create the hero with the appearance data from the character list
+            // Keep the constructor intentionally small. Scene construction happens inside a
+            // main-thread dispatcher action, so building the full HUD here previously made
+            // HandleEnteredGame block the game for roughly 150 ms.
             _hero = new HeroObject(new AppearanceData(characterInfo.Appearance));
+        }
 
-            // ModernBottomHud is created after _skillSelectionPanel below
+        public override async Task InitializeWithProgressReporting(Action<string, float> progressCallback)
+        {
+            _sceneShellInitializationTask ??= InitializeSceneShellAsync(progressCallback);
+            await _sceneShellInitializationTask;
+            await MuGame.YieldToNextFrameAsync(
+                "GameScene.InitializeControls",
+                MainThreadDispatcher.WorkPriority.High);
+            await base.InitializeWithProgressReporting(progressCallback);
+        }
+
+        private async Task InitializeSceneShellAsync(Action<string, float> progressCallback)
+        {
+            void Report(string message, float progress) => progressCallback?.Invoke(message, progress);
+
+            Report("Preparing game interface...", 0.01f);
+
+            // Phase 1: controls required by the loading and messaging paths.
             Controls.Add(NpcShopControl.Instance);
             Controls.Add(VaultControl.Instance);
             Controls.Add(ChaosMixControl.Instance);
@@ -126,7 +156,6 @@ namespace Client.Main.Scenes
             Controls.Add(BloodCastleResultControl.Instance);
 
             _mapListControl = new MapListControl { Visible = false };
-
             _chatLog = new ChatLogWindow
             {
                 X = 5,
@@ -149,6 +178,11 @@ namespace Client.Main.Scenes
             _notificationController.AddPending(ChatMessageHandler.TakePendingServerMessages());
             _scopeImportController = new GameSceneScopeImportController(this, _logger);
 
+            await MuGame.YieldToNextFrameAsync(
+                "GameScene.BuildShell.Inventory",
+                MainThreadDispatcher.WorkPriority.High);
+
+            // Phase 2: inventory and common windows.
             _inventoryControl = new InventoryControl(MuGame.Network, MuGame.AppLoggerFactory);
             Controls.Add(_inventoryControl);
             _inventoryControl.HookEvents();
@@ -160,7 +194,6 @@ namespace Client.Main.Scenes
 
             _characterInfoWindow = new CharacterInfoWindowControl { X = 20, Y = 50, Visible = false };
             Controls.Add(_characterInfoWindow);
-
             _partyPanel = new PartyPanelControl();
             Controls.Add(_partyPanel);
 
@@ -183,51 +216,47 @@ namespace Client.Main.Scenes
                 TextColor = Color.White
             };
             Controls.Add(_pingLabel);
-            _fpsLabel.BringToFront();
-            _pingLabel.BringToFront();
 
-            _chatInput.BringToFront();
-            DebugPanel.BringToFront();
-            Cursor.BringToFront();
+            await MuGame.YieldToNextFrameAsync(
+                "GameScene.BuildShell.Hud",
+                MainThreadDispatcher.WorkPriority.High);
 
-            // Pause/ESC menu
+            // Phase 3: HUD and interaction controllers.
+            var characterState = MuGame.Network.GetCharacterState();
             _pauseMenu = new PauseMenuControl();
             Controls.Add(_pauseMenu);
-            _pauseMenu.BringToFront();
 
-            // Skill selection panel (independent, not child of quick slot)
             _skillSelectionPanel = new Controls.UI.Game.Skills.SkillSelectionPanel();
             Controls.Add(_skillSelectionPanel);
 
-            // Modern bottom HUD (replaces MainControl + SkillQuickSlot + ExperienceBar)
             _modernHud = new ModernBottomHud(characterState, _skillSelectionPanel);
             Controls.Add(_modernHud);
-            _modernHud.BringToFront();
-
-            // Right-side low durability warnings (reference: item endurance icons)
             _equipmentDurabilityHud = new EquipmentDurabilityHud(characterState);
             Controls.Add(_equipmentDurabilityHud);
-            _skillController = new GameSceneSkillController(this, _modernHud, _logger, _duelController.IsDuelAttackTarget);
+            _skillController = new GameSceneSkillController(
+                this,
+                _modernHud,
+                _logger,
+                _duelController.IsDuelAttackTarget);
 
-            // Current location panel (top-left)
             _currentLocationControl = new CurrentLocationControl(characterState);
             Controls.Add(_currentLocationControl);
-            _currentLocationControl.BringToFront();
-
-            // Active buffs panel (anchored to the right of location panel)
             _activeBuffsPanel = new ActiveBuffsPanel(characterState, _currentLocationControl);
             Controls.Add(_activeBuffsPanel);
-            _activeBuffsPanel.BringToFront();
 
-            // Duel HUD scoreboard (top center, visible only during duel)
-            var duelHud = new DuelHudControl(MuGame.Network.GetCharacterState());
+            var duelHud = new DuelHudControl(characterState);
             Controls.Add(duelHud);
-            duelHud.BringToFront();
-
-            // Devil Square countdown HUD (bottom center)
             Controls.Add(DevilSquareCountdownControl.Instance);
-            DevilSquareCountdownControl.Instance.BringToFront();
-            _playerMenuController = new GameScenePlayerMenuController(this, StartWhisperToPlayer, _duelController.OnDuelRequestedFromContextMenu);
+
+            await MuGame.YieldToNextFrameAsync(
+                "GameScene.BuildShell.Controllers",
+                MainThreadDispatcher.WorkPriority.High);
+
+            // Phase 4: interaction controllers.
+            _playerMenuController = new GameScenePlayerMenuController(
+                this,
+                StartWhisperToPlayer,
+                _duelController.OnDuelRequestedFromContextMenu);
             _playerMenuController.Initialize();
             _objectEditorController = new GameSceneObjectEditorController(this, _logger);
             _objectEditorController.Initialize();
@@ -243,13 +272,19 @@ namespace Client.Main.Scenes
                 _objectEditorController,
                 _logger);
 
+            await MuGame.YieldToNextFrameAsync(
+                "GameScene.BuildShell.LoadingInfrastructure",
+                MainThreadDispatcher.WorkPriority.High);
+
+            // Phase 5: assets and loading infrastructure. Content.Load is kept in its own
+            // frame because the first content-manager lookup may synchronously touch disk.
             try
             {
                 _backgroundTexture = MuGame.Instance.Content.Load<Texture2D>("Background");
             }
             catch (Exception ex)
             {
-                _logger?.LogDebug($"[GameScene] Background load failed: {ex.Message}");
+                _logger?.LogDebug("[GameScene] Background load failed: {Message}", ex.Message);
             }
 
             _progressBar = new ProgressBarControl();
@@ -270,8 +305,28 @@ namespace Client.Main.Scenes
             _chatInput.MessageSendRequested += _chatController.OnChatMessageSendRequested;
             _uiPreloadController = new GameSceneUiPreloadController(this, _logger);
 
-            // Start pre-loading common UI assets in background to prevent freezes
-            // This runs async and won't block scene initialization
+            await MuGame.YieldToNextFrameAsync(
+                "GameScene.BuildShell.Ordering",
+                MainThreadDispatcher.WorkPriority.High);
+
+            // Phase 6: z-order changes are separated because BringToFront mutates the controls
+            // collection and repeatedly recalculates ordering.
+            _fpsLabel.BringToFront();
+            _pingLabel.BringToFront();
+            _chatInput.BringToFront();
+            _pauseMenu.BringToFront();
+            _modernHud.BringToFront();
+            _currentLocationControl.BringToFront();
+            _activeBuffsPanel.BringToFront();
+            duelHud.BringToFront();
+            DevilSquareCountdownControl.Instance.BringToFront();
+            DebugPanel.BringToFront();
+            Cursor.BringToFront();
+
+            _sceneShellInitialized = true;
+            Report("Game interface prepared.", 0.04f);
+
+            // Optional assets are deliberately not awaited by the scene transition.
             _ = _uiPreloadController.StartPreloadAsync();
         }
 
@@ -298,20 +353,24 @@ namespace Client.Main.Scenes
         // ───────────────────── Content Loading (Progressive) ─────────────────────
         private void UpdateLoadProgress(string message, float progress)
         {
-            MuGame.ScheduleOnMainThread(() => // Ensure UI updates are on the main thread
+            if (MuGame.IsMainThread)
             {
                 _mapController?.UpdateLoadProgress(message, progress);
-            });
+                return;
+            }
+
+            MuGame.ScheduleOnMainThread(
+                () => _mapController?.UpdateLoadProgress(message, progress),
+                MainThreadDispatcher.WorkPriority.High,
+                "GameScene.UpdateLoadProgress");
         }
 
         protected override async Task LoadSceneContentWithProgress(Action<string, float> progressCallback)
         {
+            WorldControl worldInstance = null;
             try
             {
                 UpdateLoadProgress("Initializing Game Scene...", 0.0f);
-
-                // 1. Hero Setup
-                UpdateLoadProgress("Setting up hero info...", 0.05f);
 
                 var charState = MuGame.Network?.GetCharacterState();
                 if (charState == null)
@@ -322,9 +381,10 @@ namespace Client.Main.Scenes
                     return;
                 }
 
+                // Phase 1: apply the small, data-only hero state.
+                UpdateLoadProgress("Setting up hero info...", 0.05f);
                 _hero.CharacterClass = _characterInfo.Class;
                 _hero.Name = _characterInfo.Name;
-
                 charState.UpdateCoreCharacterInfo(
                     charState.Id,
                     _characterInfo.Name,
@@ -332,36 +392,28 @@ namespace Client.Main.Scenes
                     _characterInfo.Level,
                     charState.PositionX,
                     charState.PositionY,
-                    charState.MapId
-                );
-
+                    charState.MapId);
                 _hero.NetworkId = charState.Id;
                 _hero.Location = new Vector2(charState.PositionX, charState.PositionY);
-                _logger?.LogDebug($"GameScene.LoadSceneContentWithProgress: _hero.NetworkId set to {charState.Id:X4}, Location set to ({charState.PositionX}, {charState.PositionY}).");
-
-                UpdateLoadProgress("Hero info applied.", 0.1f);
                 if (_windowCloseController != null)
                 {
                     _hero.PlayerMoved += _windowCloseController.OnHeroMoved;
                     _hero.PlayerTookDamage += _windowCloseController.OnHeroTookDamage;
                 }
 
-                // 2. Determine Initial World (Quick)
-                UpdateLoadProgress("Determining initial world...", 0.15f);
                 Type initialWorldType = typeof(LorenciaWorld);
-                if (charState != null && MapWorldRegistry.TryGetValue((byte)charState.MapId, out var mappedType))
-                {
+                if (MapWorldRegistry.TryGetValue((byte)charState.MapId, out Type mappedType))
                     initialWorldType = mappedType;
-                }
                 else
-                {
-                    _logger?.LogDebug($"GameScene.Load: Unknown MapId: {charState?.MapId}. Defaulting to Lorencia.");
-                }
-                UpdateLoadProgress($"Initial world: {initialWorldType.Name}.", 0.2f);
+                    _logger?.LogDebug("Unknown MapId {MapId}. Defaulting to Lorencia.", charState.MapId);
 
-                // 3. Instantiate and Initialize World
-                UpdateLoadProgress($"Loading world: {initialWorldType.Name}...", 0.25f);
+                await MuGame.YieldToNextFrameAsync(
+                    $"GameScene.Load.CreateWorld.{initialWorldType.Name}",
+                    MainThreadDispatcher.WorkPriority.Critical);
 
+                // Phase 2: create a hidden world shell. Keeping it hidden prevents the renderer
+                // from cold-starting terrain, culling and model buffers before loading completes.
+                UpdateLoadProgress($"Creating world: {initialWorldType.Name}...", 0.20f);
                 if (World != null)
                 {
                     Controls.Remove(World);
@@ -369,99 +421,123 @@ namespace Client.Main.Scenes
                     World = null;
                 }
 
-                var worldInstance = (WorldControl)Activator.CreateInstance(initialWorldType);
-                if (worldInstance is WalkableWorldControl walkable)
-                {
-                    _logger?.LogDebug($"GameScene.LoadSceneContentWithProgress: About to assign _hero to walkable.Walker. _hero.NetworkId: {_hero.NetworkId:X4}");
-
-                    walkable.Walker = _hero;
-                    _logger?.LogDebug($"GameScene.LoadSceneContentWithProgress: Assigned _hero ({_hero.NetworkId:X4}) to walkableWorld.Walker.");
-
-                    _scopeImportController?.EnsureWalkerNetworkId(walkable, charState.Id, "after assignment and verification");
-
-                    _logger?.LogDebug($"GameScene.LoadSceneContentWithProgress: Walker.NetworkId after assignment and verification: {walkable.Walker?.NetworkId:X4}");
-                }
-
+                worldInstance = (WorldControl)Activator.CreateInstance(initialWorldType);
+                worldInstance.Visible = false;
                 Controls.Add(worldInstance);
                 World = worldInstance;
 
-                World.Objects.Add(_hero);
-                _logger?.LogDebug($"GameScene.LoadSceneContentWithProgress: Added _hero to World.Objects.");
+                if (worldInstance is WalkableWorldControl walkable)
+                {
+                    walkable.Walker = _hero;
+                    _scopeImportController?.EnsureWalkerNetworkId(walkable, charState.Id, "initial world shell");
+                }
 
+                _hero.World = worldInstance;
+
+                await MuGame.YieldToNextFrameAsync(
+                    $"GameScene.Load.InitializeWorld.{initialWorldType.Name}",
+                    MainThreadDispatcher.WorkPriority.Critical);
+
+                // Phase 3: initialize the hidden world. Any unavoidable cold I/O is now isolated
+                // to a named transition phase and cannot be combined with hero publication.
+                UpdateLoadProgress($"Loading world: {initialWorldType.Name}...", 0.30f);
                 await worldInstance.Initialize();
-                UpdateLoadProgress($"World {initialWorldType.Name} initialized.", 0.6f);
+                UpdateLoadProgress($"World {initialWorldType.Name} initialized.", 0.60f);
 
-                if (worldInstance is WalkableWorldControl walkableAfterInit)
-                {
-                    _logger?.LogDebug($"GameScene.LoadSceneContentWithProgress: Walker.NetworkId after world initialization: {walkableAfterInit.Walker?.NetworkId:X4}");
+                await MuGame.YieldToNextFrameAsync(
+                    "GameScene.Load.HeroAssets",
+                    MainThreadDispatcher.WorkPriority.Critical);
 
-                    _scopeImportController?.EnsureWalkerNetworkId(walkableAfterInit, charState.Id, "after world initialization");
-                    _logger?.LogDebug($"GameScene.LoadSceneContentWithProgress: Walker.NetworkId after fix: {walkableAfterInit.Walker?.NetworkId:X4}");
-                }
-
-                // 4. Load Hero Assets
+                // Phase 4: load the hero before adding it to the live object collection.
                 UpdateLoadProgress("Loading hero assets...", 0.65f);
-                if (_hero.Status == GameControlStatus.NonInitialized || _hero.Status == GameControlStatus.Initializing)
+                if (_hero.Status == GameControlStatus.NonInitialized ||
+                    _hero.Status == GameControlStatus.Initializing)
                 {
-                    ushort expectedNetworkId = charState.Id;
-                    _logger?.LogDebug($"GameScene.LoadSceneContentWithProgress: _hero.NetworkId before Load(): {_hero.NetworkId:X4}");
-
                     await _hero.Load();
-
-                    _logger?.LogDebug($"GameScene.LoadSceneContentWithProgress: _hero.NetworkId after Load(): {_hero.NetworkId:X4}");
-                    _scopeImportController?.EnsureHeroNetworkId(expectedNetworkId, "after hero Load()");
                 }
-                UpdateLoadProgress("Hero assets loaded.", 0.80f);
 
-                // 5. Import Pending Objects
-                UpdateLoadProgress("Importing nearby entities...", 0.85f);
-                if (World.Status == GameControlStatus.Ready)
-                {
-                    await (_scopeImportController?.ImportPendingRemotePlayersAsync() ?? Task.CompletedTask);
-                    await (_scopeImportController?.ImportPendingNpcsMonstersAsync() ?? Task.CompletedTask);
-                    await (_scopeImportController?.ImportPendingDroppedItemsAsync() ?? Task.CompletedTask);
-                }
-                else
-                {
-                    _logger?.LogDebug($"GameScene.Load: World not ready after Initialize (Status: {World.Status}). Pending objects may not import correctly.");
-                }
-                UpdateLoadProgress("Entities imported.", 0.95f);
+                // Asset loading may complete on the thread pool. Marshal back before touching
+                // model buffers and split prewarm from publication into separate frames.
+                await MuGame.YieldToNextFrameAsync(
+                    "GameScene.Load.PrepareHero",
+                    MainThreadDispatcher.WorkPriority.Critical);
+                _scopeImportController?.EnsureHeroNetworkId(charState.Id, "after hero Load()");
+                _hero.SnapToTerrainHeight(updateCamera: false);
+                await _hero.PrepareGpuTexturesForFirstFrameAsync();
+                _hero.PrepareRenderResourcesForFirstFrame();
 
-                // Preload sounds for dropped items
+                await MuGame.YieldToNextFrameAsync(
+                    "GameScene.Load.PublishHero",
+                    MainThreadDispatcher.WorkPriority.Critical);
+
+                if (!worldInstance.Objects.Contains(_hero))
+                    worldInstance.Objects.Add(_hero);
+                if (worldInstance is WalkableWorldControl initializedWalkable)
+                    _scopeImportController?.EnsureWalkerNetworkId(initializedWalkable, charState.Id, "after hero publication");
+
+                // Phase 5: queue each scope category in a separate frame. Remote objects load
+                // asynchronously and are published only after their own assets are ready.
+                UpdateLoadProgress("Importing nearby players...", 0.80f);
+                await (_scopeImportController?.ImportPendingRemotePlayersAsync() ?? Task.CompletedTask);
+                await MuGame.YieldToNextFrameAsync(
+                    "GameScene.Load.ImportNpcsMonsters",
+                    MainThreadDispatcher.WorkPriority.High);
+
+                UpdateLoadProgress("Importing nearby NPCs and monsters...", 0.86f);
+                await (_scopeImportController?.ImportPendingNpcsMonstersAsync() ?? Task.CompletedTask);
+                await MuGame.YieldToNextFrameAsync(
+                    "GameScene.Load.ImportDroppedItems",
+                    MainThreadDispatcher.WorkPriority.High);
+
+                UpdateLoadProgress("Importing dropped items...", 0.90f);
+                await (_scopeImportController?.ImportPendingDroppedItemsAsync() ?? Task.CompletedTask);
+
+                await MuGame.YieldToNextFrameAsync(
+                    "GameScene.Load.PrepareVisibility",
+                    MainThreadDispatcher.WorkPriority.High);
+
+                // Build the first visibility snapshot while the loading screen is still active.
+                // This moves the initial spatial/culling rebuild out of the first gameplay frame.
+                await worldInstance.PrepareInitialRenderResourcesAsync(
+                    "GameScene.Load.PrewarmModel");
+
+                await MuGame.YieldToNextFrameAsync(
+                    "GameScene.Load.PreloadSounds",
+                    MainThreadDispatcher.WorkPriority.Low);
                 UpdateLoadProgress("Preloading sounds...", 0.96f);
-                PreloadSounds();
-                UpdateLoadProgress("Sounds preloaded.", 0.965f);
+                await PreloadSoundsAsync();
 
-                // Preload NPC and monster textures
-                UpdateLoadProgress("Preloading NPC textures...", 0.97f);
-                // Skip preloading to avoid blocking
-                UpdateLoadProgress("NPC textures preloaded.", 0.975f);
+                await MuGame.YieldToNextFrameAsync(
+                    "GameScene.Load.Finalize",
+                    MainThreadDispatcher.WorkPriority.Critical);
 
-                // Preload UI textures so opening windows doesn't cause stalls
-                UpdateLoadProgress("Preloading UI textures...", 0.98f);
-                // Skip preloading to avoid blocking
-                UpdateLoadProgress("UI textures preloaded.", 0.99f);
-
-                if (World is WalkableWorldControl finalWalkable)
-                {
-                    _logger?.LogDebug($"GameScene.LoadSceneContentWithProgress: FINAL CHECK - Walker.NetworkId: {finalWalkable.Walker?.NetworkId:X4}, CharState.Id: {charState.Id:X4}");
-
-                    // One last check and fix if needed
+                if (worldInstance is WalkableWorldControl finalWalkable)
                     _scopeImportController?.EnsureWalkerNetworkId(finalWalkable, charState.Id, "final verification");
-                    _logger?.LogDebug($"GameScene.LoadSceneContentWithProgress: After final fix - Walker.NetworkId: {finalWalkable.Walker?.NetworkId:X4}");
-                }
 
-                // Finalize
-                _mapController?.UpdateLoadProgress("Game ready!", 1.0f);
-                _modernHud.Visible = true;
-                _mapController?.UpdateMapName();
+                _mapController?.UpdateLoadProgress("Preparing first frame...", 0.99f);
+                _ = QueueWorldActivationAfterLoadingFrame(() =>
+                {
+                    _hero.SnapToTerrainHeight();
+                    worldInstance.Visible = true;
+                    _modernHud.Visible = true;
+                    _mapController?.UpdateLoadProgress("Game ready!", 1.0f);
+                    ScheduleMapNameUpdateNextFrame("GameScene.UpdateInitialMapName");
+                }, "GameScene.ActivateInitialWorld");
+
+                // Complete this nested async workflow outside the dispatcher action which ran
+                // GameScene.Load.Finalize. This prevents parent scene-initialization continuations
+                // from being charged to (and executed inside) the same frame-budgeted action.
+                await Task.Yield();
             }
             finally
             {
-                _mapController?.DisposeLoadingScreen();
-                if (_progressBar != null)
+                // Activation owns loading-screen cleanup. On failures there is no queued
+                // activation, so release the loading UI immediately.
+                if (_pendingWorldActivation == null)
                 {
-                    _progressBar.Visible = false;
+                    _mapController?.DisposeLoadingScreen();
+                    if (_progressBar != null)
+                        _progressBar.Visible = false;
                 }
             }
         }
@@ -525,9 +601,17 @@ namespace Client.Main.Scenes
         // ─────────────────────────── Update Loop ───────────────────────────
         public override void Update(GameTime gameTime)
         {
-            if (_mapController?.IsChangingWorld == true)
+            if (Status != GameControlStatus.Ready)
             {
-                _mapController.UpdateLoading(gameTime);
+                _mapController?.UpdateLoading(gameTime);
+                return;
+            }
+
+            if (_mapController?.IsChangingWorld == true ||
+                _pendingWorldActivation != null ||
+                _initialWorldActivationCooldown)
+            {
+                _mapController?.UpdateLoading(gameTime);
                 return;
             }
 
@@ -535,17 +619,24 @@ namespace Client.Main.Scenes
             var previousKeyboardState = MuGame.Instance.PrevKeyboard;
 
             base.Update(gameTime);
+            if (Status != GameControlStatus.Ready)
+                return;
+
+            long buffsStarted = UpdatePassProfiler.Start();
             MuGame.Network?.UpdateBuffs();
             MuGame.Network?.GetCharacterState()?.ExpireActiveBuffs();
             _hotkeys?.HandleGlobal(currentKeyboardState, previousKeyboardState);
+            UpdatePassProfiler.AddGameBuffs(buffsStarted);
 
+            long notificationsStarted = UpdatePassProfiler.Start();
             _notificationManager?.Update(gameTime);
             _notificationController?.ProcessPending();
+            UpdatePassProfiler.AddGameNotifications(notificationsStarted);
 
+            long scopeStarted = UpdatePassProfiler.Start();
             if (World is WalkableWorldControl walkableWorld)
-            {
                 ScopeHandler.PumpNpcSpawnQueue(walkableWorld);
-            }
+            UpdatePassProfiler.AddGameScopePump(scopeStarted);
 
             if (World == null || World.Status != GameControlStatus.Ready)
             {
@@ -554,11 +645,19 @@ namespace Client.Main.Scenes
                 return;
             }
 
+            long interactionStarted = UpdatePassProfiler.Start();
             var uiMouse = MuGame.Instance.UiMouseState;
             var prevUiMouse = MuGame.Instance.PrevUiMouseState;
-            _playerMenuController?.Update(gameTime, currentKeyboardState, uiMouse, prevUiMouse);
-            _skillController?.Update();
 
+            long playerMenuStarted = UpdatePassProfiler.Start();
+            _playerMenuController?.Update(gameTime, currentKeyboardState, uiMouse, prevUiMouse);
+            UpdatePassProfiler.AddGamePlayerMenu(playerMenuStarted);
+
+            long skillUpdateStarted = UpdatePassProfiler.Start();
+            _skillController?.Update();
+            UpdatePassProfiler.AddGameSkillUpdate(skillUpdateStarted);
+
+            long attackInputStarted = UpdatePassProfiler.Start();
             // Handle attack clicks on monsters with proper validation
             if (!IsMouseInputConsumedThisFrame &&
                 MouseHoverObject is MonsterObject targetMonster &&
@@ -594,10 +693,20 @@ namespace Client.Main.Scenes
                 }
             }
 
-            // Handle skill usage with right-click
-            _skillController?.HandleRightClickSkillUsage();
-            _hotkeys?.HandleInWorld(currentKeyboardState, previousKeyboardState);
+            UpdatePassProfiler.AddGameAttackInput(attackInputStarted);
 
+            // Handle skill usage with right-click. These paths are measured independently so
+            // the next runtime trace can identify packet/effect cold starts precisely.
+            long rightClickSkillStarted = UpdatePassProfiler.Start();
+            _skillController?.HandleRightClickSkillUsage();
+            UpdatePassProfiler.AddGameRightClickSkill(rightClickSkillStarted);
+
+            long hotkeysStarted = UpdatePassProfiler.Start();
+            _hotkeys?.HandleInWorld(currentKeyboardState, previousKeyboardState);
+            UpdatePassProfiler.AddGameHotkeys(hotkeysStarted);
+            UpdatePassProfiler.AddGameInteraction(interactionStarted);
+
+            long housekeepingStarted = UpdatePassProfiler.Start();
             // Update ping every 5 seconds to reduce network overhead
             _pingTimer += gameTime.ElapsedGameTime.TotalSeconds;
             if (_pingTimer >= 5.0)
@@ -613,12 +722,86 @@ namespace Client.Main.Scenes
                 _fpsTimer = 0;
                 UpdateFpsLabel();
             }
+            UpdatePassProfiler.AddGameHousekeeping(housekeepingStarted);
+        }
+
+        internal void ScheduleMapNameUpdateNextFrame(string actionName)
+        {
+            _ = UpdateMapNameNextFrameAsync(actionName);
+        }
+
+        private async Task UpdateMapNameNextFrameAsync(string actionName)
+        {
+            await MuGame.YieldToNextFrameAsync(
+                string.IsNullOrWhiteSpace(actionName) ? "GameScene.UpdateMapName" : actionName,
+                MainThreadDispatcher.WorkPriority.High);
+            _mapController?.UpdateMapName();
+        }
+
+        internal Task QueueWorldActivationAfterLoadingFrame(
+            Action activation,
+            string actionName,
+            bool cleanupLoadingUi = true)
+        {
+            ArgumentNullException.ThrowIfNull(activation);
+            if (_pendingWorldActivation != null)
+                throw new InvalidOperationException("A world activation is already pending.");
+
+            _pendingWorldActivation = activation;
+            _pendingWorldActivationScheduled = false;
+            _pendingWorldActivationCleansLoadingUi = cleanupLoadingUi;
+            _pendingWorldActivationName = string.IsNullOrWhiteSpace(actionName)
+                ? "GameScene.ActivateWorldAfterLoadingFrame"
+                : actionName;
+            _pendingWorldActivationCompletion = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            return _pendingWorldActivationCompletion.Task;
+        }
+
+        private void SchedulePendingWorldActivation()
+        {
+            if (_pendingWorldActivation == null || _pendingWorldActivationScheduled)
+                return;
+
+            _pendingWorldActivationScheduled = true;
+            MuGame.ScheduleOnMainThread(() =>
+            {
+                Action activation = _pendingWorldActivation;
+                TaskCompletionSource<bool> completion = _pendingWorldActivationCompletion;
+                try
+                {
+                    activation?.Invoke();
+                    if (_pendingWorldActivationCleansLoadingUi)
+                        _initialWorldActivationCooldown = true;
+                    completion?.TrySetResult(true);
+                }
+                catch (Exception ex)
+                {
+                    completion?.TrySetException(ex);
+                    throw;
+                }
+                finally
+                {
+                    _pendingWorldActivation = null;
+                    _pendingWorldActivationCompletion = null;
+                    _pendingWorldActivationScheduled = false;
+                    _pendingWorldActivationCleansLoadingUi = false;
+                    _pendingWorldActivationName = null;
+                }
+            }, MainThreadDispatcher.WorkPriority.Critical, _pendingWorldActivationName);
         }
 
         // ─────────────────────────── Draw Loop ───────────────────────────
         public override void Draw(GameTime gameTime)
         {
-            if (_mapController?.IsChangingWorld == true || World == null || World.Status != GameControlStatus.Ready)
+            if (!_sceneShellInitialized || _progressBar == null)
+            {
+                GraphicsDevice.Clear(new Color(12, 12, 20));
+                DrawBackground();
+                return;
+            }
+
+            if (_mapController?.IsChangingWorld == true || _pendingWorldActivation != null || _initialWorldActivationCooldown || World == null || World.Status != GameControlStatus.Ready)
             {
                 GraphicsDevice.Clear(new Color(12, 12, 20));
                 DrawBackground();
@@ -627,6 +810,13 @@ namespace Client.Main.Scenes
                 _progressBar.StatusText = loading?.Message ?? "Loading...";
                 _progressBar.Visible = true;
                 _progressBar.Draw(gameTime);
+                SchedulePendingWorldActivation();
+                if (_initialWorldActivationCooldown && _pendingWorldActivation == null)
+                {
+                    _initialWorldActivationCooldown = false;
+                    _mapController?.DisposeLoadingScreen();
+                    _progressBar.Visible = false;
+                }
                 return;
             }
 
@@ -669,7 +859,6 @@ namespace Client.Main.Scenes
                 TradeControl.Instance?.DrawPickedPreview(sprite, gameTime);
                 DrawPerformanceOverlay(gameTime);
             }
-            _characterInfoWindow?.BringToFront();
         }
 
         private void DrawPerformanceOverlay(GameTime gameTime)
@@ -693,16 +882,23 @@ namespace Client.Main.Scenes
         }
 
 
-        private void PreloadSounds()
+        private Task PreloadSoundsAsync()
         {
-            SoundController.Instance.PreloadSound("Sound/pDropItem.wav");
-            SoundController.Instance.PreloadSound("Sound/pDropMoney.wav");
-            SoundController.Instance.PreloadSound("Sound/mGem.wav");
-            SoundController.Instance.PreloadSound("Sound/pGetItem.wav");
-            SoundController.Instance.PreloadSound("Sound/pWalk(Grass).wav");
-            SoundController.Instance.PreloadSound("Sound/pWalk(Snow).wav");
-            SoundController.Instance.PreloadSound("Sound/pWalk(Soil).wav");
-            SoundController.Instance.PreloadSound("Sound/pSwim.wav");
+            // Move reflection-based skill effect discovery out of the first combat packet.
+            SkillVisualEffectRegistry.Initialize();
+
+            return Task.WhenAll(
+                SoundController.Instance.PreloadSoundAsync("Sound/pDropItem.wav"),
+                SoundController.Instance.PreloadSoundAsync("Sound/pDropMoney.wav"),
+                SoundController.Instance.PreloadSoundAsync("Sound/mGem.wav"),
+                SoundController.Instance.PreloadSoundAsync("Sound/pGetItem.wav"),
+                SoundController.Instance.PreloadSoundAsync("Sound/pWalk(Grass).wav"),
+                SoundController.Instance.PreloadSoundAsync("Sound/pWalk(Snow).wav"),
+                SoundController.Instance.PreloadSoundAsync("Sound/pWalk(Soil).wav"),
+                SoundController.Instance.PreloadSoundAsync("Sound/pSwim.wav"),
+                SoundController.Instance.PreloadSoundAsync("Sound/mHomord1.wav"),
+                SoundController.Instance.PreloadSoundAsync("Sound/mHomordAttack1.wav"),
+                SoundController.Instance.PreloadSoundAsync("Sound/mHomordDie.wav"));
         }
 
         private async Task UpdatePingAsync()
@@ -710,7 +906,12 @@ namespace Client.Main.Scenes
             if (MuGame.Network == null)
                 return;
 
-            int? ping = await MuGame.Network.PingServerAsync();
+            // System.Net Ping may perform an expensive synchronous first-use setup. Keep that
+            // work away from the game thread and only publish the final value through the
+            // dispatcher.
+            int? ping = await Task.Run(
+                async () => await MuGame.Network.PingServerAsync().ConfigureAwait(false))
+                .ConfigureAwait(false);
             MuGame.ScheduleOnMainThread(() =>
             {
                 if (_pingLabel == null)
@@ -759,6 +960,12 @@ namespace Client.Main.Scenes
 
         public override void Dispose()
         {
+            _pendingWorldActivation = null;
+            _pendingWorldActivationScheduled = false;
+            _initialWorldActivationCooldown = false;
+            _pendingWorldActivationCompletion?.TrySetCanceled();
+            _pendingWorldActivationCompletion = null;
+
             if (_hero != null)
             {
                 if (_windowCloseController != null)

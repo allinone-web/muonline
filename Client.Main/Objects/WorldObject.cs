@@ -170,6 +170,17 @@ namespace Client.Main.Objects
         private void Children_ControlAdded(object sender, ChildrenEventArgs<WorldObject> e)
         {
             e.Control.World = World;
+
+            // Walker roots enable shadows in the base constructor before their modular body
+            // parts are attached. Propagate that already-established contract to animated or
+            // bone-linked model children as they are added; otherwise only an occasional helm
+            // or root mesh can enter the shadow-map pass.
+            if (this is ModelObject parentModel && e.Control is ModelObject childModel)
+            {
+                bool isDirectModularActorPart = parentModel is PlayerObject || parentModel is NPCObject;
+                if (isDirectModularActorPart || childModel.LinkParentAnimation || childModel.ParentBoneLink >= 0)
+                    childModel.RenderShadow = parentModel.RenderShadow;
+            }
         }
 
         protected virtual void OnWorldChanged(WorldControl newWorld, WorldControl prevWorld)
@@ -291,8 +302,18 @@ namespace Client.Main.Objects
         {
             if (!Visible) return;
 
+            // Bounding boxes and hover labels are rendered once by BaseScene's batched
+            // overlay pass on desktop. Android keeps the legacy per-object overlay path.
+#if ANDROID
             DrawBoundingBox2D();
             DrawHoverName();
+#endif
+            DrawChildrenAfterOnly(gameTime);
+        }
+
+        internal void DrawChildrenAfterOnly(GameTime gameTime)
+        {
+            if (!Visible) return;
 
             var objects = Children;
             for (int i = 0; i < objects.Count; i++)

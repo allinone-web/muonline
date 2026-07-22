@@ -547,7 +547,7 @@ namespace Client.Main.Objects
         {
             if (World == null || !_contentLoaded || !Visible) return;
 
-            if (!LinkParentAnimation && AllowAnimationUpdates)
+            if (!LinkParentAnimation && AllowAnimationUpdates && !FreezeAnimationPose)
             {
                 Animation(gameTime);
             }
@@ -774,10 +774,14 @@ namespace Client.Main.Objects
 
         private void OnRenderShadowChanged()
         {
+            bool modularActorRoot = this is PlayerObject || this is NPCObject;
             foreach (var obj in Children)
             {
-                if (obj is ModelObject modelObj && modelObj.LinkParentAnimation)
+                if (obj is ModelObject modelObj &&
+                    (modularActorRoot || modelObj.LinkParentAnimation || modelObj.ParentBoneLink >= 0))
+                {
                     modelObj.RenderShadow = RenderShadow;
+                }
             }
         }
 

@@ -378,7 +378,7 @@ public sealed class TelemetryAnalysisService
             HasRenderPassBreakdown = samples.Any(x => x.SceneDrawMs > 0 || x.WorldObjectsMs > 0 || x.TerrainOpaqueMs > 0),
             HasMultiPoseRejectionCounters = samples.Any(x => x.MultiPoseAttempts > 0),
             Note = samples.Any(x => x.FrameIntervalMs > 0)
-                ? "Protocol v3 frame indices distinguish current CPU/pass metrics from the preceding full frame interval. Use frameIntervalMs for pacing and cpuFrameMs for CPU cost."
+                ? "Protocol v7 separates current CPU/pass metrics and render-pass allocations from the preceding full frame interval, adds terrain index/streaming diagnostics, and splits game interaction hot paths. Use frameIntervalMs for pacing and cpuFrameMs for CPU cost."
                 : segments.Count > 1
                     ? "Legacy telemetry: rolling p95/p99 can contain frames from the previous scene and current fields may be sampled at different refresh points."
                     : "Legacy single-context recording without full frame interval metrics."

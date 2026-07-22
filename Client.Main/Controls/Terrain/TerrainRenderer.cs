@@ -6,6 +6,7 @@ using Microsoft.Xna.Framework.Graphics;
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace Client.Main.Controls.Terrain
 {
@@ -16,10 +17,12 @@ namespace Client.Main.Controls.Terrain
     {
         private const float SpecialHeight = 1200f;
         private const int BlockSize = 4;
-        // The old procedural/index stitching path switches topology depending on LOD.
-        // Keep the explicit-UV path until all stitching variants are validated.
-        private const bool EnableTerrainIndexBatching = false;
-        private const int TileBatchVerts = 16384 * 6;
+        // Static terrain vertices with per-texture index batches avoid uploading the complete
+        // visible vertex stream every frame. LOD transition/edge tiles still use the explicit-UV
+        // streaming path, so enabling this remains visually safe for validated static scenes.
+        private const bool EnableTerrainIndexBatching = true;
+        private const int MaxTileBatchVerts = 16384 * 6;
+        private const int InitialTileBatchVerts = 2048;
         private const int TileBatchIndices = 16384 * 6;
         private const float LodSkirtDepth = Constants.TERRAIN_SCALE * 1.5f;
 
@@ -62,7 +65,7 @@ namespace Client.Main.Controls.Terrain
         private readonly Vector3[] _tempTerrainNormals = new Vector3[4];
         private readonly Color[] _tempTerrainLights = new Color[4];
         private readonly Color[] _tempTerrainLightsBase = new Color[4];
-        private readonly VertexPositionColorTexture[] _fallbackTileBuffer = new VertexPositionColorTexture[TileBatchVerts];
+        private VertexPositionColorTexture[] _fallbackTileBuffer = new VertexPositionColorTexture[InitialTileBatchVerts];
 
         // Cached per-vertex data (built once per terrain) to avoid per-tile CPU work each frame.
         private bool _vertexCacheBuilt;
@@ -120,11 +123,19 @@ namespace Client.Main.Controls.Terrain
         public float DistortionFrequency { get; set; } = 0f;
         public float AmbientLight { get; set; } = 0.25f;
         public short WorldIndex { get; set; }
+        public bool PreferIndexBatching { get; set; }
 
         public int DrawCalls { get; private set; }
         public int DrawnTriangles { get; private set; }
         public int DrawnBlocks { get; private set; }
         public int DrawnCells { get; private set; }
+        public int IndexedCells { get; private set; }
+        public int StreamedCells { get; private set; }
+        public int IndexUploads { get; private set; }
+        public int VertexUploads { get; private set; }
+        public int UploadedIndices { get; private set; }
+        public int UploadedVertices { get; private set; }
+        public bool UsedIndexBatching { get; private set; }
         public int LastUploadedDynamicLights { get; private set; }
         public bool IsGpuLightingActive => _useDynamicLightingShader;
         public bool IsDynamicLightingShaderAvailable => GraphicsManager.Instance.DynamicLightingEffect != null;
@@ -295,6 +306,69 @@ namespace Client.Main.Controls.Terrain
             _lightCacheBuilt = true;
         }
 
+        public void PrepareFirstDrawResources()
+        {
+            if (_graphicsDevice == null || _data.HeightMap == null || Camera.Instance == null)
+                return;
+
+            EnsureVertexCache();
+            EnsureLightCache();
+            _hasLodTransitions = BuildVisibleLodGrid();
+
+            if (ShouldPrepareIndexBatching())
+            {
+                EnsureTerrainVertexBuffers();
+                return;
+            }
+
+            // Allocate only a modest streaming capacity. Buffers grow on demand during later
+            // frames rather than reserving the maximum terrain batch in the first draw.
+            EnsureTerrainStreamBuffer(alphaLayer: false, InitialTileBatchVerts);
+            EnsureTerrainStreamBuffer(alphaLayer: true, InitialTileBatchVerts);
+        }
+
+        public async Task PrepareFirstDrawResourcesAsync(string phaseName)
+        {
+            if (_graphicsDevice == null || _data.HeightMap == null || Camera.Instance == null)
+                return;
+
+            // Position/normal/light cache generation is CPU-only and the world is still hidden.
+            // Running it on a worker keeps the loading screen responsive.
+            await Task.Run(() =>
+            {
+                EnsureVertexCache();
+                EnsureLightCache();
+            }).ConfigureAwait(false);
+
+            await MuGame.YieldToNextFrameAsync(
+                $"{phaseName}.Visibility",
+                MainThreadDispatcher.WorkPriority.High);
+            _hasLodTransitions = BuildVisibleLodGrid();
+
+            if (ShouldPrepareIndexBatching())
+            {
+                await PrepareTerrainVertexBuffersAsync(phaseName);
+                return;
+            }
+
+            await MuGame.YieldToNextFrameAsync(
+                $"{phaseName}.StreamBuffers",
+                MainThreadDispatcher.WorkPriority.High);
+            EnsureTerrainStreamBuffer(alphaLayer: false, InitialTileBatchVerts);
+            EnsureTerrainStreamBuffer(alphaLayer: true, InitialTileBatchVerts);
+        }
+
+        private bool ShouldPrepareIndexBatching()
+        {
+            if (!EnableTerrainIndexBatching || !PreferIndexBatching || !Constants.ENABLE_TERRAIN_GPU_LIGHTING ||
+                !Constants.ENABLE_DYNAMIC_LIGHTING_SHADER)
+            {
+                return false;
+            }
+
+            return SupportsProceduralTerrainUv(GraphicsManager.Instance.DynamicLightingEffect);
+        }
+
         public void Draw(bool after)
         {
             if (_graphicsDevice == null) return;
@@ -327,7 +401,7 @@ namespace Client.Main.Controls.Terrain
                 var effect = GraphicsManager.Instance.DynamicLightingEffect;
 
                 // Enable index batching only when the shader supports procedural terrain UVs.
-                if (EnableTerrainIndexBatching && !after && !_hasLodTransitions && SupportsProceduralTerrainUv(effect))
+                if (EnableTerrainIndexBatching && PreferIndexBatching && !after && SupportsProceduralTerrainUv(effect))
                 {
                     EnsureTerrainVertexBuffers();
                     _useTerrainIndexBatching = _terrainVertexBufferBase != null &&
@@ -335,9 +409,6 @@ namespace Client.Main.Controls.Terrain
                                                _terrainVertexBufferAlpha != null &&
                                                !_terrainVertexBufferAlpha.IsDisposed;
                 }
-
-                if (_useTerrainIndexBatching && VisibleBlocksTouchTerrainEdge())
-                    _useTerrainIndexBatching = false;
 
                 if (effect != null)
                 {
@@ -387,9 +458,15 @@ namespace Client.Main.Controls.Terrain
                 }
 
                 if (_useTerrainIndexBatching)
+                {
                     FlushAllTileIndexBatches();
-                else
+                    // LOD-transition and map-edge tiles intentionally fall back to explicit UVs.
                     FlushAllTileBatches();
+                }
+                else
+                {
+                    FlushAllTileBatches();
+                }
 
                 if (!after)
                     _grassRenderer.Draw();
@@ -411,6 +488,13 @@ namespace Client.Main.Controls.Terrain
             DrawnTriangles = 0;
             DrawnBlocks = 0;
             DrawnCells = 0;
+            IndexedCells = 0;
+            StreamedCells = 0;
+            IndexUploads = 0;
+            VertexUploads = 0;
+            UploadedIndices = 0;
+            UploadedVertices = 0;
+            UsedIndexBatching = false;
             LastUploadedDynamicLights = 0;
 
             // Reset state tracking for new frame
@@ -591,7 +675,7 @@ namespace Client.Main.Controls.Terrain
 
             // Optional fast path for terrain: static VB + per-texture index batching (requires shader support).
             _hasLodTransitions = BuildVisibleLodGrid();
-            if (EnableTerrainIndexBatching && !_hasLodTransitions && SupportsProceduralTerrainUv(shadowEffect))
+            if (EnableTerrainIndexBatching && PreferIndexBatching && SupportsProceduralTerrainUv(shadowEffect))
             {
                 EnsureTerrainVertexBuffers();
                 _useTerrainIndexBatching = _terrainVertexBufferBase != null &&
@@ -599,9 +683,6 @@ namespace Client.Main.Controls.Terrain
                                            _terrainVertexBufferAlpha != null &&
                                            !_terrainVertexBufferAlpha.IsDisposed;
             }
-
-            if (_useTerrainIndexBatching && VisibleBlocksTouchTerrainEdge())
-                _useTerrainIndexBatching = false;
 
             shadowEffect.Parameters["UseProceduralTerrainUV"]?.SetValue(_useTerrainIndexBatching ? 1.0f : 0.0f);
             shadowEffect.Parameters["IsWaterTexture"]?.SetValue(0.0f);
@@ -624,9 +705,14 @@ namespace Client.Main.Controls.Terrain
             }
 
             if (_useTerrainIndexBatching)
+            {
                 FlushAllTileIndexBatches();
-            else
                 FlushAllTileBatches();
+            }
+            else
+            {
+                FlushAllTileBatches();
+            }
 
             // Restore for object shadow casters (ShadowVS uses this uniform too).
             shadowEffect.Parameters["UseProceduralTerrainUV"]?.SetValue(0.0f);
@@ -842,6 +928,7 @@ namespace Client.Main.Controls.Terrain
             int i4 = GetTerrainIndexRepeat(x4, y4);
 
             bool canUseIndexedTile = _useTerrainIndexBatching &&
+                                     edgeMask == 0 &&
                                      x1 >= 0 && x1 < Constants.TERRAIN_SIZE &&
                                      y1 >= 0 && y1 < Constants.TERRAIN_SIZE &&
                                      x2 >= 0 && x2 < Constants.TERRAIN_SIZE &&
@@ -866,6 +953,9 @@ namespace Client.Main.Controls.Terrain
                 ushort u3 = (ushort)i3;
                 ushort u4 = (ushort)i4;
 
+                UsedIndexBatching = true;
+                IndexedCells++;
+
                 if (isOpaqueIndex)
                 {
                     RenderTextureIndexed(_data.Mapping.Layer2[i1], u1, u2, u3, u4, alphaLayer: false);
@@ -882,6 +972,7 @@ namespace Client.Main.Controls.Terrain
                 return;
             }
 
+            StreamedCells++;
             PrepareTileVertices(x1, y1, x2, y2, x3, y3, x4, y4, i1, i2, i3, i4);
             PrepareTileLights(i1, i2, i3, i4);
             bool renderSkirts = edgeMask != 0;
@@ -1270,25 +1361,16 @@ namespace Client.Main.Controls.Terrain
             return null;
         }
 
-        private void EnsureTerrainVertexBuffers()
+        private byte[] GetValidTerrainAlphaMap()
         {
-            if (_graphicsDevice == null)
-                return;
-
-            EnsureVertexCache();
-            EnsureLightCache();
-
             int total = Constants.TERRAIN_SIZE * Constants.TERRAIN_SIZE;
-            if (_cachedVertexPositions == null || _cachedVertexNormals == null || _cachedVertexBaseLights == null)
-                return;
-            if (_cachedVertexPositions.Length < total || _cachedVertexNormals.Length < total || _cachedVertexBaseLights.Length < total)
-                return;
-
             var alphaMap = _data.Mapping.Alpha;
-            if (alphaMap != null && alphaMap.Length < total)
-                alphaMap = null;
+            return alphaMap != null && alphaMap.Length >= total ? alphaMap : null;
+        }
 
-            bool needsRebuild =
+        private bool NeedsTerrainVertexBufferRebuild(byte[] alphaMap)
+        {
+            return
                 !_terrainVertexBuffersBuilt ||
                 _terrainVertexBufferBase == null ||
                 _terrainVertexBufferBase.IsDisposed ||
@@ -1300,57 +1382,57 @@ namespace Client.Main.Controls.Terrain
                 !ReferenceEquals(_terrainBuffersFinalLightMapRef, _cachedFinalLightMapRef) ||
                 Math.Abs(_terrainBuffersAmbientLight - _cachedAmbientLight) > 0.0001f ||
                 !ReferenceEquals(_terrainBuffersAlphaMapRef, alphaMap);
+        }
 
-            if (!needsRebuild)
-                return;
+        private TerrainVertexPositionColorNormalTexture[] BuildTerrainVertexUploadData(
+            bool alphaLayer,
+            byte[] alphaMap,
+            int total)
+        {
+            var vertices = ArrayPool<TerrainVertexPositionColorNormalTexture>.Shared.Rent(total);
+            for (int i = 0; i < total; i++)
+            {
+                Color baseLight = _cachedVertexBaseLights[i];
+                Color color = alphaLayer
+                    ? new Color(baseLight.R, baseLight.G, baseLight.B, alphaMap != null ? alphaMap[i] : (byte)0)
+                    : baseLight;
 
-            _terrainVertexBufferBase?.Dispose();
-            _terrainVertexBufferAlpha?.Dispose();
+                vertices[i] = new TerrainVertexPositionColorNormalTexture(
+                    _cachedVertexPositions[i],
+                    color,
+                    _cachedVertexNormals[i],
+                    Vector2.Zero);
+            }
 
-            _terrainVertexBufferBase = new VertexBuffer(
+            return vertices;
+        }
+
+        private void UploadTerrainVertexBuffer(
+            bool alphaLayer,
+            TerrainVertexPositionColorNormalTexture[] vertices,
+            int total)
+        {
+            var buffer = new VertexBuffer(
                 _graphicsDevice,
                 TerrainVertexPositionColorNormalTexture.VertexDeclaration,
                 total,
                 BufferUsage.WriteOnly);
+            buffer.SetData(vertices, 0, total);
 
-            _terrainVertexBufferAlpha = new VertexBuffer(
-                _graphicsDevice,
-                TerrainVertexPositionColorNormalTexture.VertexDeclaration,
-                total,
-                BufferUsage.WriteOnly);
-
-            var verts = ArrayPool<TerrainVertexPositionColorNormalTexture>.Shared.Rent(total);
-            try
+            if (alphaLayer)
             {
-                // Base buffer: baked static light (A=255), procedural UV in shader (TexCoord unused).
-                for (int i = 0; i < total; i++)
-                {
-                    verts[i] = new TerrainVertexPositionColorNormalTexture(
-                        _cachedVertexPositions[i],
-                        _cachedVertexBaseLights[i],
-                        _cachedVertexNormals[i],
-                        Vector2.Zero);
-                }
-                _terrainVertexBufferBase.SetData(verts, 0, total);
-
-                // Alpha buffer: keep baked light intact; alpha controls layer blend in shader.
-                for (int i = 0; i < total; i++)
-                {
-                    Color baseLight = _cachedVertexBaseLights[i];
-                    byte a = alphaMap != null ? alphaMap[i] : (byte)0;
-                    verts[i] = new TerrainVertexPositionColorNormalTexture(
-                        _cachedVertexPositions[i],
-                        new Color(baseLight.R, baseLight.G, baseLight.B, a),
-                        _cachedVertexNormals[i],
-                        Vector2.Zero);
-                }
-                _terrainVertexBufferAlpha.SetData(verts, 0, total);
+                _terrainVertexBufferAlpha?.Dispose();
+                _terrainVertexBufferAlpha = buffer;
             }
-            finally
+            else
             {
-                ArrayPool<TerrainVertexPositionColorNormalTexture>.Shared.Return(verts);
+                _terrainVertexBufferBase?.Dispose();
+                _terrainVertexBufferBase = buffer;
             }
+        }
 
+        private void CompleteTerrainVertexBufferBuild(byte[] alphaMap)
+        {
             _terrainBuffersHeightMapRef = _cachedHeightMapRef;
             _terrainBuffersTerrainWallRef = _cachedTerrainWallRef;
             _terrainBuffersNormalsRef = _cachedNormalsRef;
@@ -1358,6 +1440,94 @@ namespace Client.Main.Controls.Terrain
             _terrainBuffersAmbientLight = _cachedAmbientLight;
             _terrainBuffersAlphaMapRef = alphaMap;
             _terrainVertexBuffersBuilt = true;
+        }
+
+        private async Task PrepareTerrainVertexBuffersAsync(string phaseName)
+        {
+            int total = Constants.TERRAIN_SIZE * Constants.TERRAIN_SIZE;
+            if (_cachedVertexPositions == null || _cachedVertexNormals == null || _cachedVertexBaseLights == null ||
+                _cachedVertexPositions.Length < total || _cachedVertexNormals.Length < total ||
+                _cachedVertexBaseLights.Length < total)
+            {
+                return;
+            }
+
+            byte[] alphaMap = GetValidTerrainAlphaMap();
+            if (!NeedsTerrainVertexBufferRebuild(alphaMap))
+                return;
+
+            var baseVertices = await Task.Run(
+                () => BuildTerrainVertexUploadData(false, alphaMap, total)).ConfigureAwait(false);
+            try
+            {
+                await MuGame.YieldToNextFrameAsync(
+                    $"{phaseName}.BaseVertexUpload",
+                    MainThreadDispatcher.WorkPriority.High);
+                UploadTerrainVertexBuffer(alphaLayer: false, baseVertices, total);
+            }
+            finally
+            {
+                ArrayPool<TerrainVertexPositionColorNormalTexture>.Shared.Return(baseVertices);
+            }
+
+            var alphaVertices = await Task.Run(
+                () => BuildTerrainVertexUploadData(true, alphaMap, total)).ConfigureAwait(false);
+            try
+            {
+                await MuGame.YieldToNextFrameAsync(
+                    $"{phaseName}.AlphaVertexUpload",
+                    MainThreadDispatcher.WorkPriority.High);
+                UploadTerrainVertexBuffer(alphaLayer: true, alphaVertices, total);
+            }
+            finally
+            {
+                ArrayPool<TerrainVertexPositionColorNormalTexture>.Shared.Return(alphaVertices);
+            }
+
+            CompleteTerrainVertexBufferBuild(alphaMap);
+        }
+
+        private void EnsureTerrainVertexBuffers()
+        {
+            if (_graphicsDevice == null)
+                return;
+
+            EnsureVertexCache();
+            EnsureLightCache();
+
+            int total = Constants.TERRAIN_SIZE * Constants.TERRAIN_SIZE;
+            if (_cachedVertexPositions == null || _cachedVertexNormals == null || _cachedVertexBaseLights == null ||
+                _cachedVertexPositions.Length < total || _cachedVertexNormals.Length < total ||
+                _cachedVertexBaseLights.Length < total)
+            {
+                return;
+            }
+
+            byte[] alphaMap = GetValidTerrainAlphaMap();
+            if (!NeedsTerrainVertexBufferRebuild(alphaMap))
+                return;
+
+            var vertices = BuildTerrainVertexUploadData(false, alphaMap, total);
+            try
+            {
+                UploadTerrainVertexBuffer(alphaLayer: false, vertices, total);
+            }
+            finally
+            {
+                ArrayPool<TerrainVertexPositionColorNormalTexture>.Shared.Return(vertices);
+            }
+
+            vertices = BuildTerrainVertexUploadData(true, alphaMap, total);
+            try
+            {
+                UploadTerrainVertexBuffer(alphaLayer: true, vertices, total);
+            }
+            finally
+            {
+                ArrayPool<TerrainVertexPositionColorNormalTexture>.Shared.Return(vertices);
+            }
+
+            CompleteTerrainVertexBufferBuild(alphaMap);
         }
 
         private void RenderTextureIndexed(int textureIndex, ushort i1, ushort i2, ushort i3, ushort i4, bool alphaLayer)
@@ -1445,6 +1615,8 @@ namespace Client.Main.Controls.Terrain
             try
             {
                 indexBuffer.SetData(batch, 0, indexCount, SetDataOptions.Discard);
+                IndexUploads++;
+                UploadedIndices += indexCount;
                 _graphicsDevice.SetVertexBuffer(vb);
                 _graphicsDevice.Indices = indexBuffer;
 
@@ -1500,19 +1672,18 @@ namespace Client.Main.Controls.Terrain
 
         private void AddTileToBatch(int texIndex, TerrainVertexPositionColorNormalTexture[] verts, bool alphaLayer)
         {
-            var batch = GetTileBatchBuffer(texIndex, alphaLayer);
             var counters = alphaLayer ? _tileAlphaCounts : _tileBatchCounts;
-
             int dstOff = counters[texIndex];
-            if (dstOff + 6 > TileBatchVerts)
+            if (dstOff + 6 > MaxTileBatchVerts)
             {
                 FlushSingleTexture(texIndex, alphaLayer);
                 dstOff = 0;
             }
 
+            var batch = GetTileBatchBuffer(texIndex, alphaLayer, dstOff + 6);
             TrackVertexTexture(texIndex, alphaLayer);
 
-            // Manual unroll for better performance than Array.Copy
+            // Manual unroll for better performance than Array.Copy.
             batch[dstOff + 0] = verts[0];
             batch[dstOff + 1] = verts[1];
             batch[dstOff + 2] = verts[2];
@@ -1531,8 +1702,9 @@ namespace Client.Main.Controls.Terrain
             if (buffer == null || buffer.IsDisposed || buffer.VertexCount < requiredVertexCount)
             {
                 buffer?.Dispose();
-                // Allocate the full batch once; subsequent frames only stream new data.
-                int capacity = Math.Max(requiredVertexCount, TileBatchVerts);
+                // Grow with demand instead of reserving the worst-case terrain batch during
+                // the first visible draw. This avoids multi-megabyte cold-start allocations.
+                int capacity = GetExpandedCapacity(requiredVertexCount, InitialTileBatchVerts, MaxTileBatchVerts);
                 buffer = new DynamicVertexBuffer(
                     _graphicsDevice,
                     TerrainVertexPositionColorNormalTexture.VertexDeclaration,
@@ -1557,7 +1729,7 @@ namespace Client.Main.Controls.Terrain
             // Always clear the logical count, even when a texture is still loading.
             try
             {
-                var batch = GetTileBatchBuffer(texIndex, alphaLayer);
+                var batch = GetTileBatchBuffer(texIndex, alphaLayer, vertCount);
                 var texture = _data.Textures[texIndex];
                 if (texture == null || texture.IsDisposed)
                     return;
@@ -1583,6 +1755,8 @@ namespace Client.Main.Controls.Terrain
 
                     var vertexBuffer = EnsureTerrainStreamBuffer(alphaLayer, vertCount);
                     vertexBuffer.SetData(batch, 0, vertCount, SetDataOptions.Discard);
+                    VertexUploads++;
+                    UploadedVertices += vertCount;
                     _graphicsDevice.Indices = null;
                     _graphicsDevice.SetVertexBuffer(vertexBuffer);
 
@@ -1605,6 +1779,12 @@ namespace Client.Main.Controls.Terrain
                         _lastBoundTexture = texture;
                     }
 
+                    if (_fallbackTileBuffer.Length < vertCount)
+                    {
+                        int capacity = GetExpandedCapacity(vertCount, InitialTileBatchVerts, MaxTileBatchVerts);
+                        Array.Resize(ref _fallbackTileBuffer, capacity);
+                    }
+
                     for (int i = 0; i < vertCount; i++)
                     {
                         var vertex = batch[i];
@@ -1612,6 +1792,8 @@ namespace Client.Main.Controls.Terrain
                             vertex.Position, vertex.Color, vertex.TextureCoordinate);
                     }
 
+                    VertexUploads++;
+                    UploadedVertices += vertCount;
                     foreach (var pass in effect.CurrentTechnique.Passes)
                     {
                         pass.Apply();
@@ -1712,16 +1894,32 @@ namespace Client.Main.Controls.Terrain
             => ((y & Constants.TERRAIN_SIZE_MASK) * Constants.TERRAIN_SIZE)
              + (x & Constants.TERRAIN_SIZE_MASK);
 
-        private TerrainVertexPositionColorNormalTexture[] GetTileBatchBuffer(int texIndex, bool alphaLayer)
+        private TerrainVertexPositionColorNormalTexture[] GetTileBatchBuffer(
+            int texIndex,
+            bool alphaLayer,
+            int requiredVertexCount)
         {
             var batches = alphaLayer ? _tileAlphaBatches : _tileBatches;
             var buffer = batches[texIndex];
-            if (buffer == null || buffer.Length != TileBatchVerts)
+            if (buffer == null || buffer.Length < requiredVertexCount)
             {
-                buffer = new TerrainVertexPositionColorNormalTexture[TileBatchVerts];
+                int capacity = GetExpandedCapacity(
+                    requiredVertexCount,
+                    InitialTileBatchVerts,
+                    MaxTileBatchVerts);
+                buffer = new TerrainVertexPositionColorNormalTexture[capacity];
                 batches[texIndex] = buffer;
             }
             return buffer;
+        }
+
+        private static int GetExpandedCapacity(int required, int minimum, int maximum)
+        {
+            int capacity = Math.Max(1, minimum);
+            while (capacity < required && capacity < maximum)
+                capacity = Math.Min(maximum, capacity * 2);
+
+            return Math.Max(required, capacity);
         }
 
         private ushort[] GetTileIndexBatchBuffer(int texIndex, bool alphaLayer)

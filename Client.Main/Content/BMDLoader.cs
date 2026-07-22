@@ -136,6 +136,9 @@ namespace Client.Main.Content
         private readonly List<MeshCacheKey> _staleGpuMeshKeys = new(64);
         private readonly List<GpuSkinBatchCacheKey> _staleGpuBatchKeys = new(32);
         private readonly object _gpuSkinBufferLock = new();
+        private readonly Dictionary<int, int> _frameCacheMissCountsByAsset = new(128);
+        private string _frameTopCacheMissModelName = string.Empty;
+        private int _frameTopCacheMissModelCount;
         private const int GpuCachePruneIntervalFrames = 300;
         private const int GpuCacheRetentionFrames = 3600;
         private int _lastGpuCachePruneFrame;
@@ -156,6 +159,18 @@ namespace Client.Main.Content
         public int FrameMeshesProcessed { get; private set; }
         public int FrameCacheHits { get; private set; }
         public int FrameCacheMisses { get; private set; }
+        public int FrameCacheMissIndexUpload { get; private set; }
+        public int FrameCacheMissMissingEntry { get; private set; }
+        public int FrameCacheMissInvalidEntry { get; private set; }
+        public int FrameCacheMissOwner { get; private set; }
+        public int FrameCacheMissAsset { get; private set; }
+        public int FrameCacheMissMesh { get; private set; }
+        public int FrameCacheMissPose { get; private set; }
+        public int FrameCacheMissVertexCount { get; private set; }
+        public int FrameCacheMissColor { get; private set; }
+        public int FrameCacheBypasses { get; private set; }
+        public int FrameTopCacheMissModelCount => _frameTopCacheMissModelCount;
+        public string FrameTopCacheMissModelName => _frameTopCacheMissModelName;
         public int FrameMeshBatchBuilds { get; private set; }
         public int FrameMeshBatchMeshes { get; private set; }
 
@@ -166,6 +181,18 @@ namespace Client.Main.Content
         public int LastFrameMeshesProcessed { get; private set; }
         public int LastFrameCacheHits { get; private set; }
         public int LastFrameCacheMisses { get; private set; }
+        public int LastFrameCacheMissIndexUpload { get; private set; }
+        public int LastFrameCacheMissMissingEntry { get; private set; }
+        public int LastFrameCacheMissInvalidEntry { get; private set; }
+        public int LastFrameCacheMissOwner { get; private set; }
+        public int LastFrameCacheMissAsset { get; private set; }
+        public int LastFrameCacheMissMesh { get; private set; }
+        public int LastFrameCacheMissPose { get; private set; }
+        public int LastFrameCacheMissVertexCount { get; private set; }
+        public int LastFrameCacheMissColor { get; private set; }
+        public int LastFrameCacheBypasses { get; private set; }
+        public string LastFrameTopCacheMissModelName { get; private set; } = string.Empty;
+        public int LastFrameTopCacheMissModelCount { get; private set; }
         public int LastFrameMeshBatchBuilds { get; private set; }
         public int LastFrameMeshBatchMeshes { get; private set; }
         public int LastFrameGpuMeshBuffersPruned { get; private set; }
@@ -297,6 +324,18 @@ namespace Client.Main.Content
             LastFrameMeshesProcessed = FrameMeshesProcessed;
             LastFrameCacheHits = FrameCacheHits;
             LastFrameCacheMisses = FrameCacheMisses;
+            LastFrameCacheMissIndexUpload = FrameCacheMissIndexUpload;
+            LastFrameCacheMissMissingEntry = FrameCacheMissMissingEntry;
+            LastFrameCacheMissInvalidEntry = FrameCacheMissInvalidEntry;
+            LastFrameCacheMissOwner = FrameCacheMissOwner;
+            LastFrameCacheMissAsset = FrameCacheMissAsset;
+            LastFrameCacheMissMesh = FrameCacheMissMesh;
+            LastFrameCacheMissPose = FrameCacheMissPose;
+            LastFrameCacheMissVertexCount = FrameCacheMissVertexCount;
+            LastFrameCacheMissColor = FrameCacheMissColor;
+            LastFrameCacheBypasses = FrameCacheBypasses;
+            LastFrameTopCacheMissModelName = _frameTopCacheMissModelName;
+            LastFrameTopCacheMissModelCount = _frameTopCacheMissModelCount;
             LastFrameMeshBatchBuilds = FrameMeshBatchBuilds;
             LastFrameMeshBatchMeshes = FrameMeshBatchMeshes;
 
@@ -307,6 +346,19 @@ namespace Client.Main.Content
             FrameMeshesProcessed = 0;
             FrameCacheHits = 0;
             FrameCacheMisses = 0;
+            FrameCacheMissIndexUpload = 0;
+            FrameCacheMissMissingEntry = 0;
+            FrameCacheMissInvalidEntry = 0;
+            FrameCacheMissOwner = 0;
+            FrameCacheMissAsset = 0;
+            FrameCacheMissMesh = 0;
+            FrameCacheMissPose = 0;
+            FrameCacheMissVertexCount = 0;
+            FrameCacheMissColor = 0;
+            FrameCacheBypasses = 0;
+            _frameCacheMissCountsByAsset.Clear();
+            _frameTopCacheMissModelName = string.Empty;
+            _frameTopCacheMissModelCount = 0;
             FrameMeshBatchBuilds = 0;
             FrameMeshBatchMeshes = 0;
 
@@ -457,6 +509,26 @@ namespace Client.Main.Content
                 Console.WriteLine($"Failed to load asset {path}: {e.Message}");
                 return null;
             }
+        }
+
+
+        private void RecordCacheMissAsset(int assetId, string assetName)
+        {
+            if (MuGame.Diagnostics?.Enabled != true)
+                return;
+
+            int count = _frameCacheMissCountsByAsset.TryGetValue(assetId, out int current)
+                ? current + 1
+                : 1;
+            _frameCacheMissCountsByAsset[assetId] = count;
+
+            if (count <= _frameTopCacheMissModelCount)
+                return;
+
+            _frameTopCacheMissModelCount = count;
+            _frameTopCacheMissModelName = string.IsNullOrWhiteSpace(assetName)
+                ? $"asset:{assetId}"
+                : assetName;
         }
 
         private MeshTopology GetOrCreateMeshTopology(BMDTextureMesh mesh, MeshCacheKey cacheKey)
@@ -617,8 +689,55 @@ namespace Client.Main.Content
                 return;
             }
 
-            if (useCache)
+            if (!useCache)
+            {
+                FrameCacheBypasses++;
+            }
+            else
+            {
                 FrameCacheMisses++;
+                RecordCacheMissAsset(assetId, asset.Name);
+                if (uploadIndexData)
+                {
+                    FrameCacheMissIndexUpload++;
+                }
+                else if (!_bufferCacheState.TryGetValue(vertexBuffer, out var missEntry))
+                {
+                    FrameCacheMissMissingEntry++;
+                }
+                else if (!missEntry.IsValid)
+                {
+                    FrameCacheMissInvalidEntry++;
+                }
+                else if (missEntry.OwnerId != bufferOwnerId)
+                {
+                    FrameCacheMissOwner++;
+                }
+                else if (missEntry.AssetId != assetId)
+                {
+                    FrameCacheMissAsset++;
+                }
+                else if (missEntry.MeshIndex != meshIndex)
+                {
+                    FrameCacheMissMesh++;
+                }
+                else if (missEntry.PoseVersion != poseVersion)
+                {
+                    FrameCacheMissPose++;
+                }
+                else if (missEntry.VertexCount != totalVertices)
+                {
+                    FrameCacheMissVertexCount++;
+                }
+                else if (missEntry.LastColor.PackedValue != color.PackedValue)
+                {
+                    FrameCacheMissColor++;
+                }
+                else
+                {
+                    FrameCacheMissInvalidEntry++;
+                }
+            }
 
             FrameMeshesProcessed++;
 

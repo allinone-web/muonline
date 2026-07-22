@@ -1,4 +1,4 @@
-﻿using Client.Data.BMD;
+using Client.Data.BMD;
 using Client.Main.Content;
 using Client.Main.Controls;
 using Client.Main.Controllers;
@@ -219,6 +219,14 @@ namespace Client.Main.Objects
         private static int _walkerCrowdMultiPoseRejectedBuffersThisFrame;
         private static int _walkerCrowdMultiPoseRejectedBonesThisFrame;
         private static int _walkerCrowdMultiPoseRejectedPaletteThisFrame;
+        private static int _walkerCrowdMultiPoseRejectedUnsupportedThisFrame;
+        private static int _walkerCrowdMultiPoseRejectedChildrenThisFrame;
+        private static int _walkerCrowdMultiPoseRejectedTypeOrRendererThisFrame;
+        private static int _walkerCrowdMultiPoseRejectedMutableMeshThisFrame;
+        private static int _walkerCrowdMultiPoseRejectedVisibilityThisFrame;
+        private static int _walkerCrowdMultiPoseRejectedAnimationThisFrame;
+        private static int _walkerCrowdMultiPoseRejectedOneShotThisFrame;
+        private static int _walkerCrowdMultiPoseRejectedMaterialThisFrame;
 
         public static int LastFrameWalkerCrowdMultiPoseObjects { get; private set; }
         public static int LastFrameWalkerCrowdMultiPoseMeshInstances { get; private set; }
@@ -235,6 +243,14 @@ namespace Client.Main.Objects
         public static int LastFrameWalkerCrowdMultiPoseRejectedBuffers { get; private set; }
         public static int LastFrameWalkerCrowdMultiPoseRejectedBones { get; private set; }
         public static int LastFrameWalkerCrowdMultiPoseRejectedPalette { get; private set; }
+        public static int LastFrameWalkerCrowdMultiPoseRejectedUnsupported { get; private set; }
+        public static int LastFrameWalkerCrowdMultiPoseRejectedChildren { get; private set; }
+        public static int LastFrameWalkerCrowdMultiPoseRejectedTypeOrRenderer { get; private set; }
+        public static int LastFrameWalkerCrowdMultiPoseRejectedMutableMesh { get; private set; }
+        public static int LastFrameWalkerCrowdMultiPoseRejectedVisibility { get; private set; }
+        public static int LastFrameWalkerCrowdMultiPoseRejectedAnimation { get; private set; }
+        public static int LastFrameWalkerCrowdMultiPoseRejectedOneShot { get; private set; }
+        public static int LastFrameWalkerCrowdMultiPoseRejectedMaterial { get; private set; }
         public static bool IsWalkerCrowdMultiPoseActive => IsWalkerCrowdMultiPoseInstancingSupported();
 
         private static void BeginFrameWalkerCrowdMultiPoseMetrics()
@@ -254,6 +270,14 @@ namespace Client.Main.Objects
             LastFrameWalkerCrowdMultiPoseRejectedBuffers = _walkerCrowdMultiPoseRejectedBuffersThisFrame;
             LastFrameWalkerCrowdMultiPoseRejectedBones = _walkerCrowdMultiPoseRejectedBonesThisFrame;
             LastFrameWalkerCrowdMultiPoseRejectedPalette = _walkerCrowdMultiPoseRejectedPaletteThisFrame;
+            LastFrameWalkerCrowdMultiPoseRejectedUnsupported = _walkerCrowdMultiPoseRejectedUnsupportedThisFrame;
+            LastFrameWalkerCrowdMultiPoseRejectedChildren = _walkerCrowdMultiPoseRejectedChildrenThisFrame;
+            LastFrameWalkerCrowdMultiPoseRejectedTypeOrRenderer = _walkerCrowdMultiPoseRejectedTypeOrRendererThisFrame;
+            LastFrameWalkerCrowdMultiPoseRejectedMutableMesh = _walkerCrowdMultiPoseRejectedMutableMeshThisFrame;
+            LastFrameWalkerCrowdMultiPoseRejectedVisibility = _walkerCrowdMultiPoseRejectedVisibilityThisFrame;
+            LastFrameWalkerCrowdMultiPoseRejectedAnimation = _walkerCrowdMultiPoseRejectedAnimationThisFrame;
+            LastFrameWalkerCrowdMultiPoseRejectedOneShot = _walkerCrowdMultiPoseRejectedOneShotThisFrame;
+            LastFrameWalkerCrowdMultiPoseRejectedMaterial = _walkerCrowdMultiPoseRejectedMaterialThisFrame;
 
             _walkerCrowdMultiPoseObjectsThisFrame = 0;
             _walkerCrowdMultiPoseMeshInstancesThisFrame = 0;
@@ -270,6 +294,14 @@ namespace Client.Main.Objects
             _walkerCrowdMultiPoseRejectedBuffersThisFrame = 0;
             _walkerCrowdMultiPoseRejectedBonesThisFrame = 0;
             _walkerCrowdMultiPoseRejectedPaletteThisFrame = 0;
+            _walkerCrowdMultiPoseRejectedUnsupportedThisFrame = 0;
+            _walkerCrowdMultiPoseRejectedChildrenThisFrame = 0;
+            _walkerCrowdMultiPoseRejectedTypeOrRendererThisFrame = 0;
+            _walkerCrowdMultiPoseRejectedMutableMeshThisFrame = 0;
+            _walkerCrowdMultiPoseRejectedVisibilityThisFrame = 0;
+            _walkerCrowdMultiPoseRejectedAnimationThisFrame = 0;
+            _walkerCrowdMultiPoseRejectedOneShotThisFrame = 0;
+            _walkerCrowdMultiPoseRejectedMaterialThisFrame = 0;
         }
 
         private static bool IsWalkerCrowdInstancingSupported() =>
@@ -312,6 +344,37 @@ namespace Client.Main.Objects
             return TryQueueWalkerCrowdLegacyForInstancing();
         }
 
+        private static void RegisterWalkerCrowdObjectRejection(WalkerCrowdRejectionReason reason)
+        {
+            switch (reason)
+            {
+                case WalkerCrowdRejectionReason.Unsupported:
+                    _walkerCrowdMultiPoseRejectedUnsupportedThisFrame++;
+                    break;
+                case WalkerCrowdRejectionReason.Children:
+                    _walkerCrowdMultiPoseRejectedChildrenThisFrame++;
+                    break;
+                case WalkerCrowdRejectionReason.TypeOrRenderer:
+                    _walkerCrowdMultiPoseRejectedTypeOrRendererThisFrame++;
+                    break;
+                case WalkerCrowdRejectionReason.MutableMesh:
+                    _walkerCrowdMultiPoseRejectedMutableMeshThisFrame++;
+                    break;
+                case WalkerCrowdRejectionReason.Visibility:
+                    _walkerCrowdMultiPoseRejectedVisibilityThisFrame++;
+                    break;
+                case WalkerCrowdRejectionReason.Animation:
+                    _walkerCrowdMultiPoseRejectedAnimationThisFrame++;
+                    break;
+                case WalkerCrowdRejectionReason.OneShot:
+                    _walkerCrowdMultiPoseRejectedOneShotThisFrame++;
+                    break;
+                case WalkerCrowdRejectionReason.Material:
+                    _walkerCrowdMultiPoseRejectedMaterialThisFrame++;
+                    break;
+            }
+        }
+
         internal static bool HasPendingWalkerCrowdInstancingBatches() =>
             _walkerCrowdMultiPoseActiveBatches.Count > 0 || HasPendingWalkerCrowdLegacyInstancingBatches();
 
@@ -328,9 +391,11 @@ namespace Client.Main.Objects
         {
             _walkerCrowdMultiPoseAttemptsThisFrame++;
 
-            if (!CanUseWalkerCrowdInstancing() || Model?.Meshes == null || _meshes == null)
+            if (!CanUseWalkerCrowdInstancing(out WalkerCrowdRejectionReason rejectionReason) ||
+                Model?.Meshes == null || _meshes == null)
             {
                 _walkerCrowdMultiPoseRejectedObjectThisFrame++;
+                RegisterWalkerCrowdObjectRejection(rejectionReason);
                 return false;
             }
 

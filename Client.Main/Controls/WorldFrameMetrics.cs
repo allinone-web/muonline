@@ -17,6 +17,18 @@ namespace Client.Main.Controls
         public int AnimationUpdates { get; internal set; }
         public int AnimationSkips { get; internal set; }
         public int LowQualityObjects { get; internal set; }
+        public double LongestObjectUpdateMs { get; internal set; }
+        public string LongestObjectUpdateType { get; internal set; }
+        public string LongestObjectUpdateName { get; internal set; }
+        public ushort LongestObjectUpdateNetworkId { get; internal set; }
+        public int RenderFailures { get; internal set; }
+        public long LastRenderFailureSequence { get; internal set; }
+        public int LastRenderFailureFrameIndex { get; internal set; }
+        public string LastRenderFailurePhase { get; internal set; }
+        public string LastRenderFailureType { get; internal set; }
+        public string LastRenderFailureName { get; internal set; }
+        public ushort LastRenderFailureNetworkId { get; internal set; }
+        public string LastRenderFailureMessage { get; internal set; }
 
         public void Reset()
         {
@@ -32,6 +44,13 @@ namespace Client.Main.Controls
             AnimationUpdates = 0;
             AnimationSkips = 0;
             LowQualityObjects = 0;
+            LongestObjectUpdateMs = 0d;
+            LongestObjectUpdateType = null;
+            LongestObjectUpdateName = null;
+            LongestObjectUpdateNetworkId = 0;
+            RenderFailures = 0;
+            // Last failure details are retained across frames so a transient render
+            // fault remains visible in diagnostics after the object recovers.
         }
     }
 }

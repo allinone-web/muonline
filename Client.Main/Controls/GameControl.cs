@@ -453,9 +453,7 @@ namespace Client.Main.Controls
             if (Status == GameControlStatus.Disposed) return;
             if (Parent == null) return;
             if (Parent.Controls.Count == 0 || Parent.Controls[^1] == this) return; // Check count before accessing ^1
-            var currentParent = Parent; // Store parent in case 'this' is removed and Parent becomes null
-            currentParent.Controls.Remove(this);
-            currentParent.Controls.Add(this);
+            Parent.Controls.MoveToEnd(this);
         }
 
         public void SendToBack()
@@ -463,9 +461,7 @@ namespace Client.Main.Controls
             if (Status == GameControlStatus.Disposed) return;
             if (Parent == null) return;
             if (Parent.Controls.Count == 0 || Parent.Controls[0] == this) return; // Check count before accessing [0]
-            var currentParent = Parent;
-            currentParent.Controls.Remove(this);
-            currentParent.Controls.Insert(0, this);
+            Parent.Controls.MoveToStart(this);
         }
 
         // Protected Methods

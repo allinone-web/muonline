@@ -4,6 +4,7 @@ using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Models;
 using Client.Main.Objects;
+using Client.Main.Objects.Player;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System.Runtime.CompilerServices;
@@ -22,6 +23,7 @@ namespace Client.Main.Graphics
         private readonly List<WorldObject> _nearbyObjects = new(256);
         private readonly PriorityQueue<ModelObject, float> _closestCasters = new();
         private readonly List<ModelObject> _selectedCasters = new(128);
+        private readonly HashSet<ModelObject> _renderedCasters = new();
         private readonly BoundingFrustum _lightFrustum = new BoundingFrustum(Matrix.Identity);
         private readonly ConditionalWeakTable<Effect, ShadowEffectBindings> _effectBindings = new();
         private Vector3 _lastCameraPosition = new(float.NaN, float.NaN, float.NaN);
@@ -83,6 +85,23 @@ namespace Client.Main.Graphics
         public bool IsReady => _shadowMap != null && Constants.ENABLE_SHADOW_MAPPING && Constants.SUN_ENABLED
             && !(Constants.ENABLE_DAY_NIGHT_CYCLE && SunCycleManager.IsNight);
 
+        /// <summary>
+        /// Returns true only when the actor (or its modular root) is represented in the
+        /// currently rendered shadow map. A globally ready shadow target does not imply
+        /// that every nearby NPC was selected when the caster budget was reached.
+        /// </summary>
+        public bool HasRenderedCaster(ModelObject model)
+        {
+            if (!IsReady || model == null)
+                return false;
+
+            ModelObject root = model;
+            while (root.Parent is ModelObject parentModel)
+                root = parentModel;
+
+            return _renderedCasters.Contains(root);
+        }
+
         public ShadowMapRenderer(GraphicsDevice graphicsDevice)
         {
             _graphicsDevice = graphicsDevice ?? throw new ArgumentNullException(nameof(graphicsDevice));
@@ -94,6 +113,7 @@ namespace Client.Main.Graphics
             _shadowMap?.Dispose();
             _shadowMap = null;
             _shadowCasterSupported = false;
+            _renderedCasters.Clear();
         }
 
         public void EnsureRenderTarget()
@@ -131,21 +151,31 @@ namespace Client.Main.Graphics
                     0,
                     RenderTargetUsage.DiscardContents);
             }
+            _renderedCasters.Clear();
             _forceRender = true; // make sure the new target is populated before reuse
         }
 
         public void RenderShadowMap(WorldControl world)
         {
             if (world == null || !world.EnableShadows || !Constants.ENABLE_SHADOW_MAPPING || !Constants.SUN_ENABLED)
+            {
+                _renderedCasters.Clear();
                 return;
+            }
 
             // Skip shadow rendering at night when day-night cycle is active
             if (Constants.ENABLE_DAY_NIGHT_CYCLE && SunCycleManager.IsNight)
+            {
+                _renderedCasters.Clear();
                 return;
+            }
 
             var camera = Camera.Instance;
             if (camera == null)
+            {
+                _renderedCasters.Clear();
                 return;
+            }
 
             _frameCounter++;
             int updateInterval = Math.Max(1, Constants.SHADOW_UPDATE_INTERVAL);
@@ -186,7 +216,10 @@ namespace Client.Main.Graphics
 
             var shadowEffect = GraphicsManager.Instance.DynamicLightingEffect;
             if (shadowEffect == null || _shadowMap == null)
+            {
+                _renderedCasters.Clear();
                 return;
+            }
 
             ShadowEffectBindings bindings = _effectBindings.GetValue(
                 shadowEffect,
@@ -194,6 +227,7 @@ namespace Client.Main.Graphics
             _shadowCasterSupported = bindings.ShadowCasterTechnique != null;
             if (!_shadowCasterSupported)
             {
+                _renderedCasters.Clear();
                 _renderedCasterSignature = _currentCasterSignature;
                 _forceRender = false;
                 return;
@@ -225,8 +259,13 @@ namespace Client.Main.Graphics
                 // Terrain as caster
                 world.Terrain?.RenderShadowMap(shadowEffect, LightViewProjection);
 
+                _renderedCasters.Clear();
                 for (int i = 0; i < _selectedCasters.Count; i++)
-                    _selectedCasters[i].DrawShadowCaster(shadowEffect, LightViewProjection);
+                {
+                    ModelObject caster = _selectedCasters[i];
+                    if (caster.DrawShadowCaster(shadowEffect, LightViewProjection) > 0)
+                        _renderedCasters.Add(caster);
+                }
 
                 _renderedCasterSignature = _currentCasterSignature;
 
@@ -317,6 +356,34 @@ namespace Client.Main.Graphics
                 hash *= prime;
                 hash ^= caster.AnimationPoseVersion;
                 hash *= prime;
+
+                // Modular player/NPC actors load and swap body-part models independently.
+                // Include direct child readiness/model state so the shadow map refreshes
+                // when armor, boots, helm, wings or weapons become drawable.
+                int childCount = caster.Children.Count;
+                hash ^= unchecked((uint)childCount);
+                hash *= prime;
+                for (int childIndex = 0; childIndex < childCount; childIndex++)
+                {
+                    if (caster.Children[childIndex] is not ModelObject child)
+                        continue;
+
+                    uint childIdentity = unchecked((uint)RuntimeHelpers.GetHashCode(child));
+                    uint childModelIdentity = unchecked((uint)(child.Model != null
+                        ? RuntimeHelpers.GetHashCode(child.Model)
+                        : 0));
+                    uint childState = unchecked((uint)child.Status) |
+                                      (child.Hidden ? 1u << 8 : 0u) |
+                                      (child.RenderShadow ? 1u << 9 : 0u);
+
+                    hash ^= childIdentity;
+                    hash *= prime;
+                    hash ^= childModelIdentity;
+                    hash *= prime;
+                    hash ^= childState;
+                    hash *= prime;
+                }
+
                 hash ^= unchecked((uint)qx);
                 hash *= prime;
                 hash ^= unchecked((uint)qy);
@@ -470,9 +537,18 @@ namespace Client.Main.Graphics
                     return;
             }
 
-            // PriorityQueue dequeues the smallest priority. Negating distance keeps the
-            // farthest selected caster at the head, so it can be replaced in O(log N).
-            float priority = -distanceSquared;
+            // Keep player/NPC actor shadows stable when the caster budget is saturated.
+            // The real distance still gates the candidate above; this weighted score only
+            // decides which in-range actors survive the bounded selection.
+            float selectionScore = distanceSquared;
+            if (model is PlayerObject player)
+                selectionScore *= player.IsMainWalker ? 0.05f : 0.35f;
+            else if (model is NPCObject)
+                selectionScore *= 0.55f;
+
+            // PriorityQueue dequeues the smallest priority. Negating the score keeps the
+            // least important selected caster at the head, so it can be replaced in O(log N).
+            float priority = -selectionScore;
             if (destination.Count < maxCasters)
             {
                 destination.Enqueue(model, priority);
@@ -480,8 +556,8 @@ namespace Client.Main.Graphics
             }
 
             destination.TryPeek(out _, out float farthestPriority);
-            float farthestDistanceSquared = -farthestPriority;
-            if (distanceSquared >= farthestDistanceSquared)
+            float worstSelectionScore = -farthestPriority;
+            if (selectionScore >= worstSelectionScore)
                 return;
 
             destination.Dequeue();

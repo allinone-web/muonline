@@ -313,6 +313,20 @@
     set('pass-effects', `${number(passes.shadowMs, 2)} / ${number(passes.postProcessMs, 2)} ms`);
     set('pass-preview', `${number(passes.previewMs, 2)} ms · ${number(passes.previewRenders)} render`);
 
+    const expectedZ = s.session.playerExpectedZ;
+    const heightError = s.session.playerHeightError;
+    set('player-height', expectedZ == null ? '—' : `${number(s.session.playerZ, 2)} / ${number(expectedZ, 2)}`);
+    set('player-height-error', heightError == null ? '—' : `${number(heightError, 3)} units`);
+    const renderFailureAge = s.world.lastRenderFailureFrameIndex > 0
+      ? Math.max(0, (s.session.frameIndex || 0) - s.world.lastRenderFailureFrameIndex)
+      : 0;
+    set('render-faults', s.world.lastRenderFailureSequence > 0
+      ? `${number(s.world.renderFailures)} · ${s.world.lastRenderFailurePhase || 'unknown'} · ${renderFailureAge}f ago`
+      : 'none');
+    set('draw-exception', s.runtime.drawExceptionSequence > 0
+      ? `${s.runtime.drawExceptionPhase || 'unknown'} · ${number(s.runtime.drawExceptionAgeMs, 0)} ms ago`
+      : 'none');
+
     setStatus('gpu-status', s.animation.gpuSkinningEnabled && s.animation.gpuSkinningSupported, 'ACTIVE', s.animation.gpuSkinningEnabled ? 'UNAVAILABLE' : 'DISABLED');
     set('gpu-meshes', number(s.animation.gpuSkinnedMeshes)); set('gpu-batches', `${number(s.animation.gpuBatchDrawCalls)} / ${number(s.animation.gpuBatchedMeshes)}`);
     set('gpu-efficiency', ratio(s.animation.gpuBatchedMeshes, s.animation.gpuBatchDrawCalls));
@@ -323,6 +337,10 @@
     set('mp-attempts', `${number(s.animation.multiPoseAttempts)} / ${number(s.animation.multiPoseQueuedObjects)}`);
     set('mp-reject-policy', `${number(s.animation.multiPoseRejectedObject)} / ${number(s.animation.multiPoseRejectedMesh)}`);
     set('mp-reject-data', `${number(s.animation.multiPoseRejectedBuffers)} / ${number(s.animation.multiPoseRejectedBones)}`);
+    set('mp-reject-visual', `${number(s.animation.multiPoseRejectedChildren)} / ${number(s.animation.multiPoseRejectedMaterial)}`);
+    set('mp-reject-animation', `${number(s.animation.multiPoseRejectedAnimation)} / ${number(s.animation.multiPoseRejectedOneShot)}`);
+    set('mp-reject-state', `${number(s.animation.multiPoseRejectedVisibility)} / ${number(s.animation.multiPoseRejectedMutableMesh)}`);
+    set('mp-reject-platform', `${number(s.animation.multiPoseRejectedUnsupported)} / ${number(s.animation.multiPoseRejectedTypeOrRenderer)}`);
     set('cpu-fallbacks', number(s.animation.cpuFallbackDrawCalls));
 
     set('process-cpu', percent(s.runtime.processCpuPercent)); set('process-memory', `${number(s.runtime.workingSetMb)} / ${number(s.runtime.privateMemoryMb)} MB`);
@@ -339,6 +357,25 @@
     set('gc-counts', `${number(s.frame.gen0Collections)} / ${number(s.frame.gen1Collections)} / ${number(s.frame.gen2Collections)}`);
     set('bmd-hit', `${number(s.assets.cacheHits)} / ${number(s.assets.cacheMisses)}`); set('bmd-gpu', `${number(s.assets.gpuMeshBuffers)} / ${number(s.assets.gpuBatchBuffers)}`);
     set('bmd-topology', number(s.assets.meshTopologies)); set('bmd-pruned', `${number(s.assets.prunedGpuMeshes)} / ${number(s.assets.prunedGpuBatches)} / ${number(s.assets.prunedTopologies)}`);
+    const updatePasses = s.updatePasses || {};
+    set('update-core', `${number(updatePasses.dispatcherMs,2)} / ${number(updatePasses.globalMs,2)} ms`);
+    set('update-scene', `${number(updatePasses.sceneMs,2)} / ${number(updatePasses.frameworkMs,2)} ms`);
+    set('update-controls', `${number(updatePasses.sceneControlTreeMs,2)} / ${number(updatePasses.scenePostMs,2)} ms`);
+    set('update-world', `${number(updatePasses.worldInitializationMs,2)} / ${number(updatePasses.worldVisibilityMs,2)} ms`);
+    set('update-game-services', `${number(updatePasses.gameBuffsMs,2)} / ${number(updatePasses.gameNotificationsMs,2)} ms`);
+    set('update-game-actions', `${number(updatePasses.gameScopePumpMs,2)} / ${number(updatePasses.gameInteractionMs,2)} ms`);
+    set('update-game-housekeeping', `${number(updatePasses.gameHousekeepingMs,2)} ms`);
+    const longestObject = s.world.longestObjectUpdateType || '—';
+    set('world-longest-update', s.world.longestObjectUpdateMs > 0 ? `${number(s.world.longestObjectUpdateMs,2)} ms · ${longestObject}` : '—');
+    set('alloc-split', `${number(s.frame.updateAllocatedKb,1)} / ${number(s.frame.drawAllocatedKb,1)} KB`);
+    set('path-total', `${number(s.runtime.lastPathApplyMs,2)} ms / ${number(s.runtime.lastPathLength)}`);
+    set('path-parts', `${number(s.runtime.lastPathQueueMs,2)} / ${number(s.runtime.lastPathFacingMs,2)} ms`);
+    set('path-send', `${number(s.runtime.lastPathBuildDirectionsMs,2)} / ${number(s.runtime.lastPathSendScheduleMs,2)} ms`);
+    set('bmd-miss-pose', `${number(s.assets.cacheMissPose)} / ${number(s.assets.cacheMissOwner)}`);
+    set('bmd-miss-storage', `${number(s.assets.cacheMissIndexUpload)} / ${number(s.assets.cacheMissMissingEntry)}`);
+    set('bmd-miss-identity', `${number(s.assets.cacheMissAsset)} / ${number(s.assets.cacheMissMesh)}`);
+    set('bmd-miss-other', `${number(s.assets.cacheMissColor)} / ${number(s.assets.cacheBypasses)}`);
+    set('bmd-miss-top', s.assets.topCacheMissModelName ? `${s.assets.topCacheMissModelName} · ${number(s.assets.topCacheMissModelCount)}` : '—');
   }
 
   function set(id, value) { $(id).textContent = value; }
@@ -528,7 +565,7 @@
       dataQuality: {
         medianSampleIntervalMs: 200, sceneTransitionCount: 0,
         hasRenderPassBreakdown: true, hasMultiPoseRejectionCounters: true,
-        note: 'Demo data includes the expanded v3 telemetry fields.'
+        note: 'Demo data includes the expanded v4 telemetry fields.'
       }
     };
   }
@@ -554,7 +591,7 @@
       const jitter = Math.sin(t * 1.7) * 1.3 + Math.sin(t * .31) * .8;
       const p95 = 10.8 + jitter + (Math.sin(t / 7) > .86 ? 8 : 0);
       const envelope = {
-        protocolVersion: 3, kind: 'snapshot', sessionId: 'demo-session',
+        protocolVersion: 7, kind: 'snapshot', sessionId: 'demo-session',
         timestampUtc: new Date(now - i * 200).toISOString(), snapshot: demoSnapshot(t, p95)
       };
       state.snapshots.push(envelope);
@@ -575,7 +612,7 @@
       const jitter = Math.sin(t * 1.7) * 1.3 + Math.random() * 1.2;
       const p95 = 10.8 + jitter + (Math.sin(t / 7) > .86 ? 8 : 0);
       const snapshot = demoSnapshot(t, p95);
-      const envelope = { protocolVersion: 3, kind: 'snapshot', sessionId: 'demo-session', timestampUtc: new Date().toISOString(), snapshot };
+      const envelope = { protocolVersion: 7, kind: 'snapshot', sessionId: 'demo-session', timestampUtc: new Date().toISOString(), snapshot };
       state.snapshots.push(envelope); state.latest = envelope;
       state.status = { pipeConnected: true, activeSessionId: 'demo-session' };
       trimState(); scheduleRender();
@@ -584,14 +621,15 @@
 
   function demoSnapshot(t, p95) {
     return {
-      session: { scene: 'GameScene', worldName: 'World 1', worldIndex: 1, mapId: 0, playerX: 13420, playerY: 10840, playerZ: 114, frameIndex: Math.floor(t*300), uptimeSeconds: t },
-      frame: { fps: 1000 / Math.max(6.5, p95 * .72), ups: 60, frameIndex: Math.floor(t*300), frameIntervalFrameIndex: Math.max(0, Math.floor(t*300)-1), rollingWindowStartFrameIndex: Math.max(0, Math.floor(t*300)-300), rollingWindowEndFrameIndex: Math.floor(t*300), rollingSampleCount: 300, rollingSequence: Math.floor(t*10), updateMs: 2.7 + Math.random(), drawMs: 5.2 + Math.random()*1.6, cpuFrameMs: 8.6, frameIntervalMs: p95*.72, frameIntervalCpuMs: 8.6, frameIntervalUnaccountedMs: Math.max(0, p95*.72-8.6), p50Ms: 8.1 + Math.random(), p95Ms: 10.4, p99Ms: 13.9, worstMs: 17.8, wallP50Ms: 9.4, wallP95Ms: p95, wallP99Ms: p95+3.5, wallWorstMs: p95+7, allocatedKb: 90+Math.random()*110, processAllocatedKb: 96+Math.random()*120, framesOver16Ms:1, framesOver33Ms:0, wallFramesOver16Ms:p95>16?8:1, wallFramesOver33Ms:0, gen0Collections:1, gen1Collections:0, gen2Collections:0, isActive:true, inactiveSleepMs:20, isFixedTimeStep:false, targetElapsedMs:1, vSyncEnabled:false },
-      world: { cullCandidates: 460, visibleObjects: 118+Math.floor(Math.sin(t)*12), cullMs:.42, cullWasRebuild:false, modelObjects:94, spriteObjects:7, transparentObjects:17, animationUpdates:42, animationSkips:38, lowQualityObjects:29 },
+      session: { scene: 'GameScene', worldName: 'World 1', worldIndex: 1, mapId: 0, playerX: 13420, playerY: 10840, playerZ: 114, playerTerrainZ: 114, playerExpectedZ: 114, playerHeightError: 0, playerTargetZ: 114, playerMoveTargetZ: 114, frameIndex: Math.floor(t*300), uptimeSeconds: t },
+      frame: { fps: 1000 / Math.max(6.5, p95 * .72), ups: 60, frameIndex: Math.floor(t*300), frameIntervalFrameIndex: Math.max(0, Math.floor(t*300)-1), rollingWindowStartFrameIndex: Math.max(0, Math.floor(t*300)-300), rollingWindowEndFrameIndex: Math.floor(t*300), rollingSampleCount: 300, rollingSequence: Math.floor(t*10), updateMs: 2.7 + Math.random(), drawMs: 5.2 + Math.random()*1.6, cpuFrameMs: 8.6, frameIntervalMs: p95*.72, frameIntervalCpuMs: 8.6, frameIntervalUnaccountedMs: Math.max(0, p95*.72-8.6), p50Ms: 8.1 + Math.random(), p95Ms: 10.4, p99Ms: 13.9, worstMs: 17.8, wallP50Ms: 9.4, wallP95Ms: p95, wallP99Ms: p95+3.5, wallWorstMs: p95+7, allocatedKb: 90+Math.random()*110, updateAllocatedKb:35, drawAllocatedKb:65, processAllocatedKb: 96+Math.random()*120, framesOver16Ms:1, framesOver33Ms:0, wallFramesOver16Ms:p95>16?8:1, wallFramesOver33Ms:0, gen0Collections:1, gen1Collections:0, gen2Collections:0, isActive:true, inactiveSleepMs:20, isFixedTimeStep:false, targetElapsedMs:1, vSyncEnabled:false },
+      world: { renderFailures:0, lastRenderFailureSequence:0, lastRenderFailureFrameIndex:0, lastRenderFailurePhase:null, lastRenderFailureType:null, lastRenderFailureName:null, lastRenderFailureNetworkId:0, lastRenderFailureMessage:null, cullCandidates: 460, visibleObjects: 118+Math.floor(Math.sin(t)*12), cullMs:.42, cullWasRebuild:false, modelObjects:94, spriteObjects:7, transparentObjects:17, animationUpdates:42, animationSkips:38, lowQualityObjects:29, longestObjectUpdateMs:.12, longestObjectUpdateType:'MonsterObject', longestObjectUpdateName:'Budge Dragon', longestObjectUpdateNetworkId:42 },
       rendering: { terrainDrawCalls:34, terrainTriangles:182000, terrainBlocks:112, terrainCells:1792, grassDrawCalls:12, registeredLights:23, activeLights:12, visibleLights:8, uploadedLights:8, terrainLightingGpu:true, objectLightingGpu:true, fxaaEnabled:true, alphaRgbEnabled:false, estimatedDrawCalls:145+Math.floor(Math.random()*14) },
-      animation: { gpuSkinningEnabled:true, gpuSkinningSupported:true, gpuSkinnedMeshes:122, gpuBatchDrawCalls:14, gpuBatchedMeshes:71, staticInstancingEnabled:true, staticInstancedObjects:144, staticMeshInstances:322, staticDrawCalls:18, multiPoseEnabled:true, multiPoseObjects:32, multiPoseMeshInstances:128, multiPoseUniquePoses:11, multiPoseDrawCalls:8, paletteUploads:2, paletteDirtyRows:4, paletteCacheHits:18, paletteBytes:32768, cpuFallbackDrawCalls:4, sharedPaletteHits:48, sharedPaletteMisses:3, multiPoseAttempts:36, multiPoseQueuedObjects:32, multiPoseRejectedObject:2, multiPoseRejectedMesh:2, multiPoseRejectedBuffers:0, multiPoseRejectedBones:0, multiPoseRejectedPalette:0 },
+      animation: { gpuSkinningEnabled:true, gpuSkinningSupported:true, gpuSkinnedMeshes:122, gpuBatchDrawCalls:14, gpuBatchedMeshes:71, staticInstancingEnabled:true, staticInstancedObjects:144, staticMeshInstances:322, staticDrawCalls:18, multiPoseEnabled:true, multiPoseObjects:32, multiPoseMeshInstances:128, multiPoseUniquePoses:11, multiPoseDrawCalls:8, paletteUploads:2, paletteDirtyRows:4, paletteCacheHits:18, paletteBytes:32768, cpuFallbackDrawCalls:4, sharedPaletteHits:48, sharedPaletteMisses:3, multiPoseAttempts:36, multiPoseQueuedObjects:32, multiPoseRejectedObject:2, multiPoseRejectedMesh:2, multiPoseRejectedBuffers:0, multiPoseRejectedBones:0, multiPoseRejectedPalette:0, multiPoseRejectedUnsupported:0, multiPoseRejectedChildren:1, multiPoseRejectedTypeOrRenderer:0, multiPoseRejectedMutableMesh:0, multiPoseRejectedVisibility:0, multiPoseRejectedAnimation:1, multiPoseRejectedOneShot:0, multiPoseRejectedMaterial:0 },
       passes: { sceneDrawMs:6.8, sceneAfterMs:.5, postProcessMs:.4, frameworkDrawMs:.05, shadowMs:.7, worldBaseMs:1.6, worldObjectsMs:4.5, terrainOpaqueMs:1.2, terrainAfterMs:.2, previewMs:0, previewRenders:0, previewCacheHits:0, previewCacheMisses:0, previewBudgetSkips:0 },
-      runtime: { mainThreadQueued:3, mainThreadProcessed:8, mainThreadMs:.38, mainThreadLongestActionMs:.12, mainThreadLongestActionQueueMs:.04, mainThreadLongestActionName:'UI refresh', mainThreadBudgetExceeded:false, mainThreadBudgetOverrunMs:0, latestSlowActionSequence:0, latestSlowActionName:null, latestSlowActionPriority:null, latestSlowActionMs:0, latestSlowActionQueueMs:0, latestSlowActionAgeMs:0, schedulerQueued:2, schedulerProcessed:3, simulationSteps:1, simulationElapsedMs:16.67, simulationAlpha:.4, processCpuPercent:18+Math.random()*6, workingSetMb:690+Math.sin(t/8)*18, privateMemoryMb:820, managedMemoryMb:128+Math.sin(t/5)*8, threadCount:34, telemetryDroppedMessages:0 },
-      assets: { vertexBufferUpdates:8, indexBufferUploads:0, verticesTransformed:3200, meshesProcessed:7, cacheHits:114, cacheMisses:3, gpuMeshBuffers:89, gpuBatchBuffers:31, meshTopologies:152, prunedGpuMeshes:0, prunedGpuBatches:0, prunedTopologies:0 }
+      updatePasses: { dispatcherMs:.4, globalMs:.2, sceneMs:2.1, frameworkMs:.1, sceneInputMs:.1, sceneControlTreeMs:1.8, scenePostMs:.2, worldBaseMs:.6, worldInitializationMs:.1, worldVisibilityMs:.8, worldCullMs:.1, worldHoverMs:.1, gameBuffsMs:.05, gameNotificationsMs:.03, gameScopePumpMs:.04, gameInteractionMs:.12, gameHousekeepingMs:.02 },
+      runtime: { mainThreadQueued:3, mainThreadProcessed:8, mainThreadMs:.38, mainThreadLongestActionMs:.12, mainThreadLongestActionQueueMs:.04, mainThreadLongestActionName:'UI refresh', mainThreadBudgetExceeded:false, mainThreadBudgetOverrunMs:0, latestSlowActionSequence:0, latestSlowActionName:null, latestSlowActionPriority:null, latestSlowActionMs:0, latestSlowActionQueueMs:0, latestSlowActionAgeMs:0, schedulerQueued:2, schedulerProcessed:3, simulationSteps:1, simulationElapsedMs:16.67, simulationAlpha:.4, processCpuPercent:18+Math.random()*6, workingSetMb:690+Math.sin(t/8)*18, privateMemoryMb:820, managedMemoryMb:128+Math.sin(t/5)*8, threadCount:34, telemetryDroppedMessages:0, lastPathLength:12, lastPathApplyMs:.25, lastPathQueueMs:.08, lastPathFacingMs:.04, lastPathBuildDirectionsMs:.03, lastPathSendScheduleMs:.04, drawExceptionSequence:0, drawExceptionFrameIndex:0, drawExceptionAgeMs:0, drawExceptionPhase:null, drawExceptionType:null, drawExceptionMessage:null },
+      assets: { vertexBufferUpdates:8, indexBufferUploads:0, verticesTransformed:3200, meshesProcessed:7, cacheHits:114, cacheMisses:3, cacheMissIndexUpload:0, cacheMissMissingEntry:1, cacheMissInvalidEntry:0, cacheMissOwner:0, cacheMissAsset:0, cacheMissMesh:0, cacheMissPose:2, cacheMissVertexCount:0, cacheMissColor:0, cacheBypasses:0, topCacheMissModelName:'Monster01.bmd', topCacheMissModelCount:3, gpuMeshBuffers:89, gpuBatchBuffers:31, meshTopologies:152, prunedGpuMeshes:0, prunedGpuBatches:0, prunedTopologies:0 }
     };
   }
 
