@@ -161,6 +161,12 @@ namespace Client.Main.Core.Client
         public ushort Energy { get; set; } = 0;
         public ushort Leadership { get; set; } = 0;
 
+        // Fruit points reported by CharacterInformation (F3/03).
+        public ushort UsedFruitPoints { get; private set; } = 0;
+        public ushort MaxFruitPoints { get; private set; } = 0;
+        public ushort UsedNegativeFruitPoints { get; private set; } = 0;
+        public ushort MaxNegativeFruitPoints { get; private set; } = 0;
+
         // Combat speeds (provided by server, Season 6)
         public ushort AttackSpeed { get; private set; } = 0;
         public ushort MagicSpeed { get; private set; } = 0;
@@ -1151,6 +1157,18 @@ namespace Client.Main.Core.Client
             RaiseMana();
             _logger.LogInformation("💧 Max Mana: {Max} | ✨ Max AG: {MaxAbility}",
                                    MaximumMana, MaximumAbility);
+        }
+
+        public void UpdateFruitPoints(
+            ushort usedFruitPoints,
+            ushort maxFruitPoints,
+            ushort usedNegativeFruitPoints,
+            ushort maxNegativeFruitPoints)
+        {
+            UsedFruitPoints = usedFruitPoints;
+            MaxFruitPoints = maxFruitPoints;
+            UsedNegativeFruitPoints = usedNegativeFruitPoints;
+            MaxNegativeFruitPoints = maxNegativeFruitPoints;
         }
 
         /// <summary>

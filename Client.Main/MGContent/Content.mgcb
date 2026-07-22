@@ -31,6 +31,12 @@
 /processorParam:PremultiplyAlpha=True
 /build:Arial.spritefont
 
+#begin ArialSmall.spritefont
+/importer:FontDescriptionImporter
+/processor:FontDescriptionProcessor
+/processorParam:PremultiplyAlpha=True
+/build:ArialSmall.spritefont
+
 #begin NotoKR.spritefont
 /importer:FontDescriptionImporter
 /processor:FontDescriptionProcessor

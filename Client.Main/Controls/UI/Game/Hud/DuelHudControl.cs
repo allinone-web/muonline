@@ -122,7 +122,7 @@ namespace Client.Main.Controls.UI.Game.Hud
             SpriteBatchScope? scope = null;
             if (!SpriteBatchScope.BatchIsBegun)
             {
-                scope = new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend, transform: UiScaler.SpriteTransform);
+                scope = new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp, transform: UiScaler.SpriteTransform);
             }
 
             try
@@ -159,7 +159,7 @@ namespace Client.Main.Controls.UI.Game.Hud
             gd.Clear(Color.Transparent);
 
             var spriteBatch = GraphicsManager.Instance.Sprite;
-            using (new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend))
+            using (new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp))
             {
                 DrawStatic(spriteBatch);
             }

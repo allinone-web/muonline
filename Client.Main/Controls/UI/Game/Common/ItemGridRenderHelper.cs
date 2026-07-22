@@ -1,5 +1,6 @@
 using System;
 using Client.Main.Content;
+using Client.Main.Controllers;
 using Client.Main.Models;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
@@ -77,21 +78,27 @@ namespace Client.Main.Controls.UI.Game.Common
         {
             if (font == null) return;
             string text = quantity.ToString();
-            const float scale = 0.38f;
-            Vector2 size = font.MeasureString(text) * scale;
-            Vector2 pos = new(rect.Right - size.X - 2, rect.Y + 2);
+            SpriteFont renderFont = GraphicsManager.GetUiFont(10f, out float scale) ?? font;
+            Vector2 size = renderFont.MeasureString(text) * scale;
+            Vector2 pos = new(
+                MathF.Round(rect.Right - size.X - 3),
+                MathF.Round(rect.Y + 2));
 
-            for (int dx = -1; dx <= 1; dx++)
+            Texture2D pixel = GraphicsManager.Instance.Pixel;
+            if (pixel != null)
             {
-                for (int dy = -1; dy <= 1; dy++)
-                {
-                    if (dx == 0 && dy == 0) continue;
-                    spriteBatch.DrawString(font, text, pos + new Vector2(dx, dy), Color.Black * alpha,
-                                          0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
-                }
+                var background = new Rectangle(
+                    (int)pos.X - 2,
+                    (int)pos.Y - 1,
+                    (int)MathF.Ceiling(size.X) + 4,
+                    (int)MathF.Ceiling(size.Y) + 2);
+                spriteBatch.Draw(pixel, background, Color.Black * 0.72f * alpha);
             }
 
-            spriteBatch.DrawString(font, text, pos, textColor * alpha, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+            spriteBatch.DrawString(renderFont, text, pos + Vector2.One, Color.Black * 0.8f * alpha,
+                                   0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+            spriteBatch.DrawString(renderFont, text, pos, textColor * alpha,
+                                   0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
         }
 
         public static void DrawItemLevelBadge(SpriteBatch spriteBatch, Texture2D pixel, SpriteFont font, Rectangle rect, int level, Func<int, Color> levelColorSelector, Color shadowColor)
@@ -99,18 +106,20 @@ namespace Client.Main.Controls.UI.Game.Common
             if (font == null || level <= 0 || pixel == null) return;
 
             string text = $"+{level}";
-            const float scale = 0.30f;
+            SpriteFont renderFont = GraphicsManager.GetUiFont(9f, out float scale) ?? font;
 
-            Vector2 textSize = font.MeasureString(text) * scale;
-            Vector2 pos = new(rect.X + 2, rect.Bottom - textSize.Y - 2);
+            Vector2 textSize = renderFont.MeasureString(text) * scale;
+            Vector2 pos = new(
+                rect.X + 2,
+                MathF.Round(rect.Bottom - textSize.Y - 2));
 
             Color levelColor = levelColorSelector(level);
 
             var bgRect = new Rectangle((int)pos.X - 2, (int)pos.Y - 1, (int)textSize.X + 4, (int)textSize.Y + 2);
             spriteBatch.Draw(pixel, bgRect, shadowColor);
 
-            spriteBatch.DrawString(font, text, pos + Vector2.One, Color.Black * 0.8f, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
-            spriteBatch.DrawString(font, text, pos, levelColor, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+            spriteBatch.DrawString(renderFont, text, pos + Vector2.One, Color.Black * 0.8f, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+            spriteBatch.DrawString(renderFont, text, pos, levelColor, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
         }
 
         public static void DrawItemPlaceholder(SpriteBatch spriteBatch, Texture2D pixel, SpriteFont font, Rectangle rect, InventoryItem item, Color bgColor, Color textColor)
@@ -125,11 +134,11 @@ namespace Client.Main.Controls.UI.Game.Common
                     ? item.Definition.Name[..5] + ".."
                     : item.Definition.Name;
 
-                float scale = 0.24f;
-                Vector2 size = font.MeasureString(shortName) * scale;
+                SpriteFont renderFont = GraphicsManager.GetUiFont(8f, out float scale) ?? font;
+                Vector2 size = renderFont.MeasureString(shortName) * scale;
                 Vector2 pos = new(rect.X + (rect.Width - size.X) / 2, rect.Y + (rect.Height - size.Y) / 2);
 
-                spriteBatch.DrawString(font, shortName, pos, textColor,
+                spriteBatch.DrawString(renderFont, shortName, pos, textColor,
                                        0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
             }
         }

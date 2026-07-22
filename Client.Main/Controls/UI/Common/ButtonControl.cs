@@ -17,13 +17,23 @@ namespace Client.Main.Controls.UI.Common
             {
                 if (_text != value)
                 {
-                    _text = value;
+                    _text = value?.Normalize(NormalizationForm.FormC);
                     _truncatedText = null;
                 }
             }
         }
 
-        public float FontSize { get; set; } = 12f;
+        private float _fontSize = 12f;
+        public float FontSize
+        {
+            get => _fontSize;
+            set
+            {
+                if (_fontSize == value) return;
+                _fontSize = value;
+                _truncatedText = null;
+            }
+        }
         public Color TextColor { get; set; } = Color.White;
         public Color HoverTextColor { get; set; } = Color.Yellow;
         public Color DisabledTextColor { get; set; } = Color.DarkGray;
@@ -49,18 +59,18 @@ namespace Client.Main.Controls.UI.Common
 
         private string TruncateTextToFit(string text, float maxWidth)
         {
-            if (_font == null || string.IsNullOrEmpty(text) || maxWidth <= 0)
+            SpriteFont font = GraphicsManager.GetUiFont(FontSize, out float scale) ?? _font;
+            if (font == null || string.IsNullOrEmpty(text) || maxWidth <= 0)
                 return string.Empty;
 
-            float scale = FontSize / Constants.BASE_FONT_SIZE;
-            if (_font.MeasureString(text).X * scale <= maxWidth)
+            if (font.MeasureString(text).X * scale <= maxWidth)
                 return text;
 
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < text.Length; i++)
             {
                 sb.Append(text[i]);
-                if (_font.MeasureString(sb.ToString() + "...").X * scale > maxWidth)
+                if (font.MeasureString(sb.ToString() + "...").X * scale > maxWidth)
                 {
                     sb.Remove(sb.Length - 1, 1);
                     break;
@@ -133,7 +143,8 @@ namespace Client.Main.Controls.UI.Common
             base.Draw(gameTime);
 
             // Draw text on top of everything (background or sprite)
-            if (_font != null && !string.IsNullOrEmpty(Text))
+            SpriteFont font = GraphicsManager.GetUiFont(FontSize, out float scale) ?? _font;
+            if (font != null && !string.IsNullOrEmpty(Text))
             {
                 if (_truncatedText == null)
                 {
@@ -141,15 +152,14 @@ namespace Client.Main.Controls.UI.Common
                 }
 
                 Color currentTextColor = Enabled ? (IsMouseOver ? HoverTextColor : TextColor) : DisabledTextColor;
-                float scale = FontSize / Constants.BASE_FONT_SIZE; // Use defined constant
-                Vector2 textSize = _font.MeasureString(_truncatedText) * scale;
+                Vector2 textSize = font.MeasureString(_truncatedText) * scale;
 
                 // Center text within the button's display rectangle
                 Vector2 textPosition = new Vector2(
-                    DisplayPosition.X + (DisplaySize.X - textSize.X) / 2,
-                    DisplayPosition.Y + (DisplaySize.Y - textSize.Y) / 2
-                );
-                GraphicsManager.Instance.Sprite.DrawString(_font, _truncatedText, textPosition, currentTextColor * Alpha, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+                    MathF.Round(DisplayPosition.X + (DisplaySize.X - textSize.X) / 2),
+                    MathF.Round(DisplayPosition.Y + (DisplaySize.Y - textSize.Y) / 2));
+                GraphicsManager.Instance.Sprite.DrawString(font, _truncatedText, textPosition + Vector2.One, Color.Black * 0.65f * Alpha, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+                GraphicsManager.Instance.Sprite.DrawString(font, _truncatedText, textPosition, currentTextColor * Alpha, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
             }
         }
 

@@ -867,6 +867,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             private readonly List<IOptionRow> _options = new();
             private readonly List<GameControl> _dynamicControls = new();
             private const int ContentStartY = 202;
+            private const int ContentPaddingX = 30;
             private const int OptionRowHeight = 30;
             private readonly ButtonControl _closeButton;
             private readonly int _panelWidth;
@@ -1451,7 +1452,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 var heading = new LabelControl
                 {
                     Text = label,
-                    X = 14,
+                    X = ContentPaddingX,
                     Y = currentY,
                     FontSize = 13f,
                     TextColor = ModernHudTheme.TextGold,
@@ -1502,7 +1503,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     _label = new LabelControl
                     {
                         Text = label,
-                        X = 20,
+                        X = ContentPaddingX,
                         Y = y,
                         FontSize = 11.5f,
                         TextColor = ModernHudTheme.TextWhite,
@@ -1581,7 +1582,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     _label = new LabelControl
                     {
                         Text = label,
-                        X = 20,
+                        X = ContentPaddingX,
                         Y = y,
                         FontSize = 11.5f,
                         TextColor = ModernHudTheme.TextWhite,

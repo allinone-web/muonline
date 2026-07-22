@@ -517,7 +517,7 @@ namespace Client.Main.Controls.UI.Game.Trade
             SpriteBatchScope? scope = null;
             if (!SpriteBatchScope.BatchIsBegun)
             {
-                scope = new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend, transform: UiScaler.SpriteTransform);
+                scope = new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp, transform: UiScaler.SpriteTransform);
             }
 
             try
@@ -569,7 +569,7 @@ namespace Client.Main.Controls.UI.Game.Trade
             SpriteBatchScope? scope = null;
             if (!SpriteBatchScope.BatchIsBegun)
             {
-                scope = new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend, transform: UiScaler.SpriteTransform);
+                scope = new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp, transform: UiScaler.SpriteTransform);
             }
 
             try
@@ -607,7 +607,7 @@ namespace Client.Main.Controls.UI.Game.Trade
             gd.Clear(Color.Transparent);
 
             var spriteBatch = GraphicsManager.Instance.Sprite;
-            using (new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend))
+            using (new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp))
             {
                 DrawStaticElements(spriteBatch);
             }
@@ -746,7 +746,7 @@ namespace Client.Main.Controls.UI.Game.Trade
             // Warning text
             if (_font != null)
             {
-                string warning = "⚠ CHECK ITEMS BEFORE ACCEPTING";
+                string warning = "[!] CHECK ITEMS BEFORE ACCEPTING";
                 float scale = 0.32f;
                 Vector2 size = _font.MeasureString(warning) * scale;
                 Vector2 pos = new((WINDOW_WIDTH - size.X) / 2, _dividerRect.Y + 12);

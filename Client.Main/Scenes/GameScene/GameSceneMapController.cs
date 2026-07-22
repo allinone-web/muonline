@@ -244,6 +244,7 @@ namespace Client.Main.Scenes
 
                 nextWorld.PrepareInitialVisibilitySnapshot();
                 _scene.ScheduleMapNameUpdateNextFrame($"MapChange.{worldType.Name}.UpdateMapName");
+                _ = _scene.RefreshMiniMapAsync();
                 MuGame.ResetFramePerformanceWindow($"world {nextWorld.WorldIndex} ready");
                 _logger?.LogDebug("GameScene.ChangeMap<{World}>: ChangeMap completed.", worldType.Name);
 

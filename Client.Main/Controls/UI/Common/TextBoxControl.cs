@@ -29,7 +29,8 @@ namespace Client.Main.Controls.UI.Common
                 _text.Clear();
                 if (!string.IsNullOrEmpty(value))
                 {
-                    _text.Append(value.Substring(0, Math.Min(value.Length, MaxLength)));
+                    string normalized = value.Normalize(NormalizationForm.FormC);
+                    _text.Append(normalized.Substring(0, Math.Min(normalized.Length, MaxLength)));
                 }
             }
         }
@@ -191,28 +192,28 @@ namespace Client.Main.Controls.UI.Common
             DrawBorder(spriteBatch, bounds, borderColor, BorderThickness);
 
             // Text
-            var font = GraphicsManager.Instance.Font;
+            SpriteFont font = GraphicsManager.GetUiFont(FontSize, out float scale);
             if (font != null)
             {
-                string displayText = _text.Length > 0 ? _text.ToString() : PlaceholderText;
+                string displayText = (_text.Length > 0 ? _text.ToString() : PlaceholderText)?.Normalize(NormalizationForm.FormC) ?? string.Empty;
                 var textColor = _text.Length > 0 ? TextColor : PlaceholderColor;
                 var textPosition = new Vector2(
                     DisplayPosition.X + Padding,
-                    DisplayPosition.Y + (ViewSize.Y - font.LineSpacing) / 2
+                    MathF.Round(DisplayPosition.Y + (ViewSize.Y - font.LineSpacing * scale) / 2f)
                 );
 
-                spriteBatch.DrawString(font, displayText, textPosition, textColor);
+                spriteBatch.DrawString(font, displayText, textPosition, textColor, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
 
                 // Cursor
                 if (_isFocused && _cursorVisible && _text.Length > 0)
                 {
-                    var textSize = font.MeasureString(_text.ToString());
+                    var textSize = font.MeasureString(_text.ToString()) * scale;
                     var cursorX = textPosition.X + textSize.X;
                     var cursorRect = new Rectangle(
                         (int)cursorX,
                         (int)textPosition.Y,
                         2,
-                        font.LineSpacing
+                        (int)MathF.Ceiling(font.LineSpacing * scale)
                     );
                     spriteBatch.Draw(pixel, cursorRect, TextColor);
                 }

@@ -494,8 +494,8 @@ namespace Client.Main.Scenes
             using (new SpriteBatchScope(
                        GraphicsManager.Instance.Sprite,
                        SpriteSortMode.BackToFront,       // Sort sprites by depth
-                       BlendState.NonPremultiplied,      // Correct for text/UI textures
-                       SamplerState.PointClamp,
+                       BlendState.AlphaBlend,
+                       SamplerState.LinearClamp,
                        DepthStencilState.DepthRead))     // Read depth buffer but don't write to it
             {
 #if !ANDROID
@@ -523,8 +523,8 @@ namespace Client.Main.Scenes
             using (new SpriteBatchScope(
                        GraphicsManager.Instance.Sprite,
                        SpriteSortMode.Deferred,
-                       BlendState.NonPremultiplied,
-                       SamplerState.PointClamp,
+                       BlendState.AlphaBlend,
+                       SamplerState.LinearClamp,
                        DepthStencilState.None))
             {
                 for (int i = 0; i < droppedItems.Count; i++)
@@ -542,7 +542,7 @@ namespace Client.Main.Scenes
                        GraphicsManager.Instance.Sprite,
                        SpriteSortMode.Deferred,
                        BlendState.AlphaBlend,
-                       SamplerState.PointClamp,
+                       SamplerState.LinearClamp,
                        DepthStencilState.None,
                        null,
                        null,

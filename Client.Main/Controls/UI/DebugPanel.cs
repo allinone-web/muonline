@@ -159,16 +159,16 @@ namespace Client.Main.Controls.UI
             sprite.Draw(pixel, new Rectangle(rect.X + 10, rect.Y + 31, rect.Width - 20, 1), new Color(255, 255, 255, 20));
             UiDrawHelper.DrawBorder(sprite, rect, new Color(91, 104, 124, 74));
 
-            float scale = 9.5f / Constants.BASE_FONT_SIZE;
-            sprite.DrawString(font, title, new Vector2(rect.X + 12, rect.Y + 9), accent, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+            SpriteFont renderFont = GraphicsManager.GetUiFont(9.5f, out float scale) ?? font;
+            sprite.DrawString(renderFont, title, new Vector2(rect.X + 12, rect.Y + 9), accent, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
         }
 
         private static void DrawHeaderText(SpriteBatch sprite, SpriteFont font, Rectangle rect)
         {
-            float titleScale = 13.5f / Constants.BASE_FONT_SIZE;
-            float captionScale = 9f / Constants.BASE_FONT_SIZE;
-            sprite.DrawString(font, "CLIENT DIAGNOSTICS", new Vector2(rect.X + 18, rect.Y + 11), ModernHudTheme.TextGold, 0f, Vector2.Zero, titleScale, SpriteEffects.None, 0f);
-            sprite.DrawString(font, "real-time renderer and runtime telemetry", new Vector2(rect.X + 18, rect.Y + 30), ModernHudTheme.TextDark, 0f, Vector2.Zero, captionScale, SpriteEffects.None, 0f);
+            SpriteFont titleFont = GraphicsManager.GetUiFont(13.5f, out float titleScale) ?? font;
+            SpriteFont captionFont = GraphicsManager.GetUiFont(9f, out float captionScale) ?? font;
+            sprite.DrawString(titleFont, "CLIENT DIAGNOSTICS", new Vector2(rect.X + 18, rect.Y + 11), ModernHudTheme.TextGold, 0f, Vector2.Zero, titleScale, SpriteEffects.None, 0f);
+            sprite.DrawString(captionFont, "real-time renderer and runtime telemetry", new Vector2(rect.X + 18, rect.Y + 30), ModernHudTheme.TextDark, 0f, Vector2.Zero, captionScale, SpriteEffects.None, 0f);
         }
 
         private void DrawHealthBadge(SpriteBatch sprite, SpriteFont font, Rectangle rect)
@@ -177,10 +177,10 @@ namespace Client.Main.Controls.UI
             sprite.Draw(pixel, rect, new Color(_healthColor.R, _healthColor.G, _healthColor.B, (byte)34));
             UiDrawHelper.DrawBorder(sprite, rect, new Color(_healthColor.R, _healthColor.G, _healthColor.B, (byte)180));
 
-            float scale = 9.5f / Constants.BASE_FONT_SIZE;
-            Vector2 size = font.MeasureString(_healthText) * scale;
+            SpriteFont renderFont = GraphicsManager.GetUiFont(9.5f, out float scale) ?? font;
+            Vector2 size = renderFont.MeasureString(_healthText) * scale;
             Vector2 position = new(rect.X + (rect.Width - size.X) * 0.5f, rect.Y + (rect.Height - size.Y) * 0.5f);
-            sprite.DrawString(font, _healthText, position, _healthColor, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+            sprite.DrawString(renderFont, _healthText, position, _healthColor, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
         }
 
         private void DrawFrameHistory(SpriteBatch sprite, Texture2D pixel, Rectangle rect)
@@ -291,14 +291,14 @@ namespace Client.Main.Controls.UI
                 : telemetryConnected ? "WEB CONNECTED" : "WEB OFFLINE";
             Color connectionColor = telemetryConnected ? ModernHudTheme.Success : ModernHudTheme.TextDark;
 
-            float primaryScale = 12.5f / Constants.BASE_FONT_SIZE;
-            float secondaryScale = 9f / Constants.BASE_FONT_SIZE;
-            sprite.DrawString(font, $"FPS {fps}   p95 {perf.P95Ms:F1} ms   p99 {perf.P99Ms:F1} ms",
+            SpriteFont primaryFont = GraphicsManager.GetUiFont(12.5f, out float primaryScale) ?? font;
+            SpriteFont secondaryFont = GraphicsManager.GetUiFont(9f, out float secondaryScale) ?? font;
+            sprite.DrawString(primaryFont, $"FPS {fps}   p95 {perf.P95Ms:F1} ms   p99 {perf.P99Ms:F1} ms",
                 new Vector2(rect.X + 18, rect.Y + 10), _healthColor, 0f, Vector2.Zero, primaryScale, SpriteEffects.None, 0f);
             string telemetryDetails = telemetryEnabled
                 ? diagnostics.DashboardUrl
                 : "optional diagnostics";
-            sprite.DrawString(font, $"{connection}   ·   {telemetryDetails}   ·   F10 details",
+            sprite.DrawString(secondaryFont, $"{connection}   ·   {telemetryDetails}   ·   F10 details",
                 new Vector2(rect.X + 18, rect.Y + 36), connectionColor, 0f, Vector2.Zero, secondaryScale, SpriteEffects.None, 0f);
         }
 
@@ -411,14 +411,16 @@ namespace Client.Main.Controls.UI
 
             _sb.Clear()
                 .Append("Terrain  ").Append(terrainMetrics.DrawCalls).Append(" draws  ·  ")
-                .Append(terrainMetrics.DrawnTriangles).Append(" tri  ·  ")
-                .Append(terrainMetrics.DrawnBlocks).Append(" blocks  ·  ")
+                .Append(terrainMetrics.DrawnTriangles).Append(" tri")
+                .Append('\n')
+                .Append("World  ").Append(terrainMetrics.DrawnBlocks).Append(" blocks  ·  ")
                 .Append(terrainMetrics.DrawnCells).Append(" cells")
                 .Append('\n')
                 .Append("Culling  ").Append(walkableWorld.LastCullWasRebuild ? "rebuild" : "cached")
-                .Append("  ·  ").Append(walkableWorld.LastCullCandidateCount).Append(" candidates  ·  ")
-                .Append(walkableWorld.LastCullVisibleCount).Append(" visible  ·  ")
-                .Append(walkableWorld.LastCullRebuildMs.ToString("F2")).Append(" ms")
+                .Append("  ·  ").Append(walkableWorld.LastCullCandidateCount).Append(" candidates")
+                .Append('\n')
+                .Append("Visible  ").Append(walkableWorld.LastCullVisibleCount)
+                .Append("  ·  ").Append(walkableWorld.LastCullRebuildMs.ToString("F2")).Append(" ms")
                 .Append('\n')
                 .Append("Frame  p95 ").Append(framePerformance.P95Ms.ToString("F1"))
                 .Append(" ms  ·  p99 ").Append(framePerformance.P99Ms.ToString("F1"))
@@ -433,11 +435,14 @@ namespace Client.Main.Controls.UI
             _sb.Clear()
                 .Append("Buffers  VB ").Append(bmd.LastFrameVBUpdates)
                 .Append("  ·  IB ").Append(bmd.LastFrameIBUploads)
-                .Append("  ·  vertices ").Append(bmd.LastFrameVerticesTransformed)
+                .Append('\n')
+                .Append("Geometry  vertices ").Append(bmd.LastFrameVerticesTransformed)
                 .Append("  ·  meshes ").Append(bmd.LastFrameMeshesProcessed)
                 .Append('\n')
                 .Append("Cache  ").Append(bmd.LastFrameCacheHits).Append(" hit / ")
-                .Append(bmd.LastFrameCacheMisses).Append(" miss  ·  GPU ")
+                .Append(bmd.LastFrameCacheMisses).Append(" miss")
+                .Append('\n')
+                .Append("GPU cache  ")
                 .Append(bmd.GpuMeshBufferCacheCount).Append('/').Append(bmd.GpuBatchBufferCacheCount)
                 .Append("  ·  topology ").Append(bmd.MeshTopologyCacheCount)
                 .Append('\n')
@@ -458,19 +463,22 @@ namespace Client.Main.Controls.UI
                 .Append('\n')
                 .Append("Objects  ").Append(ModelObject.LastFrameStaticMapInstancedObjects)
                 .Append("  ·  mesh instances ").Append(ModelObject.LastFrameStaticMapInstancedMeshInstances)
-                .Append("  ·  batches ").Append(ModelObject.LastFrameStaticMapInstancedBatches)
+                .Append('\n')
+                .Append("Batches  ").Append(ModelObject.LastFrameStaticMapInstancedBatches)
                 .Append("  ·  draws ").Append(ModelObject.LastFrameStaticMapInstancedDrawCalls)
                 .Append("  ·  fallback ").Append(ModelObject.LastFrameStaticMapInstancingFallbacks)
                 .Append('\n')
                 .Append("Multi-pose  ").Append(ModelObject.IsWalkerCrowdMultiPoseActive ? "ON" : "LEGACY")
                 .Append("  ·  objects ").Append(ModelObject.LastFrameWalkerCrowdMultiPoseObjects)
-                .Append("  ·  mesh inst ").Append(ModelObject.LastFrameWalkerCrowdMultiPoseMeshInstances)
+                .Append('\n')
+                .Append("Crowd  mesh inst ").Append(ModelObject.LastFrameWalkerCrowdMultiPoseMeshInstances)
                 .Append("  ·  poses ").Append(ModelObject.LastFrameWalkerCrowdMultiPoseUniquePoses)
                 .Append("  ·  draws ").Append(ModelObject.LastFrameWalkerCrowdMultiPoseDrawCalls)
                 .Append('\n')
                 .Append("Atlas  uploads ").Append(ModelObject.LastFrameWalkerCrowdMultiPosePaletteUploads)
                 .Append("  ·  dirty ").Append(ModelObject.LastFrameWalkerCrowdMultiPoseDirtyRows)
-                .Append("  ·  hits ").Append(ModelObject.LastFrameWalkerCrowdMultiPosePaletteCacheHits)
+                .Append('\n')
+                .Append("Atlas cache  hits ").Append(ModelObject.LastFrameWalkerCrowdMultiPosePaletteCacheHits)
                 .Append("  ·  ").Append(ModelObject.LastFrameWalkerCrowdMultiPosePaletteBytes / 1024L).Append(" KB");
             SetLabelTextIfChanged(_instancingStatusLabel, _sb.ToString());
         }

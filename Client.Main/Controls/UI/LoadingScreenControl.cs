@@ -95,7 +95,7 @@ namespace Client.Main.Controls.UI.Game
                 spriteBatch,
                 SpriteSortMode.Deferred,
                 BlendState.AlphaBlend,
-                SamplerState.PointClamp,
+                SamplerState.LinearClamp,
                 DepthStencilState.None,
                 RasterizerState.CullNone,
                 transform: UiScaler.SpriteTransform))

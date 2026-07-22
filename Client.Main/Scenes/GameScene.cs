@@ -49,6 +49,7 @@ namespace Client.Main.Scenes
         private PartyPanelControl _partyPanel;
         private readonly (string Name, CharacterClassNumber Class, ushort Level, byte[] Appearance) _characterInfo;
         private CharacterInfoWindowControl _characterInfoWindow;
+        private MiniMapControl _miniMap;
         private ILogger _logger = MuGame.AppLoggerFactory?.CreateLogger<GameScene>() ?? NullLogger<GameScene>.Instance;
         private LabelControl _pingLabel; // Displays current ping
         private LabelControl _fpsLabel; // Displays current FPS independently of DebugPanel
@@ -194,6 +195,8 @@ namespace Client.Main.Scenes
 
             _characterInfoWindow = new CharacterInfoWindowControl { X = 20, Y = 50, Visible = false };
             Controls.Add(_characterInfoWindow);
+            _miniMap = new MiniMapControl(this);
+            Controls.Add(_miniMap);
             _partyPanel = new PartyPanelControl();
             Controls.Add(_partyPanel);
 
@@ -267,6 +270,7 @@ namespace Client.Main.Scenes
                 _moveCommandWindow,
                 _inventoryControl,
                 _characterInfoWindow,
+                _miniMap,
                 _chatInput,
                 _chatLog,
                 _objectEditorController,
@@ -522,6 +526,7 @@ namespace Client.Main.Scenes
                     _modernHud.Visible = true;
                     _mapController?.UpdateLoadProgress("Game ready!", 1.0f);
                     ScheduleMapNameUpdateNextFrame("GameScene.UpdateInitialMapName");
+                    _ = RefreshMiniMapAsync();
                 }, "GameScene.ActivateInitialWorld");
 
                 // Complete this nested async workflow outside the dispatcher action which ran
@@ -730,6 +735,13 @@ namespace Client.Main.Scenes
             _ = UpdateMapNameNextFrameAsync(actionName);
         }
 
+        internal Task RefreshMiniMapAsync()
+        {
+            return _miniMap != null && World != null
+                ? _miniMap.LoadContentForWorld(World.WorldIndex)
+                : Task.CompletedTask;
+        }
+
         private async Task UpdateMapNameNextFrameAsync(string actionName)
         {
             await MuGame.YieldToNextFrameAsync(
@@ -824,7 +836,7 @@ namespace Client.Main.Scenes
                        GraphicsManager.Instance.Sprite,
                        SpriteSortMode.Deferred,
                        BlendState.AlphaBlend,
-                       SamplerState.PointClamp,
+                       SamplerState.LinearClamp,
                        DepthStencilState.None,
                        transform: UiScaler.SpriteTransform))
             {
@@ -848,7 +860,7 @@ namespace Client.Main.Scenes
                        GraphicsManager.Instance.Sprite,
                        SpriteSortMode.Deferred,
                        BlendState.AlphaBlend,
-                       SamplerState.PointClamp,
+                       SamplerState.LinearClamp,
                        DepthStencilState.None,
                        transform: UiScaler.SpriteTransform))
             {

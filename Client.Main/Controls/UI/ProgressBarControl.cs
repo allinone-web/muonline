@@ -107,7 +107,7 @@ namespace Client.Main.Controls.UI
             int barY = screenH - ProgressBarBottomOffset;
 
             using var scope = new SpriteBatchScope(sprite, SpriteSortMode.Deferred,
-                BlendState.AlphaBlend, SamplerState.PointClamp,
+                BlendState.AlphaBlend, SamplerState.LinearClamp,
                 DepthStencilState.None, null, null, UiScaler.SpriteTransform);
 
             var pixel = GraphicsManager.Instance.Pixel;

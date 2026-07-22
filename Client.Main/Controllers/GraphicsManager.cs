@@ -20,6 +20,7 @@ namespace Client.Main.Controllers
 
         public SpriteBatch Sprite { get; private set; }
         public SpriteFont Font { get; private set; }
+        public SpriteFont SmallFont { get; private set; }
         public Texture2D Pixel { get; private set; }
         public AlphaTestEffect AlphaTestEffectUI { get; private set; }
         public AlphaTestEffect AlphaTestEffect3D { get; private set; }
@@ -114,6 +115,24 @@ namespace Client.Main.Controllers
 
             Sprite = new SpriteBatch(_graphicsDevice);
             Font = _contentManager.Load<SpriteFont>(Constants.FONT_NAME);
+            SmallFont = string.Equals(Constants.FONT_NAME, "Arial", StringComparison.OrdinalIgnoreCase)
+                ? _contentManager.Load<SpriteFont>("ArialSmall")
+                : null;
+        }
+
+        public static SpriteFont GetUiFont(float desiredSize, out float scale)
+        {
+            const float smallFontSize = 14f;
+            GraphicsManager manager = Instance;
+
+            if (desiredSize <= smallFontSize && manager?.SmallFont != null)
+            {
+                scale = desiredSize / smallFontSize;
+                return manager.SmallFont;
+            }
+
+            scale = desiredSize / Constants.BASE_FONT_SIZE;
+            return manager?.Font;
         }
 
         private void InitializeFXAAEffect()
@@ -161,7 +180,7 @@ namespace Client.Main.Controllers
         {
             if (Constants.HIGH_QUALITY_TEXTURES)
             {
-                return SamplerState.AnisotropicWrap;
+                return SamplerState.AnisotropicClamp;
             }
             return SamplerState.LinearClamp;
         }

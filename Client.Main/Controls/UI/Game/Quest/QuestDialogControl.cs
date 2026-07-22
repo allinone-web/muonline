@@ -420,7 +420,7 @@ namespace Client.Main.Controls.UI.Game.Quest
             gd.Clear(Color.Transparent);
 
             var sb = GraphicsManager.Instance.Sprite;
-            using (new SpriteBatchScope(sb, SpriteSortMode.Deferred, BlendState.AlphaBlend))
+            using (new SpriteBatchScope(sb, SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp))
             {
                 DrawStaticElements(sb);
             }

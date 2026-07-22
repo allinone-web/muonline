@@ -173,7 +173,7 @@ namespace Client.Main.Scenes
                        GraphicsManager.Instance.Sprite,
                        SpriteSortMode.Deferred,
                        BlendState.AlphaBlend,
-                       SamplerState.PointClamp,
+                       SamplerState.LinearClamp,
                        DepthStencilState.None,
                        null,
                        null,

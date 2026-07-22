@@ -841,7 +841,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
             graphicsDevice.Clear(Color.Transparent);
 
             var spriteBatch = GraphicsManager.Instance.Sprite;
-            using (new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend))
+            using (new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp))
             {
                 DrawStaticElements(spriteBatch);
             }
