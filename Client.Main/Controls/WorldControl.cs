@@ -8,6 +8,7 @@ using Client.Main.Helpers;
 using Client.Main.Models;
 using Client.Main.Objects;
 using Client.Main.Objects.Effects;
+using Client.Main.Objects.Effects.Particles;
 using Client.Main.Objects.Particles;
 using Client.Main.Objects.Player;
 using Microsoft.Extensions.Logging;
@@ -1181,7 +1182,7 @@ namespace Client.Main.Controls
 
                 bool usesSpriteBatch =
                     obj is SpriteObject ||
-                    obj is WaterMistParticleSystem ||
+                    obj is SourceParticleSystem ||
                     obj is ElfBuffOrbTrail;
 
                 if (usesSpriteBatch)
@@ -1199,7 +1200,7 @@ namespace Client.Main.Controls
 
                     var blend = obj.BlendState ?? BlendState.AlphaBlend;
                     SamplerState sampler;
-                    if (obj is WaterMistParticleSystem || obj is ElfBuffOrbTrail)
+                    if (obj is SourceParticleSystem || obj is ElfBuffOrbTrail)
                     {
                         sampler = SamplerState.LinearClamp;
                     }
@@ -1213,7 +1214,7 @@ namespace Client.Main.Controls
                     // later transparent geometry.
                     var objectDepthState = ResolveObjectDepthState(obj, depthState);
                     var batchDepth =
-                        obj is WaterMistParticleSystem ||
+                        obj is SourceParticleSystem ||
                         obj is ElfBuffOrbTrail ||
                         obj is ElfBuffOrbitingLight
                             ? DepthStencilState.DepthRead
