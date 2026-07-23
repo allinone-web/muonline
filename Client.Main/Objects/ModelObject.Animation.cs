@@ -1,4 +1,4 @@
-using Client.Data.BMD;
+﻿using Client.Data.BMD;
 using Client.Main.Content;
 using Client.Main.Controls.UI.Game.Inventory;
 using Client.Main.Models;
@@ -7,6 +7,7 @@ using Client.Main.Objects.Wings;
 using Microsoft.Xna.Framework;
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
@@ -34,6 +35,123 @@ namespace Client.Main.Objects
             public override int GetHashCode() => HashCode.Combine(ActionIndex, Frame0, Frame1, InterpolationFactor);
         }
 
+        private readonly struct SharedAnimationPaletteKey : IEquatable<SharedAnimationPaletteKey>
+        {
+            public SharedAnimationPaletteKey(BMD model, int actionIndex, int frame0, int frame1, int interpolationBucket, int bodyHeightBucket)
+            {
+                ModelId = RuntimeHelpers.GetHashCode(model);
+                ActionIndex = actionIndex;
+                Frame0 = frame0;
+                Frame1 = frame1;
+                InterpolationBucket = interpolationBucket;
+                BodyHeightBucket = bodyHeightBucket;
+            }
+
+            private int ModelId { get; }
+            private int ActionIndex { get; }
+            private int Frame0 { get; }
+            private int Frame1 { get; }
+            private int InterpolationBucket { get; }
+            private int BodyHeightBucket { get; }
+
+            public bool Equals(SharedAnimationPaletteKey other) =>
+                ModelId == other.ModelId &&
+                ActionIndex == other.ActionIndex &&
+                Frame0 == other.Frame0 &&
+                Frame1 == other.Frame1 &&
+                InterpolationBucket == other.InterpolationBucket &&
+                BodyHeightBucket == other.BodyHeightBucket;
+
+            public override bool Equals(object obj) => obj is SharedAnimationPaletteKey other && Equals(other);
+
+            public override int GetHashCode() => HashCode.Combine(ModelId, ActionIndex, Frame0, Frame1, InterpolationBucket, BodyHeightBucket);
+        }
+
+        private sealed class SharedAnimationPaletteEntry
+        {
+            public Matrix[] Bones;
+            public int LastFrame;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private Matrix[] GetEffectiveBoneTransforms()
+        {
+            if (LinkParentAnimation && Parent is ModelObject parentModel)
+                return parentModel.GetEffectiveBoneTransforms();
+
+            return _sharedAnimationRenderBones ?? BoneTransform;
+        }
+
+        private void EnsureWritableBoneTransforms(int boneCount)
+        {
+            if (boneCount <= 0)
+                return;
+
+            if (BoneTransform == null || BoneTransform.Length != boneCount)
+                BoneTransform = new Matrix[boneCount];
+
+            if (_sharedAnimationRenderBones != null)
+            {
+                int copyCount = Math.Min(boneCount, _sharedAnimationRenderBones.Length);
+                Array.Copy(_sharedAnimationRenderBones, BoneTransform, copyCount);
+                for (int i = copyCount; i < boneCount; i++)
+                    BoneTransform[i] = Matrix.Identity;
+                _sharedAnimationRenderBones = null;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint GetEffectiveBonePoseVersion()
+        {
+            // Shared arrays are immutable and their reference identifies the exact pose.
+            // Local arrays are mutated in-place, therefore they still require the version.
+            return _sharedAnimationRenderBones != null ? uint.MaxValue : _animationPoseVersion;
+        }
+
+        /// <summary>
+        /// Keeps the currently generated bone palette unchanged. This is used by cinematic
+        /// preview actors which must remain stable while their scene is being constructed and
+        /// while UI selection changes are applied. Linked children continue to consume the
+        /// parent's frozen palette.
+        /// </summary>
+        public bool FreezeAnimationPose { get; set; }
+
+        internal void SetStaticAnimationPose(int actionIndex, int frameIndex = 0)
+        {
+            if (Model?.Actions == null || Model.Actions.Length == 0 || Model.Bones == null)
+                return;
+
+            int resolvedAction = Math.Clamp(actionIndex, 0, Model.Actions.Length - 1);
+            var action = Model.Actions[resolvedAction];
+            if (action == null)
+                return;
+
+            int totalFrames = Math.Max(
+                action.LockPositions ? action.NumAnimationKeys - 1 : action.NumAnimationKeys,
+                1);
+            int resolvedFrame = Math.Clamp(frameIndex, 0, totalFrames - 1);
+            int nextFrame = totalFrames > 1 ? (resolvedFrame + 1) % totalFrames : resolvedFrame;
+
+            CurrentAction = resolvedAction;
+            CurrentFrame = resolvedFrame;
+            _animTime = resolvedFrame;
+            _priorActionIndex = resolvedAction;
+            _blendFromAction = -1;
+            _blendFromTime = 0d;
+            _blendElapsed = 0f;
+            _isBlending = false;
+            _lastAnimationTotalSeconds = 0d;
+            _animationStepAccumulatorSeconds = 0f;
+
+            GenerateBoneMatrix(resolvedAction, resolvedFrame, nextFrame, 0f);
+            InvalidateBuffers(MeshDirtyFlags.Animation);
+            UpdateBoundings();
+        }
+
+        private const int MaxSharedAnimationPaletteEntries = 512;
+        private const int SharedAnimationPaletteMaxIdleFrames = 180;
+        private static readonly Dictionary<SharedAnimationPaletteKey, SharedAnimationPaletteEntry> _sharedAnimationPalettes = new(256);
+
         private void Animation(GameTime gameTime)
         {
             if (LinkParentAnimation || Model?.Actions == null || Model.Actions.Length == 0) return;
@@ -43,7 +161,13 @@ namespace Client.Main.Objects
             if (action == null) return; // Skip animation if action is null
 
             int totalFrames = Math.Max(action.LockPositions ? action.NumAnimationKeys - 1 : action.NumAnimationKeys, 1);
-            float frameDelta = (float)gameTime.ElapsedGameTime.TotalSeconds;
+            float frameDelta;
+            double totalSeconds = gameTime.TotalGameTime.TotalSeconds;
+            if (_lastAnimationTotalSeconds > 0)
+                frameDelta = (float)(totalSeconds - _lastAnimationTotalSeconds);
+            else
+                frameDelta = (float)gameTime.ElapsedGameTime.TotalSeconds;
+            _lastAnimationTotalSeconds = totalSeconds;
             bool actionChanged = _priorActionIndex != currentActionIndex;
 
             // Detect death action for walkers to clamp on second-to-last key
@@ -72,7 +196,7 @@ namespace Client.Main.Objects
                 {
                     GenerateBoneMatrix(currentActionIndex, 0, 0, 0);
                     _priorActionIndex = currentActionIndex;
-                    InvalidateBuffers(BUFFER_FLAG_ANIMATION);
+                    InvalidateBuffers(MeshDirtyFlags.Animation);
                 }
                 CurrentFrame = 0;
                 return;
@@ -159,7 +283,11 @@ namespace Client.Main.Objects
                     _blendFromAction = -1;
                 }
 
-                InvalidateBuffers(BUFFER_FLAG_ANIMATION);
+                // Cross-fade mutates the local palette after GenerateBoneMatrix().
+                // Advance the pose version so multi-pose instancing and effect palette
+                // caches never reuse an earlier blend step for the current object.
+                unchecked { _animationPoseVersion++; }
+                InvalidateBuffers(MeshDirtyFlags.Animation);
             }
 
             _priorActionIndex = currentActionIndex;
@@ -238,6 +366,8 @@ namespace Client.Main.Objects
                                    !LinkParentAnimation &&
                                    ParentBoneLink < 0 &&
                                    action.NumAnimationKeys > 1; // Only cache non-critical animated objects
+            bool canUseSharedPalette = CanUseSharedAnimationPalette(actionIdx);
+            SharedAnimationPaletteKey sharedPaletteKey = default;
 
             if (shouldCheckCache)
             {
@@ -251,17 +381,34 @@ namespace Client.Main.Objects
 
                 // Check if we can skip expensive calculation using local cache
                 // But be more conservative - only skip if frames and interpolation are identical
+                Matrix[] activeBones = GetEffectiveBoneTransforms();
                 if (_animationStateValid && currentAnimState.Equals(_lastAnimationState) &&
-                    BoneTransform != null && BoneTransform.Length == bones.Length)
+                    activeBones != null && activeBones.Length == bones.Length)
                 {
                     // Animation state hasn't changed - no need to recalculate
                     return;
                 }
             }
 
-            // Initialize or resize bone transform array if needed
-            if (BoneTransform == null || BoneTransform.Length != bones.Length)
-                BoneTransform = new Matrix[bones.Length];
+            if (canUseSharedPalette)
+            {
+                sharedPaletteKey = new SharedAnimationPaletteKey(
+                    Model,
+                    actionIdx,
+                    frame0,
+                    frame1,
+                    _animationSampleInterpolationBucket,
+                    (int)MathF.Round(BodyHeight));
+
+                if (TryApplySharedAnimationPalette(sharedPaletteKey, bones.Length, shouldCheckCache, currentAnimState))
+                    return;
+
+                RegisterSharedAnimationPaletteMiss();
+            }
+
+            // A shared palette is read-only. Detach only when this object really needs
+            // a unique pose (cache miss, blend, procedural post-process, etc.).
+            EnsureWritableBoneTransforms(bones.Length);
 
             // Rent temp array from pool for safer hierarchical calculations
             // ArrayPool may return larger array, so we use bones.Length for actual operations
@@ -378,8 +525,11 @@ namespace Client.Main.Objects
                 {
                     Array.Copy(tempBoneTransforms, BoneTransform, bones.Length);
                     _animationPoseVersion++;
-                    InvalidateBuffers(BUFFER_FLAG_ANIMATION);
+                    InvalidateBuffers(MeshDirtyFlags.Animation);
                 }
+
+                if (canUseSharedPalette)
+                    StoreSharedAnimationPalette(sharedPaletteKey, BoneTransform, bones.Length);
 
                 // Always update cache for objects that should use it
                 if (shouldCheckCache)
@@ -401,10 +551,130 @@ namespace Client.Main.Objects
             }
         }
 
+        private bool CanUseSharedAnimationPalette(int actionIdx)
+        {
+            if (!Constants.ENABLE_SHARED_ANIMATION_PALETTES ||
+                this is not MonsterObject ||
+                Model == null ||
+                _isBlending ||
+                LinkParentAnimation ||
+                ParentBoneLink >= 0 ||
+                ContinuousAnimation ||
+                ItemDefinition != null)
+            {
+                return false;
+            }
+
+            if (actionIdx == (int)Client.Main.Models.MonsterActionType.Die)
+                return false;
+
+            // Attack and skill one-shots may share an identical quantized pose. Death is
+            // rejected above; other special one-shots stay per-instance.
+            if (this is WalkerObject walker &&
+                walker.IsOneShotPlaying &&
+                !walker.IsAttackOrSkillAnimationPlaying())
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool TryApplySharedAnimationPalette(
+            SharedAnimationPaletteKey key,
+            int boneCount,
+            bool shouldCheckCache,
+            LocalAnimationState currentAnimState)
+        {
+            if (!_sharedAnimationPalettes.TryGetValue(key, out var entry) ||
+                entry.Bones == null ||
+                entry.Bones.Length != boneCount)
+            {
+                return false;
+            }
+
+            bool changed = !ReferenceEquals(_sharedAnimationRenderBones, entry.Bones);
+            _sharedAnimationRenderBones = entry.Bones;
+            entry.LastFrame = MuGame.FrameIndex;
+
+            if (changed)
+            {
+                unchecked { _animationPoseVersion++; }
+                InvalidateBuffers(MeshDirtyFlags.Animation);
+            }
+
+            if (shouldCheckCache)
+            {
+                _lastAnimationState = currentAnimState;
+                _animationStateValid = true;
+            }
+
+            RegisterSharedAnimationPaletteHit();
+            return true;
+        }
+
+        private static void StoreSharedAnimationPalette(SharedAnimationPaletteKey key, Matrix[] bones, int boneCount)
+        {
+            if (bones == null || boneCount <= 0)
+                return;
+
+            // Published pose arrays are immutable because active monsters may hold a
+            // direct reference to them. Never overwrite an existing published array.
+            if (_sharedAnimationPalettes.TryGetValue(key, out var existing) &&
+                existing.Bones != null &&
+                existing.Bones.Length == boneCount)
+            {
+                existing.LastFrame = MuGame.FrameIndex;
+                return;
+            }
+
+            var snapshot = new Matrix[boneCount];
+            Array.Copy(bones, snapshot, boneCount);
+            _sharedAnimationPalettes[key] = new SharedAnimationPaletteEntry
+            {
+                Bones = snapshot,
+                LastFrame = MuGame.FrameIndex
+            };
+        }
+
+        private static void PruneSharedAnimationPaletteCache(int frame)
+        {
+            if (_sharedAnimationPalettes.Count == 0 ||
+                (frame % 120 != 0 && _sharedAnimationPalettes.Count <= MaxSharedAnimationPaletteEntries))
+            {
+                return;
+            }
+
+            var staleKeys = new List<SharedAnimationPaletteKey>(64);
+            try
+            {
+                foreach (var pair in _sharedAnimationPalettes)
+                {
+                    if (_sharedAnimationPalettes.Count - staleKeys.Count <= MaxSharedAnimationPaletteEntries &&
+                        frame - pair.Value.LastFrame <= SharedAnimationPaletteMaxIdleFrames)
+                    {
+                        continue;
+                    }
+
+                    staleKeys.Add(pair.Key);
+                }
+
+                for (int i = 0; i < staleKeys.Count; i++)
+                    _sharedAnimationPalettes.Remove(staleKeys[i]);
+            }
+            finally
+            {
+                staleKeys.Clear();
+            }
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static int QuantizeAnimationInterpolation(float t)
         {
-            return (int)MathHelper.Clamp(MathF.Round(t * 255f), 0f, 255f);
+            // Five bits are enough for visually smooth interpolation while allowing
+            // substantially more monsters to share a pose/instancing batch.
+            const float BucketCountMinusOne = 31f;
+            return (int)MathHelper.Clamp(MathF.Round(t * BucketCountMinusOne), 0f, BucketCountMinusOne);
         }
 
         /// <summary>
@@ -513,8 +783,7 @@ namespace Client.Main.Objects
             if (playerBones == null || playerBones.Length == 0)
                 return false;
 
-            if (BoneTransform == null || BoneTransform.Length != bones.Length)
-                BoneTransform = new Matrix[bones.Length];
+            EnsureWritableBoneTransforms(bones.Length);
 
             for (int i = 0; i < bones.Length; i++)
             {
@@ -523,7 +792,7 @@ namespace Client.Main.Objects
                     : BuildBoneFromBmd(bones[i], BoneTransform);
             }
 
-            InvalidateBuffers(BUFFER_FLAG_ANIMATION);
+            InvalidateBuffers(MeshDirtyFlags.Animation);
             return true;
         }
 

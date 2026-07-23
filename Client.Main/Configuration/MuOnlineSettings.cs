@@ -22,6 +22,13 @@ namespace Client.Main.Configuration
         public bool ForceMonsterMeshShadows { get; set; }
         public int DynamicLightUpdateFps { get; set; } = 23;
         public int AnimationUpdateFps { get; set; } = 23;
+        public bool EnableCrowdSpatialCulling { get; set; } = true;
+        public bool EnableWalkerCrowdInstancing { get; set; } = true;
+        public bool EnableAnimationThrottling { get; set; } = true;
+        public bool EnableSharedAnimationPalettes { get; set; } = true;
+        public bool EnableBmdMeshBatching { get; set; } = true;
+        public bool EnableEffectPooling { get; set; } = true;
+        public int RenderMetricsLevel { get; set; } = 1;
     }
 
     public abstract class LeafEffectSettingsBase

@@ -13,6 +13,7 @@ using Client.Main.Core.Utilities;
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading.Tasks;
 using Client.Main.Controls.UI.Game.Inventory;
 using Client.Main.Helpers;
 using Client.Main.Content;
@@ -28,22 +29,18 @@ namespace Client.Main.Objects
     public class DroppedItemObject : WorldObject
     {
         // ─────────────────── constants
-        private const float HeightOffset = 55f; // Item exactly at terrain level - model will be positioned above
+        private const float TerrainPenetrationClearance = 2f;
         private const float PickupRange = 300f;
         private const float LabelOffsetZ = 10f;
         private const int LabelPixelGap = 20;
         private const float BoundingPadding = 2f; // Small padding for interaction
-        private const int MaxCoinModels = 30;
-        private const int RenderCullStartCount = 80;
-        private const int MaxRenderedModelsPerFrame = 220;
-        private const double FrameTimeMs = 1000.0 / 60.0; // ~16.67ms at 60 FPS, used for frame ID generation
+        // A coin pile used to create up to 30 complete ModelObject instances.
+        // Twelve keeps the pile readable while sharply reducing updates and draw calls.
+        private const int MaxCoinModels = 12;
         private const float LabelVisibilityDistSq = 2000f * 2000f; // Squared distance for label visibility check
 
-        // Per-tile stable selection to avoid flicker when many drops stack on the same tile.
-        private static readonly Dictionary<int, ushort> _tileSelectedRawId = new(512);
-        private static uint _cullFrameId = uint.MaxValue;
-        private static uint _strideFrameId = uint.MaxValue;
-        private static int _globalStride = 1;
+        internal int TileKey => HashCode.Combine(_scope.PositionX, _scope.PositionY);
+        internal bool RenderVisuals { get; set; } = true;
 
         // ─────────────────── deps / state
         private ScopeObject _scope;
@@ -58,14 +55,35 @@ namespace Client.Main.Objects
         private bool _isMoney;
         private Color _labelColor;
         private readonly List<ModelObject> _coinModels = new List<ModelObject>(); // Multiple coins for money piles
-        private DroppedItemShineEffect _shineEffect;
-        private bool _renderVisualsThisFrame = true;
-        private uint _cachedFrameId;
-        private int _cachedTileKey;
+        private readonly DroppedItemVisual _visual = new();
+        private int _loadGeneration;
+        private bool _visualContentReady;
+        private bool _terrainPlacementReady;
 
         // ─────────────────── public helpers
         public ushort RawId => _scope?.RawId ?? 0;
+        internal int LoadGeneration => _loadGeneration;
         public new string DisplayName { get; private set; }
+
+        internal void PrepareRenderResourcesForFirstFrame()
+        {
+            _modelObj?.PrepareRenderResourcesForFirstFrame();
+            for (int i = 0; i < _coinModels.Count; i++)
+                _coinModels[i]?.PrepareRenderResourcesForFirstFrame();
+        }
+
+        internal async Task PrepareGpuTexturesForFirstFrameAsync()
+        {
+            if (_modelObj != null)
+                await _modelObj.PrepareGpuTexturesForFirstFrameAsync().ConfigureAwait(false);
+
+            for (int i = 0; i < _coinModels.Count; i++)
+            {
+                ModelObject coin = _coinModels[i];
+                if (coin != null)
+                    await coin.PrepareGpuTexturesForFirstFrameAsync().ConfigureAwait(false);
+            }
+        }
 
         // Pool
         private static readonly System.Collections.Concurrent.ConcurrentBag<DroppedItemObject> _pool = new();
@@ -86,14 +104,15 @@ namespace Client.Main.Objects
 
         public void Recycle()
         {
-            try
-            {
-                Dispose();
-            }
-            finally
-            {
+            _loadGeneration++;
+
+            // Never return an object to the pool while an old asynchronous Load() can still
+            // write to it. Such an object is simply left for normal GC after its load exits.
+            bool canReturnToPool = !IsLoadInProgress;
+            Dispose();
+
+            if (canReturnToPool && !IsLoadInProgress)
                 _pool.Add(this);
-            }
         }
 
         // =====================================================================
@@ -112,7 +131,11 @@ namespace Client.Main.Objects
             CharacterService charSvc,
             ILogger<DroppedItemObject> logger)
         {
+            if (!TryResetLifecycleForReuse())
+                throw new InvalidOperationException("A dropped item was reused while its previous load was still running.");
+
             _scope = scope ?? throw new ArgumentNullException(nameof(scope));
+            _loadGeneration++;
             _mainPlayerId = mainPlayerId;
             _charSvc = charSvc ?? throw new ArgumentNullException(nameof(charSvc));
             _log = logger ?? ModelObject.AppLoggerFactory?.CreateLogger<DroppedItemObject>() ?? NullLogger<DroppedItemObject>.Instance;
@@ -126,8 +149,10 @@ namespace Client.Main.Objects
             _definition = null;
             _isMoney = false;
             _coinModels.Clear();
-            _shineEffect = null;
-            _renderVisualsThisFrame = true;
+            _visual.Reset();
+            _visualContentReady = false;
+            _terrainPlacementReady = false;
+            RenderVisuals = true;
 
             // Initialize position at ground level (will be adjusted in Load() after terrain height is known)
             Position = new(
@@ -157,15 +182,18 @@ namespace Client.Main.Objects
         }
 
         // =====================================================================
-        public override async Task Load()
-        {
-            await base.Load();
+public override async Task Load()
+{
+var loadGeneration = _loadGeneration;
+await base.Load();
+var world = World;
+if (Status != GameControlStatus.Ready || !CanContinueLoad(world, loadGeneration))
+return;
 
-            if (World != null)
-            {
-                float z = World.Terrain.RequestTerrainHeight(Position.X, Position.Y);
-                Position = new(Position.X, Position.Y, z + HeightOffset);
-            }
+            // Terrain can still be loading when scope objects begin initialization. Do not
+            // permanently lock the drop to Z=0; placement is retried from Update until both
+            // terrain and the visual model are ready.
+            TryFinalizeTerrainPlacement(world);
 
             _font = GraphicsManager.Instance.Font;
 
@@ -174,7 +202,9 @@ namespace Client.Main.Objects
             {
                 try
                 {
-                    var bmd = await BMDLoader.Instance.Prepare("Item\\Gold01.bmd");
+var bmd = await BMDLoader.Instance.Prepare("Item\\Gold01.bmd");
+if (!CanContinueLoad(world, loadGeneration))
+return;
                     if (bmd == null)
                     {
                         _log.LogWarning("Gold coin BMD model is null after loading");
@@ -215,12 +245,14 @@ namespace Client.Main.Objects
                         model.Scale = 0.8f;
                         model.LightEnabled = true;
 
-                        Children.Add(model);
-                        await model.Load();
-                        _coinModels.Add(model);
+if (!await TryLoadChildModel(model, world, loadGeneration))
+return;
+_coinModels.Add(model);
                     }
 
                     RecenterCoinsAndFitBoundingBox();
+                    _visualContentReady = true;
+                    TryFinalizeTerrainPlacement(world);
                     _log.LogDebug("Gold coin pile loaded with {Count} coins at position {Pos}", coinCount, Position);
                     AttachShineEffect();
                     return; // 3D model loaded
@@ -238,8 +270,10 @@ namespace Client.Main.Objects
                 {
                     try
                     {
-                        var bmd = await BMDLoader.Instance.Prepare(_definition.TexturePath);
-                        var model = new DroppedItemModel();
+var bmd = await BMDLoader.Instance.Prepare(_definition.TexturePath);
+if (!CanContinueLoad(world, loadGeneration))
+return;
+var model = new DroppedItemModel();
                         model.Model = bmd;
                         model.ItemDefinition = _definition;
 
@@ -256,12 +290,15 @@ namespace Client.Main.Objects
                         model.Scale = 0.6f;
                         model.LightEnabled = true;
 
-                        Children.Add(model);
-                        await model.Load();
-                        _modelObj = model;
+if (!await TryLoadChildModel(model, world, loadGeneration))
+return;
+_modelObj = model;
 
-                        // Position model so its bottom touches the ground
+                        // Position model so its bottom touches the parent ground plane, then
+                        // lift the complete rotated model only when a terrain triangle penetrates it.
                         PositionModelOnGround(model);
+                        _visualContentReady = true;
+                        TryFinalizeTerrainPlacement(world);
 
                         AttachShineEffect();
                         return; // 3D model loaded
@@ -273,10 +310,66 @@ namespace Client.Main.Objects
                 }
             }
 
+            _visualContentReady = true;
+            TryFinalizeTerrainPlacement(world);
             AttachShineEffect();
         }
 
         // =====================================================================
+        private bool CanContinueLoad(Client.Main.Controls.WorldControl expectedWorld, int loadGeneration)
+        {
+            return expectedWorld != null
+                && ReferenceEquals(World, expectedWorld)
+                && _loadGeneration == loadGeneration
+                && Status != GameControlStatus.Disposed;
+        }
+
+        private async Task<bool> TryLoadChildModel(ModelObject model, Client.Main.Controls.WorldControl expectedWorld, int loadGeneration)
+        {
+            if (model == null || !CanContinueLoad(expectedWorld, loadGeneration))
+                return false;
+
+            Children.Add(model);
+
+            if (!CanContinueLoad(expectedWorld, loadGeneration))
+                return false;
+
+            await model.Load();
+            return model.Status == GameControlStatus.Ready && CanContinueLoad(expectedWorld, loadGeneration);
+        }
+
+        /// <summary>
+        /// Places the parent drop on the current terrain and then applies a geometry-aware lift.
+        /// The operation is retried while TerrainControl is still loading, so a temporary height
+        /// value of zero can never become the permanent world position of the item.
+        /// </summary>
+        private bool TryFinalizeTerrainPlacement(Client.Main.Controls.WorldControl expectedWorld)
+        {
+            if (!_visualContentReady ||
+                expectedWorld == null ||
+                !ReferenceEquals(World, expectedWorld) ||
+                expectedWorld.Terrain == null ||
+                expectedWorld.Terrain.Status != GameControlStatus.Ready)
+            {
+                _terrainPlacementReady = false;
+                return false;
+            }
+
+            float groundZ = expectedWorld.Terrain.RequestTerrainHeight(Position.X, Position.Y);
+            if (float.IsNaN(groundZ) || float.IsInfinity(groundZ))
+            {
+                _terrainPlacementReady = false;
+                return false;
+            }
+
+            // Always restart from the terrain height at the drop center. LiftVisualsAboveTerrain
+            // then accounts for slopes under every transformed vertex of the item model.
+            Position = new Vector3(Position.X, Position.Y, groundZ);
+            LiftVisualsAboveTerrain();
+            _terrainPlacementReady = true;
+            return true;
+        }
+
         /// <summary>
         /// Positions the model so its lowest vertex touches the ground (parent's Z=0 in local space).
         /// Calculates bounding box directly from model geometry.
@@ -364,6 +457,77 @@ namespace Client.Main.Objects
 
         // =====================================================================
         /// <summary>
+        /// Lifts the parent drop only by the amount required to keep every rendered
+        /// model vertex above the actual terrain triangles. Existing placement is
+        /// preserved when there is no penetration.
+        /// </summary>
+        private void LiftVisualsAboveTerrain()
+        {
+            if (World?.Terrain == null)
+                return;
+
+            float requiredLift = 0f;
+
+            if (_modelObj != null)
+                requiredLift = MathF.Max(requiredLift, CalculateRequiredTerrainLift(_modelObj));
+
+            for (int i = 0; i < _coinModels.Count; i++)
+                requiredLift = MathF.Max(requiredLift, CalculateRequiredTerrainLift(_coinModels[i]));
+
+            if (requiredLift <= 0.001f || float.IsNaN(requiredLift) || float.IsInfinity(requiredLift))
+                return;
+
+            Position = new Vector3(Position.X, Position.Y, Position.Z + requiredLift);
+        }
+
+        /// <summary>
+        /// Calculates how far a child model must be lifted so none of its transformed
+        /// vertices are below the terrain surface. This runs once when the drop loads.
+        /// </summary>
+        private float CalculateRequiredTerrainLift(ModelObject model)
+        {
+            if (model?.Model?.Meshes == null || World?.Terrain == null)
+                return 0f;
+
+            var bones = model.GetBoneTransforms();
+            Matrix rotationMatrix = Matrix.CreateRotationX(model.Angle.X) *
+                                    Matrix.CreateRotationY(model.Angle.Y) *
+                                    Matrix.CreateRotationZ(model.Angle.Z);
+
+            float requiredLift = 0f;
+
+            foreach (var mesh in model.Model.Meshes)
+            {
+                if (mesh?.Vertices == null)
+                    continue;
+
+                foreach (var vert in mesh.Vertices)
+                {
+                    Matrix boneMatrix = Matrix.Identity;
+                    if (bones != null && vert.Node >= 0 && vert.Node < bones.Length)
+                        boneMatrix = bones[vert.Node];
+
+                    Vector3 localPos = new Vector3(vert.Position.X, vert.Position.Y, vert.Position.Z);
+                    Vector3 transformedPos = Vector3.Transform(localPos, boneMatrix);
+                    transformedPos = Vector3.Transform(transformedPos, rotationMatrix) * model.Scale;
+                    transformedPos += model.Position;
+
+                    float worldX = Position.X + transformedPos.X;
+                    float worldY = Position.Y + transformedPos.Y;
+                    float vertexWorldZ = Position.Z + transformedPos.Z;
+                    float terrainZ = World.Terrain.RequestTerrainHeight(worldX, worldY);
+
+                    float penetration = terrainZ + TerrainPenetrationClearance - vertexWorldZ;
+                    if (penetration > requiredLift)
+                        requiredLift = penetration;
+                }
+            }
+
+            return requiredLift;
+        }
+
+        // =====================================================================
+        /// <summary>
         /// Centers coin pile and fits bounding box for money drops.
         /// </summary>
         private void RecenterCoinsAndFitBoundingBox()
@@ -414,28 +578,25 @@ namespace Client.Main.Objects
         {
             base.Update(gameTime);
 
-            if (!Visible)
-                return;
-
-            UpdateCullSelection(gameTime);
+            if (!_terrainPlacementReady && _visualContentReady && World != null)
+                TryFinalizeTerrainPlacement(World);
         }
 
         // =====================================================================
         public override void Draw(GameTime gameTime)
         {
-            if (!Visible) return;
+            if (!Visible || !_terrainPlacementReady) return;
 
             DrawBoundingBox3D();
 
-            _renderVisualsThisFrame = ShouldRenderVisualsThisFrame();
-            if (!_renderVisualsThisFrame)
+            if (!RenderVisuals)
                 return;
 
             var objects = Children;
             for (int i = 0; i < objects.Count; i++)
             {
                 var child = objects[i];
-                if (ReferenceEquals(child, _shineEffect))
+                if (_visual.IsShineEffect(child))
                     continue;
 
                 child.Draw(gameTime);
@@ -445,16 +606,16 @@ namespace Client.Main.Objects
         // =====================================================================
         public override void DrawAfter(GameTime gameTime)
         {
-            if (!Visible) return;
+            if (!Visible || !_terrainPlacementReady) return;
 
-            if (!_renderVisualsThisFrame)
+            if (!RenderVisuals)
                 return;
 
             var objects = Children;
             for (int i = 0; i < objects.Count; i++)
             {
                 var child = objects[i];
-                if (ReferenceEquals(child, _shineEffect))
+                if (_visual.IsShineEffect(child))
                     continue;
 
                 child.DrawAfter(gameTime);
@@ -557,66 +718,36 @@ namespace Client.Main.Objects
 
         public override void DrawHoverName()
         {
-            if (_pickedUp || Hidden)
+            if (!_terrainPlacementReady)
                 return;
 
             if (_font == null)
                 _font = GraphicsManager.Instance.Font;
-            if (_font == null || GraphicsDevice == null || Camera.Instance == null)
-                return;
 
             bool near = false;
             if (World is Controls.WalkableWorldControl w && w.Walker != null)
                 near = Vector3.DistanceSquared(w.Walker.Position, Position) <= LabelVisibilityDistSq;
+
             if (!near || World?.Scene?.Status != GameControlStatus.Ready)
                 return;
 
-            // CONTRACT: Dropped item labels are batched in BaseScene.Draw() with a single
-            // SpriteBatch Begin/End. Callers MUST ensure a SpriteBatch is active before calling.
-            // This avoids expensive per-item Begin/End overhead when many items are on screen.
+            // Dropped item labels are batched in BaseScene.Draw() with a single
+            // Begin/End. Callers ensure a SpriteBatch is active before calling.
             if (!SpriteBatchScope.BatchIsBegun)
                 return;
 
-            string text = DisplayName;
-            float baseScale = 10f / Client.Main.Constants.BASE_FONT_SIZE;
-            float scale = baseScale * UiScaler.Scale * Constants.RENDER_SCALE;
-            var color = _labelColor;
-
             Vector3 anchor = new(Position.X, Position.Y, BoundingBoxWorld.Max.Z + LabelOffsetZ);
-            Vector3 screen = GraphicsDevice.Viewport.Project(
+            WorldLabelRenderer.DrawWorldLabel(
+                GraphicsManager.Instance.Sprite,
+                GraphicsDevice,
+                _font,
+                DisplayName,
                 anchor,
+                _labelColor,
+                Color.Black * 0.55f,
                 Camera.Instance.Projection,
                 Camera.Instance.View,
-                Matrix.Identity);
-
-            if (screen.Z < 0f || screen.Z > 1f)
-                return;
-
-            var sb = GraphicsManager.Instance.Sprite;
-            Vector2 textSize = _font.MeasureString(text) * scale;
-            int padX = 4, padY = 2;
-            int width = (int)(textSize.X) + padX * 2;
-            int height = (int)(textSize.Y) + padY * 2;
-            var rect = new Rectangle(
-                (int)(screen.X - width / 2f),
-                (int)(screen.Y - height - LabelPixelGap),
-                width, height);
-            float layer = 0f;
-            sb.Draw(GraphicsManager.Instance.Pixel, rect, null, new Color(0, 0, 0, 160), 0f, Vector2.Zero, SpriteEffects.None, layer);
-            sb.Draw(GraphicsManager.Instance.Pixel, new Rectangle(rect.X, rect.Y, rect.Width, 1), null, Color.White * 0.3f, 0f, Vector2.Zero, SpriteEffects.None, layer);
-            sb.Draw(GraphicsManager.Instance.Pixel, new Rectangle(rect.X, rect.Bottom - 1, rect.Width, 1), null, Color.White * 0.3f, 0f, Vector2.Zero, SpriteEffects.None, layer);
-            sb.Draw(GraphicsManager.Instance.Pixel, new Rectangle(rect.X, rect.Y, 1, rect.Height), null, Color.White * 0.3f, 0f, Vector2.Zero, SpriteEffects.None, layer);
-            sb.Draw(GraphicsManager.Instance.Pixel, new Rectangle(rect.Right - 1, rect.Y, 1, rect.Height), null, Color.White * 0.3f, 0f, Vector2.Zero, SpriteEffects.None, layer);
-            sb.DrawString(
-                _font,
-                text,
-                new Vector2(rect.X + padX, rect.Y + padY),
-                color,
-                0f,
-                Vector2.Zero,
-                scale,
-                SpriteEffects.None,
-                layer);
+                10f / Constants.BASE_FONT_SIZE * UiScaler.Scale * Constants.RENDER_SCALE);
         }
 
         public void ResetPickupState()
@@ -626,84 +757,15 @@ namespace Client.Main.Objects
 
         private void AttachShineEffect()
         {
-            if (_shineEffect != null)
-                return;
-
-            _shineEffect = new DroppedItemShineEffect();
-            Children.Add(_shineEffect);
-            _ = _shineEffect.Load();
+            _visual.AttachShineEffect(this);
         }
 
         internal void DrawShineEffect(GameTime gameTime)
         {
-            if (!Visible || _pickedUp)
-                return;
-
-            if (Camera.Instance?.Frustum != null && !Camera.Instance.Frustum.Intersects(BoundingBoxWorld))
-                return;
-
-            if (!_renderVisualsThisFrame)
-                return;
-
-            _shineEffect?.Draw(gameTime);
+            if (_terrainPlacementReady)
+                _visual.DrawShineEffect(this, gameTime, _pickedUp, RenderVisuals);
         }
 
-        private void UpdateCullSelection(GameTime gameTime)
-        {
-            if (World is not Controls.WorldControl worldControl)
-                return;
-
-            if (worldControl.DroppedItems.Count < RenderCullStartCount)
-                return;
-
-            _cachedFrameId = (uint)(gameTime.TotalGameTime.TotalMilliseconds / FrameTimeMs);
-            if (_cullFrameId != _cachedFrameId)
-            {
-                _cullFrameId = _cachedFrameId;
-                _tileSelectedRawId.Clear();
-                _strideFrameId = uint.MaxValue;
-                _globalStride = 1;
-            }
-
-            _cachedTileKey = HashCode.Combine(_scope.PositionX, _scope.PositionY);
-            if (_tileSelectedRawId.TryGetValue(_cachedTileKey, out ushort selected))
-            {
-                if (RawId < selected)
-                    _tileSelectedRawId[_cachedTileKey] = RawId;
-            }
-            else
-            {
-                _tileSelectedRawId[_cachedTileKey] = RawId;
-            }
-        }
-
-        private bool ShouldRenderVisualsThisFrame()
-        {
-            if (World is not Controls.WorldControl worldControl)
-                return true;
-
-            // Only start culling when drops are numerous enough to impact FPS.
-            if (worldControl.DroppedItems.Count < RenderCullStartCount)
-                return true;
-
-            // Use cached values from UpdateCullSelection; fallback if Update didn't run.
-            if (_cullFrameId != _cachedFrameId)
-                return true;
-
-            if (!_tileSelectedRawId.TryGetValue(_cachedTileKey, out ushort selected) || selected != RawId)
-                return false;
-
-            if (_strideFrameId != _cachedFrameId)
-            {
-                int tileCount = _tileSelectedRawId.Count;
-                _globalStride = tileCount > MaxRenderedModelsPerFrame
-                    ? (int)MathF.Ceiling(tileCount / (float)MaxRenderedModelsPerFrame)
-                    : 1;
-                _strideFrameId = _cachedFrameId;
-            }
-
-            return _globalStride <= 1 || (RawId % _globalStride) == 0;
-        }
     }
 
     // Minimal model subclass used for dropped items

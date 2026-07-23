@@ -60,25 +60,17 @@ namespace Client.Main.Objects
             AnimationSpeed = 6f;
 
             // Initialize body part objects and link their animations to this parent object
-            HelmMask = new PlayerMaskHelmObject { LinkParentAnimation = true, Hidden = true };
-            Helm = new PlayerHelmObject { LinkParentAnimation = true };
-            Armor = new PlayerArmorObject { LinkParentAnimation = true };
-            Pants = new PlayerPantObject { LinkParentAnimation = true };
-            Gloves = new PlayerGloveObject { LinkParentAnimation = true };
-            Boots = new PlayerBootObject { LinkParentAnimation = true };
-            Weapon1 = new WeaponObject { };
-            Weapon2 = new WeaponObject { };
-            Wings = new WingObject { LinkParentAnimation = false, Hidden = true };
-
-            Children.Add(HelmMask);
-            Children.Add(Helm);
-            Children.Add(Armor);
-            Children.Add(Pants);
-            Children.Add(Gloves);
-            Children.Add(Boots);
-            Children.Add(Weapon1);
-            Children.Add(Weapon2);
-            Children.Add(Wings);
+            var equipmentVisuals = new EquipmentVisualSet();
+            HelmMask = equipmentVisuals.HelmMask;
+            Helm = equipmentVisuals.Helm;
+            Armor = equipmentVisuals.Armor;
+            Pants = equipmentVisuals.Pants;
+            Gloves = equipmentVisuals.Gloves;
+            Boots = equipmentVisuals.Boots;
+            Weapon1 = equipmentVisuals.Weapon1;
+            Weapon2 = equipmentVisuals.Weapon2;
+            Wings = equipmentVisuals.Wings;
+            equipmentVisuals.AddTo(Children);
         }
 
         public override void OnClick()

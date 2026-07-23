@@ -19,6 +19,9 @@ namespace Client.Main.Objects
 
         public abstract string TexturePath { get; }
 
+        public override WorldObjectRenderPolicy RenderPolicy => base.RenderPolicy.With(
+            forceVisibleInLoginWorld: true);
+
         public SpriteObject()
         {
             BoundingBoxColor = Color.Red;
@@ -28,12 +31,12 @@ namespace Client.Main.Objects
         {
             await base.Load();
 
-            TextureData = await TextureLoader.Instance.Prepare(TexturePath);
+            SpriteTexture = await TextureLoader.Instance.PrepareAndGetTexture(TexturePath);
+            TextureData = TextureLoader.Instance.Get(TexturePath);
 
-            if (TextureData != null)
+            if (TextureData != null && SpriteTexture != null)
             {
                 SpriteBatch = GraphicsManager.Instance.Sprite;
-                SpriteTexture = TextureLoader.Instance.GetTexture2D(TexturePath);
             }
             else
             {
@@ -100,6 +103,9 @@ namespace Client.Main.Objects
         public override void Dispose()
         {
             base.Dispose();
+            if (IsLoadInProgress)
+                return;
+
             SpriteBatch = null;
             SpriteTexture = null;
         }

@@ -132,7 +132,7 @@ namespace Client.Main.Controls.UI.Login
         /// </summary>
         public void FocusUsername()
         {
-            MuGame.ScheduleOnMainThread(() => // Ensure it's on the main thread
+            MuGame.ScheduleOnMainThread(() =>
             {
                 _userInput?.OnFocus();
                 _passwordInput?.OnBlur();
@@ -198,7 +198,6 @@ namespace Client.Main.Controls.UI.Login
                 Scene.FocusControl = null; // keep focus cleared so keyboard stays hidden
             }
 
-            Console.WriteLine("LoginDialog: Login attempt triggered."); // Debug log
             LoginAttempt?.Invoke(this, EventArgs.Empty);
         }
     }

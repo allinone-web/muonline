@@ -1,5 +1,7 @@
 using Client.Main.Content;
 using Client.Main.Controllers;
+using Client.Main.Controls.UI.Common;
+using Client.Main.Controls.UI.Game.Common;
 using Client.Main.Core.Client;
 using Client.Main.Core.Utilities;
 using Client.Main.Models;
@@ -11,7 +13,6 @@ using Microsoft.Xna.Framework.Input;
 using MUnique.OpenMU.Network.Packets;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
 using Client.Main.Helpers;
 
@@ -22,7 +23,6 @@ namespace Client.Main.Controls.UI.Game.Character
         private const int WINDOW_WIDTH = 280;
         private const int WINDOW_HEIGHT = 520;
         private const int STAT_BOX_WIDTH = 170;
-        private const int STAT_BOX_HEIGHT = 21;
         private const int BTN_STAT_COUNT = 5;
 
         private static readonly float[] s_statRowY =
@@ -36,26 +36,8 @@ namespace Client.Main.Controls.UI.Game.Character
 
         private static readonly string[] s_statShortNames = { "STR", "AGI", "STA", "ENE", "CMD" };
 
-        private static readonly string[] s_tableTexturePaths =
-        {
-            "Interface/newui_item_table01(L).tga",
-            "Interface/newui_item_table01(R).tga",
-            "Interface/newui_item_table02(L).tga",
-            "Interface/newui_item_table02(R).tga",
-            "Interface/newui_item_table03(Up).tga",
-            "Interface/newui_item_table03(Dw).tga",
-            "Interface/newui_item_table03(L).tga",
-            "Interface/newui_item_table03(R).tga"
-        };
-
         private static readonly string[] s_additionalPreloadTextures =
         {
-            "Interface/newui_msgbox_back.jpg",
-            "Interface/newui_item_back04.tga",
-            "Interface/newui_item_back02-L.tga",
-            "Interface/newui_item_back02-R.tga",
-            "Interface/newui_item_back03.tga",
-            "Interface/newui_cha_textbox02.tga",
             "Interface/newui_chainfo_btn_level.tga",
             "Interface/newui_exit_00.tga",
             "Interface/newui_chainfo_btn_quest.tga",
@@ -112,26 +94,11 @@ namespace Client.Main.Controls.UI.Game.Character
             public bool Enabled { get; set; } = true;
         }
 
-        private Texture2D _backgroundTexture;
-        private Texture2D _topFrameTexture;
-        private Texture2D _leftFrameTexture;
-        private Texture2D _rightFrameTexture;
-        private Texture2D _bottomFrameTexture;
-        private Texture2D _statTextboxTexture;
         private Texture2D _buttonExitTexture;
         private Texture2D _buttonQuestTexture;
         private Texture2D _buttonPetTexture;
         private Texture2D _buttonMasterTexture;
         private Texture2D _statIncreaseButtonTexture;
-        private Texture2D _tableTopLeftTexture;
-        private Texture2D _tableTopRightTexture;
-        private Texture2D _tableBottomLeftTexture;
-        private Texture2D _tableBottomRightTexture;
-        private Texture2D _tableTopLineTexture;
-        private Texture2D _tableBottomLineTexture;
-        private Texture2D _tableLeftLineTexture;
-        private Texture2D _tableRightLineTexture;
-
         private RenderTarget2D _staticSurface;
         private bool _staticSurfaceDirty = true;
 
@@ -167,6 +134,7 @@ namespace Client.Main.Controls.UI.Game.Character
 
         private int _hoveredButtonIndex = -1;
         private int _pressedButtonIndex = -1;
+        private bool _closeHovered;
 
         private CharacterState _characterState;
         private NetworkManager _networkManager;
@@ -202,7 +170,7 @@ namespace Client.Main.Controls.UI.Game.Character
         }
 
         public IEnumerable<string> GetPreloadTexturePaths()
-            => s_additionalPreloadTextures.Concat(s_tableTexturePaths);
+            => s_additionalPreloadTextures;
 
         public override async Task Load()
         {
@@ -210,28 +178,11 @@ namespace Client.Main.Controls.UI.Game.Character
 
             var tl = TextureLoader.Instance;
 
-            _backgroundTexture = await tl.PrepareAndGetTexture("Interface/newui_msgbox_back.jpg");
-            _topFrameTexture = await tl.PrepareAndGetTexture("Interface/newui_item_back04.tga");
-            _leftFrameTexture = await tl.PrepareAndGetTexture("Interface/newui_item_back02-L.tga");
-            _rightFrameTexture = await tl.PrepareAndGetTexture("Interface/newui_item_back02-R.tga");
-            _bottomFrameTexture = await tl.PrepareAndGetTexture("Interface/newui_item_back03.tga");
-            _statTextboxTexture = await tl.PrepareAndGetTexture("Interface/newui_cha_textbox02.tga");
-
             _buttonExitTexture = await tl.PrepareAndGetTexture("Interface/newui_exit_00.tga");
             _buttonQuestTexture = await tl.PrepareAndGetTexture("Interface/newui_chainfo_btn_quest.tga");
             _buttonPetTexture = await tl.PrepareAndGetTexture("Interface/newui_chainfo_btn_pet.tga");
             _buttonMasterTexture = await tl.PrepareAndGetTexture("Interface/newui_chainfo_btn_master.tga");
             _statIncreaseButtonTexture = await tl.PrepareAndGetTexture("Interface/newui_chainfo_btn_level.tga");
-
-            var tableTextures = await Task.WhenAll(s_tableTexturePaths.Select(path => tl.PrepareAndGetTexture(path)));
-            _tableTopLeftTexture = tableTextures.ElementAtOrDefault(0);
-            _tableTopRightTexture = tableTextures.ElementAtOrDefault(1);
-            _tableBottomLeftTexture = tableTextures.ElementAtOrDefault(2);
-            _tableBottomRightTexture = tableTextures.ElementAtOrDefault(3);
-            _tableTopLineTexture = tableTextures.ElementAtOrDefault(4);
-            _tableBottomLineTexture = tableTextures.ElementAtOrDefault(5);
-            _tableLeftLineTexture = tableTextures.ElementAtOrDefault(6);
-            _tableRightLineTexture = tableTextures.ElementAtOrDefault(7);
 
             InitializeLayout();
             InvalidateStaticSurface();
@@ -248,36 +199,36 @@ namespace Client.Main.Controls.UI.Game.Character
             float statValueYoffset = -2f;
             float statDetailYOffset = 15f;
 
-            _nameText = CreateText(new Vector2(WINDOW_WIDTH / 2f, 5f), 13f, Color.White, TextAlignment.Center);
-            _classText = CreateText(new Vector2(WINDOW_WIDTH / 2f, 23f), 12f, Color.LightGray, TextAlignment.Center);
-            _levelText = CreateText(new Vector2(28f, 60f), 11f, new Color(230, 230, 0));
-            _expText = CreateText(new Vector2(28f, 78f), 10f, Color.WhiteSmoke);
-            _fruitProbText = CreateText(new Vector2(28f, 96f), 10f, new Color(76, 197, 254));
-            _fruitStatsText = CreateText(new Vector2(28f, 114f), 10f, new Color(76, 197, 254));
-            _statPointsText = CreateText(new Vector2(155f, 60f), 11f, new Color(255, 138, 0));
+            _nameText = CreateText(new Vector2(WINDOW_WIDTH / 2f, 7f), 13f, ModernHudTheme.TextWhite, TextAlignment.Center);
+            _classText = CreateText(new Vector2(WINDOW_WIDTH / 2f, 25f), 11f, ModernHudTheme.TextGold, TextAlignment.Center);
+            _levelText = CreateText(new Vector2(26f, 61f), 11f, ModernHudTheme.TextWhite);
+            _expText = CreateText(new Vector2(26f, 79f), 10f, ModernHudTheme.TextGray);
+            _fruitProbText = CreateText(new Vector2(26f, 97f), 10f, ModernHudTheme.SecondaryBright);
+            _fruitStatsText = CreateText(new Vector2(26f, 115f), 10f, ModernHudTheme.SecondaryBright);
+            _statPointsText = CreateText(new Vector2(158f, 61f), 11f, ModernHudTheme.Warning);
 
             for (int i = 0; i < BTN_STAT_COUNT; i++)
             {
                 float rowY = s_statRowY[i];
-                _statValueTexts[i] = CreateText(new Vector2(statValueLeft, rowY + statValueYoffset), 11f, new Color(230, 230, 0), TextAlignment.Left);
+                _statValueTexts[i] = CreateText(new Vector2(statValueLeft, rowY + statValueYoffset), 11f, ModernHudTheme.TextGold, TextAlignment.Left);
             }
 
-            _strDetail1Text = CreateText(new Vector2(25f, s_statRowY[0] + statDetailYOffset), 10f, Color.LightGray);
-            _strDetail2Text = CreateText(new Vector2(25f, s_statRowY[0] + statDetailYOffset + 16f), 10f, Color.LightGray);
+            _strDetail1Text = CreateText(new Vector2(25f, s_statRowY[0] + statDetailYOffset), 10f, ModernHudTheme.TextGray);
+            _strDetail2Text = CreateText(new Vector2(25f, s_statRowY[0] + statDetailYOffset + 16f), 10f, ModernHudTheme.TextGray);
 
-            _agiDetail1Text = CreateText(new Vector2(25f, s_statRowY[1] + statDetailYOffset), 10f, Color.LightGray);
-            _agiDetail2Text = CreateText(new Vector2(25f, s_statRowY[1] + statDetailYOffset + 16f), 10f, Color.LightGray);
-            _agiDetail3Text = CreateText(new Vector2(25f, s_statRowY[1] + statDetailYOffset + 32f), 10f, Color.LightGray);
+            _agiDetail1Text = CreateText(new Vector2(25f, s_statRowY[1] + statDetailYOffset), 10f, ModernHudTheme.TextGray);
+            _agiDetail2Text = CreateText(new Vector2(25f, s_statRowY[1] + statDetailYOffset + 16f), 10f, ModernHudTheme.TextGray);
+            _agiDetail3Text = CreateText(new Vector2(25f, s_statRowY[1] + statDetailYOffset + 32f), 10f, ModernHudTheme.TextGray);
 
-            _vitDetail1Text = CreateText(new Vector2(25f, s_statRowY[2] + statDetailYOffset), 10f, Color.LightGray);
-            _vitDetail2Text = CreateText(new Vector2(25f, s_statRowY[2] + statDetailYOffset + 16f), 10f, Color.LightGray);
+            _vitDetail1Text = CreateText(new Vector2(25f, s_statRowY[2] + statDetailYOffset), 10f, ModernHudTheme.TextGray);
+            _vitDetail2Text = CreateText(new Vector2(25f, s_statRowY[2] + statDetailYOffset + 16f), 10f, ModernHudTheme.TextGray);
 
-            _eneDetail1Text = CreateText(new Vector2(25f, s_statRowY[3] + statDetailYOffset), 10f, Color.LightGray);
-            _eneDetail2Text = CreateText(new Vector2(25f, s_statRowY[3] + statDetailYOffset + 16f), 10f, Color.LightGray);
-            _eneDetail3Text = CreateText(new Vector2(25f, s_statRowY[3] + statDetailYOffset + 32f), 10f, Color.LightGray);
+            _eneDetail1Text = CreateText(new Vector2(25f, s_statRowY[3] + statDetailYOffset), 10f, ModernHudTheme.TextGray);
+            _eneDetail2Text = CreateText(new Vector2(25f, s_statRowY[3] + statDetailYOffset + 16f), 10f, ModernHudTheme.TextGray);
+            _eneDetail3Text = CreateText(new Vector2(25f, s_statRowY[3] + statDetailYOffset + 32f), 10f, ModernHudTheme.TextGray);
 
-            _pvmInfo1Text = CreateText(new Vector2(18f, s_statRowY[4] + 20f), 10f, new Color(255, 200, 100));
-            _pvmInfo2Text = CreateText(new Vector2(18f, s_statRowY[4] + 38f), 10f, new Color(255, 200, 100));
+            _pvmInfo1Text = CreateText(new Vector2(25f, s_statRowY[4] + 18f), 10f, ModernHudTheme.Warning);
+            _pvmInfo2Text = CreateText(new Vector2(25f, s_statRowY[4] + 35f), 10f, ModernHudTheme.Warning);
 
             // Stat increase buttons
             for (int i = 0; i < BTN_STAT_COUNT; i++)
@@ -460,15 +411,15 @@ namespace Client.Main.Controls.UI.Game.Character
                 return;
             }
 
-            _staticSurface?.Dispose();
-            _staticSurface = new RenderTarget2D(graphicsDevice, WINDOW_WIDTH, WINDOW_HEIGHT, false, SurfaceFormat.Color, DepthFormat.None);
+            Client.Main.Graphics.UiRenderTargetPool.Return(_staticSurface);
+            _staticSurface = Client.Main.Graphics.UiRenderTargetPool.Rent(graphicsDevice, WINDOW_WIDTH, WINDOW_HEIGHT);
 
             var previousTargets = graphicsDevice.GetRenderTargets();
             graphicsDevice.SetRenderTarget(_staticSurface);
             graphicsDevice.Clear(Color.Transparent);
 
             var spriteBatch = GraphicsManager.Instance.Sprite;
-            using (new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend))
+            using (new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp))
             {
                 DrawStaticElements(spriteBatch);
             }
@@ -479,158 +430,86 @@ namespace Client.Main.Controls.UI.Game.Character
 
         private void DrawStaticElements(SpriteBatch spriteBatch)
         {
-            if (_backgroundTexture != null)
+            Texture2D pixel = GraphicsManager.Instance.Pixel;
+            if (pixel == null)
             {
-                spriteBatch.Draw(_backgroundTexture, new Rectangle(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT), Color.White);
+                return;
             }
 
-            if (_topFrameTexture != null)
+            Rectangle window = new(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+            spriteBatch.Draw(pixel, window, ModernHudTheme.BorderOuter);
+            UiDrawHelper.DrawVerticalGradient(
+                spriteBatch,
+                new Rectangle(2, 2, WINDOW_WIDTH - 4, WINDOW_HEIGHT - 4),
+                ModernHudTheme.BgDark,
+                ModernHudTheme.BgDarkest);
+            UiDrawHelper.DrawCornerAccents(spriteBatch, window, ModernHudTheme.Accent * 0.4f);
+
+            DrawModernPanel(spriteBatch, new Rectangle(8, 6, WINDOW_WIDTH - 16, 40), ModernHudTheme.BgMid, true);
+            spriteBatch.Draw(pixel, new Rectangle(20, 8, WINDOW_WIDTH - 40, 2), ModernHudTheme.Accent * 0.8f);
+            UiDrawHelper.DrawHorizontalGradient(spriteBatch, new Rectangle(20, 47, 120, 1), Color.Transparent, ModernHudTheme.BorderInner);
+            UiDrawHelper.DrawHorizontalGradient(spriteBatch, new Rectangle(140, 47, 120, 1), ModernHudTheme.BorderInner, Color.Transparent);
+
+            DrawModernPanel(spriteBatch, new Rectangle(14, 53, WINDOW_WIDTH - 28, 78), ModernHudTheme.BgMid);
+            spriteBatch.Draw(pixel, new Rectangle(18, 58, 2, 68), ModernHudTheme.Secondary * 0.65f);
+
+            for (int i = 0; i < BTN_STAT_COUNT; i++)
             {
-                spriteBatch.Draw(_topFrameTexture, new Rectangle(0, 0, WINDOW_WIDTH + 97, 74), Color.White);
+                int rowTop = (int)s_statRowY[i] - 5;
+                int rowBottom = i + 1 < BTN_STAT_COUNT ? (int)s_statRowY[i + 1] - 8 : 466;
+                Rectangle row = new(14, rowTop, WINDOW_WIDTH - 28, Math.Max(48, rowBottom - rowTop));
+                DrawModernPanel(spriteBatch, row, ModernHudTheme.SlotBg);
+                spriteBatch.Draw(pixel, new Rectangle(row.X + 4, row.Y + 5, 2, row.Height - 10), ModernHudTheme.AccentDim * 0.8f);
+                spriteBatch.Draw(pixel, new Rectangle(row.X + 10, (int)s_statRowY[i] + 13, row.Width - 20, 1), ModernHudTheme.BorderInner * 0.35f);
             }
 
-            if (_leftFrameTexture != null)
+            DrawModernPanel(spriteBatch, new Rectangle(14, 472, WINDOW_WIDTH - 28, 38), ModernHudTheme.BgMid);
+
+            SpriteFont font = GraphicsManager.Instance.Font;
+            if (font == null)
             {
-                spriteBatch.Draw(_leftFrameTexture, new Rectangle(0, 0, 26, WINDOW_HEIGHT + 250), Color.White);
+                return;
             }
 
-            if (_rightFrameTexture != null)
+            float labelScale = 10f / Constants.BASE_FONT_SIZE;
+            for (int i = 0; i < BTN_STAT_COUNT; i++)
             {
-                spriteBatch.Draw(_rightFrameTexture, new Rectangle(WINDOW_WIDTH - 17, 0, 26, WINDOW_HEIGHT + 250), Color.White);
+                string label = i == BTN_STAT_COUNT - 1 && !_lastIsDarkLordFamily
+                    ? "COMBAT"
+                    : s_statShortNames[i];
+                Vector2 position = new(23f, s_statRowY[i] - 1f);
+                spriteBatch.DrawString(font, label, position + Vector2.One, Color.Black * 0.6f,
+                    0f, Vector2.Zero, labelScale, SpriteEffects.None, 0f);
+                spriteBatch.DrawString(font, label, position, ModernHudTheme.TextGold,
+                    0f, Vector2.Zero, labelScale, SpriteEffects.None, 0f);
             }
-
-            if (_bottomFrameTexture != null)
-            {
-                spriteBatch.Draw(_bottomFrameTexture, new Rectangle(0, WINDOW_HEIGHT - 40, WINDOW_WIDTH + 97, 55), Color.White);
-            }
-
-            if (_statTextboxTexture != null)
-            {
-                float statBoxLeft = GetStatBoxLeft();
-
-                // Draw stat boxes - only show Leadership (5th stat) for Dark Lord family
-                int statBoxCount = _lastIsDarkLordFamily ? BTN_STAT_COUNT : BTN_STAT_COUNT - 1;
-                for (int i = 0; i < statBoxCount; i++)
-                {
-                    spriteBatch.Draw(_statTextboxTexture,
-                        new Rectangle((int)statBoxLeft, (int)s_statRowY[i], STAT_BOX_WIDTH, STAT_BOX_HEIGHT),
-                        Color.White);
-                }
-
-                // Draw stat short names
-                var font = GraphicsManager.Instance.Font;
-                if (font != null)
-                {
-                    float labelScale = 10f / Constants.BASE_FONT_SIZE;
-                    float labelX = statBoxLeft + 8f;
-                    for (int i = 0; i < statBoxCount; i++)
-                    {
-                        spriteBatch.DrawString(font,
-                            s_statShortNames[i],
-                            new Vector2(labelX, s_statRowY[i] - 1f),
-                            new Color(230, 230, 0),
-                            0f,
-                            Vector2.Zero,
-                            labelScale,
-                            SpriteEffects.None,
-                            0f);
-                    }
-                }
-            }
-
-            // Draw info table background
-            DrawInfoTableSurface(spriteBatch, new Vector2(18f, 55f));
         }
 
-        private void DrawInfoTableSurface(SpriteBatch spriteBatch, Vector2 origin)
+        private static void DrawModernPanel(SpriteBatch spriteBatch, Rectangle rectangle, Color background, bool glow = false)
         {
-            const int tableWidth = WINDOW_WIDTH - 36;
-            const int tableHeight = 80;
-
-            var pixel = GraphicsManager.Instance.Pixel;
-            if (pixel != null)
-            {
-                spriteBatch.Draw(pixel, new Rectangle((int)origin.X, (int)origin.Y, tableWidth, tableHeight), Color.Black * 0.3f);
-            }
-
-            int cornerSizeTopLeftWidth = _tableTopLeftTexture?.Width ?? 0;
-            int cornerSizeTopLeftHeight = _tableTopLeftTexture?.Height ?? 0;
-            int cornerSizeTopRightWidth = _tableTopRightTexture?.Width ?? 0;
-            int cornerSizeTopRightHeight = _tableTopRightTexture?.Height ?? 0;
-            int cornerSizeBottomLeftWidth = _tableBottomLeftTexture?.Width ?? 0;
-            int cornerSizeBottomLeftHeight = _tableBottomLeftTexture?.Height ?? 0;
-            int cornerSizeBottomRightWidth = _tableBottomRightTexture?.Width ?? 0;
-            int cornerSizeBottomRightHeight = _tableBottomRightTexture?.Height ?? 0;
-
-            if (_tableTopLeftTexture != null)
-            {
-                spriteBatch.Draw(_tableTopLeftTexture,
-                    new Rectangle((int)origin.X, (int)origin.Y, cornerSizeTopLeftWidth, cornerSizeTopLeftHeight),
-                    Color.White);
-            }
-
-            if (_tableTopRightTexture != null)
-            {
-                spriteBatch.Draw(_tableTopRightTexture,
-                    new Rectangle((int)(origin.X + tableWidth - cornerSizeTopRightWidth), (int)origin.Y, cornerSizeTopRightWidth, cornerSizeTopRightHeight),
-                    Color.White);
-            }
-
-            if (_tableBottomLeftTexture != null)
-            {
-                spriteBatch.Draw(_tableBottomLeftTexture,
-                    new Rectangle((int)origin.X, (int)(origin.Y + tableHeight - cornerSizeBottomLeftHeight), cornerSizeBottomLeftWidth, cornerSizeBottomLeftHeight),
-                    Color.White);
-            }
-
-            if (_tableBottomRightTexture != null)
-            {
-                spriteBatch.Draw(_tableBottomRightTexture,
-                    new Rectangle((int)(origin.X + tableWidth - cornerSizeBottomRightWidth), (int)(origin.Y + tableHeight - cornerSizeBottomRightHeight), cornerSizeBottomRightWidth, cornerSizeBottomRightHeight),
-                    Color.White);
-            }
-
-            int horizontalStartX = cornerSizeTopLeftWidth;
-            int horizontalEndX = tableWidth - cornerSizeTopRightWidth;
-            int horizontalWidth = Math.Max(0, horizontalEndX - horizontalStartX);
-
-            if (_tableTopLineTexture != null && horizontalWidth > 0)
-            {
-                spriteBatch.Draw(_tableTopLineTexture,
-                    new Rectangle((int)(origin.X + horizontalStartX), (int)origin.Y, horizontalWidth, _tableTopLineTexture.Height),
-                    Color.White);
-            }
-
-            if (_tableBottomLineTexture != null && horizontalWidth > 0)
-            {
-                spriteBatch.Draw(_tableBottomLineTexture,
-                    new Rectangle((int)(origin.X + horizontalStartX), (int)(origin.Y + tableHeight - _tableBottomLineTexture.Height), horizontalWidth, _tableBottomLineTexture.Height),
-                    Color.White);
-            }
-
-            int verticalStartY = cornerSizeTopLeftHeight;
-            int verticalEndY = tableHeight - cornerSizeBottomLeftHeight;
-            int verticalHeight = Math.Max(0, verticalEndY - verticalStartY);
-
-            if (_tableLeftLineTexture != null && verticalHeight > 0)
-            {
-                spriteBatch.Draw(_tableLeftLineTexture,
-                    new Rectangle((int)origin.X, (int)(origin.Y + verticalStartY), _tableLeftLineTexture.Width, verticalHeight),
-                    Color.White);
-            }
-
-            if (_tableRightLineTexture != null && verticalHeight > 0)
-            {
-                spriteBatch.Draw(_tableRightLineTexture,
-                    new Rectangle((int)(origin.X + tableWidth - _tableRightLineTexture.Width), (int)(origin.Y + verticalStartY), _tableRightLineTexture.Width, verticalHeight),
-                    Color.White);
-            }
+            UiDrawHelper.DrawPanel(
+                spriteBatch,
+                rectangle,
+                background,
+                ModernHudTheme.BorderInner,
+                ModernHudTheme.BorderOuter,
+                ModernHudTheme.BorderHighlight * 0.3f,
+                glow,
+                glow ? ModernHudTheme.Accent * 0.12f : null);
         }
 
         public override void Update(GameTime gameTime)
         {
             if (!Visible)
             {
+                return;
+            }
+
+            if (MuGame.Instance.Keyboard.IsKeyDown(Keys.Escape) &&
+                MuGame.Instance.PrevKeyboard.IsKeyUp(Keys.Escape))
+            {
+                HideWindow();
+                SoundController.Instance.PlayBuffer("Sound/iButtonClick.wav");
                 return;
             }
 
@@ -649,10 +528,17 @@ namespace Client.Main.Controls.UI.Game.Character
             bool leftPressed = mouseState.LeftButton == ButtonState.Pressed;
             bool leftJustPressed = leftPressed && prevMouseState.LeftButton == ButtonState.Released;
             bool leftJustReleased = mouseState.LeftButton == ButtonState.Released && prevMouseState.LeftButton == ButtonState.Pressed;
+            float controlScale = Scale;
+            _closeHovered = GetHeaderCloseRectangle(controlScale).Contains(mousePosition);
+
+            if (leftJustReleased && _closeHovered)
+            {
+                HideWindow();
+                SoundController.Instance.PlayBuffer("Sound/iButtonClick.wav");
+                return;
+            }
 
             _hoveredButtonIndex = -1;
-
-            float controlScale = Scale;
 
             for (int i = 0; i < _buttons.Count; i++)
             {
@@ -705,7 +591,7 @@ namespace Client.Main.Controls.UI.Game.Character
             SpriteBatchScope? scope = null;
             if (!SpriteBatchScope.BatchIsBegun)
             {
-                scope = new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend, transform: UiScaler.SpriteTransform);
+                scope = new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp, transform: UiScaler.SpriteTransform);
             }
 
             try
@@ -717,6 +603,7 @@ namespace Client.Main.Controls.UI.Game.Character
 
                 DrawTexts(spriteBatch, font);
                 DrawButtons(spriteBatch);
+                DrawHeaderCloseButton(spriteBatch);
             }
             finally
             {
@@ -750,7 +637,10 @@ namespace Client.Main.Controls.UI.Game.Character
                         break;
                 }
 
-                spriteBatch.DrawString(font, entry.Text, pos, entry.Color * Alpha, 0f, Vector2.Zero, textScale, SpriteEffects.None, 0f);
+                spriteBatch.DrawString(font, entry.Text, pos + Vector2.One * controlScale, Color.Black * (0.65f * Alpha),
+                    0f, Vector2.Zero, textScale, SpriteEffects.None, 0f);
+                spriteBatch.DrawString(font, entry.Text, pos, entry.Color * Alpha,
+                    0f, Vector2.Zero, textScale, SpriteEffects.None, 0f);
             }
         }
 
@@ -766,6 +656,17 @@ namespace Client.Main.Controls.UI.Game.Character
                 }
 
                 Rectangle destRect = GetButtonRectangle(button, controlScale);
+                Rectangle panelRect = new(destRect.X - 2, destRect.Y - 2, destRect.Width + 4, destRect.Height + 4);
+                bool highlighted = (_hoveredButtonIndex == i || _pressedButtonIndex == i) && button.Enabled;
+                UiDrawHelper.DrawVerticalGradient(
+                    spriteBatch,
+                    panelRect,
+                    highlighted ? ModernHudTheme.BgLighter : ModernHudTheme.BgLight,
+                    ModernHudTheme.BgDarkest);
+                UiDrawHelper.DrawBorder(
+                    spriteBatch,
+                    panelRect,
+                    highlighted ? ModernHudTheme.Accent : ModernHudTheme.BorderInner);
                 Rectangle? sourceRect = button.NormalRect;
                 if (_pressedButtonIndex == i && button.Enabled && button.PressedRect.HasValue)
                 {
@@ -802,6 +703,34 @@ namespace Client.Main.Controls.UI.Game.Character
             }
         }
 
+        private void DrawHeaderCloseButton(SpriteBatch spriteBatch)
+        {
+            Rectangle rectangle = GetHeaderCloseRectangle(Scale);
+            Texture2D pixel = GraphicsManager.Instance.Pixel;
+            SpriteFont font = GraphicsManager.Instance.Font;
+            if (pixel == null || font == null)
+            {
+                return;
+            }
+
+            spriteBatch.Draw(pixel, rectangle, (_closeHovered ? ModernHudTheme.Danger : ModernHudTheme.BgLight) * Alpha);
+            UiDrawHelper.DrawBorder(
+                spriteBatch,
+                rectangle,
+                (_closeHovered ? ModernHudTheme.Danger : ModernHudTheme.BorderInner) * Alpha);
+
+            const float baseScale = 0.38f;
+            float textScale = baseScale * Scale;
+            Vector2 size = font.MeasureString("X") * textScale;
+            Vector2 position = new(
+                rectangle.X + (rectangle.Width - size.X) / 2f,
+                rectangle.Y + (rectangle.Height - size.Y) / 2f);
+            spriteBatch.DrawString(font, "X", position + Vector2.One, Color.Black * (0.65f * Alpha),
+                0f, Vector2.Zero, textScale, SpriteEffects.None, 0f);
+            spriteBatch.DrawString(font, "X", position, ModernHudTheme.TextWhite * Alpha,
+                0f, Vector2.Zero, textScale, SpriteEffects.None, 0f);
+        }
+
         private Rectangle GetButtonRectangle(CharacterInfoButton button, float controlScale)
         {
             var baseRect = button.BaseBounds;
@@ -810,6 +739,15 @@ namespace Client.Main.Controls.UI.Game.Character
             int width = (int)MathF.Round(button.FrameSize.X * controlScale);
             int height = (int)MathF.Round(button.FrameSize.Y * controlScale);
             return new Rectangle(x, y, width, height);
+        }
+
+        private Rectangle GetHeaderCloseRectangle(float controlScale)
+        {
+            return new Rectangle(
+                DisplayRectangle.X + (int)MathF.Round((WINDOW_WIDTH - 34) * controlScale),
+                DisplayRectangle.Y + (int)MathF.Round(12f * controlScale),
+                Math.Max(16, (int)MathF.Round(20f * controlScale)),
+                Math.Max(16, (int)MathF.Round(20f * controlScale)));
         }
 
         private void OnAttackSpeedsChanged()
@@ -877,8 +815,16 @@ namespace Client.Main.Controls.UI.Game.Character
                 _statPointsText.Text = snapshot.LevelUpPoints > 0 ? $"Points: {snapshot.LevelUpPoints}" : string.Empty;
             }
 
-            _fruitProbText.Text = "[+]100%|[-]100%";
-            _fruitStatsText.Text = "Create 0/0 | Decrease 0/0";
+            ushort usedFruitPoints = snapshot.Level > 9 ? snapshot.UsedFruitPoints : (ushort)0;
+            ushort maxFruitPoints = snapshot.Level > 9 ? snapshot.MaxFruitPoints : (ushort)0;
+            ushort usedNegativeFruitPoints = snapshot.Level > 9 ? snapshot.UsedNegativeFruitPoints : (ushort)0;
+            ushort maxNegativeFruitPoints = snapshot.Level > 9 ? snapshot.MaxNegativeFruitPoints : (ushort)0;
+            int positiveProbability = GetFruitProbability(usedFruitPoints, maxFruitPoints);
+            int negativeProbability = GetFruitProbability(usedNegativeFruitPoints, maxNegativeFruitPoints);
+            _fruitProbText.Text = $"[+]{positiveProbability}% | [-]{negativeProbability}%";
+            _fruitStatsText.Text =
+                $"Create {usedFruitPoints}/{maxFruitPoints} | " +
+                $"Decrease {-usedNegativeFruitPoints}/{-maxNegativeFruitPoints}";
 
             for (int i = 0; i < BTN_STAT_COUNT; i++)
             {
@@ -886,7 +832,7 @@ namespace Client.Main.Controls.UI.Game.Character
                 ushort addedValue = snapshot.GetAddedStat(i);
                 ushort total = (ushort)(baseValue + addedValue);
                 _statValueTexts[i].Text = addedValue > 0 ? $"{baseValue}+{addedValue}" : total.ToString();
-                _statValueTexts[i].Color = addedValue > 0 ? new Color(100, 150, 255) : new Color(230, 230, 0);
+                _statValueTexts[i].Color = addedValue > 0 ? ModernHudTheme.SecondaryBright : ModernHudTheme.TextGold;
             }
 
             if (snapshot.HasPhysicalDamage)
@@ -980,6 +926,11 @@ namespace Client.Main.Controls.UI.Game.Character
         {
             SoundController.Instance.PlayBuffer("Sound/iButtonClick.wav");
 
+            if ((uint)statIndex >= BTN_STAT_COUNT || _characterState == null || _characterState.LevelUpPoints == 0)
+            {
+                return;
+            }
+
             if (_networkManager == null || !_networkManager.IsConnected || _networkManager.CurrentState < ClientConnectionState.InGame)
             {
                 _logger.LogWarning("Cannot increase stat: Not connected to game server or invalid state.");
@@ -996,11 +947,6 @@ namespace Client.Main.Controls.UI.Game.Character
                 4 => CharacterStatAttribute.Leadership,
                 _ => CharacterStatAttribute.Strength
             };
-
-            if (_characterState == null)
-            {
-                return;
-            }
 
             if (attributeToSend == CharacterStatAttribute.Leadership &&
                 !(_characterState.Class == CharacterClassNumber.DarkLord || _characterState.Class == CharacterClassNumber.LordEmperor))
@@ -1064,7 +1010,7 @@ namespace Client.Main.Controls.UI.Game.Character
             }
 
             base.Dispose();
-            _staticSurface?.Dispose();
+            Client.Main.Graphics.UiRenderTargetPool.Return(_staticSurface);
             _staticSurface = null;
         }
 
@@ -1104,6 +1050,10 @@ namespace Client.Main.Controls.UI.Game.Character
                 MaxMana = state.MaximumMana;
                 CurrentAbility = state.CurrentAbility;
                 MaxAbility = state.MaximumAbility;
+                UsedFruitPoints = state.UsedFruitPoints;
+                MaxFruitPoints = state.MaxFruitPoints;
+                UsedNegativeFruitPoints = state.UsedNegativeFruitPoints;
+                MaxNegativeFruitPoints = state.MaxNegativeFruitPoints;
 
                 var phys = GetPhysicalDamage(state);
                 PhysicalMin = phys.min;
@@ -1125,7 +1075,7 @@ namespace Client.Main.Controls.UI.Game.Character
                 PvMDefenseRate = GetPvMDefenseRate(state);
 
                 IsDarkLordFamily = state.Class == CharacterClassNumber.DarkLord || state.Class == CharacterClassNumber.LordEmperor;
-                CanBeMaster = state.Class != CharacterClassNumber.DarkWizard;
+                CanBeMaster = IsMasterClass(state.Class);
             }
 
             public static CharacterInfoSnapshot Create(CharacterState state) => new(state);
@@ -1156,6 +1106,10 @@ namespace Client.Main.Controls.UI.Game.Character
             public readonly uint MaxMana;
             public readonly uint CurrentAbility;
             public readonly uint MaxAbility;
+            public readonly ushort UsedFruitPoints;
+            public readonly ushort MaxFruitPoints;
+            public readonly ushort UsedNegativeFruitPoints;
+            public readonly ushort MaxNegativeFruitPoints;
             public readonly int PhysicalMin;
             public readonly int PhysicalMax;
             public readonly int MagicalMin;
@@ -1220,6 +1174,10 @@ namespace Client.Main.Controls.UI.Game.Character
                        MaxMana == other.MaxMana &&
                        CurrentAbility == other.CurrentAbility &&
                        MaxAbility == other.MaxAbility &&
+                       UsedFruitPoints == other.UsedFruitPoints &&
+                       MaxFruitPoints == other.MaxFruitPoints &&
+                       UsedNegativeFruitPoints == other.UsedNegativeFruitPoints &&
+                       MaxNegativeFruitPoints == other.MaxNegativeFruitPoints &&
                        PhysicalMin == other.PhysicalMin &&
                        PhysicalMax == other.PhysicalMax &&
                        MagicalMin == other.MagicalMin &&
@@ -1233,6 +1191,35 @@ namespace Client.Main.Controls.UI.Game.Character
                        IsDarkLordFamily == other.IsDarkLordFamily &&
                        CanBeMaster == other.CanBeMaster;
             }
+        }
+
+        private static bool IsMasterClass(CharacterClassNumber characterClass)
+        {
+            return characterClass is
+                CharacterClassNumber.GrandMaster or
+                CharacterClassNumber.BladeMaster or
+                CharacterClassNumber.HighElf or
+                CharacterClassNumber.LordEmperor or
+                CharacterClassNumber.DuelMaster or
+                CharacterClassNumber.DimensionMaster or
+                CharacterClassNumber.FistMaster;
+        }
+
+        private static int GetFruitProbability(ushort usedPoints, ushort maxPoints)
+        {
+            if (usedPoints <= 10 || maxPoints == 0)
+            {
+                return 100;
+            }
+
+            int ratio = usedPoints * 100 / maxPoints;
+            return ratio switch
+            {
+                <= 10 => 70,
+                <= 30 => 60,
+                <= 50 => 50,
+                _ => 40
+            };
         }
 
         private static (int min, int max) GetPhysicalDamage(CharacterState state)

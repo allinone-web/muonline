@@ -41,6 +41,7 @@ namespace Client.Main.Networking.PacketHandling
         private readonly ShopHandler _shopHandler;
         private readonly TradeHandler _tradeHandler;
         private readonly BloodCastleHandler _bloodCastleHandler;
+        private readonly BuffManager _buffManager;
 
         private readonly Dictionary<(byte MainCode, byte SubCode), Func<Memory<byte>, Task>> _packetHandlers
             = new();
@@ -49,6 +50,8 @@ namespace Client.Main.Networking.PacketHandling
 
         // ───────────────────────── Properties ─────────────────────────
         public TargetProtocolVersion TargetVersion { get; }
+
+        public void UpdateBuffs() => _buffManager.Update();
 
         // ───────────────────────── Constructors ─────────────────────────
         public PacketRouter(
@@ -67,8 +70,11 @@ namespace Client.Main.Networking.PacketHandling
             _networkManager = networkManager;
             _settings = settings;
 
+            // Instantiate BuffManager (shared across handlers)
+            _buffManager = new BuffManager(loggerFactory);
+
             // Instantiate handlers
-            _characterDataHandler = new CharacterDataHandler(loggerFactory, characterState, networkManager, targetVersion);
+            _characterDataHandler = new CharacterDataHandler(loggerFactory, characterState, networkManager, targetVersion, _buffManager);
             _inventoryHandler = new InventoryHandler(loggerFactory, characterState, networkManager, targetVersion);
             _scopeHandler = new ScopeHandler(loggerFactory, scopeManager, characterState, networkManager, partyManager, targetVersion, settings);
             _chatMessageHandler = new ChatMessageHandler(loggerFactory);

@@ -47,13 +47,56 @@ with.
       </CharacterRegion>
       <!-- Latin-1 Supplement -->
       <CharacterRegion>
-        <Start>À</Start> <!-- À (U+00C0) -->
+        <Start>&#x00A0;</Start> <!-- U+00A0 -->
         <End>ÿ</End>   <!-- ÿ (U+00FF) -->
       </CharacterRegion>
       <!-- Latin Extended-A -->
       <CharacterRegion>
         <Start>Ā</Start> <!-- Ā (U+0100) -->
         <End>ſ</End>   <!-- ſ (U+017F) -->
+      </CharacterRegion>
+      <!-- Combining Diacritical Marks -->
+      <CharacterRegion>
+        <Start>̀</Start> <!-- U+0300 -->
+        <End>ͯ</End>   <!-- U+036F -->
+      </CharacterRegion>
+      <!-- Cyrillic and Cyrillic Supplement -->
+      <CharacterRegion>
+        <Start>Ѐ</Start> <!-- U+0400 -->
+        <End>ԯ</End>   <!-- U+052F -->
+      </CharacterRegion>
+      <!-- Typography and symbols used by the UI -->
+      <CharacterRegion>
+        <Start>–</Start> <!-- U+2013 -->
+        <End>—</End>   <!-- U+2014 -->
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>•</Start> <!-- U+2022 -->
+        <End>•</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>→</Start> <!-- U+2192 -->
+        <End>→</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>≠</Start> <!-- U+2260 -->
+        <End>≠</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>≤</Start> <!-- U+2264 -->
+        <End>≥</End>   <!-- U+2265 -->
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>─</Start> <!-- U+2500 -->
+        <End>─</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>═</Start> <!-- U+2550 -->
+        <End>═</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>▼</Start> <!-- U+25BC -->
+        <End>▼</End>
       </CharacterRegion>
     </CharacterRegions>
   </Asset>

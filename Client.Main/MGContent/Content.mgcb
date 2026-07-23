@@ -3,9 +3,9 @@
 
 /outputDir:bin/$(Platform)
 /intermediateDir:obj/$(Platform)
-/platform:DesktopGL
+/platform:Windows
 /config:
-/profile:Reach
+/profile:HiDef
 /compress:False
 
 #-------------------------------- References --------------------------------#
@@ -30,6 +30,12 @@
 /processor:FontDescriptionProcessor
 /processorParam:PremultiplyAlpha=True
 /build:Arial.spritefont
+
+#begin ArialSmall.spritefont
+/importer:FontDescriptionImporter
+/processor:FontDescriptionProcessor
+/processorParam:PremultiplyAlpha=True
+/build:ArialSmall.spritefont
 
 #begin NotoKR.spritefont
 /importer:FontDescriptionImporter

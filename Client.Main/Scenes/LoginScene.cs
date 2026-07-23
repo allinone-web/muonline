@@ -1,4 +1,4 @@
-﻿using Client.Main.Controllers; // Needed for SoundController
+using Client.Main.Controllers; // Needed for SoundController
 using Client.Main.Controls.UI;
 using Client.Main.Controls.UI.Login;
 using Client.Main.Core.Client;
@@ -105,19 +105,31 @@ namespace Client.Main.Scenes
             progressCallback?.Invoke("Loading Login World...", 0.21f);
 
             World?.Dispose();
-            var loginWorld = new NewLoginWorld();
+            var loginWorld = new NewLoginWorld { Visible = false };
             Controls.Add(loginWorld);
             // Assuming NewLoginWorld.Initialize() is relatively fast.
             // If it were slow, it would need its own progress reporting that this method would scale.
             await loginWorld.Initialize();
+            await MuGame.YieldToNextFrameAsync(
+                "LoginScene.AttachWorld",
+                MainThreadDispatcher.WorkPriority.Critical);
             World = loginWorld;
 
-            progressCallback?.Invoke("Login World Loaded.", 0.70f);
-
+            // Ambient light is part of the static terrain vertex data. Set it before prewarm so
+            // the first visible Draw does not immediately rebuild both terrain vertex buffers.
             if (loginWorld.Terrain != null)
-            {
                 loginWorld.Terrain.AmbientLight = 0.2f;
-            }
+
+            await MuGame.YieldToNextFrameAsync(
+                "LoginScene.PrewarmWorld",
+                MainThreadDispatcher.WorkPriority.High);
+            await loginWorld.PrepareInitialRenderResourcesAsync("LoginScene.PrewarmModel");
+            await MuGame.YieldToNextFrameAsync(
+                "LoginScene.ActivateWorld",
+                MainThreadDispatcher.WorkPriority.Critical);
+            loginWorld.Visible = true;
+
+            progressCallback?.Invoke("Login World Loaded.", 0.70f);
 
             progressCallback?.Invoke("Playing Login Theme...", 0.75f);
             SoundController.Instance.PlayBackgroundMusic("Music/login_theme.mp3");
@@ -145,6 +157,10 @@ namespace Client.Main.Scenes
                 EnsureServerListPopulatedFromCache();
             }
             progressCallback?.Invoke("Login Scene Setup Complete.", 0.90f);
+
+            // Prevent parent scene-finalization continuations from running inline in the world
+            // activation dispatcher action.
+            await Task.Yield();
         }
 
         // Public Methods

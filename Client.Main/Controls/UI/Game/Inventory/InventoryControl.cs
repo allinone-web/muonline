@@ -617,7 +617,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
         public override void Dispose()
         {
             base.Dispose();
-            _staticSurface?.Dispose();
+            Client.Main.Graphics.UiRenderTargetPool.Return(_staticSurface);
             _staticSurface = null;
         }
 
@@ -833,15 +833,15 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 return;
             }
 
-            _staticSurface?.Dispose();
-            _staticSurface = new RenderTarget2D(graphicsDevice, WINDOW_WIDTH, WINDOW_HEIGHT, false, SurfaceFormat.Color, DepthFormat.None);
+            Client.Main.Graphics.UiRenderTargetPool.Return(_staticSurface);
+            _staticSurface = Client.Main.Graphics.UiRenderTargetPool.Rent(graphicsDevice, WINDOW_WIDTH, WINDOW_HEIGHT);
 
             var previousTargets = graphicsDevice.GetRenderTargets();
             graphicsDevice.SetRenderTarget(_staticSurface);
             graphicsDevice.Clear(Color.Transparent);
 
             var spriteBatch = GraphicsManager.Instance.Sprite;
-            using (new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend))
+            using (new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp))
             {
                 DrawStaticElements(spriteBatch);
             }

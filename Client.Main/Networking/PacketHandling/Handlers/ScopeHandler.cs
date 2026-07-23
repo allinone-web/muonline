@@ -25,7 +25,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
     /// <summary>
     /// Handles packets related to objects entering or leaving scope, moving, and dying.
     /// </summary>
-    public class ScopeHandler : IGamePacketHandler
+    public partial class ScopeHandler : IGamePacketHandler
     {
         private static readonly string[] _recentHitPackets = new string[12];
         private static int _recentHitPacketIndex = -1;
@@ -51,13 +51,15 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         private static readonly HashSet<ushort> _pendingPlayerIds = new();
         private static readonly ConcurrentQueue<NpcSpawnRequest> _npcSpawnQueue = new();
         private static readonly ConcurrentQueue<PlayerSpawnRequest> _playerSpawnQueue = new();
-        private static readonly ConcurrentQueue<DroppedItemWorkItem> _droppedItemQueue = new();
         private static readonly ConcurrentDictionary<ushort, int> _npcSpawnGenerations = new();
+        private static readonly ConcurrentDictionary<ushort, ScheduledNpcSpawn> _scheduledNpcSpawnGenerations = new();
+        private static readonly object _npcSpawnScheduleLock = new();
         private static int _npcSpawnsInFlight;
+        private static long _nextNpcScopeReconcileTick;
         private static int _playerSpawnWorkerRunning;
-        private static int _droppedItemWorkerRunning;
         private const int MaxNpcSpawnsPerFrame = 8;
         private const int MaxConcurrentNpcSpawns = 8;
+        private const int NpcScopeReconcileIntervalMs = 750;
         private static ScopeHandler _activeInstance;
 
         // ─────────────────────── Constructors ────────────────────────
@@ -142,6 +144,57 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             _npcSpawnGenerations.AddOrUpdate(maskedId, 1, static (_, previous) => unchecked(previous + 1));
         }
 
+        private void QueueNpcSpawn(
+            ushort maskedId,
+            ushort rawId,
+            byte x,
+            byte y,
+            byte direction,
+            ushort type,
+            string name,
+            ushort mapId)
+        {
+            int spawnGeneration;
+            lock (_npcSpawnScheduleLock)
+            {
+                if (_scheduledNpcSpawnGenerations.TryGetValue(maskedId, out var scheduled) &&
+                    scheduled.MapId == mapId)
+                {
+                    // Duplicate packets for the same map must not invalidate a load which is
+                    // already queued or in flight.
+                    return;
+                }
+
+                // Network IDs are reused between maps. A target-world request must supersede
+                // an old-map load immediately instead of remaining hidden behind its schedule.
+                spawnGeneration = BumpNpcSpawnGeneration(maskedId);
+                _scheduledNpcSpawnGenerations[maskedId] = new ScheduledNpcSpawn(spawnGeneration, mapId);
+
+                _npcSpawnQueue.Enqueue(new NpcSpawnRequest(
+                    maskedId,
+                    rawId,
+                    x,
+                    y,
+                    direction,
+                    type,
+                    name,
+                    mapId,
+                    spawnGeneration));
+            }
+        }
+
+        private static void ClearScheduledNpcSpawn(ushort maskedId, int spawnGeneration)
+        {
+            if (!_scheduledNpcSpawnGenerations.TryGetValue(maskedId, out var scheduled) ||
+                scheduled.Generation != spawnGeneration)
+            {
+                return;
+            }
+
+            var entry = new KeyValuePair<ushort, ScheduledNpcSpawn>(maskedId, scheduled);
+            ((ICollection<KeyValuePair<ushort, ScheduledNpcSpawn>>)_scheduledNpcSpawnGenerations).Remove(entry);
+        }
+
         /// <summary>
         /// Maps a server direction byte (0-7) to the client Direction enum using the inverse direction map.
         /// </summary>
@@ -190,6 +243,59 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         }
 
         // ───────────────────── Internal API ────────────────────────
+        private void EnsureNearbyScopedNpcsMaterialized(WalkableWorldControl world)
+        {
+            if (world?.Walker == null || _scopeManager == null)
+                return;
+
+            const int nearbyTileRange = 12;
+            const int nearbyTileRangeSq = nearbyTileRange * nearbyTileRange;
+            int queued = 0;
+
+            foreach (var scopeObject in _scopeManager.GetScopeItems(ScopeObjectType.Npc))
+            {
+                if (scopeObject is not NpcScopeObject npc)
+                    continue;
+
+                int dx = npc.PositionX - _characterState.PositionX;
+                int dy = npc.PositionY - _characterState.PositionY;
+                if ((dx * dx) + (dy * dy) > nearbyTileRangeSq)
+                    continue;
+
+                ushort maskedId = (ushort)(npc.Id & 0x7FFF);
+                if (world.TryGetWalkerById(maskedId, out var existing))
+                {
+                    if (existing.Status == GameControlStatus.Ready &&
+                        (existing.Hidden || !world.IsObjectVisibleInSnapshot(existing)))
+                    {
+                        world.ActivateObjectForRendering(
+                            existing,
+                            forceFullVisibilityRebuild: true);
+                    }
+
+                    continue;
+                }
+
+                byte serverDirection = MapClientDirectionToServer(npc.Direction);
+                QueueNpcSpawn(
+                    maskedId,
+                    npc.RawId,
+                    npc.PositionX,
+                    npc.PositionY,
+                    serverDirection,
+                    npc.TypeNumber,
+                    npc.Name,
+                    _characterState.MapId);
+                queued++;
+            }
+
+            if (queued > 0)
+            {
+                _logger.LogDebug("Queued {Count} nearby scoped NPC/monster spawns after local damage packet.", queued);
+                PumpNpcSpawnQueue(world, 32);
+            }
+        }
+
         /// <summary>
         /// Retrieves and clears pending player spawns.
         /// </summary>
@@ -222,14 +328,16 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         /// Requeues pending NPC/monster descriptors into the normal spawn queue so all lifecycle checks
         /// (generation, scope validity, deduplication) run through one path.
         /// </summary>
-        internal static void EnqueuePendingNpcsMonsters(IReadOnlyList<NpcScopeObject> pending)
+        internal static void EnqueuePendingNpcsMonsters(
+            IReadOnlyList<NpcScopeObject> pending,
+            WalkableWorldControl targetWorld = null)
         {
             var handler = _activeInstance;
             if (handler == null || pending == null || pending.Count == 0)
                 return;
 
-            ushort mapId = handler._characterState.MapId;
-            var world = MuGame.Instance?.ActiveScene?.World as WalkableWorldControl;
+            var world = targetWorld ?? MuGame.Instance?.ActiveScene?.World as WalkableWorldControl;
+            ushort mapId = world?.MapId ?? handler._characterState.MapId;
 
             for (int i = 0; i < pending.Count; i++)
             {
@@ -241,12 +349,11 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 if (!handler._scopeManager.ScopeContains(maskedId))
                     continue;
 
-                if (world != null && world.FindWalkerById(maskedId) != null)
+                if (world != null && world.TryGetWalkerById(maskedId, out _))
                     continue;
 
-                int spawnGeneration = BumpNpcSpawnGeneration(maskedId);
                 byte serverDirection = handler.MapClientDirectionToServer(npc.Direction);
-                _npcSpawnQueue.Enqueue(new NpcSpawnRequest(
+                handler.QueueNpcSpawn(
                     maskedId,
                     npc.RawId,
                     npc.PositionX,
@@ -254,8 +361,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     serverDirection,
                     npc.TypeNumber,
                     npc.Name,
-                    mapId,
-                    spawnGeneration));
+                    mapId);
             }
         }
 
@@ -434,7 +540,8 @@ namespace Client.Main.Networking.PacketHandling.Handlers
 
             // Spawn remote players immediately if the world is ready, otherwise buffer for later.
             if (MuGame.Instance.ActiveScene?.World is WalkableWorldControl w
-                && w.Status == GameControlStatus.Ready)
+                && w.Status == GameControlStatus.Ready
+                && w.MapId == _characterState.MapId)
             {
                 SpawnRemotePlayerIntoWorld(w, maskedId, rawId, x, y, name, cls, appearanceBytes);
                 return;
@@ -680,8 +787,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 if (world.WalkerObjectsById.TryGetValue(maskedId, out WalkerObject existingWalker))
                 {
                     _logger.LogWarning("[Spawn] Stale object for {Name} found. Removing before adding new.", name);
-                    world.Objects.Remove(existingWalker);
-                    existingWalker.Dispose();
+                    WorldMutationQueue.RemoveAndDispose(world, existingWalker);
                 }
 
                 if (world.FindPlayerById(maskedId) != null)
@@ -780,11 +886,14 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 string name = NpcDatabase.GetNpcName(type);
 
                 _scopeManager.AddOrUpdateNpcInScope(maskedId, rawId, x, y, type, name);
-                int spawnGeneration = BumpNpcSpawnGeneration(maskedId);
-
-                _npcSpawnQueue.Enqueue(new NpcSpawnRequest(maskedId, rawId, x, y, direction, type, name, currentMapId, spawnGeneration));
+                QueueNpcSpawn(maskedId, rawId, x, y, direction, type, name, currentMapId);
             }
         }
+
+        internal static int PendingNpcSpawnWorkCount =>
+            _npcSpawnQueue.Count + Math.Max(0, Volatile.Read(ref _npcSpawnsInFlight));
+
+        internal static bool HasPendingNpcSpawnWork => PendingNpcSpawnWorkCount > 0;
 
         internal static void PumpNpcSpawnQueue(WalkableWorldControl world, int maxPerFrame = MaxNpcSpawnsPerFrame)
         {
@@ -794,7 +903,17 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             }
 
             var handler = _activeInstance;
-            if (handler == null || _npcSpawnQueue.IsEmpty)
+            if (handler == null)
+            {
+                return;
+            }
+
+            // Reconciliation is internally throttled and scheduled-generation tracking
+            // prevents duplicates even while other NPCs are still loading. Running it here
+            // avoids starving a missing stationary NPC behind unrelated spawn work.
+            handler.ReconcileMissingScopedNpcs(world);
+
+            if (_npcSpawnQueue.IsEmpty)
             {
                 return;
             }
@@ -806,43 +925,137 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             {
                 if (request.MapId != handler._characterState.MapId)
                 {
+                    ClearScheduledNpcSpawn(request.MaskedId, request.SpawnGeneration);
                     handler._logger.LogDebug("Discarding queued NPC/Monster spawn {SpawnId:X4} for map {RequestMap} after map changed to {CurrentMap}.", request.MaskedId, request.MapId, handler._characterState.MapId);
                     continue;
                 }
 
+                if (!IsCurrentNpcSpawnGeneration(request.MaskedId, request.SpawnGeneration))
+                {
+                    ClearScheduledNpcSpawn(request.MaskedId, request.SpawnGeneration);
+                    continue;
+                }
+
                 startedThisFrame++;
-                handler.StartNpcSpawn(request);
+                handler.StartNpcSpawn(request, world);
             }
         }
 
-        private void StartNpcSpawn(NpcSpawnRequest request)
+        private void ReconcileMissingScopedNpcs(WalkableWorldControl world)
+        {
+            long now = Environment.TickCount64;
+            long next = Volatile.Read(ref _nextNpcScopeReconcileTick);
+            if (now < next)
+                return;
+
+            if (Interlocked.CompareExchange(
+                    ref _nextNpcScopeReconcileTick,
+                    now + NpcScopeReconcileIntervalMs,
+                    next) != next)
+            {
+                return;
+            }
+
+            int queued = 0;
+            ushort currentMapId = world.MapId;
+            foreach (var scopeObject in _scopeManager.GetScopeItems(ScopeObjectType.Npc))
+            {
+                if (scopeObject is not NpcScopeObject npc)
+                    continue;
+
+                ushort maskedId = (ushort)(npc.Id & 0x7FFF);
+                if (world.TryGetWalkerById(maskedId, out WalkerObject existing))
+                {
+                    bool readyExisting =
+                        ReferenceEquals(existing.World, world) &&
+                        existing.Status == GameControlStatus.Ready &&
+                        world.Objects.Contains(existing);
+
+                    if (readyExisting)
+                    {
+                        if (existing.Hidden || !world.IsObjectVisibleInSnapshot(existing))
+                        {
+                            world.ActivateObjectForRendering(
+                                existing,
+                                forceFullVisibilityRebuild: true);
+                        }
+
+                        continue;
+                    }
+
+                    bool initializationStillPending =
+                        ReferenceEquals(existing.World, world) &&
+                        existing.Status is GameControlStatus.NonInitialized or GameControlStatus.Initializing &&
+                        world.IsObjectInitializationPending(existing);
+
+                    if (initializationStillPending)
+                        continue;
+
+                    world.RemoveObject(existing);
+                    if (existing.Status != GameControlStatus.Disposed)
+                        existing.Dispose();
+                }
+
+                byte serverDirection = MapClientDirectionToServer(npc.Direction);
+                QueueNpcSpawn(
+                    maskedId,
+                    npc.RawId,
+                    npc.PositionX,
+                    npc.PositionY,
+                    serverDirection,
+                    npc.TypeNumber,
+                    npc.Name,
+                    currentMapId);
+                queued++;
+            }
+
+            if (queued > 0)
+            {
+                _logger.LogInformation(
+                    "Reconciled {Count} scoped NPC/monster entries missing from the ready world.",
+                    queued);
+            }
+        }
+
+        private static bool IsSpawnTargetWorldValid(WalkableWorldControl world, ushort mapId)
+        {
+            return world != null &&
+                   world.Status == GameControlStatus.Ready &&
+                   world.MapId == mapId &&
+                   ReferenceEquals(world.Scene?.World, world);
+        }
+
+        private void StartNpcSpawn(NpcSpawnRequest request, WalkableWorldControl targetWorld)
         {
             if (request.MapId != _characterState.MapId)
             {
+                ClearScheduledNpcSpawn(request.MaskedId, request.SpawnGeneration);
                 _logger.LogDebug("Skipping queued NPC/Monster spawn {SpawnId:X4} for stale map {RequestMap} (current: {CurrentMap}).", request.MaskedId, request.MapId, _characterState.MapId);
                 return;
             }
 
             if (!IsCurrentNpcSpawnGeneration(request.MaskedId, request.SpawnGeneration))
             {
+                ClearScheduledNpcSpawn(request.MaskedId, request.SpawnGeneration);
                 _logger.LogDebug("Skipping stale NPC/Monster spawn {SpawnId:X4} (generation {Generation}).", request.MaskedId, request.SpawnGeneration);
                 return;
             }
 
             Interlocked.Increment(ref _npcSpawnsInFlight);
 
-            _ = ProcessNpcSpawnAsync(request).ContinueWith(t =>
+            _ = ProcessNpcSpawnAsync(request, targetWorld).ContinueWith(t =>
             {
                 if (t.IsFaulted && t.Exception != null)
                 {
                     _logger.LogError(t.Exception, "ScopeHandler: Error processing NPC/Monster spawn {SpawnId:X4}.", request.MaskedId);
                 }
 
+                ClearScheduledNpcSpawn(request.MaskedId, request.SpawnGeneration);
                 Interlocked.Decrement(ref _npcSpawnsInFlight);
             }, global::System.Threading.Tasks.TaskScheduler.Default);
         }
 
-        private Task ProcessNpcSpawnAsync(NpcSpawnRequest request)
+        private Task ProcessNpcSpawnAsync(NpcSpawnRequest request, WalkableWorldControl targetWorld)
         {
             if (request.MapId != _characterState.MapId)
             {
@@ -856,10 +1069,30 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 return Task.CompletedTask;
             }
 
-            return ProcessNpcSpawnAsync(request.MaskedId, request.RawId, request.X, request.Y, request.Direction, request.Type, request.Name, request.SpawnGeneration);
+            return ProcessNpcSpawnAsync(
+                request.MaskedId,
+                request.RawId,
+                request.X,
+                request.Y,
+                request.Direction,
+                request.Type,
+                request.Name,
+                request.MapId,
+                request.SpawnGeneration,
+                targetWorld);
         }
 
-        private async Task ProcessNpcSpawnAsync(ushort maskedId, ushort rawId, byte x, byte y, byte direction, ushort type, string name, int spawnGeneration)
+        private async Task ProcessNpcSpawnAsync(
+            ushort maskedId,
+            ushort rawId,
+            byte x,
+            byte y,
+            byte direction,
+            ushort type,
+            string name,
+            ushort mapId,
+            int spawnGeneration,
+            WalkableWorldControl worldRef)
         {
             if (!IsCurrentNpcSpawnGeneration(maskedId, spawnGeneration))
             {
@@ -867,15 +1100,12 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 return;
             }
 
-            if (MuGame.Instance.ActiveScene?.World is not WalkableWorldControl worldRef || worldRef.Status != GameControlStatus.Ready)
+            if (!IsSpawnTargetWorldValid(worldRef, mapId))
             {
-                lock (_pendingNpcsMonsters)
-                {
-                    if (_pendingNpcMonsterIds.Add(maskedId))
-                    {
-                        _pendingNpcsMonsters.Add(new NpcScopeObject(maskedId, rawId, x, y, type, name) { Direction = (byte)MapServerDirection(direction) });
-                    }
-                }
+                _logger.LogDebug(
+                    "Deferring NPC/Monster {SpawnId:X4}; target world is no longer valid for map {MapId}.",
+                    maskedId,
+                    mapId);
                 return;
             }
 
@@ -896,23 +1126,19 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             obj.Location = new Vector2(x, y);
             obj.Direction = MapServerDirection(direction);
             obj.World = worldRef;
+            obj.Hidden = true;
 
             // Load assets in background
             try
             {
                 await obj.Load();
                 if (obj is ModelObject modelObj)
-                {
-                    // Skip preloading to avoid blocking
-                }
+                    await modelObj.PrepareGpuTexturesForFirstFrameAsync().ConfigureAwait(false);
 
                 if (obj.Status != GameControlStatus.Ready)
                 {
-                    _logger.LogWarning(
-                        "ScopeHandler: NPC/Monster {MaskedId:X4} ({WalkerType}) loaded but status is {Status}.",
-                        maskedId,
-                        obj.GetType().Name,
-                        obj.Status);
+                    throw new InvalidOperationException(
+                        $"NPC/Monster {maskedId:X4} ({obj.GetType().Name}) finished Load() with status {obj.Status}.");
                 }
             }
             catch (Exception ex)
@@ -928,77 +1154,116 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 return;
             }
 
-            // Add to world on main thread
+            // Keep the spawn marked as scheduled until the main-thread insertion has
+            // completed. Otherwise the reconciliation pass can enqueue the same NPC again
+            // in the small window between background loading and world insertion.
+            var insertionCompletion = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
             MuGame.ScheduleOnMainThread(() =>
             {
-                // Double-check world is still valid and object doesn't already exist
-                if (MuGame.Instance.ActiveScene?.World != worldRef || worldRef.Status != GameControlStatus.Ready)
+                try
                 {
-                    obj.Dispose();
-                    return;
-                }
+                    // Double-check world is still valid and object doesn't already exist.
+                    if (!IsSpawnTargetWorldValid(worldRef, mapId))
+                    {
+                        obj.Dispose();
+                        insertionCompletion.TrySetResult(false);
+                        return;
+                    }
 
-                if (!IsCurrentNpcSpawnGeneration(maskedId, spawnGeneration) || !_scopeManager.ScopeContains(maskedId))
-                {
-                    obj.Dispose();
-                    return;
-                }
+                    if (!IsCurrentNpcSpawnGeneration(maskedId, spawnGeneration) || !_scopeManager.ScopeContains(maskedId))
+                    {
+                        obj.Dispose();
+                        insertionCompletion.TrySetResult(false);
+                        return;
+                    }
 
-                // Check and remove stale objects quickly
-                if (worldRef.WalkerObjectsById.TryGetValue(maskedId, out WalkerObject existingWalker))
-                {
-                    _logger.LogWarning(
-                        "ScopeHandler: Stale/Duplicate NPC/Monster ID {MaskedId:X4} ({ExistingWalkerType}) found in WalkerObjectsById. Removing it before adding new {Name} (Type: {TypeId}).",
-                        maskedId,
-                        existingWalker.GetType().Name,
-                        name,
-                        type);
+                    // Check and remove stale objects quickly.
+                    if (worldRef.WalkerObjectsById.TryGetValue(maskedId, out WalkerObject existingWalker))
+                    {
+                        _logger.LogWarning(
+                            "ScopeHandler: Stale/Duplicate NPC/Monster ID {MaskedId:X4} ({ExistingWalkerType}) found in WalkerObjectsById. Removing it before adding new {Name} (Type: {TypeId}).",
+                            maskedId,
+                            existingWalker.GetType().Name,
+                            name,
+                            type);
 
-                    existingWalker.Dispose();
-                    worldRef.Objects.Remove(existingWalker);
-                }
+                        worldRef.RemoveObject(existingWalker);
+                        if (existingWalker.Status != GameControlStatus.Disposed)
+                            existingWalker.Dispose();
+                    }
 
-                // Quick check for duplicates using cached walkers
-                if (worldRef.FindWalkerById(maskedId) != null)
-                {
-                    obj.Dispose();
-                    return;
-                }
+                    if (worldRef.FindWalkerById(maskedId) != null)
+                    {
+                        obj.Dispose();
+                        insertionCompletion.TrySetResult(false);
+                        return;
+                    }
 
-                worldRef.Objects.Add(obj);
+                    // Resolve the destination height and GPU resources before adding the
+                    // object to the live world. The object stays hidden for one complete frame
+                    // so visibility/culling can observe a fully initialized state.
+                    if (obj.World?.Terrain != null)
+                    {
+                        obj.SnapToTerrainHeight(updateCamera: false);
+                    }
+                    else
+                    {
+                        _logger.LogError(
+                            "ScopeHandler: obj.World or obj.World.Terrain is null for NPC/Monster {MaskedId:X4} ({WalkerType}) before publication.",
+                            maskedId,
+                            obj.GetType().Name);
+                        float worldX = obj.Location.X * Constants.TERRAIN_SCALE + 0.5f * Constants.TERRAIN_SCALE;
+                        float worldY = obj.Location.Y * Constants.TERRAIN_SCALE + 0.5f * Constants.TERRAIN_SCALE;
+                        obj.MoveTargetPosition = new Vector3(worldX, worldY, 0);
+                        obj.Position = obj.MoveTargetPosition;
+                    }
 
-                // Set final position
-                if (obj.World?.Terrain != null)
-                {
-                    obj.MoveTargetPosition = obj.TargetPosition;
-                    obj.Position = obj.TargetPosition;
-                }
-                else
-                {
-                    _logger.LogError(
-                        "ScopeHandler: obj.World or obj.World.Terrain is null for NPC/Monster {MaskedId:X4} ({WalkerType}) AFTER loading and adding. This indicates a problem.",
-                        maskedId,
-                        obj.GetType().Name);
-                    float worldX = obj.Location.X * Constants.TERRAIN_SCALE + 0.5f * Constants.TERRAIN_SCALE;
-                    float worldY = obj.Location.Y * Constants.TERRAIN_SCALE + 0.5f * Constants.TERRAIN_SCALE;
-                    obj.MoveTargetPosition = new Vector3(worldX, worldY, 0);
-                    obj.Position = obj.MoveTargetPosition;
-                }
+                    if (obj is ModelObject readyModel)
+                        readyModel.PrepareRenderResourcesForFirstFrame();
 
-                // Play Appear animation for monsters that have MonsterActionType.Appear mapped
-                if (obj is MonsterObject monster && obj is ModelObject modelObj)
-                {
-                    // Check if monster has Appear animation available
-                    if (modelObj.Model?.Actions != null &&
+                    worldRef.Objects.Add(obj);
+
+                    if (obj is MonsterObject monster && obj is ModelObject modelObj &&
+                        modelObj.Model?.Actions != null &&
                         (int)MonsterActionType.Appear < modelObj.Model.Actions.Length &&
                         modelObj.Model.Actions[(int)MonsterActionType.Appear] != null)
                     {
-                        // Play MonsterActionType.Appear animation for dramatic spawn effect
                         monster.PlayAction((ushort)MonsterActionType.Appear);
                     }
+
+                    insertionCompletion.TrySetResult(true);
                 }
-            });
+                catch (Exception ex)
+                {
+                    insertionCompletion.TrySetException(ex);
+                }
+            }, MainThreadDispatcher.WorkPriority.High, $"ProcessNpcSpawn.Publish.{maskedId:X4}");
+
+            bool inserted = await insertionCompletion.Task.ConfigureAwait(false);
+            if (!inserted)
+                return;
+
+            await MuGame.YieldToNextFrameAsync(
+                $"ProcessNpcSpawn.Activate.{maskedId:X4}",
+                MainThreadDispatcher.WorkPriority.High);
+
+            if (IsSpawnTargetWorldValid(worldRef, mapId) &&
+                IsCurrentNpcSpawnGeneration(maskedId, spawnGeneration) &&
+                _scopeManager.ScopeContains(maskedId) &&
+                worldRef.FindWalkerById(maskedId) == obj)
+            {
+                worldRef.ActivateObjectForRendering(obj, forceFullVisibilityRebuild: true);
+            }
+            else
+            {
+                worldRef.RemoveObject(obj);
+                obj.Dispose();
+            }
         }
+
+        private readonly record struct ScheduledNpcSpawn(int Generation, ushort MapId);
 
         private readonly struct NpcSpawnRequest
         {
@@ -1056,20 +1321,6 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             public string Name { get; }
             public CharacterClassNumber Class { get; }
             public ReadOnlyMemory<byte> AppearanceData { get; }
-        }
-
-        private readonly struct DroppedItemWorkItem
-        {
-            public DroppedItemWorkItem(ScopeObject dropObj, ushort maskedId, string soundPath)
-            {
-                DropObject = dropObj;
-                MaskedId = maskedId;
-                SoundPath = soundPath;
-            }
-
-            public ScopeObject DropObject { get; }
-            public ushort MaskedId { get; }
-            public string SoundPath { get; }
         }
 
         [PacketHandler(0x25, PacketRouter.NoSubCode)]
@@ -1357,6 +1608,9 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                         return;
                     }
 
+                    if (maskedId == _characterState.Id && world is WalkableWorldControl localWorld)
+                        EnsureNearbyScopedNpcsMaterialized(localWorld);
+
                     WalkerObject target = null;
                     if (maskedId == _characterState.Id && world is WalkableWorldControl walkable)
                     {
@@ -1429,7 +1683,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                         maskedId,
                         dmgColor
                     );
-                    world.Objects.Add(txt);
+            WorldMutationQueue.Add(world, txt);
                     _logger.LogDebug("Spawned DamageTextObject '{Text}' for {Id:X4}", txt.Text, maskedId);
                 });
 
@@ -1703,15 +1957,14 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             // Remove objects on main thread in one batched action.
             MuGame.ScheduleOnMainThread(() =>
             {
-                if (MuGame.Instance.ActiveScene?.World is not WalkableWorldControl world) return;
+                if (!TryGetActiveWalkableWorld(out var world)) return;
 
                 foreach (var masked in objectsToRemove)
                 {
                     var obj = world.FindDroppedItemById(masked);
                     if (obj != null)
                     {
-                        world.Objects.Remove(obj);
-                        obj.Recycle();
+                        WorldMutationQueue.RemoveAndRecycle(world, obj);
                         _logger.LogDebug("Removed DroppedItemObject {Id:X4} from world (scope gone).", masked);
                     }
                 }
@@ -1771,7 +2024,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             // Remove objects on main thread in one batched action.
             MuGame.ScheduleOnMainThread(() =>
             {
-                if (MuGame.Instance.ActiveScene?.World is not WalkableWorldControl world) return;
+                if (!TryGetActiveWalkableWorld(out var world)) return;
                 var localWalker = world.Walker;
 
                 foreach (var masked in objectsToRemove)
@@ -1792,8 +2045,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                             continue;
                         }
 
-                        world.Objects.Remove(player);
-                        player.Dispose();
+                        WorldMutationQueue.RemoveAndDispose(world, player);
                         continue;
                     }
 
@@ -1807,8 +2059,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                             continue;
                         }
 
-                        world.Objects.Remove(walker);
-                        walker.Dispose();
+                        WorldMutationQueue.RemoveAndDispose(world, walker);
                         continue;
                     }
 
@@ -1816,8 +2067,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     var drop = world.FindDroppedItemById(masked);
                     if (drop != null)
                     {
-                        world.Objects.Remove(drop);
-                        drop.Dispose();
+                        WorldMutationQueue.RemoveAndDispose(world, drop);
                     }
                 }
             });
@@ -1911,7 +2161,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
 
             MuGame.ScheduleOnMainThread(() =>
             {
-                if (MuGame.Instance.ActiveScene?.World is not WalkableWorldControl world)
+                if (!TryGetActiveWalkableWorld(out var world))
                     return;
 
                 // ────────────────────────────────────────────────
@@ -2080,12 +2330,11 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                             {
                                 MuGame.ScheduleOnMainThread(() =>
                                 {
-                                    if (world.Objects.Contains(walker))
-                                    {
-                                        world.Objects.Remove(walker);
-                                        walker.Dispose();
-                                        _logger.LogDebug("💀 Removed dead remote player {Name} after animation",
-                                                        remotePlayer.Name);
+                                if (world.Objects.Contains(walker))
+                                {
+                                    WorldMutationQueue.RemoveAndDispose(world, walker);
+                                    _logger.LogDebug("💀 Removed dead remote player {Name} after animation",
+                                        remotePlayer.Name);
                                     }
                                 });
                             });
@@ -2299,8 +2548,10 @@ namespace Client.Main.Networking.PacketHandling.Handlers
 
         private async Task ProcessDroppedItemAsync(ScopeObject dropObj, ushort maskedId, string soundPath)
         {
-            // Add to world on main thread first, then load assets
-            var tcs = new TaskCompletionSource<bool>();
+            // Create the pooled object on the main thread, then keep it unpublished until
+            // CPU decoding, GPU upload and terrain placement have all completed.
+            var tcs = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
 
             MuGame.ScheduleOnMainThread(() =>
             {
@@ -2310,69 +2561,145 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             await tcs.Task;
         }
 
-        private void ProcessDroppedItemOnMainThread(ScopeObject dropObj, ushort maskedId, string soundPath, TaskCompletionSource<bool> tcs)
+        private void ProcessDroppedItemOnMainThread(
+            ScopeObject dropObj,
+            ushort maskedId,
+            string soundPath,
+            TaskCompletionSource<bool> tcs)
         {
             try
             {
-                if (MuGame.Instance.ActiveScene?.World is not WalkableWorldControl world)
+                if (!TryGetActiveWalkableWorld(out var world))
                 {
-                    tcs.SetResult(false);
+                    tcs.TrySetResult(false);
                     return;
                 }
 
-                // Remove existing visual object if it's already there
                 var existing = world.FindDroppedItemById(maskedId);
                 if (existing != null)
-                {
-                    world.Objects.Remove(existing);
-                    existing.Recycle();
-                }
+                    WorldMutationQueue.RemoveAndRecycle(world, existing);
 
-                var obj = DroppedItemObject.Rent(dropObj, _characterState.Id, _networkManager.GetCharacterService(), _loggerFactory.CreateLogger<DroppedItemObject>());
-
-                // Set World property before adding to world objects
+                var obj = DroppedItemObject.Rent(
+                    dropObj,
+                    _characterState.Id,
+                    _networkManager.GetCharacterService(),
+                    _loggerFactory.CreateLogger<DroppedItemObject>());
                 obj.World = world;
+                obj.Hidden = true;
+                int loadGeneration = obj.LoadGeneration;
 
-                // Add to world so World.Scene is available
-                world.Objects.Add(obj);
-
-                // Queue load to avoid long stalls on the main thread
+                // Decode and prepare resources before publication. Adding the object only after
+                // it is Ready avoids the generic world initializer racing this explicit loader.
                 bool enqueued = MuGame.TaskScheduler.QueueTask(async () =>
                 {
                     try
                     {
-                        await obj.Load();
+                        await obj.Load().ConfigureAwait(false);
+                        await obj.PrepareGpuTexturesForFirstFrameAsync().ConfigureAwait(false);
+
+                        if (!ReferenceEquals(obj.World, world) ||
+                            obj.LoadGeneration != loadGeneration ||
+                            obj.Status != GameControlStatus.Ready)
+                        {
+                            MuGame.ScheduleOnMainThread(
+                                obj.Recycle,
+                                MainThreadDispatcher.WorkPriority.High,
+                                $"ProcessDrop.RecycleStale.{maskedId:X4}");
+                            tcs.TrySetResult(false);
+                            return;
+                        }
+
+                        var publishCompletion = new TaskCompletionSource<bool>(
+                            TaskCreationOptions.RunContinuationsAsynchronously);
+                        MuGame.ScheduleOnMainThread(() =>
+                        {
+                            try
+                            {
+                                if (MuGame.Instance.ActiveScene?.World != world ||
+                                    world.Status != GameControlStatus.Ready ||
+                                    !ReferenceEquals(obj.World, world) ||
+                                    obj.LoadGeneration != loadGeneration)
+                                {
+                                    obj.Recycle();
+                                    publishCompletion.TrySetResult(false);
+                                    return;
+                                }
+
+                                obj.PrepareRenderResourcesForFirstFrame();
+                                world.Objects.Add(obj);
+                                publishCompletion.TrySetResult(true);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "Error publishing dropped item {MaskedId:X4}.", maskedId);
+                                obj.Recycle();
+                                publishCompletion.TrySetResult(false);
+                            }
+                        }, MainThreadDispatcher.WorkPriority.High, $"ProcessDrop.Publish.{maskedId:X4}");
+
+                        bool published = await publishCompletion.Task.ConfigureAwait(false);
+                        if (!published)
+                        {
+                            tcs.TrySetResult(false);
+                            return;
+                        }
+
+                        await MuGame.YieldToNextFrameAsync(
+                            $"ProcessDrop.Activate.{maskedId:X4}",
+                            MainThreadDispatcher.WorkPriority.High);
+
+                        if (MuGame.Instance.ActiveScene?.World == world &&
+                            world.Status == GameControlStatus.Ready &&
+                            ReferenceEquals(obj.World, world) &&
+                            obj.LoadGeneration == loadGeneration &&
+                            world.FindDroppedItemById(maskedId) == obj)
+                        {
+                            obj.Hidden = false;
+                            SoundController.Instance.PlayBufferWithAttenuation(
+                                soundPath,
+                                obj.Position,
+                                world.Walker?.Position ?? obj.Position);
+
+                            _logger.LogDebug(
+                                "Spawned dropped item ({DisplayName}) at {PosX},{PosY},{PosZ}. RawId: {RawId:X4}, MaskedId: {MaskedId:X4}",
+                                obj.DisplayName,
+                                obj.Position.X,
+                                obj.Position.Y,
+                                obj.Position.Z,
+                                obj.RawId,
+                                obj.NetworkId);
+                            tcs.TrySetResult(true);
+                        }
+                        else
+                        {
+                            world.RemoveObject(obj);
+                            obj.Recycle();
+                            tcs.TrySetResult(false);
+                        }
                     }
                     catch (Exception ex)
                     {
                         _logger.LogError(ex, "Error loading dropped item assets for {MaskedId:X4}", maskedId);
-                        world.Objects.Remove(obj);
-                        obj.Recycle();
-                        tcs.TrySetResult(false);
-                        return;
+                        MuGame.ScheduleOnMainThread(() =>
+                        {
+                            if (ReferenceEquals(obj.World, world))
+                                world.RemoveObject(obj);
+                            obj.Recycle();
+                            tcs.TrySetResult(false);
+                        }, MainThreadDispatcher.WorkPriority.High, $"ProcessDrop.RemoveFailed.{maskedId:X4}");
                     }
-
-                    // Play drop sound
-                    SoundController.Instance.PlayBufferWithAttenuation(soundPath, obj.Position, world.Walker.Position);
-
-                    // Don't set Hidden immediately - let WorldObject.Update handle visibility checks
-                    // The immediate visibility check was causing items to be Hidden incorrectly
-                    _logger.LogDebug(
-                        "Spawned dropped item ({DisplayName}) at {PosX},{PosY},{PosZ}. RawId: {RawId:X4}, MaskedId: {MaskedId:X4}",
-                        obj.DisplayName,
-                        obj.Position.X,
-                        obj.Position.Y,
-                        obj.Position.Z,
-                        obj.RawId,
-                        obj.NetworkId);
-                    tcs.TrySetResult(true);
-                }, Controllers.TaskScheduler.Priority.Low);
+                }, Controllers.TaskScheduler.Priority.Low, $"ProcessDrop.Load.{maskedId:X4}");
 
                 if (!enqueued)
                 {
-                    _logger.LogWarning("Failed to queue dropped item load task for {Id:X4} – scheduler at capacity.", maskedId);
-                    world.Objects.Remove(obj);
-                    obj.Recycle();
+                    _logger.LogWarning(
+                        "Failed to queue dropped item load task for {Id:X4} – scheduler at capacity.",
+                        maskedId);
+                    // Recycle on the graphics thread because the object may own GPU resources.
+                    MuGame.ScheduleOnMainThread(
+                        obj.Recycle,
+                        MainThreadDispatcher.WorkPriority.High,
+                        $"ProcessDrop.RecycleQueueFailure.{maskedId:X4}");
                     tcs.TrySetResult(false);
                 }
             }

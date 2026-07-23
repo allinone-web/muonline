@@ -23,6 +23,7 @@ namespace Client.Main.Objects.Worlds.Login
 
         // A small height offset to place the light source where the flame is.
         private float _flameHeight = 50f;
+        public override WorldObjectRenderPolicy RenderPolicy => base.RenderPolicy.With(alwaysUpdate: true);
 
         public StatueTorchObject()
         {

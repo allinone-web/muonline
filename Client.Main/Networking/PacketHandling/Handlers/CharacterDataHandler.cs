@@ -27,19 +27,22 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         private readonly NetworkManager _networkManager;
         private readonly TargetProtocolVersion _targetVersion;
         private readonly ElfBuffEffectManager _elfBuffEffectManager;
+        private readonly Core.Client.BuffManager _buffManager;
 
         // ───────────────────────── Constructors ─────────────────────────
         public CharacterDataHandler(
             ILoggerFactory loggerFactory,
             CharacterState characterState,
             NetworkManager networkManager,
-            TargetProtocolVersion targetVersion)
+            TargetProtocolVersion targetVersion,
+            Core.Client.BuffManager buffManager)
         {
             _logger = loggerFactory.CreateLogger<CharacterDataHandler>();
             _characterState = characterState;
             _networkManager = networkManager;
             _targetVersion = targetVersion;
             _elfBuffEffectManager = new ElfBuffEffectManager();
+            _buffManager = buffManager;
         }
 
         // ───────────────────────── Packet Handlers ─────────────────────────
@@ -74,10 +77,14 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                             }
                         });
                     }
+
+                    // Notify BuffManager for visual effects
+                    _buffManager.ProcessMagicEffectStatus(playerId, effectId, true);
                 }
                 else
                 {
                     _characterState.DeactivateBuff(effectId, playerId);
+                    _buffManager.ProcessMagicEffectStatus(playerId, effectId, false);
                 }
 
                 HandleElfBuffVisual(effectId, playerId, isActive);
@@ -108,6 +115,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 // This mapping may need to be adjusted based on actual game data
                 byte effectId = (byte)(skillId & 0xFF);
                 _characterState.DeactivateBuff(effectId, targetId);
+                _buffManager.ProcessMagicEffectStatus(targetId, effectId, false);
                 HandleElfBuffVisual(effectId, targetId, false);
 
                 return Task.CompletedTask;
@@ -133,6 +141,8 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 uint initialMana = 0, maxMana = 1;
                 uint initialAbility = 0, maxAbility = 0;
                 ushort str = 0, agi = 0, vit = 0, ene = 0, cmd = 0;
+                ushort usedFruitPoints = 0, maxFruitPoints = 0;
+                ushort usedNegativeFruitPoints = 0, maxNegativeFruitPoints = 0;
                 ushort attackSpeed = 0, magicSpeed = 0, maxAttackSpeed = 0;
                 byte inventoryExpansion = 0;
                 CharacterStatus status = CharacterStatus.Normal;
@@ -168,6 +178,10 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                             money = info.Money;
                             heroState = info.HeroState;
                             status = info.Status;
+                            usedFruitPoints = info.UsedFruitPoints;
+                            maxFruitPoints = info.MaxFruitPoints;
+                            usedNegativeFruitPoints = info.UsedNegativeFruitPoints;
+                            maxNegativeFruitPoints = info.MaxNegativeFruitPoints;
                             inventoryExpansion = info.InventoryExtensions;
                             // Note: CharacterInformationExtended (S6) does not have a direction field. Client might get it from MapChange or default.
                         }
@@ -192,6 +206,10 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                             money = info.Money;
                             heroState = info.HeroState;
                             status = info.Status;
+                            usedFruitPoints = info.UsedFruitPoints;
+                            maxFruitPoints = info.MaxFruitPoints;
+                            usedNegativeFruitPoints = info.UsedNegativeFruitPoints;
+                            maxNegativeFruitPoints = info.MaxNegativeFruitPoints;
                             inventoryExpansion = info.InventoryExtensions;
                             // Note: CharacterInformation (S6, non-extended) does not have a direction field.
                         }
@@ -219,6 +237,8 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                             money = info.Money;
                             heroState = info.HeroState;
                             status = info.Status;
+                            usedFruitPoints = info.UsedFruitPoints;
+                            maxFruitPoints = info.MaxFruitPoints;
                             inventoryExpansion = 0;
                             direction = info.Direction;
                         }
@@ -275,6 +295,11 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 _characterState.UpdateCurrentManaAbility(initialMana, initialAbility);
                 _characterState.UpdateInventoryZen(money);
                 _characterState.UpdateStatus(status, heroState);
+                _characterState.UpdateFruitPoints(
+                    usedFruitPoints,
+                    maxFruitPoints,
+                    usedNegativeFruitPoints,
+                    maxNegativeFruitPoints);
                 _characterState.InventoryExpansionState = inventoryExpansion;
                 _characterState.UpdateAttackSpeeds(attackSpeed, magicSpeed, maxAttackSpeed);
 
@@ -887,8 +912,20 @@ namespace Client.Main.Networking.PacketHandling.Handlers
 
                 if (success)
                 {
-                    if (maxHp > 0) _characterState.UpdateMaximumHealthShield(maxHp, maxSd);
-                    if (maxMana > 0) _characterState.UpdateMaximumManaAbility(maxMana, maxAbility);
+                    if (maxHp > 0 || maxSd > 0)
+                    {
+                        _characterState.UpdateMaximumHealthShield(
+                            maxHp > 0 ? maxHp : _characterState.MaximumHealth,
+                            maxSd > 0 ? maxSd : _characterState.MaximumShield);
+                    }
+
+                    if (maxMana > 0 || maxAbility > 0)
+                    {
+                        _characterState.UpdateMaximumManaAbility(
+                            maxMana > 0 ? maxMana : _characterState.MaximumMana,
+                            maxAbility > 0 ? maxAbility : _characterState.MaximumAbility);
+                    }
+
                     _characterState.IncrementStat(attr, addedAmount);
 
                     ushort newPoints = (ushort)Math.Max(0, oldPoints - addedAmount);
@@ -1295,7 +1332,12 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                                     world.Objects.Add(effect);
 
                                 if (effect.Status == GameControlStatus.NonInitialized)
-                                    _ = effect.Load();
+                                {
+                                    MuGame.TaskScheduler?.QueueTask(
+                                        async () => await effect.Load(),
+                                        Controllers.TaskScheduler.Priority.High,
+                                        $"SkillEffect.Load.{effect.GetType().Name}");
+                                }
                             }
                         }
                     }
@@ -1388,7 +1430,12 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                                     world.Objects.Add(effect);
 
                                 if (effect.Status == GameControlStatus.NonInitialized)
-                                    _ = effect.Load();
+                                {
+                                    MuGame.TaskScheduler?.QueueTask(
+                                        async () => await effect.Load(),
+                                        Controllers.TaskScheduler.Priority.High,
+                                        $"SkillEffect.Load.{effect.GetType().Name}");
+                                }
                             }
                         }
                     }

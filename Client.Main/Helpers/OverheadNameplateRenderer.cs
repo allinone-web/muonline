@@ -36,7 +36,9 @@ namespace Client.Main.Helpers
         private const float BaseNamePaddingY = 2f;
         private const float BaseNameBarGap = 2f;
         private const int BarSegments = 8;
+        private const int MaxRetainedQueueCapacity = 512;
         private static readonly List<QueuedNameplate> s_queue = new(256);
+        public static int LastFrameQueuedNameplates { get; private set; }
 
         private static class Theme
         {
@@ -139,7 +141,10 @@ namespace Client.Main.Helpers
             {
                 if (hasScope)
                     scope.Dispose();
+                LastFrameQueuedNameplates = s_queue.Count;
                 s_queue.Clear();
+                if (s_queue.Capacity > MaxRetainedQueueCapacity)
+                    s_queue.Capacity = MaxRetainedQueueCapacity;
             }
         }
 

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic; // Added for Dictionary
 using System.IO;
@@ -10,6 +10,7 @@ using Client.Data.Texture;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Extensions.Logging;
+using Client.Main.Controllers;
 
 namespace Client.Main.Content
 {
@@ -20,12 +21,14 @@ namespace Client.Main.Content
         public Func<TextureData, byte[]> CustomDecompressFunction = null;
 
         private readonly ConcurrentDictionary<string, Lazy<Task<TextureData>>> _textureTasks = new();
+        private readonly ConcurrentDictionary<string, Lazy<Task<Texture2D>>> _gpuTextureTasks = new();
         private readonly ConcurrentDictionary<string, ClientTexture> _textures = new();
 
         // Cache: Key -> Resolved Full Path (or empty if not found)
         private readonly ConcurrentDictionary<string, string> _pathResolutionCache = new();
 
         private readonly CancellationTokenSource _cleanupCts = new();
+        private readonly SemaphoreSlim _decodeGate = new(Math.Clamp(Environment.ProcessorCount / 2, 1, 4));
         private readonly TimeSpan _cleanupInterval = TimeSpan.FromSeconds(60);
         private readonly TimeSpan _textureTtl = TimeSpan.FromMinutes(5);
         private GraphicsDevice _graphicsDevice;
@@ -69,15 +72,69 @@ namespace Client.Main.Content
             string normalizedKey = NormalizePathKey(path);
             var lazyTextureTask = _textureTasks.GetOrAdd(
                 normalizedKey,
-                key => new Lazy<Task<TextureData>>(() => Task.Run(() => InternalPrepare(path)))); // Pass original path to InternalPrepare
+                _ => new Lazy<Task<TextureData>>(
+                    () => PrepareBoundedAsync(path),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
 
             return lazyTextureTask.Value;
         }
 
+        private async Task<TextureData> PrepareBoundedAsync(string path)
+        {
+            await _decodeGate.WaitAsync(_cleanupCts.Token).ConfigureAwait(false);
+            try
+            {
+                // Readers combine file I/O and CPU decoding. Keep both off the render thread
+                // and bound concurrency to avoid thread-pool, disk and GC spikes on map entry.
+                return await Task.Run(() => InternalPrepare(path), _cleanupCts.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                _decodeGate.Release();
+            }
+        }
+
         public async Task<Texture2D> PrepareAndGetTexture(string path)
         {
-            await Prepare(path);
-            return GetTexture2D(path);
+            await Prepare(path).ConfigureAwait(false);
+
+            string normalizedKey = NormalizePathKey(path);
+            var lazyUpload = _gpuTextureTasks.GetOrAdd(
+                normalizedKey,
+                _ => new Lazy<Task<Texture2D>>(
+                    () => CreateTextureOnGraphicsThreadAsync(path, normalizedKey),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
+
+            return await lazyUpload.Value.ConfigureAwait(false);
+        }
+
+        private Task<Texture2D> CreateTextureOnGraphicsThreadAsync(string path, string normalizedKey)
+        {
+            if (MuGame.IsMainThread)
+                return Task.FromResult(GetTexture2D(path));
+
+            var completion = new TaskCompletionSource<Texture2D>(TaskCreationOptions.RunContinuationsAsynchronously);
+            MuGame.ScheduleOnMainThread(static state =>
+            {
+                var (loader, texturePath, cacheKey, source) = state;
+                try
+                {
+                    Texture2D texture = loader.GetTexture2D(texturePath);
+                    if (texture == null)
+                        loader._gpuTextureTasks.TryRemove(cacheKey, out _);
+                    source.TrySetResult(texture);
+                }
+                catch (Exception ex)
+                {
+                    loader._gpuTextureTasks.TryRemove(cacheKey, out _);
+                    source.TrySetException(ex);
+                }
+            },
+            (this, path, normalizedKey, completion),
+            MainThreadDispatcher.WorkPriority.High,
+            "TextureLoader.UploadTexture");
+
+            return completion.Task;
         }
 
         private async Task<TextureData> InternalPrepare(string path)
@@ -294,70 +351,86 @@ namespace Client.Main.Content
             if (textureInfo?.Width == 0 || textureInfo?.Height == 0 || textureInfo.Data == null)
                 return null;
 
-            // Ensure we create texture on Main Thread if possible, usually MonoGame handles this,
-            // but Thread safety is good. Here we assume we are in Draw/Update or don't care.
-            try
+            // Prevent duplicate GPU uploads when several async loads complete at the same time.
+            // The caller is still responsible for invoking this method on the graphics thread.
+            lock (clientTexture)
             {
-                Texture2D texture;
-                bool isCompressed = textureInfo.IsCompressed;
+                if (clientTexture.Texture != null && !clientTexture.Texture.IsDisposed)
+                    return clientTexture.Texture;
 
-                if (CustomDecompressFunction != null && isCompressed)
+                try
                 {
-                    var data = CustomDecompressFunction(textureInfo);
-                    texture = new Texture2D(_graphicsDevice, textureInfo.Width, textureInfo.Height, false, SurfaceFormat.Color);
-                    texture.SetData(data);
+                    Texture2D texture;
+                    bool isCompressed = textureInfo.IsCompressed;
+
+                    if (CustomDecompressFunction != null && isCompressed)
+                    {
+                        var data = CustomDecompressFunction(textureInfo);
+                        texture = new Texture2D(_graphicsDevice, textureInfo.Width, textureInfo.Height, false, SurfaceFormat.Color);
+                        texture.SetData(data);
+                        clientTexture.Texture = texture;
+                        return texture;
+                    }
+                    else if (isCompressed)
+                    {
+                        texture = new Texture2D(_graphicsDevice, textureInfo.Width, textureInfo.Height, false, textureInfo.Format.ToXNA());
+                        texture.SetData(textureInfo.Data);
+                    }
+                    else
+                    {
+                        texture = new Texture2D(_graphicsDevice, textureInfo.Width, textureInfo.Height);
+                        int pixelCount = texture.Width * texture.Height;
+                        int components = textureInfo.Components;
+
+                        if (components != 3 && components != 4)
+                        {
+                            texture.Dispose();
+                            _logger?.LogDebug("Unsupported texture components: {Components} for texture {Path}", components, path);
+                            return null;
+                        }
+
+                        byte[] data = textureInfo.Data;
+                        int requiredBytes = checked(pixelCount * components);
+                        if (data.Length < requiredBytes)
+                        {
+                            texture.Dispose();
+                            _logger?.LogDebug(
+                                "Texture data is truncated: {ActualBytes}/{RequiredBytes} for {Path}",
+                                data.Length,
+                                requiredBytes,
+                                path);
+                            return null;
+                        }
+
+                        var pool = System.Buffers.ArrayPool<Color>.Shared;
+                        Color[] pixelData = pool.Rent(pixelCount);
+                        try
+                        {
+                            for (int i = 0; i < pixelCount; i++)
+                            {
+                                int dataIndex = i * components;
+                                byte r = data[dataIndex];
+                                byte g = data[dataIndex + 1];
+                                byte b = data[dataIndex + 2];
+                                byte a = components == 4 ? data[dataIndex + 3] : (byte)255;
+                                pixelData[i] = new Color(r, g, b, a);
+                            }
+                            texture.SetData(pixelData, 0, pixelCount);
+                        }
+                        finally
+                        {
+                            pool.Return(pixelData);
+                        }
+                    }
+
                     clientTexture.Texture = texture;
                     return texture;
                 }
-                else if (isCompressed)
+                catch (Exception ex)
                 {
-                    texture = new Texture2D(_graphicsDevice, textureInfo.Width, textureInfo.Height, false, textureInfo.Format.ToXNA());
-                    texture.SetData(textureInfo.Data);
+                    _logger?.LogError(ex, "Failed creating Texture2D for {Path}", path);
+                    return null;
                 }
-                else
-                {
-                    texture = new Texture2D(_graphicsDevice, textureInfo.Width, textureInfo.Height);
-                    int pixelCount = texture.Width * texture.Height;
-                    int components = textureInfo.Components;
-
-                    if (components != 3 && components != 4)
-                    {
-                        _logger?.LogDebug("Unsupported texture components: {Components} for texture {Path}", components, path);
-                        return null;
-                    }
-
-                    var pool = System.Buffers.ArrayPool<Color>.Shared;
-                    Color[] pixelData = pool.Rent(pixelCount);
-                    try
-                    {
-                        byte[] data = textureInfo.Data;
-                        for (int i = 0; i < pixelCount; i++)
-                        {
-                            int dataIndex = i * components;
-                            // Bounds check
-                            if (dataIndex + (components - 1) >= data.Length) break;
-
-                            byte r = data[dataIndex];
-                            byte g = data[dataIndex + 1];
-                            byte b = data[dataIndex + 2];
-                            byte a = components == 4 ? data[dataIndex + 3] : (byte)255;
-                            pixelData[i] = new Color(r, g, b, a);
-                        }
-                        texture.SetData(pixelData, 0, pixelCount);
-                    }
-                    finally
-                    {
-                        pool.Return(pixelData);
-                    }
-                }
-
-                clientTexture.Texture = texture;
-                return texture;
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "Failed creating Texture2D for {Path}", path);
-                return null;
             }
         }
 
@@ -367,12 +440,20 @@ namespace Client.Main.Content
             return texture;
         }
 
-        private void Touch(ClientTexture texture)
+        private static void Touch(ClientTexture texture)
         {
-            if (texture != null)
-            {
+            if (texture == null)
+                return;
+
+            // Texture lookups happen in draw paths. A system-clock query for every mesh or UI
+            // element is unnecessary; refresh the TTL timestamp at most once per second at 60 FPS.
+            int frame = MuGame.FrameIndex;
+            int previousFrame = Volatile.Read(ref texture.LastAccessFrame);
+            if (frame >= previousFrame && frame - previousFrame < 60)
+                return;
+
+            if (Interlocked.CompareExchange(ref texture.LastAccessFrame, frame, previousFrame) == previousFrame)
                 texture.LastAccessUtc = DateTime.UtcNow;
-            }
         }
 
         private async Task CleanupLoopAsync(CancellationToken token)
@@ -430,10 +511,13 @@ namespace Client.Main.Content
                         }
 
                         _textureTasks.TryRemove(key, out _);
+                        _gpuTextureTasks.TryRemove(key, out _);
                         _pathResolutionCache.TryRemove(key, out _); // Clean cache too
                     }
                 }
-            });
+            },
+            MainThreadDispatcher.WorkPriority.Low,
+            "TextureLoader.CleanupStaleTextures");
         }
     }
 }

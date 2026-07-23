@@ -16,10 +16,13 @@ namespace Client.Main.Controls.Terrain
         public bool IsVisible;
         public int Xi, Yi;
 
-        // Hierarchical culling data
-        public bool[] TileVisibility = new bool[16]; // 4x4 tiles per block
+        // 16 tiles fit in a single mask, avoiding one heap allocation per terrain block.
+        public ushort TileVisibilityMask;
         public int VisibleTileCount;
         public bool FullyVisible; // All tiles in block are visible (skip individual tile tests)
+
+        public bool IsTileVisible(int tileIndex)
+            => (uint)tileIndex < 16u && (((uint)TileVisibilityMask) & (1u << tileIndex)) != 0;
     }
 
     /// <summary>
@@ -37,22 +40,30 @@ namespace Client.Main.Controls.Terrain
 
         private readonly TerrainData _data;
         private readonly TerrainBlockCache _blockCache;
-        private readonly Queue<TerrainBlock> _visibleBlocks = new(64);
+        private readonly List<TerrainBlock> _visibleBlocks = new(256);
         // Scratch list reused each frame to avoid per-update allocations
         private readonly List<TerrainBlock> _visibleScratch = new(256);
         private readonly object _visibleScratchLock = new();
         private readonly BoundingBox[] _tilePaddedBounds = new BoundingBox[Constants.TERRAIN_SIZE * Constants.TERRAIN_SIZE];
         private Vector2 _lastCameraPosition;
+        private Vector3 _lastCameraDirection;
+        private float _lastViewFar;
+        private float _lastFov;
+        private float _lastAspectRatio;
+        private bool _hasVisibilitySnapshot;
         private readonly int[] _lodSteps = { 1, 2, 4 };
         private bool _cullingDataReady;
-        private const int ParallelBlockCullingThreshold = 144;
+        private const int ParallelBlockCullingThreshold = 1024;
         private static readonly ParallelOptions CullingParallelOptions = new()
         {
-            MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1)
+            MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 2)
         };
 
-        public IReadOnlyCollection<TerrainBlock> VisibleBlocks => _visibleBlocks;
+        public IReadOnlyList<TerrainBlock> VisibleBlocks => _visibleBlocks;
         public int[] LodSteps => _lodSteps;
+        // Bumped each time the visible-block set is rebuilt. Consumers can cache derived data
+        // (e.g. per-block LOD grid) keyed on this version to avoid recomputing within the same frame.
+        public int Version { get; private set; }
 
         public TerrainVisibilityManager(TerrainData data)
         {
@@ -134,11 +145,31 @@ namespace Client.Main.Controls.Terrain
             if (!_cullingDataReady)
                 return;
 
+            var camera = Camera.Instance;
+            Vector3 cameraDirection = camera.Target - camera.Position;
+            if (cameraDirection.LengthSquared() > 1e-8f)
+                cameraDirection.Normalize();
+            else
+                cameraDirection = Vector3.UnitY;
+
             const float thrSq = CameraMoveThreshold * CameraMoveThreshold;
-            if (Vector2.DistanceSquared(_lastCameraPosition, cameraPosition) < thrSq)
+            bool positionChanged = Vector2.DistanceSquared(_lastCameraPosition, cameraPosition) >= thrSq;
+            bool directionChanged = !_hasVisibilitySnapshot ||
+                                    Vector3.Dot(_lastCameraDirection, cameraDirection) < 0.9995f;
+            bool projectionChanged = !_hasVisibilitySnapshot ||
+                                     MathF.Abs(_lastViewFar - camera.ViewFar) > 0.01f ||
+                                     MathF.Abs(_lastFov - camera.FOV) > 0.001f ||
+                                     MathF.Abs(_lastAspectRatio - camera.AspectRatio) > 0.0001f;
+
+            if (_hasVisibilitySnapshot && !positionChanged && !directionChanged && !projectionChanged)
                 return;
 
             _lastCameraPosition = cameraPosition;
+            _lastCameraDirection = cameraDirection;
+            _lastViewFar = camera.ViewFar;
+            _lastFov = camera.FOV;
+            _lastAspectRatio = camera.AspectRatio;
+            _hasVisibilitySnapshot = true;
             _visibleBlocks.Clear();
 
             float renderDist = Camera.Instance.ViewFar * 1.7f;
@@ -203,8 +234,9 @@ namespace Client.Main.Controls.Terrain
                 }
             }
 
-            foreach (var block in visible)
-                _visibleBlocks.Enqueue(block);
+            _visibleBlocks.AddRange(visible);
+
+            unchecked { Version++; }
         }
 
         private bool TryClassifyVisibleBlock(
@@ -216,9 +248,6 @@ namespace Client.Main.Controls.Terrain
             out TerrainBlock block)
         {
             block = _blockCache.GetBlock(gx, gy);
-            block.Center = new Vector2(
-                (block.Xi + BlockSize * 0.5f) * Constants.TERRAIN_SCALE,
-                (block.Yi + BlockSize * 0.5f) * Constants.TERRAIN_SCALE);
 
             float distSq = Vector2.DistanceSquared(block.Center, cameraPosition);
             if (distSq > renderDistSq)
@@ -227,7 +256,7 @@ namespace Client.Main.Controls.Terrain
                 return false;
             }
 
-            block.LODLevel = GetLodLevel(MathF.Sqrt(distSq));
+            block.LODLevel = GetLodLevelFromDistanceSquared(distSq);
 
             var containment = frustum.Contains(block.PaddedBounds);
             block.IsVisible = containment != ContainmentType.Disjoint;
@@ -238,8 +267,7 @@ namespace Client.Main.Controls.Terrain
             {
                 block.FullyVisible = true;
                 block.VisibleTileCount = 16;
-                for (int i = 0; i < 16; i++)
-                    block.TileVisibility[i] = true;
+                block.TileVisibilityMask = ushort.MaxValue;
             }
             else
             {
@@ -250,18 +278,22 @@ namespace Client.Main.Controls.Terrain
             return true;
         }
 
-        private int GetLodLevel(float distance)
+        private static int GetLodLevelFromDistanceSquared(float distanceSquared)
         {
-            float f = distance / LodDistanceMultiplier;
-            int l = (int)Math.Floor(f);
-            float blend = f - l;
-            l = (int)MathHelper.Lerp(l, l + 1, blend);
-            return Math.Min(l, MaxLodLevels - 1);
+            float level1 = LodDistanceMultiplier;
+            float level2 = LodDistanceMultiplier * 2f;
+
+            if (distanceSquared < level1 * level1)
+                return 0;
+            if (distanceSquared < level2 * level2)
+                return 1;
+            return MaxLodLevels - 1;
         }
 
         private void PerformTileCulling(TerrainBlock block, BoundingFrustum frustum)
         {
-            block.VisibleTileCount = 0;
+            int visibleCount = 0;
+            ushort visibilityMask = 0;
 
             for (int tileY = 0; tileY < BlockSize; tileY++)
             {
@@ -270,17 +302,18 @@ namespace Client.Main.Controls.Terrain
                     int x = block.Xi + tileX;
                     int y = block.Yi + tileY;
                     int tileIndex = y * Constants.TERRAIN_SIZE + x;
-                    bool visible = frustum.Contains(_tilePaddedBounds[tileIndex]) != ContainmentType.Disjoint;
+                    if (frustum.Contains(_tilePaddedBounds[tileIndex]) == ContainmentType.Disjoint)
+                        continue;
 
-                    int idx = tileY * BlockSize + tileX;
-                    block.TileVisibility[idx] = visible;
-                    if (visible) block.VisibleTileCount++;
+                    int indexInBlock = tileY * BlockSize + tileX;
+                    visibilityMask |= (ushort)(1 << indexInBlock);
+                    visibleCount++;
                 }
             }
 
-            // If all tiles ended up visible, mark FullyVisible to skip per-tile checks next frame
-            // Block is 4x4 tiles -> 16 total
-            block.FullyVisible = block.VisibleTileCount == 16;
+            block.TileVisibilityMask = visibilityMask;
+            block.VisibleTileCount = visibleCount;
+            block.FullyVisible = visibleCount == 16;
         }
 
         private static BoundingBox Inflate(BoundingBox bounds, float padXY, float padZ)
@@ -304,8 +337,21 @@ namespace Client.Main.Controls.Terrain
                 _blocks = new TerrainBlock[_gridSize, _gridSize];
 
                 for (int y = 0; y < _gridSize; y++)
+                {
                     for (int x = 0; x < _gridSize; x++)
-                        _blocks[y, x] = new TerrainBlock { Xi = x * blockSize, Yi = y * blockSize };
+                    {
+                        int xi = x * blockSize;
+                        int yi = y * blockSize;
+                        _blocks[y, x] = new TerrainBlock
+                        {
+                            Xi = xi,
+                            Yi = yi,
+                            Center = new Vector2(
+                                (xi + blockSize * 0.5f) * Constants.TERRAIN_SCALE,
+                                (yi + blockSize * 0.5f) * Constants.TERRAIN_SCALE)
+                        };
+                    }
+                }
             }
 
             public TerrainBlock GetBlock(int x, int y) => _blocks[y, x];

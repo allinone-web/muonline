@@ -1,74 +1,65 @@
 ﻿using Microsoft.Xna.Framework;
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Client.Main.Controllers
 {
-    public class FPSCounter
+    public sealed class FPSCounter
     {
-        public static FPSCounter Instance { get; private set; } = new FPSCounter();
+        private const float ReferenceFps = 25f;
+        private const double AverageWindowMs = 500d;
 
-        private bool _timeInit = false;
-        private double _startTime = 0;
-        private double _lastTime = 0;
-        private int _frameCount = 0;
+        public static FPSCounter Instance { get; } = new();
+
+        private bool _timeInitialized;
+        private double _windowStartTime;
+        private double _lastFrameTime;
+        private int _windowFrameCount;
 
         public double WorldTime { get; private set; }
         public double FPS { get; private set; }
         public double FPS_AVG { get; private set; }
-        public float FPS_ANIMATION_FACTOR { get; private set; }
-
-        private const float REFERENCE_FPS = 25f;
+        public float FPS_ANIMATION_FACTOR { get; private set; } = 1f;
 
         public bool RandFPSCheck(int referenceFrames)
         {
-            double animationFactor = Math.Min(1.0, (double)FPS_ANIMATION_FACTOR);
-
-            double randValue = MuGame.Random.NextDouble();
-
+            double animationFactor = Math.Min(1.0, FPS_ANIMATION_FACTOR);
             double chance = referenceFrames == 1
                 ? animationFactor
-                : (1.0 / referenceFrames) * animationFactor;
-            
-            return randValue <= chance;
+                : (1.0 / Math.Max(1, referenceFrames)) * animationFactor;
+
+            return MuGame.Random.NextDouble() <= chance;
         }
 
         public void CalcFPS(GameTime gameTime)
         {
-            if (!_timeInit)
-            {
-                _startTime = gameTime.TotalGameTime.TotalMilliseconds;
-                _timeInit = true;
-            }
-
-            _frameCount++;
             WorldTime = gameTime.TotalGameTime.TotalMilliseconds;
-
-            double differenceMs = WorldTime - _lastTime;
-            if (differenceMs <= 0)
+            if (!_timeInitialized)
             {
-                FPS = 0.01;
-            }
-            else
-            {
-                FPS = 1000 / differenceMs;
+                _timeInitialized = true;
+                _windowStartTime = WorldTime;
+                _lastFrameTime = WorldTime;
+                return;
             }
 
-            FPS_ANIMATION_FACTOR = Math.Min((float)(REFERENCE_FPS / FPS), 2.5f);
+            double frameIntervalMs = WorldTime - _lastFrameTime;
+            _lastFrameTime = WorldTime;
 
-            double diffSinceStart = WorldTime - _startTime;
-            if (diffSinceStart > 2000.0 || _frameCount > 25)
+            if (frameIntervalMs > 0d)
             {
-                FPS_AVG = (1000.0 * _frameCount) / diffSinceStart;
-                _startTime = WorldTime;
-                _frameCount = 0;
+                FPS = 1000d / frameIntervalMs;
+                FPS_ANIMATION_FACTOR = Math.Min(ReferenceFps / (float)FPS, 2.5f);
             }
 
-            _lastTime = WorldTime;
+            _windowFrameCount++;
+            double windowDurationMs = WorldTime - _windowStartTime;
+            if (windowDurationMs < AverageWindowMs)
+                return;
+
+            FPS_AVG = windowDurationMs > 0d
+                ? 1000d * _windowFrameCount / windowDurationMs
+                : 0d;
+            _windowStartTime = WorldTime;
+            _windowFrameCount = 0;
         }
     }
-
 }

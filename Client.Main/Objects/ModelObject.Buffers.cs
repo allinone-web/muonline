@@ -3,6 +3,7 @@ using Client.Data.Texture;
 using Client.Main.Content;
 using Client.Main.Controllers;
 using Client.Main.Graphics;
+using Client.Main.Models;
 using Client.Main.Objects.Player;
 using Microsoft.Extensions.Logging;
 using Microsoft.Xna.Framework;
@@ -10,6 +11,7 @@ using Microsoft.Xna.Framework.Graphics;
 using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Client.Main.Objects
 {
@@ -35,94 +37,23 @@ namespace Client.Main.Objects
             return null;
         }
 
-        private void SetDynamicBuffers()
+        private void SetDynamicBuffers(bool allowHidden = false)
         {
-            if (_invalidatedBufferFlags == 0 || Model?.Meshes == null)
+            if (_invalidatedBufferFlags == MeshDirtyFlags.None || Model?.Meshes == null)
                 return;
 
             try
             {
                 int meshCount = Model.Meshes.Length;
-                if (meshCount == 0) return;
-
-                // Early exit if not visible - huge optimization
-                if (!Visible)
-                {
-                    _invalidatedBufferFlags = 0;
+                if (ShouldSkipDynamicBufferUpdate(meshCount, allowHidden))
                     return;
-                }
 
-                uint currentFrame = (uint)(MuGame.Instance.GameTime.TotalGameTime.TotalMilliseconds / 16.67f);
+                uint currentFrame = unchecked((uint)MuGame.FrameIndex);
 
-                // If we only have transform updates we can skip heavy CPU skinning work.
-                if ((_invalidatedBufferFlags & ~BUFFER_FLAG_TRANSFORM) == 0)
-                {
-                    _invalidatedBufferFlags &= ~BUFFER_FLAG_TRANSFORM;
+                if (ShouldSkipTransformOnlyBufferUpdate())
                     return;
-                }
 
-                // Allow attachments to update at a reduced frequency when only animation is dirty.
-                if ((_invalidatedBufferFlags & BUFFER_FLAG_ANIMATION) != 0 &&
-                    (_invalidatedBufferFlags & ~(BUFFER_FLAG_ANIMATION | BUFFER_FLAG_TRANSFORM)) == 0 &&
-                    AnimationUpdateStride > 1)
-                {
-                    int animationUpdateFps = Constants.ClampPerformanceFps(Constants.ANIMATION_UPDATE_FPS);
-                    double strideFrameMs = 1000.0 / animationUpdateFps;
-                    double nowMs = _lastFrameTimeMs;
-                    double intervalMs = strideFrameMs * AnimationUpdateStride;
-
-                    // Time-based throttling avoids aliasing at low FPS where frame-based modulo
-                    // can reduce updates far below the intended rate (causing visible stutter).
-                    if (double.IsNegativeInfinity(_lastStrideAnimationBufferUpdateTimeMs))
-                    {
-                        double phaseMs = (_animationStrideOffset % AnimationUpdateStride) * strideFrameMs;
-                        _lastStrideAnimationBufferUpdateTimeMs = nowMs - intervalMs + phaseMs;
-                    }
-
-                    if (nowMs - _lastStrideAnimationBufferUpdateTimeMs < intervalMs)
-                    {
-                        _invalidatedBufferFlags &= ~BUFFER_FLAG_TRANSFORM;
-                        return;
-                    }
-
-                    _lastStrideAnimationBufferUpdateTimeMs = nowMs;
-                }
-
-                // Ensure arrays only when needed
-                bool needArrayResize =
-                    _boneVertexBuffers?.Length != meshCount ||
-                    _boneIndexBuffers?.Length != meshCount ||
-                    _gpuSkinVertexBuffers?.Length != meshCount ||
-                    _gpuSkinIndexBuffers?.Length != meshCount ||
-                    _gpuSkinBoneCounts?.Length != meshCount ||
-                    _gpuSkinMeshEnabled?.Length != meshCount ||
-                    _boneTextures?.Length != meshCount ||
-                    _scriptTextures?.Length != meshCount ||
-                    _dataTextures?.Length != meshCount ||
-                    _meshIsRGBA?.Length != meshCount ||
-                    _meshHiddenByScript?.Length != meshCount ||
-                    _meshBlendByScript?.Length != meshCount ||
-                    _meshTexturePath?.Length != meshCount ||
-                    _blendMeshIndicesScratch?.Length != meshCount ||
-                    _meshBufferCache?.Length != meshCount;
-                if (needArrayResize)
-                {
-                    EnsureArraySize(ref _boneVertexBuffers, meshCount);
-                    EnsureArraySize(ref _boneIndexBuffers, meshCount);
-                    EnsureArraySize(ref _gpuSkinVertexBuffers, meshCount);
-                    EnsureArraySize(ref _gpuSkinIndexBuffers, meshCount);
-                    EnsureArraySize(ref _gpuSkinBoneCounts, meshCount);
-                    EnsureArraySize(ref _gpuSkinMeshEnabled, meshCount);
-                    EnsureArraySize(ref _boneTextures, meshCount);
-                    EnsureArraySize(ref _scriptTextures, meshCount);
-                    EnsureArraySize(ref _dataTextures, meshCount);
-                    EnsureArraySize(ref _meshIsRGBA, meshCount);
-                    EnsureArraySize(ref _meshHiddenByScript, meshCount);
-                    EnsureArraySize(ref _meshBlendByScript, meshCount);
-                    EnsureArraySize(ref _meshTexturePath, meshCount);
-                    EnsureArraySize(ref _blendMeshIndicesScratch, meshCount);
-                    EnsureArraySize(ref _meshBufferCache, meshCount);
-                }
+                EnsureMeshRuntimeState(meshCount);
 
                 // Bone transforms are expensive to prepare. Delay until a mesh actually needs CPU skinning.
                 Matrix[] bones = null;
@@ -135,18 +66,18 @@ namespace Client.Main.Objects
                 bool canUseStaticMapCpuSkip = !usesMutableMeshData &&
                                               !projectedShadowCpuBuffersRequired &&
                                               CanUseStaticMapInstancing();
-                bool canUseMonsterCrowdCpuSkip = !usesMutableMeshData &&
+                bool canUseWalkerCrowdCpuSkip = !usesMutableMeshData &&
                                                  !projectedShadowCpuBuffersRequired &&
-                                                 CanFullyUseMonsterCrowdInstancingForCpuSkip();
+                                                 CanFullyUseWalkerCrowdInstancingForCpuSkip();
 
                 // Calculate lighting only once if lighting flags are set
-                bool needLightCalculation = (_invalidatedBufferFlags & BUFFER_FLAG_LIGHTING) != 0;
+                bool needLightCalculation = (_invalidatedBufferFlags & MeshDirtyFlags.Lighting) != 0;
                 Vector3 baseLight = Vector3.Zero;
                 Vector3 worldTranslation = WorldPosition.Translation;
 
                 if (needLightCalculation && LightEnabled && World?.Terrain != null)
                 {
-                    baseLight = World.Terrain.EvaluateTerrainLight(worldTranslation.X, worldTranslation.Y) + Light;
+                    baseLight = EvaluateCombinedTerrainLight(worldTranslation.X, worldTranslation.Y) + Light;
                 }
                 else if (needLightCalculation)
                 {
@@ -159,7 +90,7 @@ namespace Client.Main.Objects
                 float colorB = Color.B;
                 float totalAlpha = TotalAlpha;
                 float blendMeshLight = BlendMeshLight;
-                bool textureDirty = (_invalidatedBufferFlags & BUFFER_FLAG_TEXTURE) != 0;
+                bool textureDirty = (_invalidatedBufferFlags & MeshDirtyFlags.Texture) != 0;
                 bool hasPendingTextureResources = false;
 
                 // Process only meshes that need updates
@@ -167,49 +98,51 @@ namespace Client.Main.Objects
                 {
                     try
                     {
-                        ref var cache = ref _meshBufferCache[meshIndex];
+                        ref var cache = ref _meshes[meshIndex].BufferCache;
                         var mesh = Model.Meshes[meshIndex];
 
-                        // Skip if mesh is hidden and we're not doing texture updates
-                        if (IsHiddenMesh(meshIndex) && (_invalidatedBufferFlags & BUFFER_FLAG_TEXTURE) == 0)
+                        if (IsHiddenMesh(meshIndex) && (_invalidatedBufferFlags & MeshDirtyFlags.Texture) == 0)
                             continue;
 
-                        bool canUseGpuSkinning = SupportsGpuDynamicSkinning &&
-                                                 Constants.ENABLE_GPU_SKINNING &&
-                                                 !usesMutableMeshData &&
-                                                 !hasVertexDeformer &&
-                                                 DetermineShaderForMesh(meshIndex).UseDynamicLighting;
+                        // Main-pass GPU skinning and projected mesh shadows are independent concerns.
+                        // A projected shadow may still need CPU-skinned buffers, but that must not disable
+                        // GPU skinning for the visible model. In that case both buffer paths are maintained.
+                        bool canUseGpuSkinning = CanUseGpuSkinningForMesh(meshIndex);
 
+                        var ms = _meshes[meshIndex];
                         bool gpuSkinReady = canUseGpuSkinning &&
-                                            _gpuSkinMeshEnabled != null &&
-                                            (uint)meshIndex < (uint)_gpuSkinMeshEnabled.Length &&
-                                            _gpuSkinMeshEnabled[meshIndex] &&
-                                            _gpuSkinVertexBuffers != null &&
-                                            (uint)meshIndex < (uint)_gpuSkinVertexBuffers.Length &&
-                                            _gpuSkinVertexBuffers[meshIndex] != null &&
-                                            _gpuSkinIndexBuffers != null &&
-                                            (uint)meshIndex < (uint)_gpuSkinIndexBuffers.Length &&
-                                            _gpuSkinIndexBuffers[meshIndex] != null &&
-                                            _gpuSkinBoneCounts != null &&
-                                            (uint)meshIndex < (uint)_gpuSkinBoneCounts.Length &&
-                                            _gpuSkinBoneCounts[meshIndex] > 0;
+                                            ms.GpuSkinEnabled &&
+                                            ms.GpuVertexBuffer != null && !ms.GpuVertexBuffer.IsDisposed &&
+                                            ms.GpuIndexBuffer != null && !ms.GpuIndexBuffer.IsDisposed &&
+                                            ms.GpuBoneCount > 0;
 
-                        if (canUseGpuSkinning && (!gpuSkinReady && TryEnableGpuSkinnedMesh(meshIndex, mesh) || gpuSkinReady))
+                        bool gpuSkinActive = canUseGpuSkinning &&
+                                             (gpuSkinReady ||
+                                              TryEnableGpuSkinnedMesh(
+                                                  meshIndex,
+                                                  mesh,
+                                                  preserveCpuBuffers: projectedShadowCpuBuffersRequired));
+
+                        if (gpuSkinActive)
                         {
                             bool gpuTextureReady = EnsureMeshTextureLoaded(meshIndex, mesh, allowLazyLoad: textureDirty);
                             if (!gpuTextureReady)
-                            {
                                 hasPendingTextureResources = true;
+
+                            cache.IsValid = false;
+
+                            // No CPU-only side pass needs animated geometry, so release stale CPU buffers.
+                            if (!projectedShadowCpuBuffersRequired)
+                            {
+                                ReleaseCpuMeshBuffers(meshIndex);
+                                continue;
                             }
 
-                            cache.IsValid = false; // CPU cache path is bypassed for GPU-skinned mesh.
-                            continue;
+                            // Keep building/updating CPU buffers below only for the projected shadow pass.
                         }
-
-                        if (_gpuSkinMeshEnabled != null && (uint)meshIndex < (uint)_gpuSkinMeshEnabled.Length)
-                        {
-                            _gpuSkinMeshEnabled[meshIndex] = false;
-                        }
+                        // GpuSkinEnabled describes attached immutable GPU geometry, not the
+                        // shader selected for this particular frame. Do not clear it during
+                        // temporary walk/stop blends, hover transitions or material changes.
 
                         // Calculate mesh-specific lighting
                         bool isBlend = IsBlendMesh(meshIndex);
@@ -220,7 +153,7 @@ namespace Client.Main.Objects
                         // Check if this specific mesh needs update - only on real changes
                         bool meshNeedsUpdate = !cache.IsValid ||
                                              (needLightCalculation && Vector3.DistanceSquared(meshLight, cache.CachedLight) > 0.01f) ||
-                                             (_invalidatedBufferFlags & (BUFFER_FLAG_ANIMATION | BUFFER_FLAG_TRANSFORM | BUFFER_FLAG_LIGHTING | BUFFER_FLAG_TEXTURE)) != 0;
+                                             (_invalidatedBufferFlags & (MeshDirtyFlags.Animation | MeshDirtyFlags.Transform | MeshDirtyFlags.Lighting | MeshDirtyFlags.Material | MeshDirtyFlags.Texture)) != 0;
 
                         if (!meshNeedsUpdate)
                             continue;
@@ -245,7 +178,7 @@ namespace Client.Main.Objects
                             mesh,
                             textureReady,
                             canUseStaticMapCpuSkip,
-                            canUseMonsterCrowdCpuSkip))
+                            canUseWalkerCrowdCpuSkip))
                         {
                             ReleaseCpuMeshBuffers(meshIndex);
                             continue;
@@ -256,7 +189,7 @@ namespace Client.Main.Objects
                         if (!colorChanged &&
                             textureReady &&
                             cache.IsValid &&
-                            (_invalidatedBufferFlags & (BUFFER_FLAG_ANIMATION | BUFFER_FLAG_TEXTURE)) == 0)
+                            (_invalidatedBufferFlags & (MeshDirtyFlags.Animation | MeshDirtyFlags.Texture)) == 0)
                             continue;
 
                         if (bones == null)
@@ -273,14 +206,15 @@ namespace Client.Main.Objects
                         // Generate buffers only when necessary
                         BMDLoader.Instance.GetModelBuffers(
                             Model, meshIndex, bodyColor, bones,
-                            ref _boneVertexBuffers[meshIndex],
-                            ref _boneIndexBuffers[meshIndex],
+                            ref _meshes[meshIndex].CpuVertexBuffer,
+                            ref _meshes[meshIndex].CpuIndexBuffer,
                             skipSharedMeshCache,
-                            vertexDeformer);
+                            vertexDeformer,
+                            RuntimeHelpers.GetHashCode(this),
+                            _animationPoseVersion);
 
-                        // Update cache
-                        cache.VertexBuffer = _boneVertexBuffers[meshIndex];
-                        cache.IndexBuffer = _boneIndexBuffers[meshIndex];
+                        cache.VertexBuffer = _meshes[meshIndex].CpuVertexBuffer;
+                        cache.IndexBuffer = _meshes[meshIndex].CpuIndexBuffer;
                         cache.CachedLight = meshLight;
                         cache.CachedBodyColor = bodyColor;
                         cache.LastUpdateFrame = currentFrame;
@@ -296,8 +230,8 @@ namespace Client.Main.Objects
                 // This prevents one-frame load races from leaving attachments (e.g. NPC wings)
                 // permanently invisible.
                 _invalidatedBufferFlags = hasPendingTextureResources
-                    ? BUFFER_FLAG_TEXTURE
-                    : 0;
+                    ? MeshDirtyFlags.Texture
+                    : MeshDirtyFlags.None;
             }
             catch (Exception ex)
             {
@@ -305,27 +239,106 @@ namespace Client.Main.Objects
             }
         }
 
-        private bool RequiresCpuProjectedShadowBuffers()
+        private void EnsureMeshRuntimeState(int meshCount)
         {
-            bool useShadowMap = Constants.ENABLE_DYNAMIC_LIGHTING_SHADER &&
-                                GraphicsManager.Instance.ShadowMapRenderer?.IsReady == true;
-            bool isNight = Constants.ENABLE_DAY_NIGHT_CYCLE && SunCycleManager.IsNight;
-            return RenderShadow && !LowQuality && !useShadowMap && !isNight;
+            if (_meshes?.Length == meshCount && _blendMeshIndicesScratch?.Length == meshCount)
+                return;
+
+            if (_meshes == null || _meshes.Length != meshCount)
+            {
+                var old = _meshes;
+                _meshes = new MeshRuntimeState[meshCount];
+                if (old != null)
+                {
+                    for (int i = 0; i < Math.Min(old.Length, meshCount); i++)
+                        _meshes[i] = old[i];
+                }
+
+                for (int i = 0; i < meshCount; i++)
+                    _meshes[i] ??= new MeshRuntimeState { BufferCache = new MeshBufferCache { IsValid = false } };
+            }
+
+            EnsureArraySize(ref _blendMeshIndicesScratch, meshCount);
         }
 
-        private bool CanFullyUseMonsterCrowdInstancingForCpuSkip()
+        private bool ShouldSkipDynamicBufferUpdate(int meshCount, bool allowHidden)
         {
-            if (!CanUseMonsterCrowdInstancing() || Model?.Meshes == null)
+            if (meshCount == 0)
+                return true;
+
+            if (!Visible && !allowHidden)
+            {
+                _invalidatedBufferFlags = MeshDirtyFlags.None;
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool ShouldSkipTransformOnlyBufferUpdate()
+        {
+            if ((_invalidatedBufferFlags & ~MeshDirtyFlags.Transform) != 0)
+                return false;
+
+            _invalidatedBufferFlags &= ~MeshDirtyFlags.Transform;
+            return true;
+        }
+
+        private bool RequiresCpuProjectedShadowBuffers()
+        {
+            bool isNight = Constants.ENABLE_DAY_NIGHT_CYCLE && SunCycleManager.IsNight;
+            if (!RenderShadow || LowQuality || isNight)
+                return false;
+
+            bool shadowMapReady = Constants.ENABLE_DYNAMIC_LIGHTING_SHADER &&
+                                  GraphicsManager.Instance.ShadowMapRenderer?.IsReady == true;
+            bool representedInShadowMap = UsesRenderedShadowMapForCurrentObject();
+            bool actorMeshShadow = IsPlayerOrNpcShadowPart();
+
+            if (representedInShadowMap)
+            {
+                // The shadow-map pass normally consumes immutable GPU geometry. When the
+                // effect lacks ShadowCaster_Skinned, keep CPU buffers as a correctness
+                // fallback instead of silently dropping armor/body-part shadows.
+                return !SupportsGpuSkinnedShadowCaster();
+            }
+
+            // Player and NPC actors must retain a real projected-mesh fallback whenever
+            // they were omitted from the bounded shadow-map caster list. This includes
+            // linked armor and bone-attached weapons, otherwise the actor loses its shadow
+            // or casts only the one child which happened to own CPU buffers.
+            if (actorMeshShadow)
+                return true;
+
+            // A ready map can still omit this actor because of caster limits or a stale
+            // selection. Other walkers use one root blob shadow and do not need duplicate
+            // CPU-skinned copies for linked equipment.
+            if (shadowMapReady && (ShouldUseBlobShadowForCurrentPass() || LinkParentAnimation || ParentBoneLink >= 0))
+                return false;
+
+            if (LinkParentAnimation || ParentBoneLink >= 0)
+                return false;
+
+            // Blob shadows use a static quad and do not consume the model's CPU-skinned mesh.
+            if (ShouldUseBlobShadowForCurrentPass())
+                return false;
+
+            return true;
+        }
+
+        private bool CanFullyUseWalkerCrowdInstancingForCpuSkip()
+        {
+            if (!CanUseWalkerCrowdInstancing() || Model?.Meshes == null)
                 return false;
 
             bool queuedAnyMesh = false;
             int meshCount = Model.Meshes.Length;
             for (int meshIndex = 0; meshIndex < meshCount; meshIndex++)
             {
-                if (!ShouldQueueMonsterCrowdMesh(meshIndex))
+                if (!ShouldQueueWalkerCrowdMesh(meshIndex))
                     continue;
 
-                if (!CanUseMonsterCrowdMeshForInstancing(meshIndex))
+                if (!CanUseWalkerCrowdMeshForInstancing(meshIndex))
                     return false;
 
                 if (!BMDLoader.Instance.TryGetGpuSkinnedMeshBuffers(
@@ -349,7 +362,7 @@ namespace Client.Main.Objects
             BMDTextureMesh mesh,
             bool textureReady,
             bool canUseStaticMapCpuSkip,
-            bool canUseMonsterCrowdCpuSkip)
+            bool canUseWalkerCrowdCpuSkip)
         {
             if (!textureReady || Model == null || mesh == null)
                 return false;
@@ -366,196 +379,203 @@ namespace Client.Main.Objects
                 return true;
             }
 
-            if (canUseMonsterCrowdCpuSkip && ShouldQueueMonsterCrowdMesh(meshIndex))
+            if (canUseWalkerCrowdCpuSkip && ShouldQueueWalkerCrowdMesh(meshIndex))
                 return true;
 
             return false;
         }
 
-        private void ReleaseCpuMeshBuffers(int meshIndex)
+        internal async Task PrepareGpuTexturesForFirstFrameAsync()
         {
-            if (_boneVertexBuffers != null &&
-                meshIndex >= 0 &&
-                meshIndex < _boneVertexBuffers.Length)
+            if (!_contentLoaded || Status == GameControlStatus.Disposed || _meshes == null)
+                return;
+
+            // ModelObject.LoadContent decodes texture data off-thread. Complete the GPU upload
+            // before publishing a newly spawned object so its first Draw cannot cold-create
+            // Texture2D resources inside the render pass.
+            for (int i = 0; i < _meshes.Length; i++)
             {
-                var cpuVertexBuffer = _boneVertexBuffers[meshIndex];
-                if (cpuVertexBuffer != null)
-                {
-                    DynamicBufferPool.ReturnVertexBuffer(cpuVertexBuffer);
-                    _boneVertexBuffers[meshIndex] = null;
-                }
+                string texturePath = _meshes[i]?.TexturePath;
+                if (string.IsNullOrEmpty(texturePath))
+                    continue;
+
+                await TextureLoader.Instance.PrepareAndGetTexture(texturePath).ConfigureAwait(false);
             }
 
-            if (_boneIndexBuffers != null &&
-                meshIndex >= 0 &&
-                meshIndex < _boneIndexBuffers.Length)
+            for (int i = 0; i < Children.Count; i++)
             {
-                var cpuIndexBuffer = _boneIndexBuffers[meshIndex];
-                if (cpuIndexBuffer != null)
+                if (Children[i] is ModelObject childModel)
+                    await childModel.PrepareGpuTexturesForFirstFrameAsync().ConfigureAwait(false);
+            }
+        }
+
+        internal void PrepareRenderResourcesForFirstFrame()
+        {
+            if (!_contentLoaded || Status == GameControlStatus.Disposed)
+                return;
+
+            SetDynamicBuffers(allowHidden: true);
+
+            for (int i = 0; i < Children.Count; i++)
+            {
+                if (Children[i] is ModelObject childModel)
+                    childModel.PrepareRenderResourcesForFirstFrame();
+            }
+        }
+
+        private void ReleaseCpuMeshBuffers(int meshIndex)
+        {
+            if (_meshes != null && (uint)meshIndex < (uint)_meshes.Length)
+            {
+                var ms = _meshes[meshIndex];
+                if (ms.CpuVertexBuffer != null)
                 {
-                    DynamicBufferPool.ReturnIndexBuffer(cpuIndexBuffer);
-                    _boneIndexBuffers[meshIndex] = null;
+                    DynamicBufferPool.ReturnVertexBuffer(ms.CpuVertexBuffer);
+                    ms.CpuVertexBuffer = null;
+                }
+                if (ms.CpuIndexBuffer != null)
+                {
+                    DynamicBufferPool.ReturnIndexBuffer(ms.CpuIndexBuffer);
+                    ms.CpuIndexBuffer = null;
                 }
             }
         }
 
-        private bool TryEnableGpuSkinnedMesh(int meshIndex, BMDTextureMesh mesh)
+        /// <summary>
+        /// Ensures that the individual main-pass renderer can use GPU skinning.
+        /// Crowd instancing and individual rendering are separate paths; when a walker
+        /// leaves a crowd batch (for example during an attack transition), the mesh may
+        /// not yet have its per-instance GPU state attached even though shared GPU
+        /// geometry already exists in BMDLoader. Reacquire it lazily at draw time.
+        /// </summary>
+        private bool EnsureGpuSkinnedMeshForMainPass(int meshIndex)
         {
-            if (_gpuSkinMeshEnabled == null ||
-                _gpuSkinVertexBuffers == null ||
-                _gpuSkinIndexBuffers == null ||
-                _gpuSkinBoneCounts == null ||
-                Model == null ||
-                mesh == null ||
-                (uint)meshIndex >= (uint)_gpuSkinMeshEnabled.Length)
+            if (_meshes == null || Model?.Meshes == null ||
+                (uint)meshIndex >= (uint)_meshes.Length ||
+                (uint)meshIndex >= (uint)Model.Meshes.Length)
             {
                 return false;
             }
 
-            // If shadow mapping is off and projected mesh shadows are active, keep CPU-skinned buffers.
-            // This guarantees non-shadow-map mode uses mesh-based shadows (no blob shadow fallback).
-            bool useShadowMap = Constants.ENABLE_DYNAMIC_LIGHTING_SHADER &&
-                                GraphicsManager.Instance.ShadowMapRenderer?.IsReady == true;
-            bool isNight = Constants.ENABLE_DAY_NIGHT_CYCLE && SunCycleManager.IsNight;
-            bool meshShadowPassActive = RenderShadow &&
-                                        !useShadowMap &&
-                                        !LowQuality &&
-                                        !isNight &&
-                                        this is not MonsterObject;
-            if (meshShadowPassActive)
+            var ms = _meshes[meshIndex];
+            if (ms.GpuSkinEnabled &&
+                ms.GpuVertexBuffer != null && !ms.GpuVertexBuffer.IsDisposed &&
+                ms.GpuIndexBuffer != null && !ms.GpuIndexBuffer.IsDisposed &&
+                ms.GpuBoneCount > 0)
             {
-                return false;
+                int frame = MuGame.FrameIndex;
+                int age = frame - ms.LastGpuCacheTouchFrame;
+                if (age < 0 || age >= 300)
+                {
+                    BMDLoader.Instance.TouchGpuSkinnedMeshBuffers(Model, meshIndex);
+                    ms.LastGpuCacheTouchFrame = frame;
+                }
+                return true;
             }
+
+            if (!CanUseGpuSkinGeometry())
+                return false;
+
+            return TryEnableGpuSkinnedMesh(
+                meshIndex,
+                Model.Meshes[meshIndex],
+                preserveCpuBuffers: RequiresCpuProjectedShadowBuffers());
+        }
+
+        private bool TryEnableGpuSkinnedMesh(
+            int meshIndex,
+            BMDTextureMesh mesh,
+            bool preserveCpuBuffers)
+        {
+            if (_meshes == null || Model == null || mesh == null ||
+                (uint)meshIndex >= (uint)_meshes.Length)
+                return false;
 
             if (!BMDLoader.Instance.TryGetGpuSkinnedMeshBuffers(
-                Model,
-                meshIndex,
-                out var vertexBuffer,
-                out var indexBuffer,
-                out var boneCount))
-            {
+                Model, meshIndex, out var vertexBuffer, out var indexBuffer, out var boneCount))
                 return false;
-            }
 
             if (boneCount <= 0 || boneCount > MaxGpuSkinBones)
-            {
                 return false;
-            }
 
-            _gpuSkinVertexBuffers[meshIndex] = vertexBuffer;
-            _gpuSkinIndexBuffers[meshIndex] = indexBuffer;
-            _gpuSkinBoneCounts[meshIndex] = boneCount;
-            _gpuSkinMeshEnabled[meshIndex] = true;
+            _meshes[meshIndex].GpuVertexBuffer = vertexBuffer;
+            _meshes[meshIndex].GpuIndexBuffer = indexBuffer;
+            _meshes[meshIndex].GpuBoneCount = boneCount;
+            _meshes[meshIndex].GpuSkinEnabled = true;
+            _meshes[meshIndex].LastGpuCacheTouchFrame = MuGame.FrameIndex;
 
-            // Free dynamic CPU buffers for this mesh - GPU skinning replaces this path.
-            if (_boneVertexBuffers != null && (uint)meshIndex < (uint)_boneVertexBuffers.Length)
-            {
-                var cpuVB = _boneVertexBuffers[meshIndex];
-                if (cpuVB != null)
-                {
-                    DynamicBufferPool.ReturnVertexBuffer(cpuVB);
-                    _boneVertexBuffers[meshIndex] = null;
-                }
-            }
-
-            if (_boneIndexBuffers != null && (uint)meshIndex < (uint)_boneIndexBuffers.Length)
-            {
-                var cpuIB = _boneIndexBuffers[meshIndex];
-                if (cpuIB != null)
-                {
-                    DynamicBufferPool.ReturnIndexBuffer(cpuIB);
-                    _boneIndexBuffers[meshIndex] = null;
-                }
-            }
+            // Normally GPU skinning replaces CPU buffers. When projected mesh shadows are
+            // active, retain/build the CPU path only for that side pass.
+            if (!preserveCpuBuffers)
+                ReleaseCpuMeshBuffers(meshIndex);
 
             return true;
         }
 
         private bool EnsureMeshTextureLoaded(int meshIndex, BMDTextureMesh mesh, bool allowLazyLoad)
         {
-            if (_boneTextures == null ||
-                _scriptTextures == null ||
-                _dataTextures == null ||
-                mesh == null ||
-                Model == null ||
-                (uint)meshIndex >= (uint)_boneTextures.Length ||
-                (uint)meshIndex >= (uint)_scriptTextures.Length ||
-                (uint)meshIndex >= (uint)_dataTextures.Length)
-            {
+            if (_meshes == null || mesh == null || Model == null ||
+                (uint)meshIndex >= (uint)_meshes.Length)
                 return false;
-            }
 
-            string texturePath = null;
-            if (_meshTexturePath != null && (uint)meshIndex < (uint)_meshTexturePath.Length)
-            {
-                texturePath = _meshTexturePath[meshIndex];
-            }
+            var ms = _meshes[meshIndex];
+            string texturePath = ms.TexturePath;
 
             if (string.IsNullOrEmpty(texturePath))
             {
                 texturePath = BMDLoader.Instance.GetTexturePath(Model, mesh.TexturePath);
-                if (_meshTexturePath != null && (uint)meshIndex < (uint)_meshTexturePath.Length)
-                {
-                    _meshTexturePath[meshIndex] = texturePath;
-                }
+                ms.TexturePath = texturePath;
             }
 
             if (string.IsNullOrEmpty(texturePath))
-            {
                 return false;
-            }
 
-            if (allowLazyLoad && _boneTextures[meshIndex] == null)
-            {
+            if (allowLazyLoad && ms.Texture == null)
                 _ = TextureLoader.Instance.Prepare(texturePath);
-            }
 
             var resolvedTexture = TextureLoader.Instance.GetTexture2D(texturePath);
-            if (!ReferenceEquals(_boneTextures[meshIndex], resolvedTexture))
+            if (!ReferenceEquals(ms.Texture, resolvedTexture))
             {
-                _boneTextures[meshIndex] = resolvedTexture;
-                _sortTextureHintDirty = true;
-                _sortTextureHint = null;
+                ms.Texture = resolvedTexture;
+                InvalidateMeshRenderPlan();
             }
 
-            bool needsMetadataRefresh = allowLazyLoad || _scriptTextures[meshIndex] == null || _dataTextures[meshIndex] == null;
+            bool needsMetadataRefresh = allowLazyLoad || ms.Script == null || ms.Data == null;
             if (!needsMetadataRefresh)
-            {
-                return _boneTextures[meshIndex] != null;
-            }
+                return ms.Texture != null;
 
             var script = TextureLoader.Instance.GetScript(texturePath);
             var data = TextureLoader.Instance.Get(texturePath);
-            _scriptTextures[meshIndex] = script;
-            _dataTextures[meshIndex] = data;
+            bool isRgba = data?.Components == 4;
+            bool hiddenByScript = script?.HiddenMesh ?? false;
+            bool blendByScript = script?.Bright ?? false;
+            bool renderPlanChanged = !ReferenceEquals(ms.Script, script) ||
+                                     !ReferenceEquals(ms.Data, data) ||
+                                     ms.IsRgba != isRgba ||
+                                     ms.HiddenByScript != hiddenByScript ||
+                                     ms.BlendByScript != blendByScript;
 
-            if (_meshIsRGBA != null && (uint)meshIndex < (uint)_meshIsRGBA.Length)
-            {
-                _meshIsRGBA[meshIndex] = data?.Components == 4;
-            }
+            ms.Script = script;
+            ms.Data = data;
+            ms.IsRgba = isRgba;
+            ms.HiddenByScript = hiddenByScript;
+            ms.BlendByScript = blendByScript;
 
-            if (_meshHiddenByScript != null && (uint)meshIndex < (uint)_meshHiddenByScript.Length)
-            {
-                _meshHiddenByScript[meshIndex] = script?.HiddenMesh ?? false;
-            }
+            if (renderPlanChanged)
+                InvalidateMeshRenderPlan();
 
-            if (_meshBlendByScript != null && (uint)meshIndex < (uint)_meshBlendByScript.Length)
-            {
-                _meshBlendByScript[meshIndex] = script?.Bright ?? false;
-            }
-
-            return _boneTextures[meshIndex] != null;
+            return ms.Texture != null;
         }
 
         private Matrix[] GetCachedBoneTransforms()
         {
-            Matrix[] bones = (LinkParentAnimation && Parent is ModelObject parentModel && parentModel.BoneTransform != null)
-                ? parentModel.BoneTransform
-                : BoneTransform;
-
+            Matrix[] bones = GetEffectiveBoneTransforms();
             if (bones == null) return null;
 
             float currentAnimTime = (float)_animTime;
+            uint activePoseVersion = LinkParentAnimation && Parent is ModelObject parentModel
+                ? parentModel.GetEffectiveBonePoseVersion()
+                : GetEffectiveBonePoseVersion();
 
             // For child objects that link to parent animation OR have ParentBoneLink, always use fresh bone transforms
             // This ensures weapons and accessories animate properly during blending
@@ -568,6 +588,8 @@ namespace Client.Main.Objects
             // Check if we can use cached bone matrix for main objects
             // But be more conservative - only cache if animation time hasn't changed at all
             if (_boneMatrixCacheValid &&
+                ReferenceEquals(_lastCachedBoneSource, bones) &&
+                _lastCachedBonePoseVersion == activePoseVersion &&
                 _lastCachedAction == CurrentAction &&
                 Math.Abs(_lastCachedAnimTime - currentAnimTime) < 0.0001f &&
                 _cachedBoneMatrix != null &&
@@ -584,6 +606,8 @@ namespace Client.Main.Objects
 
             Array.Copy(bones, _cachedBoneMatrix, bones.Length);
 
+            _lastCachedBoneSource = bones;
+            _lastCachedBonePoseVersion = activePoseVersion;
             _lastCachedAction = CurrentAction;
             _lastCachedAnimTime = currentAnimTime;
             _boneMatrixCacheValid = true;
@@ -598,11 +622,11 @@ namespace Client.Main.Objects
                 array = new T[size];
         }
 
-        public void InvalidateBuffers(uint flags = BUFFER_FLAG_ALL)
+        public void InvalidateBuffers(MeshDirtyFlags flags = MeshDirtyFlags.All)
         {
             _dynamicBuffersFrozen = false;
             _invalidatedBufferFlags |= flags;
-            if ((flags & BUFFER_FLAG_TEXTURE) != 0)
+            if ((flags & MeshDirtyFlags.Texture) != 0)
             {
                 _sortTextureHintDirty = true;
                 _sortTextureHint = null;
@@ -613,15 +637,15 @@ namespace Client.Main.Objects
                 if (Children[i] is not ModelObject modelObject)
                     continue;
 
-                uint childFlags = flags;
+                MeshDirtyFlags childFlags = flags;
 
-                if ((childFlags & BUFFER_FLAG_TRANSFORM) != 0 &&
+                if ((childFlags & MeshDirtyFlags.Transform) != 0 &&
                     (modelObject.LinkParentAnimation || modelObject.ParentBoneLink >= 0))
                 {
-                    childFlags &= ~BUFFER_FLAG_TRANSFORM;
+                    childFlags &= ~MeshDirtyFlags.Transform;
                 }
 
-                if (childFlags != 0)
+                if (childFlags != MeshDirtyFlags.None)
                 {
                     modelObject.InvalidateBuffers(childFlags);
                 }
@@ -630,45 +654,31 @@ namespace Client.Main.Objects
 
         private void ReleaseDynamicBuffers()
         {
-            var vertexBuffers = Interlocked.Exchange(ref _boneVertexBuffers, null);
-            if (vertexBuffers != null)
+            var meshes = _meshes;
+            if (meshes != null)
             {
-                for (int i = 0; i < vertexBuffers.Length; i++)
+                for (int i = 0; i < meshes.Length; i++)
                 {
-                    var buffer = vertexBuffers[i];
-                    if (buffer == null)
-                        continue;
-
-                    DynamicBufferPool.ReturnVertexBuffer(buffer);
-                    vertexBuffers[i] = null;
-                }
-            }
-
-            var indexBuffers = Interlocked.Exchange(ref _boneIndexBuffers, null);
-            if (indexBuffers != null)
-            {
-                for (int i = 0; i < indexBuffers.Length; i++)
-                {
-                    var buffer = indexBuffers[i];
-                    if (buffer == null)
-                        continue;
-
-                    DynamicBufferPool.ReturnIndexBuffer(buffer);
-                    indexBuffers[i] = null;
-                }
-            }
-
-            var meshCache = _meshBufferCache;
-            if (meshCache != null)
-            {
-                for (int i = 0; i < meshCache.Length; i++)
-                {
-                    ref var cache = ref meshCache[i];
+                    var ms = meshes[i];
+                    if (ms == null) continue;
+                    if (ms.CpuVertexBuffer != null)
+                    {
+                        DynamicBufferPool.ReturnVertexBuffer(ms.CpuVertexBuffer);
+                        ms.CpuVertexBuffer = null;
+                    }
+                    if (ms.CpuIndexBuffer != null)
+                    {
+                        DynamicBufferPool.ReturnIndexBuffer(ms.CpuIndexBuffer);
+                        ms.CpuIndexBuffer = null;
+                    }
+                    ref var cache = ref ms.BufferCache;
                     cache.VertexBuffer = null;
                     cache.IndexBuffer = null;
                     cache.IsValid = false;
                 }
             }
+
+            ReleaseFastMeshBatchBuffers();
         }
     }
 }

@@ -21,48 +21,187 @@ namespace Client.Main.Controls
 
         // Fields
         private Point _controlSize, _viewSize;
+        private GameControl _parent;
+        private ControlAlign _align;
+        private bool _autoViewSize = true;
+        private int _x, _y;
+        private float _scale = 1f;
+        private Margin _margin = Margin.Empty;
+        private Margin _padding = new Margin();
+        private Point _offset;
+        private bool _visible = true;
+        private bool _layoutDirty = true;
         private bool _isCurrentlyPressedByMouse = false;
         private static readonly ILogger _logger = Microsoft.Extensions.Logging.LoggerFactory.Create(builder => { }).CreateLogger<GameControl>();
 
         // Properties
         public GraphicsDevice GraphicsDevice => MuGame.Instance.GraphicsDevice;
         public GameControl Root => Parent?.Root ?? this;
-        public GameControl Parent { get; set; }
+        public GameControl Parent
+        {
+            get => _parent;
+            set
+            {
+                if (ReferenceEquals(_parent, value))
+                    return;
+
+                _parent = value;
+                MarkLayoutDirty();
+            }
+        }
         public BaseScene Scene => this is BaseScene scene ? scene : Parent?.Scene;
         public virtual WorldControl World => Scene?.World;
 
         public ChildrenCollection<GameControl> Controls { get; private set; }
         public GameControlStatus Status { get; protected set; } = GameControlStatus.NonInitialized;
-        public ControlAlign Align { get; set; }
-        public bool AutoViewSize { get; set; } = true;
+        public ControlAlign Align
+        {
+            get => _align;
+            set
+            {
+                if (_align == value)
+                    return;
+
+                _align = value;
+                MarkLayoutDirty();
+            }
+        }
+        public bool AutoViewSize
+        {
+            get => _autoViewSize;
+            set
+            {
+                if (_autoViewSize == value)
+                    return;
+
+                _autoViewSize = value;
+                MarkLayoutDirty();
+            }
+        }
         public bool Interactive { get; set; }
         /// <summary>
         /// Allows non-interactive controls to still capture pointer hit-testing in scene input routing.
         /// Defaults to false to keep click-through behavior for visual-only overlays.
         /// </summary>
         public bool CapturePointerWhenNonInteractive { get; set; }
-        public int X { get; set; }
-        public int Y { get; set; }
-        public Point ControlSize { get => _controlSize; set => _controlSize = value; }
+        public int X
+        {
+            get => _x;
+            set
+            {
+                if (_x == value)
+                    return;
+
+                _x = value;
+                MarkLayoutDirty();
+            }
+        }
+        public int Y
+        {
+            get => _y;
+            set
+            {
+                if (_y == value)
+                    return;
+
+                _y = value;
+                MarkLayoutDirty();
+            }
+        }
+        public Point ControlSize
+        {
+            get => _controlSize;
+            set
+            {
+                if (_controlSize == value)
+                    return;
+
+                _controlSize = value;
+                MarkLayoutDirty();
+            }
+        }
         public Point ViewSize
         {
             get => _viewSize;
-            set { if (_viewSize != value) { _viewSize = value; OnScreenSizeChanged(); } }
+            set
+            {
+                if (_viewSize == value)
+                    return;
+
+                _viewSize = value;
+                MarkLayoutDirty();
+                OnScreenSizeChanged();
+            }
         }
-        public float Scale { get; set; } = 1f;
-        public Margin Margin { get; set; } = Margin.Empty;
-        public Margin Padding { get; set; } = new Margin();
+        public float Scale
+        {
+            get => _scale;
+            set
+            {
+                if (Math.Abs(_scale - value) < 0.0001f)
+                    return;
+
+                _scale = value;
+                MarkLayoutDirty();
+            }
+        }
+        public Margin Margin
+        {
+            get => _margin;
+            set
+            {
+                if (EqualityComparer<Margin>.Default.Equals(_margin, value))
+                    return;
+
+                _margin = value;
+                MarkLayoutDirty();
+            }
+        }
+        public Margin Padding
+        {
+            get => _padding;
+            set
+            {
+                if (EqualityComparer<Margin>.Default.Equals(_padding, value))
+                    return;
+
+                _padding = value;
+                MarkLayoutDirty();
+            }
+        }
         public Color BorderColor { get; set; }
         public int BorderThickness { get; set; } = 0;
         public Color BackgroundColor { get; set; } = Color.Transparent;
-        public Point Offset { get; set; }
+        public Point Offset
+        {
+            get => _offset;
+            set
+            {
+                if (_offset == value)
+                    return;
+
+                _offset = value;
+                MarkLayoutDirty();
+            }
+        }
         public virtual Point DisplayPosition => new(
             (Parent?.DisplayRectangle.X ?? 0) + X + Margin.Left - Margin.Right + Offset.X,
             (Parent?.DisplayRectangle.Y ?? 0) + Y + Margin.Top - Margin.Bottom + Offset.Y
         );
         public virtual Point DisplaySize => new((int)(ViewSize.X * Scale), (int)(ViewSize.Y * Scale));
         public virtual Rectangle DisplayRectangle => new(DisplayPosition, DisplaySize);
-        public bool Visible { get; set; } = true;
+        public bool Visible
+        {
+            get => _visible;
+            set
+            {
+                if (_visible == value)
+                    return;
+
+                _visible = value;
+                MarkLayoutDirty();
+            }
+        }
 
         // Added property for storing additional data (e.g., design info)
         public object Tag { get; set; }
@@ -85,6 +224,8 @@ namespace Client.Main.Controls
         protected GameControl()
         {
             Controls = new ChildrenCollection<GameControl>(this);
+            Controls.ControlAdded += OnChildCollectionChanged;
+            Controls.ControlRemoved += OnChildCollectionChanged;
         }
 
         protected virtual MouseState CurrentMouseState => MuGame.Instance.Mouse;
@@ -163,64 +304,62 @@ namespace Client.Main.Controls
 
             if (Status != GameControlStatus.Ready || !Visible) return;
 
-            // Cache mouse and display rectangle to avoid repeated property lookups
-            var mouse = CurrentMouseState;
-            var prevMouse = PreviousMouseState;
-            Rectangle rect = DisplayRectangle;
-            Point mousePosition = mouse.Position;
-            IsMouseOver = Interactive &&
-                          mousePosition.X >= rect.X && mousePosition.X <= rect.X + rect.Width &&
-                          mousePosition.Y >= rect.Y && mousePosition.Y <= rect.Y + rect.Height;
-
-            // moved: Scene.MouseControl = this; 
-            // MouseControl is now determined by BaseScene to ensure topmost logic.
-
-            if (Interactive && Visible) // process clicks only if interactive and visible
+            // Non-interactive visual controls make up most of the UI tree. Avoid fetching
+            // mouse state and recursively calculating DisplayRectangle unless the control can
+            // consume or explicitly capture pointer input.
+            bool needsPointerHitTest = Interactive || CapturePointerWhenNonInteractive;
+            if (!needsPointerHitTest)
             {
-                if (IsMouseOver) // mouse is currently over this control
-                {
-                    if (mouse.LeftButton == ButtonState.Pressed)
-                    {
-                        IsMousePressed = true; // for UI styling, indicate it's being pressed
-                        if (prevMouse.LeftButton == ButtonState.Released)
-                        {
-                            _isCurrentlyPressedByMouse = true; // this control initiated the press sequence
-                            Scene?.FocusControlIfInteractive(this); // attempt to set focus
-                        }
-                    }
-                    else if (mouse.LeftButton == ButtonState.Released)
-                    {
-                        // mouse is released WHILE OVER this control
-                        if (_isCurrentlyPressedByMouse && prevMouse.LeftButton == ButtonState.Pressed)
-                        {
-                            // click occurred (press and release over this control)
-                            if (OnClick()) // call OnClick and check if it was handled
-                            {
-                                if (Scene is BaseScene baseScene && this != baseScene.World)
-                                {
-                                    baseScene.SetMouseInputConsumed();
-                                }
-                            }
-                        }
-                        _isCurrentlyPressedByMouse = false; // reset press initiator
-                        IsMousePressed = false; // reset styling state
-                    }
-                }
-                else // mouse is not over this control
-                {
-                    IsMousePressed = false; // not pressed for styling if mouse isn't over
-                    // if mouse was pressed on this control but then dragged off and released elsewhere,
-                    // reset if mouse is released not over this control.
-                    if (mouse.LeftButton == ButtonState.Released)
-                    {
-                        _isCurrentlyPressedByMouse = false;
-                    }
-                }
-            }
-            else // not interactive or not visible
-            {
+                IsMouseOver = false;
                 IsMousePressed = false;
                 _isCurrentlyPressedByMouse = false;
+            }
+            else
+            {
+                var mouse = CurrentMouseState;
+                Rectangle rectangle = DisplayRectangle;
+                Point mousePosition = mouse.Position;
+                IsMouseOver = mousePosition.X >= rectangle.Left && mousePosition.X <= rectangle.Right &&
+                              mousePosition.Y >= rectangle.Top && mousePosition.Y <= rectangle.Bottom;
+
+                if (!Interactive)
+                {
+                    IsMousePressed = false;
+                    _isCurrentlyPressedByMouse = false;
+                }
+                else
+                {
+                    var previousMouse = PreviousMouseState;
+                    if (IsMouseOver)
+                    {
+                        if (mouse.LeftButton == ButtonState.Pressed)
+                        {
+                            IsMousePressed = true;
+                            if (previousMouse.LeftButton == ButtonState.Released)
+                            {
+                                _isCurrentlyPressedByMouse = true;
+                                Scene?.FocusControlIfInteractive(this);
+                            }
+                        }
+                        else
+                        {
+                            if (_isCurrentlyPressedByMouse && previousMouse.LeftButton == ButtonState.Pressed && OnClick())
+                            {
+                                if (Scene is BaseScene baseScene && this != baseScene.World)
+                                    baseScene.SetMouseInputConsumed();
+                            }
+
+                            _isCurrentlyPressedByMouse = false;
+                            IsMousePressed = false;
+                        }
+                    }
+                    else
+                    {
+                        IsMousePressed = false;
+                        if (mouse.LeftButton == ButtonState.Released)
+                            _isCurrentlyPressedByMouse = false;
+                    }
+                }
             }
 
             // Iterate over a copy for updating children to prevent collection modification issues
@@ -237,34 +376,8 @@ namespace Client.Main.Controls
                 }
             }
 
-            if (AutoViewSize)
-            {
-                int maxWidth = 0, maxHeight = 0;
-                // For AutoViewSize, iterate over the current Controls collection
-                // Use for loop to avoid ToArray() allocation
-                for (int j = 0; j < Controls.Count; j++)
-                {
-                    var control = Controls[j];
-                    if (control.Status == GameControlStatus.Disposed) continue; // Skip disposed controls for layout
-
-                    int controlWidth = control.DisplaySize.X + control.Margin.Left;
-                    int controlHeight = control.DisplaySize.Y + control.Margin.Top;
-
-                    if (!Align.HasFlag(ControlAlign.Left))
-                        controlWidth += control.X;
-                    if (!Align.HasFlag(ControlAlign.Bottom))
-                        controlHeight += control.Y;
-
-                    if (controlWidth > maxWidth)
-                        maxWidth = controlWidth;
-                    if (controlHeight > maxHeight)
-                        maxHeight = controlHeight;
-                }
-                ViewSize = new Point(Math.Max(ControlSize.X, maxWidth), Math.Max(ControlSize.Y, maxHeight));
-            }
-
-            if (Align != ControlAlign.None)
-                AlignControl();
+            if (_layoutDirty)
+                RecalculateLayout();
         }
 
         public virtual bool ProcessMouseScroll(int scrollDelta)
@@ -297,11 +410,6 @@ namespace Client.Main.Controls
             DrawBackground();
             DrawBorder();
 
-            GraphicsDevice.SamplerStates[0] = SamplerState.LinearWrap;
-            GraphicsDevice.RasterizerState = RasterizerState.CullNone;
-            GraphicsDevice.DepthStencilState = DepthStencilState.Default;
-            GraphicsDevice.BlendState = BlendState.Opaque; // Usually AlphaBlend for UI
-
             for (int i = 0; i < Controls.Count; i++)
                 Controls[i].Draw(gameTime);
         }
@@ -318,6 +426,9 @@ namespace Client.Main.Controls
         public virtual void Dispose()
         {
             if (NonDisposable) return;
+
+            Controls.ControlAdded -= OnChildCollectionChanged;
+            Controls.ControlRemoved -= OnChildCollectionChanged;
 
             // Use reverse iteration to avoid ToArray() allocation
             for (int i = Controls.Count - 1; i >= 0; i--)
@@ -342,9 +453,7 @@ namespace Client.Main.Controls
             if (Status == GameControlStatus.Disposed) return;
             if (Parent == null) return;
             if (Parent.Controls.Count == 0 || Parent.Controls[^1] == this) return; // Check count before accessing ^1
-            var currentParent = Parent; // Store parent in case 'this' is removed and Parent becomes null
-            currentParent.Controls.Remove(this);
-            currentParent.Controls.Add(this);
+            Parent.Controls.MoveToEnd(this);
         }
 
         public void SendToBack()
@@ -352,12 +461,71 @@ namespace Client.Main.Controls
             if (Status == GameControlStatus.Disposed) return;
             if (Parent == null) return;
             if (Parent.Controls.Count == 0 || Parent.Controls[0] == this) return; // Check count before accessing [0]
-            var currentParent = Parent;
-            currentParent.Controls.Remove(this);
-            currentParent.Controls.Insert(0, this);
+            Parent.Controls.MoveToStart(this);
         }
 
         // Protected Methods
+        private void OnChildCollectionChanged(object sender, ChildrenEventArgs<GameControl> e)
+        {
+            MarkLayoutDirty();
+        }
+
+        private void RecalculateLayout()
+        {
+            if (AutoViewSize)
+            {
+                int maxWidth = 0;
+                int maxHeight = 0;
+
+                for (int i = 0; i < Controls.Count; i++)
+                {
+                    var control = Controls[i];
+                    if (control.Status == GameControlStatus.Disposed)
+                        continue;
+
+                    int controlWidth = control.DisplaySize.X + control.Margin.Left;
+                    int controlHeight = control.DisplaySize.Y + control.Margin.Top;
+
+                    if (!Align.HasFlag(ControlAlign.Left))
+                        controlWidth += control.X;
+                    if (!Align.HasFlag(ControlAlign.Bottom))
+                        controlHeight += control.Y;
+
+                    maxWidth = Math.Max(maxWidth, controlWidth);
+                    maxHeight = Math.Max(maxHeight, controlHeight);
+                }
+
+                Point requiredSize = new(
+                    Math.Max(ControlSize.X, maxWidth),
+                    Math.Max(ControlSize.Y, maxHeight));
+
+                if (_viewSize != requiredSize)
+                {
+                    _viewSize = requiredSize;
+                    OnScreenSizeChanged();
+                }
+            }
+
+            if (Align != ControlAlign.None)
+                AlignControl();
+
+            _layoutDirty = false;
+        }
+
+        protected void MarkLayoutDirty()
+        {
+            _layoutDirty = true;
+
+            if (Parent != null)
+                Parent._layoutDirty = true;
+
+            if (Controls == null)
+                return;
+
+            for (int i = 0; i < Controls.Count; i++)
+                Controls[i]._layoutDirty = true;
+        }
+
         protected virtual void AlignControl()
         {
             if (Parent == null)
@@ -402,20 +570,25 @@ namespace Client.Main.Controls
             if (BorderThickness <= 0 || BorderColor.A == 0) // Check alpha for transparency
                 return;
 
-            Color finalBorderColor = BorderColor * Alpha; // Apply control's alpha
+            Color finalBorderColor = BorderColor * Alpha;
+            Rectangle rectangle = DisplayRectangle;
+            Texture2D pixel = GraphicsManager.Instance.Pixel;
+            SpriteBatch sprite = GraphicsManager.Instance.Sprite;
 
-            // Top border
-            GraphicsManager.Instance.Sprite.Draw(GraphicsManager.Instance.Pixel, new Rectangle(DisplayRectangle.X, DisplayRectangle.Y, DisplayRectangle.Width, BorderThickness), finalBorderColor);
-            // Bottom border
-            GraphicsManager.Instance.Sprite.Draw(GraphicsManager.Instance.Pixel, new Rectangle(DisplayRectangle.X, DisplayRectangle.Y + DisplayRectangle.Height - BorderThickness, DisplayRectangle.Width, BorderThickness), finalBorderColor);
-            // Left border
-            GraphicsManager.Instance.Sprite.Draw(GraphicsManager.Instance.Pixel, new Rectangle(DisplayRectangle.X, DisplayRectangle.Y, BorderThickness, DisplayRectangle.Height), finalBorderColor);
-            // Right border
-            GraphicsManager.Instance.Sprite.Draw(GraphicsManager.Instance.Pixel, new Rectangle(DisplayRectangle.X + DisplayRectangle.Width - BorderThickness, DisplayRectangle.Y, BorderThickness, DisplayRectangle.Height), finalBorderColor);
+            sprite.Draw(pixel, new Rectangle(rectangle.X, rectangle.Y, rectangle.Width, BorderThickness), finalBorderColor);
+            sprite.Draw(pixel, new Rectangle(rectangle.X, rectangle.Bottom - BorderThickness, rectangle.Width, BorderThickness), finalBorderColor);
+            sprite.Draw(pixel, new Rectangle(rectangle.X, rectangle.Y, BorderThickness, rectangle.Height), finalBorderColor);
+            sprite.Draw(pixel, new Rectangle(rectangle.Right - BorderThickness, rectangle.Y, BorderThickness, rectangle.Height), finalBorderColor);
         }
 
         protected virtual void OnScreenSizeChanged()
         {
+            if (Parent != null)
+                Parent._layoutDirty = true;
+
+            for (int i = 0; i < Controls.Count; i++)
+                Controls[i]._layoutDirty = true;
+
             SizeChanged?.Invoke(this, EventArgs.Empty);
         }
     }

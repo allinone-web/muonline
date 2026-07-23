@@ -15,6 +15,7 @@ namespace Client.Main.Controls.Terrain
         public TerrainAttribute Attributes { get; set; }
         public TerrainMapping Mapping { get; set; }
         public Texture2D[] Textures { get; set; }
+        public string[] TexturePaths { get; set; }
         public Color[] HeightMap { get; set; }
         public Color[] LightData { get; set; }
         public Vector3[] Normals { get; set; }

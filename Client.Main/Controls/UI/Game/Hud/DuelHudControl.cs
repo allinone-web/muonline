@@ -79,7 +79,7 @@ namespace Client.Main.Controls.UI.Game.Hud
         public override void Dispose()
         {
             _characterState.DuelStateChanged -= OnDuelStateChanged;
-            _staticSurface?.Dispose();
+            Client.Main.Graphics.UiRenderTargetPool.Return(_staticSurface);
             _staticSurface = null;
             base.Dispose();
         }
@@ -122,7 +122,7 @@ namespace Client.Main.Controls.UI.Game.Hud
             SpriteBatchScope? scope = null;
             if (!SpriteBatchScope.BatchIsBegun)
             {
-                scope = new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend, transform: UiScaler.SpriteTransform);
+                scope = new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp, transform: UiScaler.SpriteTransform);
             }
 
             try
@@ -151,15 +151,15 @@ namespace Client.Main.Controls.UI.Game.Hud
 
             var gd = GraphicsManager.Instance.GraphicsDevice;
 
-            _staticSurface?.Dispose();
-            _staticSurface = new RenderTarget2D(gd, WIDTH, HEIGHT, false, SurfaceFormat.Color, DepthFormat.None);
+            Client.Main.Graphics.UiRenderTargetPool.Return(_staticSurface);
+            _staticSurface = Client.Main.Graphics.UiRenderTargetPool.Rent(gd, WIDTH, HEIGHT);
 
             var previousTargets = gd.GetRenderTargets();
             gd.SetRenderTarget(_staticSurface);
             gd.Clear(Color.Transparent);
 
             var spriteBatch = GraphicsManager.Instance.Sprite;
-            using (new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend))
+            using (new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp))
             {
                 DrawStatic(spriteBatch);
             }

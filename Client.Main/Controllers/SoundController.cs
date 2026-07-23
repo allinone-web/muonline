@@ -1,7 +1,8 @@
-﻿// File: SoundController.cs
+// File: SoundController.cs
 using Microsoft.Xna.Framework.Audio;
 using NLayer;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
@@ -25,6 +26,10 @@ namespace Client.Main.Controllers
         private readonly Dictionary<string, Task<SoundEffect>> _soundEffectLoadTasks = new Dictionary<string, Task<SoundEffect>>(StringComparer.OrdinalIgnoreCase);
         private readonly object _soundCacheLock = new object();
         private int _backgroundMusicRequestId;
+        private int _ambientSoundRequestId;
+        private readonly SemaphoreSlim _soundLoadGate = new(2, 2);
+        private int _cacheGeneration;
+        private bool _disposed;
 
         private sealed class ManagedLoopData
         {
@@ -97,6 +102,12 @@ namespace Client.Main.Controllers
 
         public void StopAmbientSound()
         {
+            Interlocked.Increment(ref _ambientSoundRequestId);
+            StopAmbientSoundInstance();
+        }
+
+        private void StopAmbientSoundInstance()
+        {
             _activeAmbientSoundInstance?.Stop(true);
             _activeAmbientSoundInstance?.Dispose();
             _activeAmbientSoundInstance = null;
@@ -119,31 +130,9 @@ namespace Client.Main.Controllers
                 return;
             }
 
-            StopAmbientSound();
-
-            SoundEffect ambientEffect = LoadSoundEffectData(Path.Combine(Constants.DataPath, relativePath));
-            if (ambientEffect != null)
-            {
-                _activeAmbientSoundInstance = ambientEffect.CreateInstance();
-                _activeAmbientSoundInstance.IsLooped = true;
-                _activeAmbientSoundInstance.Volume = 1f; // Lower volume for ambient sounds
-                try
-                {
-                    _activeAmbientSoundInstance.Play();
-                    _currentAmbientSoundPath = relativePath;
-                }
-                catch (Exception ex)
-                {
-                    _logger?.LogDebug($"[PlayAmbientSound] Error playing sound '{relativePath}': {ex.Message}");
-                    _activeAmbientSoundInstance.Dispose();
-                    _activeAmbientSoundInstance = null;
-                    _currentAmbientSoundPath = null;
-                }
-            }
-            else
-            {
-                _logger?.LogDebug($"[PlayAmbientSound] Failed to load SoundEffect for: {relativePath}");
-            }
+            int requestId = Interlocked.Increment(ref _ambientSoundRequestId);
+            StopAmbientSoundInstance();
+            _ = PlayAmbientSoundAsync(relativePath, requestId);
         }
 
         /// <summary>
@@ -152,10 +141,15 @@ namespace Client.Main.Controllers
         /// </summary>
         public void PreloadSound(string relativePath)
         {
+            _ = PreloadSoundAsync(relativePath);
+        }
+
+        public async Task PreloadSoundAsync(string relativePath)
+        {
             if ((!Constants.BACKGROUND_MUSIC && !Constants.SOUND_EFFECTS) || string.IsNullOrEmpty(relativePath))
                 return;
 
-            LoadSoundEffectData(Path.Combine(Constants.DataPath, relativePath));
+            await LoadSoundEffectDataAsync(Path.Combine(Constants.DataPath, relativePath)).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -177,12 +171,9 @@ namespace Client.Main.Controllers
                 string instanceKey = fullPath.ToLowerInvariant();
                 if (!_managedLoopingInstances.TryGetValue(instanceKey, out var managed) || managed.Instance == null || managed.Instance.IsDisposed)
                 {
-                    SoundEffect sfxData = LoadSoundEffectData(fullPath);
+                    SoundEffect sfxData = GetCachedOrBeginLoad(fullPath);
                     if (sfxData == null || sfxData.IsDisposed)
-                    {
-                        _logger?.LogDebug($"[ManagedLoop] Failed to load SoundEffect data for: {relativePath}");
                         return;
-                    }
 
                     var newInstance = sfxData.CreateInstance();
                     newInstance.IsLooped = true;
@@ -236,11 +227,9 @@ namespace Client.Main.Controllers
                     return;
                 }
 
-                SoundEffect sfx = LoadSoundEffectData(fullPath); // LoadSoundEffectData używa cache
+                SoundEffect sfx = GetCachedOrBeginLoad(fullPath);
                 if (sfx == null || sfx.IsDisposed)
-                {
                     return;
-                }
 
                 try
                 {
@@ -257,7 +246,8 @@ namespace Client.Main.Controllers
         {
             if (!Constants.SOUND_EFFECTS) return;
 
-            SoundEffect sfx = LoadSoundEffectData(Path.Combine(Constants.DataPath, relativePath));
+            string fullPath = Path.Combine(Constants.DataPath, relativePath);
+            SoundEffect sfx = GetCachedOrBeginLoad(fullPath);
             if (sfx == null || sfx.IsDisposed)
                 return;
 
@@ -350,15 +340,22 @@ namespace Client.Main.Controllers
             }
         }
 
+        private SoundEffect GetCachedOrBeginLoad(string fullPath)
+        {
+            string cacheKey = fullPath.ToLowerInvariant();
+            SoundEffect cached = GetCachedSoundEffect(cacheKey);
+            if (cached != null)
+                return cached;
+
+            if (!IsFailedPath(cacheKey))
+                _ = LoadSoundEffectDataAsync(fullPath);
+
+            return null;
+        }
+
         private SoundEffect LoadSoundEffectData(string fullPath)
         {
             string cacheKey = fullPath.ToLowerInvariant();
-            var cached = GetCachedSoundEffect(cacheKey);
-            if (cached != null)
-            {
-                return cached;
-            }
-
             if (IsFailedPath(cacheKey)) return null;
 
             if (!File.Exists(fullPath))
@@ -396,10 +393,6 @@ namespace Client.Main.Controllers
                     return null;
                 }
 
-                if (loadedSfx != null)
-                {
-                    CacheSoundEffect(cacheKey, loadedSfx);
-                }
                 return loadedSfx;
             }
             catch (Exception ex)
@@ -416,60 +409,57 @@ namespace Client.Main.Controllers
             channels = 0;
             try
             {
-                using (var fs = File.OpenRead(filePath))
-                using (var mpegFile = new MpegFile(fs))
+                using var fs = File.OpenRead(filePath);
+                using var mpegFile = new MpegFile(fs);
+                if (mpegFile.SampleRate == 0 || mpegFile.Channels == 0 || mpegFile.Length <= 0)
                 {
-                    if (mpegFile.SampleRate == 0 || mpegFile.Channels == 0 || mpegFile.Length == 0)
-                    {
-                        _logger?.LogDebug($"[LoadMp3PcmData] Invalid MP3 header or empty file: {filePath}. SampleRate: {mpegFile.SampleRate}, Channels: {mpegFile.Channels}, Length: {mpegFile.Length}");
-                        return null;
-                    }
-                    sampleRate = mpegFile.SampleRate;
-                    channels = mpegFile.Channels;
+                    _logger?.LogDebug("[LoadMp3PcmData] Invalid or empty MP3: {Path}", filePath);
+                    return null;
+                }
 
-                    if (mpegFile.Length <= 0)
+                sampleRate = mpegFile.SampleRate;
+                channels = mpegFile.Channels;
+                int floatBufferLength = 1152 * channels * 2;
+                float[] floatBuffer = ArrayPool<float>.Shared.Rent(floatBufferLength);
+                byte[] pcmBuffer = ArrayPool<byte>.Shared.Rent(floatBufferLength * sizeof(short));
+                try
+                {
+                    using var output = new MemoryStream();
+                    int samplesRead;
+                    while ((samplesRead = mpegFile.ReadSamples(floatBuffer, 0, floatBufferLength)) > 0)
                     {
-                        _logger?.LogDebug($"[LoadMp3PcmData] MP3 file has zero length (no samples): {filePath}");
-                        return null;
-                    }
-
-                    List<byte> pcmList = new List<byte>();
-                    float[] floatBuffer = new float[1152 * channels * 2];
-
-                    int samplesReadFromFrame;
-                    while ((samplesReadFromFrame = mpegFile.ReadSamples(floatBuffer, 0, floatBuffer.Length)) > 0)
-                    {
-                        for (int i = 0; i < samplesReadFromFrame; i++)
+                        int byteCount = samplesRead * sizeof(short);
+                        for (int i = 0; i < samplesRead; i++)
                         {
-                            short s = (short)(MathHelper.Clamp(floatBuffer[i], -1.0f, 1.0f) * short.MaxValue);
-                            pcmList.Add((byte)(s & 0xFF));
-                            pcmList.Add((byte)((s >> 8) & 0xFF));
+                            short sample = (short)(MathHelper.Clamp(floatBuffer[i], -1f, 1f) * short.MaxValue);
+                            int offset = i * 2;
+                            pcmBuffer[offset] = (byte)(sample & 0xFF);
+                            pcmBuffer[offset + 1] = (byte)((sample >> 8) & 0xFF);
                         }
+
+                        output.Write(pcmBuffer, 0, byteCount);
                     }
 
-                    if (pcmList.Count == 0 && mpegFile.Length > 0)
-                    {
-                        _logger?.LogDebug($"[LoadMp3PcmData] No PCM data generated from MP3 despite non-zero length: {filePath}. Total Samples in file: {mpegFile.Length}");
-                        return null;
-                    }
-                    else if (pcmList.Count == 0)
-                    {
-                        _logger?.LogDebug($"[LoadMp3PcmData] No PCM data generated from MP3: {filePath}");
-                        return null;
-                    }
-                    return pcmList.ToArray();
+                    return output.Length > 0 ? output.ToArray() : null;
+                }
+                finally
+                {
+                    ArrayPool<float>.Shared.Return(floatBuffer);
+                    ArrayPool<byte>.Shared.Return(pcmBuffer);
                 }
             }
             catch (Exception ex)
             {
-                _logger?.LogDebug($"[LoadMp3PcmData] Error loading MP3 file '{filePath}': {ex.Message}");
+                _logger?.LogDebug(ex, "[LoadMp3PcmData] Error loading MP3 file {Path}", filePath);
                 return null;
             }
         }
 
         public void ClearSoundCaches()
         {
+            Interlocked.Increment(ref _cacheGeneration);
             StopBackgroundMusic();
+            StopAmbientSound();
 
             List<SoundEffect> cached;
             lock (_soundCacheLock)
@@ -496,13 +486,57 @@ namespace Client.Main.Controllers
                 }
             }
             _managedLoopingInstances.Clear();
+            lock (_recentOneShotsLock)
+                _recentOneShots.Clear();
 
             _logger?.LogDebug("SoundController: SoundEffect cache and managed looping instances cleared.");
         }
 
         public void Dispose()
         {
+            if (_disposed)
+                return;
+
+            _disposed = true;
             ClearSoundCaches();
+        }
+
+        private async Task PlayAmbientSoundAsync(string relativePath, int requestId)
+        {
+            SoundEffect ambientEffect;
+            try
+            {
+                ambientEffect = await LoadSoundEffectDataAsync(Path.Combine(Constants.DataPath, relativePath)).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogDebug(ex, "[PlayAmbientSound] Failed loading {Path}", relativePath);
+                return;
+            }
+
+            if (ambientEffect == null)
+                return;
+
+            MuGame.ScheduleOnMainThread(() =>
+            {
+                if (requestId != Volatile.Read(ref _ambientSoundRequestId) || !Constants.SOUND_EFFECTS)
+                    return;
+
+                StopAmbientSoundInstance();
+                try
+                {
+                    _activeAmbientSoundInstance = ambientEffect.CreateInstance();
+                    _activeAmbientSoundInstance.IsLooped = true;
+                    _activeAmbientSoundInstance.Volume = 1f;
+                    _activeAmbientSoundInstance.Play();
+                    _currentAmbientSoundPath = relativePath;
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogDebug(ex, "[PlayAmbientSound] Error playing {Path}", relativePath);
+                    StopAmbientSoundInstance();
+                }
+            }, MainThreadDispatcher.WorkPriority.High);
         }
 
         private async Task PlayBackgroundMusicAsync(string relativePath, int requestId)
@@ -546,48 +580,60 @@ namespace Client.Main.Controllers
                     _logger?.LogDebug($"[PlayBackgroundMusic] Error playing sound '{relativePath}': {ex.Message}");
                     StopBackgroundMusicInstance();
                 }
-            });
+            }, MainThreadDispatcher.WorkPriority.High);
         }
 
         private Task<SoundEffect> LoadSoundEffectDataAsync(string fullPath)
         {
-            string cacheKey = fullPath.ToLowerInvariant();
+            if (_disposed)
+                return Task.FromResult<SoundEffect>(null);
 
-            var cached = GetCachedSoundEffect(cacheKey);
+            string cacheKey = fullPath.ToLowerInvariant();
+            SoundEffect cached = GetCachedSoundEffect(cacheKey);
             if (cached != null)
-            {
                 return Task.FromResult(cached);
-            }
 
             if (IsFailedPath(cacheKey))
-            {
                 return Task.FromResult<SoundEffect>(null);
-            }
 
             lock (_soundCacheLock)
             {
                 if (_soundEffectLoadTasks.TryGetValue(cacheKey, out var existingTask))
-                {
                     return existingTask;
-                }
 
-                var task = Task.Run(() =>
-                {
-                    try
-                    {
-                        return LoadSoundEffectData(fullPath);
-                    }
-                    finally
-                    {
-                        lock (_soundCacheLock)
-                        {
-                            _soundEffectLoadTasks.Remove(cacheKey);
-                        }
-                    }
-                });
-
+                int generation = Volatile.Read(ref _cacheGeneration);
+                Task<SoundEffect> task = LoadSoundEffectDataBoundedAsync(fullPath, cacheKey, generation);
                 _soundEffectLoadTasks[cacheKey] = task;
                 return task;
+            }
+        }
+
+        private async Task<SoundEffect> LoadSoundEffectDataBoundedAsync(string fullPath, string cacheKey, int generation)
+        {
+            await _soundLoadGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                SoundEffect effect = await Task.Run(() => LoadSoundEffectData(fullPath)).ConfigureAwait(false);
+                if (effect == null)
+                    return null;
+
+                if (_disposed || generation != Volatile.Read(ref _cacheGeneration))
+                {
+                    effect.Dispose();
+                    return null;
+                }
+
+                CacheSoundEffect(cacheKey, effect);
+                return effect;
+            }
+            finally
+            {
+                _soundLoadGate.Release();
+                if (generation == Volatile.Read(ref _cacheGeneration))
+                {
+                    lock (_soundCacheLock)
+                        _soundEffectLoadTasks.Remove(cacheKey);
+                }
             }
         }
 

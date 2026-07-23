@@ -2,6 +2,7 @@
 using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Models;
+using Client.Main.Objects.Effects;
 using Client.Main.Objects.Player;
 using Client.Main.Core.Utilities;
 using Microsoft.Xna.Framework;
@@ -14,10 +15,16 @@ namespace Client.Main.Objects.Monsters
     {
         private WeaponObject _rightHandWeapon;
 
+        private GlowingEyesEffect _eyeGlow;
+
         public LizardKing()
         {
             RenderShadow = true;
-            Scale = 1.4f; // Set according to C++ Setting_Monster
+            Scale = 1.4f;
+
+            // Eyes: bones 42 (L), 43 (R) — original RenderEye(o, 42, 43)
+            _eyeGlow = new GlowingEyesEffect { LeftEyeBone = 42, RightEyeBone = 43, GlowColor = new Color(70, 180, 255) };
+            Children.Add(_eyeGlow);
             _rightHandWeapon = new WeaponObject
             {
                 LinkParentAnimation = false,

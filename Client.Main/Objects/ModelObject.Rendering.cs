@@ -1,3 +1,4 @@
+using Client.Main.Content;
 using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Graphics;
@@ -14,6 +15,14 @@ namespace Client.Main.Objects
 {
     public abstract partial class ModelObject
     {
+        private enum MeshShaderKind : byte
+        {
+            AlphaTest = 0,
+            DynamicLighting = 1,
+            ItemMaterial = 2,
+            MonsterMaterial = 3,
+        }
+
         // Struct to hold shader selection results
         private readonly struct ShaderSelection
         {
@@ -21,6 +30,7 @@ namespace Client.Main.Objects
             public readonly bool UseItemMaterial;
             public readonly bool UseMonsterMaterial;
             public readonly bool NeedsSpecialShader;
+            public readonly MeshShaderKind Kind;
 
             public ShaderSelection(bool useDynamicLighting, bool useItemMaterial, bool useMonsterMaterial)
             {
@@ -28,6 +38,13 @@ namespace Client.Main.Objects
                 UseItemMaterial = useItemMaterial;
                 UseMonsterMaterial = useMonsterMaterial;
                 NeedsSpecialShader = useItemMaterial || useMonsterMaterial || useDynamicLighting;
+                Kind = useItemMaterial
+                    ? MeshShaderKind.ItemMaterial
+                    : useMonsterMaterial
+                        ? MeshShaderKind.MonsterMaterial
+                        : useDynamicLighting
+                            ? MeshShaderKind.DynamicLighting
+                            : MeshShaderKind.AlphaTest;
             }
         }
 
@@ -37,18 +54,21 @@ namespace Client.Main.Objects
             public readonly Texture2D Texture;
             public readonly BlendState BlendState;
             public readonly bool TwoSided;
+            public readonly MeshShaderKind ShaderKind;
 
-            public MeshStateKey(Texture2D tex, BlendState blend, bool twoSided)
+            public MeshStateKey(Texture2D tex, BlendState blend, bool twoSided, MeshShaderKind shaderKind)
             {
                 Texture = tex;
                 BlendState = blend;
                 TwoSided = twoSided;
+                ShaderKind = shaderKind;
             }
 
             public bool Equals(MeshStateKey other) =>
                 ReferenceEquals(Texture, other.Texture) &&
                 ReferenceEquals(BlendState, other.BlendState) &&
-                TwoSided == other.TwoSided;
+                TwoSided == other.TwoSided &&
+                ShaderKind == other.ShaderKind;
 
             public override bool Equals(object obj) => obj is MeshStateKey o && Equals(o);
 
@@ -60,34 +80,135 @@ namespace Client.Main.Objects
                     h = h * 31 + (Texture?.GetHashCode() ?? 0);
                     h = h * 31 + (BlendState?.GetHashCode() ?? 0);
                     h = h * 31 + (TwoSided ? 1 : 0);
+                    h = h * 31 + (int)ShaderKind;
                     return h;
                 }
             }
         }
 
-        // Reuse for grouping to avoid allocations
-        private readonly Dictionary<MeshStateKey, List<int>> _meshGroups = new Dictionary<MeshStateKey, List<int>>(32);
-        private readonly Stack<List<int>> _meshGroupPool = new Stack<List<int>>(32);
+        private sealed class FastMeshBatchBuffer
+        {
+            public DynamicVertexBuffer VertexBuffer;
+            public DynamicIndexBuffer IndexBuffer;
+            public bool IndexBufferIs16Bit;
+            public int PrimitiveCount;
+            public int MeshHash;
+            public Color Color;
+            public uint PoseVersion;
+            public bool IsValid;
+        }
+
+        // Persistent render plans. Mesh classification and state grouping are rebuilt only
+        // when material visibility or texture state changes, not once per object per frame.
+        private readonly Dictionary<MeshStateKey, List<int>> _opaqueMeshPlan = new(32);
+        private readonly Dictionary<MeshStateKey, List<int>> _transparentMeshPlan = new(32);
+        private readonly Dictionary<MeshStateKey, FastMeshBatchBuffer> _fastMeshBatchBuffers = new(16);
+        private readonly Stack<List<int>> _meshGroupPool = new(64);
+        private uint _meshRenderPlanVersion = 1;
+        private uint _builtMeshRenderPlanVersion;
+        private BlendState _plannedBlendState;
+        private BlendState _plannedBlendMeshState;
+        private bool _plannedLowQuality;
+        private bool _plannedPreserveBlendMeshes;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private List<int> RentMeshList()
             => _meshGroupPool.Count > 0 ? _meshGroupPool.Pop() : new List<int>(8);
 
-        private void ReleaseMeshGroups()
+        private void ReleaseMeshGroupDictionary(Dictionary<MeshStateKey, List<int>> groups)
         {
-            if (_meshGroups.Count == 0)
+            if (groups.Count == 0)
                 return;
 
-            foreach (var list in _meshGroups.Values)
+            foreach (var list in groups.Values)
             {
                 list.Clear();
-                // Avoid unbounded growth in extreme cases
                 if (list.Capacity > 128)
                     list.Capacity = 128;
                 _meshGroupPool.Push(list);
             }
 
-            _meshGroups.Clear();
+            groups.Clear();
+        }
+
+        private void ClearMeshRenderPlans()
+        {
+            ReleaseMeshGroupDictionary(_opaqueMeshPlan);
+            ReleaseMeshGroupDictionary(_transparentMeshPlan);
+            _builtMeshRenderPlanVersion = 0;
+        }
+
+        private void InvalidateMeshRenderPlan()
+        {
+            ReleaseFastMeshBatchBuffers();
+            unchecked { _meshRenderPlanVersion++; }
+            if (_meshRenderPlanVersion == 0)
+                _meshRenderPlanVersion = 1;
+            _sortTextureHintDirty = true;
+            _sortTextureHint = null;
+        }
+
+        private Dictionary<MeshStateKey, List<int>> GetMeshRenderPlan(bool isAfterDraw)
+        {
+            EnsureMeshRenderPlans();
+            return isAfterDraw ? _transparentMeshPlan : _opaqueMeshPlan;
+        }
+
+        private void EnsureMeshRenderPlans()
+        {
+            bool preserveBlendMeshes = RenderPolicy.PreserveBlendMeshesInLowQuality;
+            if (_builtMeshRenderPlanVersion == _meshRenderPlanVersion &&
+                ReferenceEquals(_plannedBlendState, BlendState) &&
+                ReferenceEquals(_plannedBlendMeshState, BlendMeshState) &&
+                _plannedLowQuality == LowQuality &&
+                _plannedPreserveBlendMeshes == preserveBlendMeshes)
+            {
+                return;
+            }
+
+            RebuildMeshRenderPlans(preserveBlendMeshes);
+        }
+
+        private void RebuildMeshRenderPlans(bool preserveBlendMeshes)
+        {
+            ReleaseMeshGroupDictionary(_opaqueMeshPlan);
+            ReleaseMeshGroupDictionary(_transparentMeshPlan);
+
+            if (Model?.Meshes != null && _meshes != null)
+            {
+                int meshCount = Math.Min(Model.Meshes.Length, _meshes.Length);
+                for (int meshIndex = 0; meshIndex < meshCount; meshIndex++)
+                {
+                    if (IsHiddenMesh(meshIndex))
+                        continue;
+
+                    bool isBlend = IsBlendMesh(meshIndex);
+                    bool isRgba = _meshes[meshIndex].IsRgba;
+                    if (LowQuality && isBlend && !preserveBlendMeshes)
+                        continue;
+
+                    var target = (isRgba || isBlend) ? _transparentMeshPlan : _opaqueMeshPlan;
+                    Texture2D texture = _meshes[meshIndex].Texture;
+                    bool twoSided = IsMeshTwoSided(meshIndex, isBlend);
+                    BlendState blend = GetMeshBlendState(meshIndex, isBlend);
+                    MeshShaderKind shaderKind = DetermineShaderForMesh(meshIndex).Kind;
+                    var key = new MeshStateKey(texture, blend, twoSided, shaderKind);
+
+                    if (!target.TryGetValue(key, out List<int> list))
+                    {
+                        list = RentMeshList();
+                        target.Add(key, list);
+                    }
+
+                    list.Add(meshIndex);
+                }
+            }
+
+            _plannedBlendState = BlendState;
+            _plannedBlendMeshState = BlendMeshState;
+            _plannedLowQuality = LowQuality;
+            _plannedPreserveBlendMeshes = preserveBlendMeshes;
+            _builtMeshRenderPlanVersion = _meshRenderPlanVersion;
         }
 
         // Hint for world-level batching: returns first visible mesh texture (if any)
@@ -99,12 +220,12 @@ namespace Client.Main.Objects
             _sortTextureHintDirty = false;
             _sortTextureHint = null;
 
-            if (_boneTextures == null)
+            if (_meshes == null)
                 return null;
 
-            for (int i = 0; i < _boneTextures.Length; i++)
+            for (int i = 0; i < _meshes.Length; i++)
             {
-                var tex = _boneTextures[i];
+                var tex = _meshes[i].Texture;
                 if (tex != null && !IsHiddenMesh(i))
                 {
                     _sortTextureHint = tex;
@@ -157,10 +278,10 @@ namespace Client.Main.Objects
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool IsMeshTwoSided(int mesh, bool isBlendMesh)
         {
-            if (_meshIsRGBA == null || mesh < 0 || mesh >= _meshIsRGBA.Length)
+            if (_meshes == null || mesh < 0 || mesh >= _meshes.Length)
                 return false;
 
-            if (_meshIsRGBA[mesh] || isBlendMesh)
+            if (_meshes[mesh].IsRgba || isBlendMesh)
                 return true;
 
             if (Model?.Meshes != null && mesh < Model.Meshes.Length)
@@ -178,25 +299,25 @@ namespace Client.Main.Objects
             if (isBlendMesh)
                 return true;
 
-            return _meshIsRGBA != null && (uint)mesh < (uint)_meshIsRGBA.Length && _meshIsRGBA[mesh];
+            return _meshes != null && (uint)mesh < (uint)_meshes.Length && _meshes[mesh].IsRgba;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool IsHiddenMesh(int mesh)
         {
-            if (_meshHiddenByScript == null || (uint)mesh >= (uint)_meshHiddenByScript.Length)
+            if (_meshes == null || (uint)mesh >= (uint)_meshes.Length)
                 return false;
 
-            return HiddenMesh == mesh || HiddenMesh == -2 || _meshHiddenByScript[mesh];
+            return HiddenMesh == mesh || HiddenMesh == -2 || _meshes[mesh].HiddenByScript;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         protected virtual bool IsBlendMesh(int mesh)
         {
-            if (_meshBlendByScript == null || (uint)mesh >= (uint)_meshBlendByScript.Length)
+            if (_meshes == null || (uint)mesh >= (uint)_meshes.Length)
                 return false;
 
-            return BlendMesh == mesh || BlendMesh == -2 || _meshBlendByScript[mesh];
+            return BlendMesh == mesh || BlendMesh == -2 || _meshes[mesh].BlendByScript;
         }
 
         /// <summary>
@@ -230,10 +351,6 @@ namespace Client.Main.Objects
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private ShaderSelection DetermineShaderForMesh(int mesh)
         {
-            // Only force standard path for fading monsters (to guarantee alpha/darken visibility)
-            if (this is MonsterObject mo && mo.IsDead)
-                return new ShaderSelection(false, false, false);
-
             // Item material shader (for excellent/ancient/high level items)
             bool useItemMaterial = Constants.ENABLE_ITEM_MATERIAL_SHADER &&
                                    (ItemLevel >= 7 || IsExcellentItem || IsAncientItem) &&
@@ -254,10 +371,142 @@ namespace Client.Main.Objects
             return new ShaderSelection(useDynamicLighting, useItemMaterial, useMonsterMaterial);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool CanUseGpuSkinGeometry()
+        {
+            return SupportsGpuDynamicSkinning &&
+                   Constants.ENABLE_GPU_SKINNING &&
+                   !UsesMutableMeshData &&
+                   GetVertexDeformer() == null;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool CanUseGpuSkinningForMesh(int mesh)
+        {
+            if (!CanUseGpuSkinGeometry())
+                return false;
+
+            ShaderSelection selection = DetermineShaderForMesh(mesh);
+            if (selection.UseItemMaterial)
+            {
+                return TryGetTechnique(
+                    GraphicsManager.Instance.ItemMaterialEffect,
+                    "BasicColorDrawing_Skinned") != null;
+            }
+
+            if (selection.UseMonsterMaterial)
+            {
+                return TryGetTechnique(
+                    GraphicsManager.Instance.MonsterMaterialEffect,
+                    "MonsterMaterialDrawing_Skinned") != null;
+            }
+
+            return selection.UseDynamicLighting &&
+                   TryGetTechnique(
+                       GraphicsManager.Instance.DynamicLightingEffect,
+                       "DynamicLighting_Skinned") != null;
+        }
+
+        private bool TryResolveMaterialMeshBuffers(
+            int mesh,
+            Effect effect,
+            string baseTechniqueName,
+            string skinnedTechniqueName,
+            out VertexBuffer vertexBuffer,
+            out IndexBuffer indexBuffer,
+            out bool usingGpuSkinning)
+        {
+            vertexBuffer = null;
+            indexBuffer = null;
+            usingGpuSkinning = false;
+
+            EffectTechnique baseTechnique = TryGetTechnique(effect, baseTechniqueName) ??
+                                            (effect != null && effect.Techniques.Count > 0
+                                                ? effect.Techniques[0]
+                                                : null);
+            if (baseTechnique == null)
+                return false;
+
+            if (CanUseGpuSkinningForMesh(mesh) && EnsureGpuSkinnedMeshForMainPass(mesh))
+            {
+                var state = _meshes[mesh];
+                EffectTechnique skinnedTechnique = TryGetTechnique(effect, skinnedTechniqueName);
+                if (skinnedTechnique != null &&
+                    state.GpuVertexBuffer != null && !state.GpuVertexBuffer.IsDisposed &&
+                    state.GpuIndexBuffer != null && !state.GpuIndexBuffer.IsDisposed &&
+                    TryUploadGpuSkinBoneMatrices(effect, state.GpuBoneCount))
+                {
+                    effect.CurrentTechnique = skinnedTechnique;
+                    vertexBuffer = state.GpuVertexBuffer;
+                    indexBuffer = state.GpuIndexBuffer;
+                    usingGpuSkinning = true;
+                    return true;
+                }
+            }
+
+            effect.CurrentTechnique = baseTechnique;
+            vertexBuffer = _meshes?[mesh]?.CpuVertexBuffer;
+            indexBuffer = _meshes?[mesh]?.CpuIndexBuffer;
+            return vertexBuffer != null && !vertexBuffer.IsDisposed &&
+                   indexBuffer != null && !indexBuffer.IsDisposed;
+        }
+
         // Determines if this mesh needs special shader path and cannot use fast alpha path
         private bool NeedsSpecialShaderForMesh(int mesh)
         {
             return DetermineShaderForMesh(mesh).NeedsSpecialShader;
+        }
+
+        private bool DrawRootBlobShadowIfNeeded(
+            bool isAfterDraw,
+            Matrix view,
+            Matrix projection,
+            Vector3 worldPosition)
+        {
+            bool representedInShadowMap = UsesRenderedShadowMapForCurrentObject();
+            bool persistentActorShadow = RequiresPersistentActorGroundShadow();
+            bool needsSafetyBlob = representedInShadowMap &&
+                                   (persistentActorShadow || NeedsModularShadowSafetyBlob());
+
+            if (isAfterDraw ||
+                !RenderShadow ||
+                (LowQuality && !persistentActorShadow) ||
+                (representedInShadowMap && !needsSafetyBlob) ||
+                (Constants.ENABLE_DAY_NIGHT_CYCLE && SunCycleManager.IsNight) ||
+                !ShouldUseBlobShadowForCurrentPass() ||
+                !TryGetGroundBlobShadowMatrix(out Matrix shadowMatrix))
+            {
+                return false;
+            }
+
+            // Modular player/NPC actors can temporarily have only a subset of body-part
+            // casters ready. Keep a subtle root footprint under the detailed shadow-map
+            // result so the shadow never degenerates to a single helmet or weapon.
+            float shadowOpacity;
+            if (!representedInShadowMap)
+            {
+                shadowOpacity = ShadowOpacity;
+            }
+            else if (persistentActorShadow)
+            {
+                // Keep player/NPC grounding clearly visible even when the detailed shadow map
+                // contains only a subset of modular body parts.
+                shadowOpacity = ShadowOpacity * 0.65f;
+            }
+            else
+            {
+                shadowOpacity = ShadowOpacity * 0.35f;
+            }
+            if (World?.Terrain != null)
+            {
+                var dyn = World.Terrain.EvaluateDynamicLight(
+                    new Vector2(worldPosition.X, worldPosition.Y));
+                float lum = (0.2126f * dyn.X + 0.7152f * dyn.Y + 0.0722f * dyn.Z) / 255f;
+                shadowOpacity *= MathHelper.Clamp(1f - lum * 0.6f, 0.35f, 1f);
+            }
+
+            DrawBlobShadow(view, projection, shadowMatrix, shadowOpacity);
+            return true;
         }
 
         private void DrawProjectedShadowPass(
@@ -273,11 +522,17 @@ namespace Client.Main.Objects
             if (!doShadow || useShadowMap)
                 return;
 
+            // Non-actor attachments can share the parent's cheap fallback. Player/NPC body
+            // parts, however, form the actor silhouette and must participate when the root
+            // was omitted from the shadow map.
+            if ((LinkParentAnimation || ParentBoneLink >= 0) && !IsPlayerOrNpcShadowPart())
+                return;
+
             if (ShouldUseBlobShadowForCurrentPass())
             {
-                if (!drewBlobShadow)
+                if (!drewBlobShadow && TryGetGroundBlobShadowMatrix(out Matrix blobShadowMatrix))
                 {
-                    DrawBlobShadow(view, projection, shadowMatrix, shadowOpacity);
+                    DrawBlobShadow(view, projection, blobShadowMatrix, shadowOpacity);
                     drewBlobShadow = true;
                 }
             }
@@ -295,53 +550,74 @@ namespace Client.Main.Objects
             DrawBoundingBox3D();
             SetDrawShaderTimeSeconds((float)gameTime.TotalGameTime.TotalSeconds);
 
-            if (Model?.Meshes != null && _boneVertexBuffers != null)
+            if (Model?.Meshes != null && _meshes != null)
             {
                 var view = Camera.Instance.View;
                 var projection = Camera.Instance.Projection;
                 var worldPos = WorldPosition;
 
-                bool useShadowMap = Constants.ENABLE_DYNAMIC_LIGHTING_SHADER &&
-                                    GraphicsManager.Instance.ShadowMapRenderer?.IsReady == true;
+                bool useShadowMap = UsesRenderedShadowMapForCurrentObject();
                 bool isNight = Constants.ENABLE_DAY_NIGHT_CYCLE && SunCycleManager.IsNight;
                 bool doShadow = false;
                 Matrix shadowMatrix = Matrix.Identity;
                 if (RenderShadow && !LowQuality && !useShadowMap && !isNight)
                     doShadow = TryGetShadowMatrix(out shadowMatrix);
 
-                if (doShadow)
+                bool highlightAllowed = !LowQuality && IsMouseHover &&
+                                        !(this is MonsterObject monster && monster.IsDead);
+                Matrix highlightMatrix = Matrix.Identity;
+                Vector3 highlightColor = Vector3.One;
+                if (highlightAllowed)
+                {
+                    const float scaleHighlight = 0.015f;
+                    const float scaleFactor = 1f + scaleHighlight;
+                    highlightMatrix = Matrix.CreateScale(scaleFactor) *
+                                      Matrix.CreateTranslation(-scaleHighlight, -scaleHighlight, -scaleHighlight) *
+                                      worldPos;
+                    highlightColor = this is MonsterObject ? _redHighlight : _greenHighlight;
+                }
+
+                bool rootBlobDrawn = DrawRootBlobShadowIfNeeded(
+                    isAfterDraw: false,
+                    view,
+                    projection,
+                    worldPos.Translation);
+
+                if (doShadow || highlightAllowed)
                 {
                     float shadowOpacity = ShadowOpacity;
-                    if (World?.Terrain != null)
+                    if (doShadow && World?.Terrain != null)
                     {
-                        var dyn = World.Terrain.EvaluateDynamicLight(new Vector2(worldPos.Translation.X, worldPos.Translation.Y));
+                        var dyn = World.Terrain.EvaluateDynamicLight(
+                            new Vector2(worldPos.Translation.X, worldPos.Translation.Y));
                         float lum = (0.2126f * dyn.X + 0.7152f * dyn.Y + 0.0722f * dyn.Z) / 255f;
                         shadowOpacity *= MathHelper.Clamp(1f - lum * 0.6f, 0.35f, 1f);
                     }
 
-                    GroupMeshesByState(false);
-                    try
+                    var meshGroups = GroupMeshesByState(false);
                     {
-                        bool drewBlobShadow = false;
-                        foreach (var kvp in _meshGroups)
+                        bool drewBlobShadow = rootBlobDrawn;
+                        foreach (var kvp in meshGroups)
                         {
                             if (kvp.Value.Count == 0)
                                 continue;
 
-                            DrawProjectedShadowPass(
-                                kvp.Value,
-                                doShadow,
-                                useShadowMap,
-                                shadowMatrix,
-                                view,
-                                projection,
-                                shadowOpacity,
-                                ref drewBlobShadow);
+                            if (doShadow)
+                            {
+                                DrawProjectedShadowPass(
+                                    kvp.Value,
+                                    doShadow,
+                                    useShadowMap,
+                                    shadowMatrix,
+                                    view,
+                                    projection,
+                                    shadowOpacity,
+                                    ref drewBlobShadow);
+                            }
+
+                            if (highlightAllowed)
+                                DrawMeshesHighlight(kvp.Value, highlightMatrix, highlightColor);
                         }
-                    }
-                    finally
-                    {
-                        ReleaseMeshGroups();
                     }
                 }
             }
@@ -351,9 +627,24 @@ namespace Client.Main.Objects
 
         public override void Draw(GameTime gameTime)
         {
-            if (!Visible || _boneIndexBuffers == null) return;
+            if (!Visible)
+                return;
 
             SetDrawShaderTimeSeconds((float)gameTime.TotalGameTime.TotalSeconds);
+
+            // Modular actors can temporarily have no drawable root mesh while their body
+            // parts are already ready. Do not suppress children or the stable ground shadow
+            // just because the root model has no buffer set.
+            if (_meshes == null || Model?.Meshes == null)
+            {
+                DrawRootBlobShadowIfNeeded(
+                    isAfterDraw: false,
+                    Camera.Instance.View,
+                    Camera.Instance.Projection,
+                    WorldPosition.Translation);
+                base.Draw(gameTime);
+                return;
+            }
 
             var gd = GraphicsDevice;
             var prevCull = gd.RasterizerState;
@@ -371,31 +662,35 @@ namespace Client.Main.Objects
 
         public virtual void DrawModel(bool isAfterDraw)
         {
-            if (Model?.Meshes == null || _boneVertexBuffers == null)
-            {
-                ReleaseMeshGroups();
+            if (Model?.Meshes == null || _meshes == null)
                 return;
-            }
 
             int meshCount = Model.Meshes.Length;
             if (meshCount == 0)
-            {
-                ReleaseMeshGroups();
                 return;
-            }
 
             _drawModelInvocationId = ++_drawModelInvocationCounter;
 
-            // Cache commonly used values
+            // Cache commonly used values before resolving mesh groups. Modular player-model
+            // NPCs can have no visible root mesh at all; their root blob must still be drawn.
             var view = Camera.Instance.View;
             var projection = Camera.Instance.Projection;
             var worldPos = WorldPosition;
+            bool rootBlobDrawn = DrawRootBlobShadowIfNeeded(
+                isAfterDraw,
+                view,
+                projection,
+                worldPos.Translation);
+
+            // Resolve the persistent plan before touching the remaining graphics state.
+            var meshGroups = GroupMeshesByState(isAfterDraw);
+            if (meshGroups.Count == 0)
+                return;
 
             // Pre-calculate shadow and highlight states at object level
             bool doShadow = false;
             Matrix shadowMatrix = Matrix.Identity;
-            bool useShadowMap = Constants.ENABLE_DYNAMIC_LIGHTING_SHADER &&
-                                GraphicsManager.Instance.ShadowMapRenderer?.IsReady == true;
+            bool useShadowMap = UsesRenderedShadowMapForCurrentObject();
             // Skip blob shadows at night when day-night cycle is active
             bool isNight = Constants.ENABLE_DAY_NIGHT_CYCLE && SunCycleManager.IsNight;
             if (!isAfterDraw && RenderShadow && !LowQuality && !useShadowMap && !isNight)
@@ -424,20 +719,16 @@ namespace Client.Main.Objects
                 highlightColor = this is MonsterObject ? _redHighlight : _greenHighlight;
             }
 
-            // Group meshes by render state to minimize state changes
-            GroupMeshesByState(isAfterDraw);
-
-            // Render each group with minimal state changes
-            try
+            // Render each persistent group with minimal state changes.
             {
                 var gd = GraphicsDevice;
                 var effect = GraphicsManager.Instance.AlphaTestEffect3D;
                 // Object-level alpha is constant; set once for the pass
                 if (effect != null && effect.Alpha != TotalAlpha)
                     effect.Alpha = TotalAlpha;
-                bool drewBlobShadow = false;
+                bool drewBlobShadow = rootBlobDrawn;
 
-                foreach (var kvp in _meshGroups)
+                foreach (var kvp in meshGroups)
                 {
                     var stateKey = kvp.Key;
                     var meshIndices = kvp.Value;
@@ -496,6 +787,18 @@ namespace Client.Main.Objects
                     // to ensure proper DepthStencilState handling and BasicEffect usage for alpha blending
                     bool forcePerMeshTransparency = !Constants.ENABLE_DYNAMIC_LIGHTING_SHADER &&
                                                     stateKey.BlendState != BlendState.Opaque;
+                    if (!forcePerMeshTransparency &&
+                        TryDrawGpuSkinnedMeshBatch(stateKey, meshIndices, isAfterDraw))
+                    {
+                        continue;
+                    }
+
+                    if (!forcePerMeshTransparency &&
+                        TryDrawFastAlphaMeshBatch(stateKey, meshIndices, isAfterDraw))
+                    {
+                        continue;
+                    }
+
                     for (int n = 0; n < meshIndices.Count; n++)
                     {
                         int mi = meshIndices[n];
@@ -519,25 +822,332 @@ namespace Client.Main.Objects
                     }
                 }
             }
+        }
+
+        private bool TryDrawGpuSkinnedMeshBatch(MeshStateKey stateKey, List<int> meshIndices, bool isAfterDraw)
+        {
+            if (_gpuSkinnedMeshBatchingFailed ||
+                !Constants.ENABLE_BMD_MESH_BATCHING ||
+                stateKey.ShaderKind == MeshShaderKind.AlphaTest ||
+                meshIndices == null || meshIndices.Count <= 1 ||
+                Model?.Meshes == null || _meshes == null ||
+                !CanUseGpuSkinGeometry())
+            {
+                return false;
+            }
+
+            for (int i = 0; i < meshIndices.Count; i++)
+            {
+                int meshIndex = meshIndices[i];
+                if ((uint)meshIndex >= (uint)Model.Meshes.Length ||
+                    (uint)meshIndex >= (uint)_meshes.Length ||
+                    IsHiddenMesh(meshIndex) ||
+                    IsStaticMapMeshQueuedForInstancing(meshIndex) ||
+                    !ReferenceEquals(_meshes[meshIndex].Texture, stateKey.Texture) ||
+                    DetermineShaderForMesh(meshIndex).Kind != stateKey.ShaderKind ||
+                    !CanUseGpuSkinningForMesh(meshIndex))
+                {
+                    return false;
+                }
+            }
+
+            var gd = GraphicsDevice;
+            DepthStencilState previousDepth = gd.DepthStencilState;
+            bool useReadOnlyDepth = isAfterDraw || !ReferenceEquals(stateKey.BlendState, BlendState.Opaque);
+
+            try
+            {
+                if (!BMDLoader.Instance.TryGetGpuSkinnedMeshBatchBuffers(
+                    Model,
+                    meshIndices,
+                    out VertexBuffer vertexBuffer,
+                    out IndexBuffer indexBuffer,
+                    out int boneCount))
+                {
+                    return false;
+                }
+
+                Effect effect = PrepareGpuSkinnedBatchEffect(stateKey, boneCount);
+                if (effect?.CurrentTechnique == null)
+                    return false;
+
+                if (useReadOnlyDepth)
+                    gd.DepthStencilState = GraphicsManager.ReadOnlyDepth;
+
+                gd.SetVertexBuffer(vertexBuffer);
+                gd.Indices = indexBuffer;
+                int primitiveCount = indexBuffer.IndexCount / 3;
+                int passCount = effect.CurrentTechnique.Passes.Count;
+                for (int passIndex = 0; passIndex < passCount; passIndex++)
+                {
+                    effect.CurrentTechnique.Passes[passIndex].Apply();
+                    gd.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, primitiveCount);
+                }
+
+                RegisterGpuSkinnedMeshDraw(meshIndices.Count);
+                RegisterGpuSkinnedBatchDraw(meshIndices.Count);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _gpuSkinnedMeshBatchingFailed = true;
+                _logger?.LogWarning(ex, "Combined GPU-skinned mesh batching disabled after runtime failure.");
+                return false;
+            }
             finally
             {
-                // Drop state groups promptly to avoid retaining stale texture references between frames/passes.
-                ReleaseMeshGroups();
+                if (useReadOnlyDepth)
+                    gd.DepthStencilState = previousDepth;
             }
+        }
+
+        private Effect PrepareGpuSkinnedBatchEffect(MeshStateKey stateKey, int boneCount)
+        {
+            return stateKey.ShaderKind switch
+            {
+                MeshShaderKind.DynamicLighting => PrepareDynamicLightingGpuBatch(stateKey.Texture, boneCount),
+                MeshShaderKind.ItemMaterial => PrepareItemMaterialGpuBatch(stateKey.Texture, boneCount),
+                MeshShaderKind.MonsterMaterial => PrepareMonsterMaterialGpuBatch(stateKey.Texture, boneCount),
+                _ => null,
+            };
+        }
+
+        private Effect PrepareDynamicLightingGpuBatch(Texture2D texture, int boneCount)
+        {
+            Effect effect = GraphicsManager.Instance.DynamicLightingEffect;
+            if (effect == null)
+                return null;
+
+            PrepareDynamicLightingEffect(effect, useGpuSkinning: true, requiredBoneCount: boneCount);
+            if (!string.Equals(effect.CurrentTechnique?.Name, "DynamicLighting_Skinned", StringComparison.Ordinal))
+                return null;
+
+            GetModelEffectBindings(effect)?.DiffuseTexture?.SetValue(texture);
+            return effect;
+        }
+
+        private Effect PrepareItemMaterialGpuBatch(Texture2D texture, int boneCount)
+        {
+            Effect effect = GraphicsManager.Instance.ItemMaterialEffect;
+            ModelEffectBindings bindings = GetModelEffectBindings(effect);
+            EffectTechnique technique = bindings?.GetTechnique("BasicColorDrawing_Skinned");
+            if (effect == null || bindings == null || technique == null ||
+                !TryUploadGpuSkinBoneMatrices(effect, bindings, boneCount))
+            {
+                return null;
+            }
+
+            effect.CurrentTechnique = technique;
+            GraphicsManager.Instance.ShadowMapRenderer?.ApplyShadowParameters(effect);
+
+            var camera = Camera.Instance;
+            Matrix world = WorldPosition;
+            bindings.WorldViewProjection?.SetValue(world * camera.View * camera.Projection);
+            bindings.World?.SetValue(world);
+            bindings.View?.SetValue(camera.View);
+            bindings.Projection?.SetValue(camera.Projection);
+            bindings.EyePosition?.SetValue(camera.Position);
+
+            Vector3 sunDir = GraphicsManager.Instance.ShadowMapRenderer?.LightDirection ?? Constants.SUN_DIRECTION;
+            if (sunDir.LengthSquared() < 0.0001f)
+                sunDir = new Vector3(1f, 0f, -0.6f);
+            sunDir = Vector3.Normalize(sunDir);
+            bool worldAllowsSun = World is WorldControl wc ? wc.IsSunWorld : true;
+            bool sunEnabled = Constants.SUN_ENABLED && worldAllowsSun && UseSunLight && !HasWalkerAncestor();
+            bindings.LightDirection?.SetValue(sunDir);
+            bindings.ShadowStrength?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
+            bindings.DiffuseTexture?.SetValue(texture);
+
+            int itemOptions = ItemLevel & 0x0F;
+            if (IsExcellentItem)
+                itemOptions |= 0x10;
+            bindings.ItemOptions?.SetValue(itemOptions);
+            bindings.Time?.SetValue(GetShaderTimeSeconds());
+            bindings.IsAncient?.SetValue(IsAncientItem);
+            bindings.IsExcellent?.SetValue(IsExcellentItem);
+            bindings.Alpha?.SetValue(TotalAlpha);
+            return effect;
+        }
+
+        private Effect PrepareMonsterMaterialGpuBatch(Texture2D texture, int boneCount)
+        {
+            Effect effect = GraphicsManager.Instance.MonsterMaterialEffect;
+            ModelEffectBindings bindings = GetModelEffectBindings(effect);
+            EffectTechnique technique = bindings?.GetTechnique("MonsterMaterialDrawing_Skinned");
+            if (effect == null || bindings == null || technique == null ||
+                !TryUploadGpuSkinBoneMatrices(effect, bindings, boneCount))
+            {
+                return null;
+            }
+
+            effect.CurrentTechnique = technique;
+            GraphicsManager.Instance.ShadowMapRenderer?.ApplyShadowParameters(effect);
+
+            var camera = Camera.Instance;
+            Matrix world = WorldPosition;
+            bindings.WorldViewProjection?.SetValue(world * camera.View * camera.Projection);
+            bindings.World?.SetValue(world);
+            bindings.View?.SetValue(camera.View);
+            bindings.Projection?.SetValue(camera.Projection);
+            bindings.EyePosition?.SetValue(camera.Position);
+
+            Vector3 sunDir = GraphicsManager.Instance.ShadowMapRenderer?.LightDirection ?? Constants.SUN_DIRECTION;
+            if (sunDir.LengthSquared() < 0.0001f)
+                sunDir = new Vector3(1f, 0f, -0.6f);
+            sunDir = Vector3.Normalize(sunDir);
+            bool worldAllowsSun = World is WorldControl wc ? wc.IsSunWorld : true;
+            bool sunEnabled = Constants.SUN_ENABLED && worldAllowsSun && UseSunLight && !HasWalkerAncestor();
+            bindings.LightDirection?.SetValue(sunDir);
+            bindings.ShadowStrength?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
+            bindings.DiffuseTexture?.SetValue(texture);
+            bindings.GlowColor?.SetValue(GlowColor);
+            bindings.GlowIntensity?.SetValue(GlowIntensity);
+            bindings.EnableGlow?.SetValue(GlowIntensity > 0f && !SimpleColorMode);
+            bindings.SimpleColorMode?.SetValue(SimpleColorMode);
+            bindings.Time?.SetValue(GetShaderTimeSeconds());
+            bindings.Alpha?.SetValue(TotalAlpha);
+            return effect;
+        }
+
+        private bool TryDrawFastAlphaMeshBatch(MeshStateKey stateKey, List<int> meshIndices, bool isAfterDraw)
+        {
+            if (!Constants.ENABLE_BMD_MESH_BATCHING ||
+                isAfterDraw ||
+                meshIndices == null ||
+                meshIndices.Count <= 1 ||
+                Model?.Meshes == null ||
+                RequiresPerFrameAnimation ||
+                HasAnimatedCurrentAction() ||
+                GetVertexDeformer() != null ||
+                UsesMutableMeshData)
+            {
+                return false;
+            }
+
+            if (!CanBatchFastAlphaMeshes(stateKey, meshIndices))
+                return false;
+
+            Matrix[] bones = GetCachedBoneTransforms();
+            bones = GetRenderBoneTransforms(bones) ?? bones;
+            if (bones == null || bones.Length == 0)
+                return false;
+
+            if (!TryResolveOpaqueBodyColor(out Color bodyColor))
+                return false;
+
+            int meshHash = CalculateMeshListHash(meshIndices);
+            if (!_fastMeshBatchBuffers.TryGetValue(stateKey, out var batch))
+            {
+                batch = new FastMeshBatchBuffer();
+                _fastMeshBatchBuffers[stateKey] = batch;
+            }
+
+            if (!batch.IsValid ||
+                batch.MeshHash != meshHash ||
+                batch.PoseVersion != _animationPoseVersion ||
+                batch.Color.PackedValue != bodyColor.PackedValue ||
+                batch.VertexBuffer == null ||
+                batch.VertexBuffer.IsDisposed ||
+                batch.IndexBuffer == null ||
+                batch.IndexBuffer.IsDisposed)
+            {
+                if (!BMDLoader.Instance.GetModelBatchBuffers(
+                    Model,
+                    meshIndices,
+                    bodyColor,
+                    bones,
+                    ref batch.VertexBuffer,
+                    ref batch.IndexBuffer,
+                    ref batch.IndexBufferIs16Bit))
+                {
+                    batch.IsValid = false;
+                    return false;
+                }
+
+                batch.PrimitiveCount = batch.IndexBuffer.IndexCount / 3;
+                batch.MeshHash = meshHash;
+                batch.PoseVersion = _animationPoseVersion;
+                batch.Color = bodyColor;
+                batch.IsValid = true;
+            }
+
+            var gd = GraphicsDevice;
+            gd.SetVertexBuffer(batch.VertexBuffer);
+            gd.Indices = batch.IndexBuffer;
+            gd.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, batch.PrimitiveCount);
+            RegisterModelFallbackDrawCall();
+            return true;
+        }
+
+        private bool CanBatchFastAlphaMeshes(MeshStateKey stateKey, List<int> meshIndices)
+        {
+            for (int i = 0; i < meshIndices.Count; i++)
+            {
+                int meshIndex = meshIndices[i];
+                if ((uint)meshIndex >= (uint)Model.Meshes.Length ||
+                    IsHiddenMesh(meshIndex) ||
+                    IsStaticMapMeshQueuedForInstancing(meshIndex) ||
+                    IsBlendMesh(meshIndex) ||
+                    NeedsSpecialShaderForMesh(meshIndex) ||
+                    _meshes != null && (uint)meshIndex < (uint)_meshes.Length && _meshes[meshIndex].IsRgba ||
+                    _meshes == null ||
+                    (uint)meshIndex >= (uint)_meshes.Length ||
+                    !ReferenceEquals(_meshes[meshIndex].Texture, stateKey.Texture))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private bool TryResolveOpaqueBodyColor(out Color bodyColor)
+        {
+            Vector3 meshLight = Light;
+            Vector3 worldTranslation = WorldPosition.Translation;
+            if (LightEnabled && World?.Terrain != null)
+                meshLight = EvaluateCombinedTerrainLight(worldTranslation.X, worldTranslation.Y) + Light;
+
+            float r = MathF.Min(Color.R * (meshLight.X * TotalAlpha), 255f);
+            float g = MathF.Min(Color.G * (meshLight.Y * TotalAlpha), 255f);
+            float b = MathF.Min(Color.B * (meshLight.Z * TotalAlpha), 255f);
+            bodyColor = new Color((byte)r, (byte)g, (byte)b);
+            return true;
+        }
+
+        private static int CalculateMeshListHash(List<int> meshIndices)
+        {
+            unchecked
+            {
+                int hash = 17;
+                for (int i = 0; i < meshIndices.Count; i++)
+                    hash = hash * 31 + meshIndices[i];
+                return hash;
+            }
+        }
+
+        private void ReleaseFastMeshBatchBuffers()
+        {
+            foreach (var batch in _fastMeshBatchBuffers.Values)
+            {
+                DynamicBufferPool.ReturnVertexBuffer(batch.VertexBuffer);
+                DynamicBufferPool.ReturnIndexBuffer(batch.IndexBuffer);
+                batch.VertexBuffer = null;
+                batch.IndexBuffer = null;
+                batch.IsValid = false;
+            }
+
+            _fastMeshBatchBuffers.Clear();
         }
 
         // Fast path draw for standard alpha-tested meshes (no special shaders)
         private void DrawMeshFastAlpha(int mesh)
         {
-            if (_boneVertexBuffers == null || _boneIndexBuffers == null || _boneTextures == null)
+            if (_meshes == null || mesh >= _meshes.Length)
                 return;
-            if (mesh < 0 ||
-                mesh >= _boneVertexBuffers.Length ||
-                mesh >= _boneIndexBuffers.Length ||
-                mesh >= _boneTextures.Length ||
-                _boneVertexBuffers[mesh] == null ||
-                _boneIndexBuffers[mesh] == null ||
-                _boneTextures[mesh] == null ||
+            if (_meshes[mesh].CpuVertexBuffer == null ||
+                _meshes[mesh].CpuIndexBuffer == null ||
+                _meshes[mesh].Texture == null ||
                 IsHiddenMesh(mesh))
                 return;
 
@@ -545,72 +1155,47 @@ namespace Client.Main.Objects
                 return;
 
             var gd = GraphicsDevice;
-            gd.SetVertexBuffer(_boneVertexBuffers[mesh]);
-            gd.Indices = _boneIndexBuffers[mesh];
+            gd.SetVertexBuffer(_meshes[mesh].CpuVertexBuffer);
+            gd.Indices = _meshes[mesh].CpuIndexBuffer;
             int primitiveCount = gd.Indices.IndexCount / 3;
             gd.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, primitiveCount);
         }
 
-        private void GroupMeshesByState(bool isAfterDraw)
+        private Dictionary<MeshStateKey, List<int>> GroupMeshesByState(bool isAfterDraw)
         {
-            // Release previous frame state to avoid retaining textures/blend states longer than needed
-            ReleaseMeshGroups();
-
-            if (Model?.Meshes == null)
-                return;
-
-            int meshCount = Model.Meshes.Length;
-
-            for (int i = 0; i < meshCount; i++)
-            {
-                if (IsHiddenMesh(i)) continue;
-                if (!isAfterDraw && IsStaticMapMeshQueuedForInstancing(i)) continue;
-
-                bool isBlend = IsBlendMesh(i);
-                bool isRGBA = _meshIsRGBA != null && i < _meshIsRGBA.Length && _meshIsRGBA[i];
-
-                // Skip based on pass and low quality settings
-                if (LowQuality && isBlend) continue;
-                bool shouldDraw = isAfterDraw ? (isRGBA || isBlend) : (!isRGBA && !isBlend);
-                if (!shouldDraw) continue;
-
-                if (_boneTextures == null || i >= _boneTextures.Length)
-                    continue;
-
-                var tex = _boneTextures[i];
-                bool twoSided = IsMeshTwoSided(i, isBlend);
-                BlendState blend = GetMeshBlendState(i, isBlend);
-
-                var key = new MeshStateKey(tex, blend, twoSided);
-                if (!_meshGroups.TryGetValue(key, out var list))
-                {
-                    list = RentMeshList();
-                    _meshGroups[key] = list;
-                }
-
-                list.Add(i);
-            }
+            return GetMeshRenderPlan(isAfterDraw);
         }
 
         private void DrawMeshesShadow(List<int> meshIndices, Matrix shadowMatrix, Matrix view, Matrix projection, float shadowOpacity)
         {
             for (int n = 0; n < meshIndices.Count; n++)
-                DrawShadowMesh(meshIndices[n], view, projection, shadowMatrix, shadowOpacity);
+            {
+                int meshIndex = meshIndices[n];
+                if (IsStaticMapMeshQueuedForInstancing(meshIndex))
+                    continue;
+
+                DrawShadowMesh(meshIndex, view, projection, shadowMatrix, shadowOpacity);
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool ShouldUseBlobShadowForCurrentPass()
         {
-            if (this is not MonsterObject)
+            if (IsPlayerOrNpcShadowPart())
                 return false;
 
-            if (MuGame.AppSettings?.Graphics?.ForceMonsterMeshShadows == true)
+            if (this is not WalkerObject)
                 return false;
 
-            if (GraphicsQualityManager.ActivePreset == GraphicsQualityPreset.High)
+            // Keep the existing explicit compatibility switch for users who prefer the
+            // legacy full-mesh monster shadow when shadow mapping is disabled.
+            if (this is MonsterObject && MuGame.AppSettings?.Graphics?.ForceMonsterMeshShadows == true)
                 return false;
 
-            return LowQuality || Constants.ENABLE_GPU_SKINNING || Constants.OPTIMIZE_FOR_INTEGRATED_GPU;
+            // A projected animated mesh forces a second CPU-skinned copy even when the
+            // main pass uses GPU skinning. A single blob quad preserves grounding without
+            // duplicating animation, uploads and draw calls for every walker.
+            return true;
         }
 
         private void DrawMeshesHighlight(List<int> meshIndices, Matrix highlightMatrix, Vector3 highlightColor)
@@ -618,15 +1203,11 @@ namespace Client.Main.Objects
             for (int n = 0; n < meshIndices.Count; n++)
             {
                 int mi = meshIndices[n];
-                if (_boneVertexBuffers == null || _boneIndexBuffers == null || _boneTextures == null)
+                if (_meshes == null || mi >= _meshes.Length)
                     return;
-                if (mi < 0 ||
-                    mi >= _boneVertexBuffers.Length ||
-                    mi >= _boneIndexBuffers.Length ||
-                    mi >= _boneTextures.Length)
-                {
+                if (mi < 0 || IsStaticMapMeshQueuedForInstancing(mi))
                     continue;
-                }
+
                 DrawMeshHighlight(mi, highlightMatrix, highlightColor);
             }
         }
@@ -635,34 +1216,36 @@ namespace Client.Main.Objects
         {
             if (Model?.Meshes == null || mesh < 0 || mesh >= Model.Meshes.Length)
                 return;
-            if (_boneTextures?[mesh] == null || IsHiddenMesh(mesh))
+            if (_meshes?[mesh]?.Texture == null || IsHiddenMesh(mesh))
                 return;
 
             if (IsStaticMapMeshQueuedForInstancing(mesh))
                 return;
 
-            bool hasCpuBuffers = _boneVertexBuffers?[mesh] != null && _boneIndexBuffers?[mesh] != null;
-            bool hasGpuDynamicBuffers = _gpuSkinMeshEnabled != null &&
-                                        (uint)mesh < (uint)_gpuSkinMeshEnabled.Length &&
-                                        _gpuSkinMeshEnabled[mesh] &&
-                                        _gpuSkinVertexBuffers != null &&
-                                        (uint)mesh < (uint)_gpuSkinVertexBuffers.Length &&
-                                        _gpuSkinVertexBuffers[mesh] != null &&
-                                        _gpuSkinIndexBuffers != null &&
-                                        (uint)mesh < (uint)_gpuSkinIndexBuffers.Length &&
-                                        _gpuSkinIndexBuffers[mesh] != null;
-
             var shaderSelection = DetermineShaderForMesh(mesh);
+
+            // Route every skinned-capable shader before checking CPU buffers. GPU-only
+            // objects intentionally release their CPU copy, especially after crowd instancing.
+            if (shaderSelection.UseItemMaterial)
+            {
+                DrawMeshWithItemMaterial(mesh);
+                return;
+            }
+
+            if (shaderSelection.UseMonsterMaterial)
+            {
+                DrawMeshWithMonsterMaterial(mesh);
+                return;
+            }
 
             if (shaderSelection.UseDynamicLighting)
             {
-                if (!hasCpuBuffers && !hasGpuDynamicBuffers)
-                    return;
-
                 DrawMeshWithDynamicLighting(mesh);
                 return;
             }
 
+            bool hasCpuBuffers = _meshes?[mesh]?.CpuVertexBuffer != null &&
+                                 _meshes?[mesh]?.CpuIndexBuffer != null;
             if (!hasCpuBuffers)
                 return;
 
@@ -683,24 +1266,6 @@ namespace Client.Main.Objects
                         gd.RasterizerState = GraphicsManager.GetCachedRasterizerState(depthBias, prevRasterizer.CullMode, prevRasterizer);
                     }
 
-                    if (shaderSelection.UseItemMaterial)
-                    {
-                        DrawMeshWithItemMaterial(mesh);
-                        return;
-                    }
-
-                    if (shaderSelection.UseMonsterMaterial)
-                    {
-                        DrawMeshWithMonsterMaterial(mesh);
-                        return;
-                    }
-
-                    if (shaderSelection.UseDynamicLighting)
-                    {
-                        DrawMeshWithDynamicLighting(mesh);
-                        return;
-                    }
-
                     var alphaEffect = GraphicsManager.Instance.AlphaTestEffect3D;
 
                     // Cache frequently used values
@@ -709,9 +1274,9 @@ namespace Client.Main.Objects
                     // Always use AlphaTestEffect - it has ReferenceAlpha=2 which discards very low alpha
                     // pixels similar to DynamicLightingEffect's clip(finalAlpha - 0.01), preventing
                     // black outlines and depth buffer issues with semi-transparent meshes
-                    var vertexBuffer = _boneVertexBuffers[mesh];
-                    var indexBuffer = _boneIndexBuffers[mesh];
-                    var texture = _boneTextures[mesh];
+                    var vertexBuffer = _meshes[mesh].CpuVertexBuffer;
+                    var indexBuffer = _meshes[mesh].CpuIndexBuffer;
+                    var texture = _meshes[mesh].Texture;
 
                     // Batch state changes - save current states
                     var originalRasterizer = gd.RasterizerState;
@@ -788,10 +1353,7 @@ namespace Client.Main.Objects
         {
             if (Model?.Meshes == null || mesh < 0 || mesh >= Model.Meshes.Length)
                 return;
-            if (_boneVertexBuffers?[mesh] == null ||
-                _boneIndexBuffers?[mesh] == null ||
-                _boneTextures?[mesh] == null ||
-                IsHiddenMesh(mesh))
+            if (_meshes?[mesh]?.Texture == null || IsHiddenMesh(mesh))
                 return;
 
             try
@@ -800,12 +1362,21 @@ namespace Client.Main.Objects
                 var effect = GraphicsManager.Instance.ItemMaterialEffect;
 
                 if (effect == null)
+                    return;
+
+                ModelEffectBindings bindings = GetModelEffectBindings(effect);
+                if (!TryResolveMaterialMeshBuffers(
+                    mesh,
+                    effect,
+                    "BasicColorDrawing",
+                    "BasicColorDrawing_Skinned",
+                    out VertexBuffer vertexBuffer,
+                    out IndexBuffer indexBuffer,
+                    out bool usingGpuSkinning))
                 {
-                    DrawMesh(mesh);
                     return;
                 }
 
-                effect.CurrentTechnique = effect.Techniques[0];
                 GraphicsManager.Instance.ShadowMapRenderer?.ApplyShadowParameters(effect);
 
                 var prevDepthState = gd.DepthStencilState;
@@ -814,9 +1385,7 @@ namespace Client.Main.Objects
                 try
                 {
                     bool isBlendMesh = IsBlendMesh(mesh);
-                    var vertexBuffer = _boneVertexBuffers[mesh];
-                    var indexBuffer = _boneIndexBuffers[mesh];
-                    var texture = _boneTextures[mesh];
+                    var texture = _meshes[mesh].Texture;
 
                     var prevCull = gd.RasterizerState;
                     var prevBlend = gd.BlendState;
@@ -844,32 +1413,34 @@ namespace Client.Main.Objects
 
                     // Set world view projection matrix
                     Matrix worldViewProjection = WorldPosition * Camera.Instance.View * Camera.Instance.Projection;
-                    effect.Parameters["WorldViewProjection"]?.SetValue(worldViewProjection);
-                    effect.Parameters["World"]?.SetValue(WorldPosition);
-                    effect.Parameters["View"]?.SetValue(Camera.Instance.View);
-                    effect.Parameters["Projection"]?.SetValue(Camera.Instance.Projection);
-                    effect.Parameters["EyePosition"]?.SetValue(Camera.Instance.Position);
-                    effect.Parameters["LightDirection"]?.SetValue(sunDir);
-                    effect.Parameters["ShadowStrength"]?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
+                    bindings.WorldViewProjection?.SetValue(worldViewProjection);
+                    bindings.World?.SetValue(WorldPosition);
+                    bindings.View?.SetValue(Camera.Instance.View);
+                    bindings.Projection?.SetValue(Camera.Instance.Projection);
+                    bindings.EyePosition?.SetValue(Camera.Instance.Position);
+                    bindings.LightDirection?.SetValue(sunDir);
+                    bindings.ShadowStrength?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
 
                     // Set texture
-                    effect.Parameters["DiffuseTexture"]?.SetValue(texture);
+                    bindings.DiffuseTexture?.SetValue(texture);
 
                     // Set item properties
                     int itemOptions = ItemLevel & 0x0F;
                     if (IsExcellentItem)
                         itemOptions |= 0x10;
 
-                    effect.Parameters["ItemOptions"]?.SetValue(itemOptions);
-                    effect.Parameters["Time"]?.SetValue(GetShaderTimeSeconds());
-                    effect.Parameters["IsAncient"]?.SetValue(IsAncientItem);
-                    effect.Parameters["IsExcellent"]?.SetValue(IsExcellentItem);
-                    effect.Parameters["Alpha"]?.SetValue(TotalAlpha);
+                    bindings.ItemOptions?.SetValue(itemOptions);
+                    bindings.Time?.SetValue(GetShaderTimeSeconds());
+                    bindings.IsAncient?.SetValue(IsAncientItem);
+                    bindings.IsExcellent?.SetValue(IsExcellentItem);
+                    bindings.Alpha?.SetValue(TotalAlpha);
 
                     gd.SetVertexBuffer(vertexBuffer);
                     gd.Indices = indexBuffer;
 
                     int primitiveCount = indexBuffer.IndexCount / 3;
+                    if (usingGpuSkinning)
+                        RegisterGpuSkinnedMeshDraw();
 
                     foreach (EffectPass pass in effect.CurrentTechnique.Passes)
                     {
@@ -889,7 +1460,6 @@ namespace Client.Main.Objects
             catch (Exception ex)
             {
                 _logger?.LogDebug("Error in DrawMeshWithItemMaterial: {Message}", ex.Message);
-                DrawMesh(mesh);
             }
         }
 
@@ -897,10 +1467,7 @@ namespace Client.Main.Objects
         {
             if (Model?.Meshes == null || mesh < 0 || mesh >= Model.Meshes.Length)
                 return;
-            if (_boneVertexBuffers?[mesh] == null ||
-                _boneIndexBuffers?[mesh] == null ||
-                _boneTextures?[mesh] == null ||
-                IsHiddenMesh(mesh))
+            if (_meshes?[mesh]?.Texture == null || IsHiddenMesh(mesh))
                 return;
 
             try
@@ -909,12 +1476,21 @@ namespace Client.Main.Objects
                 var effect = GraphicsManager.Instance.MonsterMaterialEffect;
 
                 if (effect == null)
+                    return;
+
+                ModelEffectBindings bindings = GetModelEffectBindings(effect);
+                if (!TryResolveMaterialMeshBuffers(
+                    mesh,
+                    effect,
+                    "MonsterMaterialDrawing",
+                    "MonsterMaterialDrawing_Skinned",
+                    out VertexBuffer vertexBuffer,
+                    out IndexBuffer indexBuffer,
+                    out bool usingGpuSkinning))
                 {
-                    DrawMesh(mesh);
                     return;
                 }
 
-                effect.CurrentTechnique = effect.Techniques[0];
                 GraphicsManager.Instance.ShadowMapRenderer?.ApplyShadowParameters(effect);
 
                 var prevDepthState = gd.DepthStencilState;
@@ -923,9 +1499,7 @@ namespace Client.Main.Objects
                 try
                 {
                     bool isBlendMesh = IsBlendMesh(mesh);
-                    var vertexBuffer = _boneVertexBuffers[mesh];
-                    var indexBuffer = _boneIndexBuffers[mesh];
-                    var texture = _boneTextures[mesh];
+                    var texture = _meshes[mesh].Texture;
 
                     var prevCull = gd.RasterizerState;
                     var prevBlend = gd.BlendState;
@@ -952,28 +1526,32 @@ namespace Client.Main.Objects
                     bool sunEnabled = Constants.SUN_ENABLED && worldAllowsSun && UseSunLight && !HasWalkerAncestor();
 
                     // Set matrices
-                    effect.Parameters["World"]?.SetValue(WorldPosition);
-                    effect.Parameters["View"]?.SetValue(Camera.Instance.View);
-                    effect.Parameters["Projection"]?.SetValue(Camera.Instance.Projection);
-                    effect.Parameters["EyePosition"]?.SetValue(Camera.Instance.Position);
-                    effect.Parameters["LightDirection"]?.SetValue(sunDir);
-                    effect.Parameters["ShadowStrength"]?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
+                    bindings.WorldViewProjection?.SetValue(
+                        WorldPosition * Camera.Instance.View * Camera.Instance.Projection);
+                    bindings.World?.SetValue(WorldPosition);
+                    bindings.View?.SetValue(Camera.Instance.View);
+                    bindings.Projection?.SetValue(Camera.Instance.Projection);
+                    bindings.EyePosition?.SetValue(Camera.Instance.Position);
+                    bindings.LightDirection?.SetValue(sunDir);
+                    bindings.ShadowStrength?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
 
                     // Set texture
-                    effect.Parameters["DiffuseTexture"]?.SetValue(texture);
+                    bindings.DiffuseTexture?.SetValue(texture);
 
                     // Set monster-specific properties
-                    effect.Parameters["GlowColor"]?.SetValue(GlowColor);
-                    effect.Parameters["GlowIntensity"]?.SetValue(GlowIntensity);
-                    effect.Parameters["EnableGlow"]?.SetValue(GlowIntensity > 0.0f && !SimpleColorMode);
-                    effect.Parameters["SimpleColorMode"]?.SetValue(SimpleColorMode);
-                    effect.Parameters["Time"]?.SetValue(GetShaderTimeSeconds());
-                    effect.Parameters["Alpha"]?.SetValue(TotalAlpha);
+                    bindings.GlowColor?.SetValue(GlowColor);
+                    bindings.GlowIntensity?.SetValue(GlowIntensity);
+                    bindings.EnableGlow?.SetValue(GlowIntensity > 0.0f && !SimpleColorMode);
+                    bindings.SimpleColorMode?.SetValue(SimpleColorMode);
+                    bindings.Time?.SetValue(GetShaderTimeSeconds());
+                    bindings.Alpha?.SetValue(TotalAlpha);
 
                     gd.SetVertexBuffer(vertexBuffer);
                     gd.Indices = indexBuffer;
 
                     int primitiveCount = indexBuffer.IndexCount / 3;
+                    if (usingGpuSkinning)
+                        RegisterGpuSkinnedMeshDraw();
 
                     foreach (EffectPass pass in effect.CurrentTechnique.Passes)
                     {
@@ -993,7 +1571,6 @@ namespace Client.Main.Objects
             catch (Exception ex)
             {
                 _logger?.LogDebug("Error in DrawMeshWithMonsterMaterial: {Message}", ex.Message);
-                DrawMesh(mesh);
             }
         }
 
@@ -1001,7 +1578,7 @@ namespace Client.Main.Objects
         {
             if (Model?.Meshes == null || mesh < 0 || mesh >= Model.Meshes.Length)
                 return;
-            if (_boneTextures?[mesh] == null || IsHiddenMesh(mesh))
+            if (_meshes?[mesh]?.Texture == null || IsHiddenMesh(mesh))
                 return;
 
             try
@@ -1010,30 +1587,24 @@ namespace Client.Main.Objects
                 var effect = GraphicsManager.Instance.DynamicLightingEffect;
 
                 if (effect == null)
-                {
-                    DrawMesh(mesh); // Fallback to standard rendering
                     return;
-                }
 
+                ModelEffectBindings bindings = GetModelEffectBindings(effect);
                 var prevDepthState = gd.DepthStencilState;
                 bool depthStateChanged = false;
 
                 try
                 {
                     bool isBlendMesh = IsBlendMesh(mesh);
-                    var texture = _boneTextures[mesh];
-                    bool useGpuSkinning = _gpuSkinMeshEnabled != null &&
-                                          (uint)mesh < (uint)_gpuSkinMeshEnabled.Length &&
-                                          _gpuSkinMeshEnabled[mesh] &&
-                                          _gpuSkinVertexBuffers != null &&
-                                          (uint)mesh < (uint)_gpuSkinVertexBuffers.Length &&
-                                          _gpuSkinVertexBuffers[mesh] != null &&
-                                          _gpuSkinIndexBuffers != null &&
-                                          (uint)mesh < (uint)_gpuSkinIndexBuffers.Length &&
-                                          _gpuSkinIndexBuffers[mesh] != null;
+                    var texture = _meshes[mesh].Texture;
+                    // A monster can leave crowd instancing when an action changes or a
+                    // one-shot starts. Do not trust a stale per-instance flag from the
+                    // previous path; lazily attach the shared GPU geometry for this draw.
+                    bool useGpuSkinning = CanUseGpuSkinningForMesh(mesh) &&
+                                               EnsureGpuSkinnedMeshForMainPass(mesh);
 
-                    VertexBuffer vertexBuffer = useGpuSkinning ? _gpuSkinVertexBuffers[mesh] : _boneVertexBuffers?[mesh];
-                    IndexBuffer indexBuffer = useGpuSkinning ? _gpuSkinIndexBuffers[mesh] : _boneIndexBuffers?[mesh];
+                    VertexBuffer vertexBuffer = useGpuSkinning ? _meshes[mesh].GpuVertexBuffer : _meshes?[mesh]?.CpuVertexBuffer;
+                    IndexBuffer indexBuffer = useGpuSkinning ? _meshes[mesh].GpuIndexBuffer : _meshes?[mesh]?.CpuIndexBuffer;
                     if (vertexBuffer == null || indexBuffer == null)
                         return;
 
@@ -1055,30 +1626,33 @@ namespace Client.Main.Objects
                     gd.BlendState = blendState;
 
                     int requiredBoneCount = useGpuSkinning &&
-                                            _gpuSkinBoneCounts != null &&
-                                            (uint)mesh < (uint)_gpuSkinBoneCounts.Length
-                        ? _gpuSkinBoneCounts[mesh]
+                                            _meshes != null &&
+                                            (uint)mesh < (uint)_meshes.Length
+                        ? _meshes[mesh].GpuBoneCount
                         : 0;
 
-                    bool needsGpuBoneRefresh = useGpuSkinning &&
-                                               requiredBoneCount > _dynamicLightingPreparedGpuBoneCount;
+                    // DynamicLightingEffect is shared by terrain, shadows, hover and all
+                    // objects. Rebind the technique and bone palette for every mesh draw;
+                    // invocation-level caching allowed another pass to leave Highlight or
+                    // Terrain active and caused an intermittent CPU fallback.
+                    PrepareDynamicLightingEffect(effect, useGpuSkinning, requiredBoneCount);
+                    _dynamicLightingPreparedInvocationId = _drawModelInvocationId;
+                    _dynamicLightingPreparedWithGpuSkinning = useGpuSkinning;
+                    _dynamicLightingPreparedGpuBoneCount = useGpuSkinning ? requiredBoneCount : 0;
 
-                    if (_dynamicLightingPreparedInvocationId != _drawModelInvocationId ||
-                        _dynamicLightingPreparedWithGpuSkinning != useGpuSkinning ||
-                        needsGpuBoneRefresh)
+                    if (useGpuSkinning &&
+                        !string.Equals(effect.CurrentTechnique?.Name, "DynamicLighting_Skinned", StringComparison.Ordinal))
                     {
-                        PrepareDynamicLightingEffect(effect, useGpuSkinning, requiredBoneCount);
-                        _dynamicLightingPreparedInvocationId = _drawModelInvocationId;
-                        _dynamicLightingPreparedWithGpuSkinning = useGpuSkinning;
-                        _dynamicLightingPreparedGpuBoneCount = useGpuSkinning ? requiredBoneCount : 0;
+                        // Do not silently oscillate between GPU and CPU because of leaked
+                        // effect state. Retry the exact skinned binding once.
+                        PrepareDynamicLightingEffect(effect, true, requiredBoneCount);
                     }
 
-                    if (useGpuSkinning && !string.Equals(effect.CurrentTechnique?.Name, "DynamicLighting_Skinned", StringComparison.Ordinal))
+                    if (useGpuSkinning &&
+                        !string.Equals(effect.CurrentTechnique?.Name, "DynamicLighting_Skinned", StringComparison.Ordinal))
                     {
-                        _dynamicLightingPreparedWithGpuSkinning = false;
-                        _dynamicLightingPreparedGpuBoneCount = 0;
-                        vertexBuffer = _boneVertexBuffers?[mesh];
-                        indexBuffer = _boneIndexBuffers?[mesh];
+                        vertexBuffer = _meshes?[mesh]?.CpuVertexBuffer;
+                        indexBuffer = _meshes?[mesh]?.CpuIndexBuffer;
                         if (vertexBuffer == null || indexBuffer == null)
                             return;
                         useGpuSkinning = false;
@@ -1088,7 +1662,7 @@ namespace Client.Main.Objects
                         RegisterGpuSkinnedMeshDraw();
 
                     // Set texture
-                    effect.Parameters["DiffuseTexture"]?.SetValue(texture);
+                    bindings.DiffuseTexture?.SetValue(texture);
 
                     gd.SetVertexBuffer(vertexBuffer);
                     gd.Indices = indexBuffer;
@@ -1113,87 +1687,135 @@ namespace Client.Main.Objects
             catch (Exception ex)
             {
                 _logger?.LogDebug("Error in DrawMeshWithDynamicLighting: {Message}", ex.Message);
-                DrawMesh(mesh); // Fallback to standard rendering
             }
         }
 
         public virtual void DrawMeshHighlight(int mesh, Matrix highlightMatrix, Vector3 highlightColor)
         {
-            if (IsHiddenMesh(mesh) || _boneVertexBuffers == null || _boneIndexBuffers == null || _boneTextures == null)
-                return;
-
-            // Defensive range checks to avoid races when buffers are swapped during async loads
-            if (mesh < 0 ||
-                mesh >= _boneVertexBuffers.Length ||
-                mesh >= _boneIndexBuffers.Length ||
-                mesh >= _boneTextures.Length)
+            if (IsHiddenMesh(mesh) || _meshes == null ||
+                mesh < 0 || mesh >= _meshes.Length ||
+                _meshes[mesh].Texture == null)
             {
                 return;
             }
 
-            VertexBuffer vertexBuffer = _boneVertexBuffers[mesh];
-            IndexBuffer indexBuffer = _boneIndexBuffers[mesh];
-
-            if (vertexBuffer == null || indexBuffer == null)
-                return;
-
-            int primitiveCount = indexBuffer.IndexCount / 3;
-
-            // Save previous graphics states
             var previousDepthState = GraphicsDevice.DepthStencilState;
             var previousBlendState = GraphicsDevice.BlendState;
 
-            var alphaTestEffect = GraphicsManager.Instance.AlphaTestEffect3D;
-            if (alphaTestEffect == null || alphaTestEffect.CurrentTechnique == null) return;
-
-            float prevAlpha = alphaTestEffect.Alpha;
-
-            alphaTestEffect.World = highlightMatrix;
-            alphaTestEffect.Texture = _boneTextures[mesh];
-            alphaTestEffect.DiffuseColor = highlightColor;
-            alphaTestEffect.Alpha = 1f;
-
-            // Configure depth and blend states for drawing the highlight
-            GraphicsDevice.DepthStencilState = GraphicsManager.ReadOnlyDepth;
-            GraphicsDevice.BlendState = BlendState.Additive;
-
-            // Draw the mesh highlight
-            foreach (EffectPass pass in alphaTestEffect.CurrentTechnique.Passes)
+            try
             {
-                pass.Apply();
+                // Keep hover on the GPU. Hovered walkers leave crowd instancing so they can
+                // be selected independently, but their geometry and bone palette remain skinned.
+                if (EnsureGpuSkinnedMeshForMainPass(mesh))
+                {
+                    var effect = GraphicsManager.Instance.DynamicLightingEffect;
+                    var technique = TryGetTechnique(effect, "Highlight_Skinned");
+                    var state = _meshes[mesh];
+                    ModelEffectBindings bindings = GetModelEffectBindings(effect);
+
+                    if (technique != null && bindings != null &&
+                        state.GpuVertexBuffer != null && !state.GpuVertexBuffer.IsDisposed &&
+                        state.GpuIndexBuffer != null && !state.GpuIndexBuffer.IsDisposed &&
+                        TryUploadGpuSkinBoneMatrices(effect, bindings, state.GpuBoneCount))
+                    {
+                        effect.CurrentTechnique = technique;
+                        bindings.World?.SetValue(highlightMatrix);
+                        bindings.View?.SetValue(Camera.Instance.View);
+                        bindings.Projection?.SetValue(Camera.Instance.Projection);
+                        bindings.WorldViewProjection?.SetValue(
+                            highlightMatrix * Camera.Instance.View * Camera.Instance.Projection);
+                        bindings.DiffuseTexture?.SetValue(state.Texture);
+                        bindings.HighlightColor?.SetValue(highlightColor);
+                        bindings.Alpha?.SetValue(1f);
+
+                        GraphicsDevice.DepthStencilState = GraphicsManager.ReadOnlyDepth;
+                        GraphicsDevice.BlendState = BlendState.Additive;
+                        GraphicsDevice.SetVertexBuffer(state.GpuVertexBuffer);
+                        GraphicsDevice.Indices = state.GpuIndexBuffer;
+
+                        int primitiveCount = state.GpuIndexBuffer.IndexCount / 3;
+                        foreach (EffectPass pass in technique.Passes)
+                        {
+                            pass.Apply();
+                            GraphicsDevice.DrawIndexedPrimitives(
+                                PrimitiveType.TriangleList, 0, 0, primitiveCount);
+                        }
+
+                        // Highlight uses the shared dynamic-lighting effect with another
+                        // technique. Force the following main mesh draw to restore all
+                        // skinned lighting parameters instead of trusting the per-object cache.
+                        _dynamicLightingPreparedInvocationId = -1;
+                        _dynamicLightingPreparedWithGpuSkinning = false;
+                        _dynamicLightingPreparedGpuBoneCount = 0;
+                        return;
+                    }
+                }
+
+                VertexBuffer vertexBuffer = _meshes[mesh].CpuVertexBuffer;
+                IndexBuffer indexBuffer = _meshes[mesh].CpuIndexBuffer;
+                if (vertexBuffer == null || indexBuffer == null)
+                    return;
+
+                var alphaTestEffect = GraphicsManager.Instance.AlphaTestEffect3D;
+                if (alphaTestEffect == null || alphaTestEffect.CurrentTechnique == null)
+                    return;
+
+                float previousAlpha = alphaTestEffect.Alpha;
+                alphaTestEffect.World = highlightMatrix;
+                alphaTestEffect.Texture = _meshes[mesh].Texture;
+                alphaTestEffect.DiffuseColor = highlightColor;
+                alphaTestEffect.Alpha = 1f;
+
+                GraphicsDevice.DepthStencilState = GraphicsManager.ReadOnlyDepth;
+                GraphicsDevice.BlendState = BlendState.Additive;
                 GraphicsDevice.SetVertexBuffer(vertexBuffer);
                 GraphicsDevice.Indices = indexBuffer;
-                GraphicsDevice.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, primitiveCount);
+
+                int cpuPrimitiveCount = indexBuffer.IndexCount / 3;
+                foreach (EffectPass pass in alphaTestEffect.CurrentTechnique.Passes)
+                {
+                    pass.Apply();
+                    GraphicsDevice.DrawIndexedPrimitives(
+                        PrimitiveType.TriangleList, 0, 0, cpuPrimitiveCount);
+                }
+
+                alphaTestEffect.Alpha = previousAlpha;
+                alphaTestEffect.World = WorldPosition;
+                alphaTestEffect.DiffuseColor = Vector3.One;
             }
-
-            alphaTestEffect.Alpha = prevAlpha;
-
-            // Restore previous graphics states
-            GraphicsDevice.DepthStencilState = previousDepthState;
-            GraphicsDevice.BlendState = previousBlendState;
-
-            alphaTestEffect.World = WorldPosition;
-            alphaTestEffect.DiffuseColor = Vector3.One;
+            finally
+            {
+                GraphicsDevice.DepthStencilState = previousDepthState;
+                GraphicsDevice.BlendState = previousBlendState;
+            }
         }
 
         public override void DrawAfter(GameTime gameTime)
         {
             if (!Visible) return;
 
-            SetDrawShaderTimeSeconds((float)gameTime.TotalGameTime.TotalSeconds);
+            EnsureMeshRenderPlans();
+            if (_transparentMeshPlan.Count > 0)
+            {
+                SetDrawShaderTimeSeconds((float)gameTime.TotalGameTime.TotalSeconds);
 
-            var gd = GraphicsDevice;
-            var prevCull = gd.RasterizerState;
-            gd.RasterizerState = RasterizerState.CullCounterClockwise;
+                var gd = GraphicsDevice;
+                var prevCull = gd.RasterizerState;
+                gd.RasterizerState = RasterizerState.CullCounterClockwise;
 
-            GraphicsManager.Instance.AlphaTestEffect3D.View = Camera.Instance.View;
-            GraphicsManager.Instance.AlphaTestEffect3D.Projection = Camera.Instance.Projection;
-            GraphicsManager.Instance.AlphaTestEffect3D.World = WorldPosition;
+                GraphicsManager.Instance.AlphaTestEffect3D.View = Camera.Instance.View;
+                GraphicsManager.Instance.AlphaTestEffect3D.Projection = Camera.Instance.Projection;
+                GraphicsManager.Instance.AlphaTestEffect3D.World = WorldPosition;
 
-            DrawModel(true);    // RGBA / blend mesh
-            base.DrawAfter(gameTime);
+                DrawModel(true);
+                gd.RasterizerState = prevCull;
+            }
 
-            gd.RasterizerState = prevCull;
+#if ANDROID
+            DrawBoundingBox2D();
+            DrawHoverName();
+#endif
+            DrawChildrenAfterOnly(gameTime);
         }
     }
 }

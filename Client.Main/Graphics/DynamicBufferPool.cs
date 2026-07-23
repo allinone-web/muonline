@@ -7,11 +7,18 @@ namespace Client.Main.Graphics
 {
     /// <summary>
     /// Lightweight pool for dynamic vertex and index buffers that hides GPU allocation latency.
-    /// Buffers are bucketed by capacity (rounded up) and reused on demand.
+    /// Vertex capacities are normalized into coarse buckets because draw paths use explicit logical
+    /// vertex counts. Index buffers remain exact-sized because some legacy paths still derive the
+    /// primitive count from the physical index-buffer size.
     /// </summary>
     public static class DynamicBufferPool
     {
         private const int MaxBuffersPerBucket = 8;
+        private const int PruneIntervalFrames = 120;
+        private const int SmallVertexBucketStep = 128;
+        private const int MediumVertexBucketStep = 512;
+        private const int LargeVertexBucketStep = 2048;
+        private const int HugeVertexBucketStep = 8192;
 
         // DX needs extra breathing room to avoid reusing buffers the GPU still references.
 #if WINDOWS_DX
@@ -32,6 +39,7 @@ namespace Client.Main.Graphics
 
         private static GraphicsDevice _graphicsDevice;
         private static int _frameId;
+        private static int _lastPruneFrame;
 
         // Explicit VertexDeclaration to ensure correct layout on DirectX
         private static VertexDeclaration _explicitVertexDeclaration;
@@ -75,6 +83,7 @@ namespace Client.Main.Graphics
 
             _graphicsDevice = graphicsDevice;
             Volatile.Write(ref _frameId, 0);
+            Volatile.Write(ref _lastPruneFrame, 0);
 
             if (_graphicsDevice != null)
             {
@@ -112,7 +121,13 @@ namespace Client.Main.Graphics
                 frameIndex = current + 1; // guarantee monotonic progression
 
             Volatile.Write(ref _frameId, frameIndex);
-            PruneStaleBuffers();
+
+            int lastPrune = Volatile.Read(ref _lastPruneFrame);
+            if (frameIndex - lastPrune >= PruneIntervalFrames &&
+                Interlocked.CompareExchange(ref _lastPruneFrame, frameIndex, lastPrune) == lastPrune)
+            {
+                PruneStaleBuffers();
+            }
         }
 
         public static DynamicVertexBuffer RentVertexBuffer(int requiredVertexCount)
@@ -129,14 +144,15 @@ namespace Client.Main.Graphics
                     BufferUsage.WriteOnly);
             }
 
-            var pooled = RentFromPool(_vertexPools, _vertexLock, requiredVertexCount);
+            int bucketSize = NormalizeVertexCapacity(requiredVertexCount);
+            var pooled = RentFromPool(_vertexPools, _vertexLock, bucketSize);
             if (pooled != null)
                 return pooled;
 
             return new DynamicVertexBuffer(
                 _graphicsDevice,
                 GetExplicitVertexDeclaration(),
-                requiredVertexCount,
+                bucketSize,
                 BufferUsage.WriteOnly);
         }
 
@@ -209,6 +225,20 @@ namespace Client.Main.Graphics
             var targetLock = buffer.IndexElementSize == IndexElementSize.SixteenBits ? _index16Lock : _index32Lock;
 
             ReturnToPool(pools, targetLock, buffer.IndexCount, buffer);
+        }
+
+        private static int NormalizeVertexCapacity(int requiredCount)
+        {
+            int step = requiredCount switch
+            {
+                <= 1024 => SmallVertexBucketStep,
+                <= 8192 => MediumVertexBucketStep,
+                <= 65536 => LargeVertexBucketStep,
+                _ => HugeVertexBucketStep,
+            };
+
+            long rounded = ((long)requiredCount + step - 1L) / step * step;
+            return rounded > int.MaxValue ? requiredCount : (int)rounded;
         }
 
         private static void ClearPools()

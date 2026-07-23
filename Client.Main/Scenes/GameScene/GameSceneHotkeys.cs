@@ -9,12 +9,25 @@ using Client.Main.Controls.UI.Game.Character;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Client.Main.Core.Models;
+using System;
 
 namespace Client.Main.Scenes
 {
     internal sealed class GameSceneHotkeys
     {
         private static readonly Keys[] MoveCommandKeys = { Keys.Up, Keys.Down, Keys.Left, Keys.Right, Keys.Enter, Keys.Escape };
+        private static readonly MessageType[] ChatLogViewCycle =
+        {
+            MessageType.All,
+            MessageType.Chat,
+            MessageType.Whisper,
+            MessageType.System,
+            MessageType.Party,
+            MessageType.Guild,
+            MessageType.Union,
+            MessageType.Gens,
+            MessageType.GM
+        };
 
         private readonly GameScene _scene;
         private readonly PauseMenuControl _pauseMenu;
@@ -22,6 +35,7 @@ namespace Client.Main.Scenes
         private readonly MoveCommandWindow _moveCommandWindow;
         private readonly InventoryControl _inventoryControl;
         private readonly CharacterInfoWindowControl _characterInfoWindow;
+        private readonly MiniMapControl _miniMap;
         private readonly ChatInputBoxControl _chatInput;
         private readonly ChatLogWindow _chatLog;
         private readonly GameSceneObjectEditorController _objectEditorController;
@@ -37,6 +51,7 @@ namespace Client.Main.Scenes
             MoveCommandWindow moveCommandWindow,
             InventoryControl inventoryControl,
             CharacterInfoWindowControl characterInfoWindow,
+            MiniMapControl miniMap,
             ChatInputBoxControl chatInput,
             ChatLogWindow chatLog,
             GameSceneObjectEditorController objectEditorController,
@@ -48,6 +63,7 @@ namespace Client.Main.Scenes
             _moveCommandWindow = moveCommandWindow;
             _inventoryControl = inventoryControl;
             _characterInfoWindow = characterInfoWindow;
+            _miniMap = miniMap;
             _chatInput = chatInput;
             _chatLog = chatLog;
             _objectEditorController = objectEditorController;
@@ -75,7 +91,7 @@ namespace Client.Main.Scenes
         private HotkeyContext CreateContext(KeyboardState keyboard, KeyboardState prevKeyboard)
         {
             bool isUiInputActive =
-                (_scene.FocusControl is TextFieldControl)
+                (_scene.FocusControl is TextFieldControl textField && textField.Visible)
                 || (_scene.FocusControl == _moveCommandWindow && _moveCommandWindow.Visible)
                 || (_pauseMenu != null && _pauseMenu.Visible);
 
@@ -124,6 +140,14 @@ namespace Client.Main.Scenes
 
         private static bool WhenNotUiInput(HotkeyContext context) => !context.IsUiInputActive;
 
+        private bool WhenMiniMapToggle(HotkeyContext context)
+            => _miniMap?.Visible == true || !context.IsUiInputActive;
+
+        private bool WhenCharacterInfoToggle(HotkeyContext context)
+            => !(context.Scene.FocusControl is TextFieldControl textField && textField.Visible)
+               && !(_moveCommandWindow?.Visible ?? false)
+               && !(_pauseMenu?.Visible ?? false);
+
         private static bool WhenMouseNotConsumed(HotkeyContext context) => !context.Scene.IsMouseInputConsumedThisFrame;
 
         private static bool WhenChatLogFrameVisible(HotkeyContext context) => context.ChatLog.IsFrameVisible;
@@ -147,8 +171,9 @@ namespace Client.Main.Scenes
 
             hotkeys.OnKeyPressed(Keys.I, ToggleInventory, when: WhenNotUiInput);
             hotkeys.OnKeyPressed(Keys.V, ToggleInventory, when: WhenNotUiInput);
-            hotkeys.OnKeyPressed(Keys.C, ToggleCharacterInfo, when: WhenNotUiInput);
+            hotkeys.OnKeyPressed(Keys.C, ToggleCharacterInfo, when: WhenCharacterInfoToggle);
             hotkeys.OnKeyPressed(Keys.M, ToggleMoveCommand, when: WhenNotUiInput);
+            hotkeys.OnKeyPressed(Keys.Tab, ToggleMiniMap, when: WhenMiniMapToggle);
             hotkeys.OnKeyPressed(Keys.Enter, OpenChatInput, when: WhenNotUiInput);
         }
 
@@ -250,6 +275,23 @@ namespace Client.Main.Scenes
             _moveCommandWindow.ToggleVisibility();
         }
 
+        private void ToggleMiniMap(HotkeyContext context)
+        {
+            if (_miniMap == null)
+            {
+                return;
+            }
+
+            if (_miniMap.Visible)
+            {
+                _miniMap.Hide();
+            }
+            else
+            {
+                _miniMap.Show();
+            }
+        }
+
         private void OpenChatInput(HotkeyContext context)
         {
             if (_chatInput.Visible)
@@ -299,12 +341,10 @@ namespace Client.Main.Scenes
                 return;
             }
 
-            var nextType = _chatLog.CurrentViewType + 1;
-            if (!System.Enum.IsDefined(typeof(MessageType), nextType) || nextType == MessageType.Unknown) nextType = MessageType.All;
-            if (nextType == MessageType.Info || nextType == MessageType.Error) nextType++;
-            if (!System.Enum.IsDefined(typeof(MessageType), nextType) || nextType == MessageType.Unknown) nextType = MessageType.All;
+            var currentIndex = Array.IndexOf(ChatLogViewCycle, _chatLog.CurrentViewType);
+            var nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % ChatLogViewCycle.Length;
+            var nextType = ChatLogViewCycle[nextIndex];
             _chatLog.ChangeViewType(nextType);
-            System.Console.WriteLine($"[ChatLog] Changed view to: {nextType}");
         }
 
         private void ScrollChatLogPageUp(HotkeyContext context)

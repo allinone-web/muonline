@@ -3,6 +3,7 @@ using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Core.Utilities;
 using Client.Main.Models;
+using Client.Main.Objects.Effects;
 using Client.Main.Objects.Player;
 using Microsoft.Xna.Framework;
 using System.Threading.Tasks;
@@ -13,6 +14,9 @@ namespace Client.Main.Objects.Monsters
     public class EliteBullFighter : MonsterObject
     {
         private WeaponObject _rightHandWeapon;
+        private GlowingEyesEffect _eyeGlow;
+        private MonsterBreathEffect _breath;
+
         public EliteBullFighter()
         {
             RenderShadow = true;
@@ -20,7 +24,7 @@ namespace Client.Main.Objects.Monsters
 
             EnableCustomShader = true;
             SimpleColorMode = true;
-            GlowColor = new Vector3(0.25f, 0.15f, 0f); 
+            GlowColor = new Vector3(0.25f, 0.15f, 0f);
             GlowIntensity = 7.0f;
 
             _rightHandWeapon = new WeaponObject
@@ -30,6 +34,23 @@ namespace Client.Main.Objects.Monsters
                 ItemLevel = 1
             };
             Children.Add(_rightHandWeapon);
+
+            // Eyes: bones 22 (L), 23 (R) — original RenderEye(o, 22, 23)
+            _eyeGlow = new GlowingEyesEffect { LeftEyeBone = 22, RightEyeBone = 23, GlowColor = new Color(80, 180, 255) };
+            Children.Add(_eyeGlow);
+
+            // Breath smoke from mouth (bone 24) during idle/walk
+            _breath = new MonsterBreathEffect
+            {
+                SourceBone = 24,
+                EmissionRate = 20f,
+                Triggers = new()
+                {
+                    new() { ActionIndex = (byte)MonsterActionType.Stop1, FrameStart = 15, FrameEnd = 20 },
+                    new() { ActionIndex = (byte)MonsterActionType.Stop2, FrameStart = 20, FrameEnd = 25 },
+                }
+            };
+            Children.Add(_breath);
         }
 
         public override async Task Load()

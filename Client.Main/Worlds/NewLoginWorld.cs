@@ -1,4 +1,4 @@
-﻿using Client.Main.Controls;
+using Client.Main.Controls;
 using Client.Main.Graphics;
 using Client.Main.Objects.Player;
 using Client.Main.Objects.Worlds.Login;
@@ -15,6 +15,7 @@ namespace Client.Main.Worlds
         public NewLoginWorld() : base(worldIndex: 95)
         {
             EnableShadows = false;
+            Terrain.PreferIndexBatching = true;
             Camera.Instance.ViewFar = 50000f;
         }
 
@@ -30,7 +31,11 @@ namespace Client.Main.Worlds
 
             MapTileObjects[18] = typeof(BlendedObjects);
             MapTileObjects[7] = typeof(BlendedObjects);
+            MapTileObjects[8] = typeof(BlendedObjects);
             MapTileObjects[10] = typeof(BlendedObjects);
+            MapTileObjects[11] = typeof(BlendedObjects);
+            MapTileObjects[19] = typeof(BlendedObjects);
+            MapTileObjects[20] = typeof(BlendedObjects);
         }
 
         public override void AfterLoad()

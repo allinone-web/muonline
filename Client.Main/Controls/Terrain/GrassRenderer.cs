@@ -1,11 +1,13 @@
-using Client.Main.Content;
+﻿using Client.Main.Content;
 using Client.Main.Graphics;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
 
 namespace Client.Main.Controls.Terrain
 {
@@ -18,39 +20,73 @@ namespace Client.Main.Controls.Terrain
         private sealed class GrassChunk : IDisposable
         {
             public VertexBuffer VertexBuffer;
+            public VertexBuffer InstanceBuffer;
             public int VertexCount;
+            public int InstanceCount;
+            public bool UsesHardwareInstancing;
             public BoundingBox Bounds;
-            public Vector3 Center;
 
             public void Dispose()
             {
                 VertexBuffer?.Dispose();
                 VertexBuffer = null;
+                InstanceBuffer?.Dispose();
+                InstanceBuffer = null;
             }
         }
 
-        private const float GrassBladeBaseW = 130f;
-        private const float GrassBladeBaseH = 45f;
-        private const float GrassScaleMax = 3.0f;
-        private const int ChunkSize = 16; // 16x16 tiles
-        private const int GrassPerTile = 6;
-        private const float MaxRenderDistanceSq = 5000f * 5000f;
+        private const float GrassBladeBaseW = 105f;
+        private const float GrassBladeBaseH = 50f;
+        private const float GrassScaleMin = 0.82f;
+        private const float GrassScaleMax = 1.75f;
+        private const float GrassUWidth = 0.26f;
+        private const float GrassPlacementRadius = 0.42f;
+        private const float GrassBaseSink = 1.5f;
+        private const float FootprintBoundaryEpsilon = 0.001f;
+        private const int ChunkSize = 24;
+        private const int GrassCandidatesPerTile = 30;
+        private const int VerticesPerBlade = 6;
+        private const float DensityFadeStart = 1450f;
+        private const float DensityFadeEnd = 4300f;
+        private const float ChunkCullDistanceSq = 4600f * 4600f;
 
         private volatile bool _texReady;
+        private readonly object _contentLoadLock = new();
+        private Task _contentLoadTask;
 
         private readonly GraphicsDevice _graphicsDevice;
         private readonly TerrainData _data;
         private readonly TerrainPhysics _physics;
-        private readonly WindSimulator _wind;
+        private readonly bool[] _terrainPlacementMask;
+        private readonly bool[] _grassTileMask;
+        private readonly bool[] _grassTextureLookup = new bool[256];
 
         private Texture2D _grassSpriteTexture;
         private Effect _grassWindEffect;
+        private EffectParameter _worldParameter;
+        private EffectParameter _viewParameter;
+        private EffectParameter _projectionParameter;
+        private EffectParameter _textureParameter;
+        private EffectParameter _timeParameter;
+        private EffectParameter _windSpeedParameter;
+        private EffectParameter _windStrengthParameter;
+        private EffectParameter _alphaCutoffParameter;
+        private EffectParameter _cameraPositionParameter;
+        private EffectParameter _densityFadeStartParameter;
+        private EffectParameter _densityFadeEndParameter;
+        private EffectTechnique _grassFallbackTechnique;
+        private EffectTechnique _grassInstancedTechnique;
+        private VertexBuffer _bladeTemplateVertexBuffer;
+        private IndexBuffer _bladeTemplateIndexBuffer;
+        private readonly VertexBufferBinding[] _instancedVertexBindings = new VertexBufferBinding[2];
+        private bool _hardwareInstancingFailed;
+        private volatile bool _fallbackRebuildPending;
         private string _grassSpritePath;
         private short _worldIndex;
 
         private readonly List<GrassChunk> _chunks = new();
 
-        public float GrassBrightness { get; set; } = 2f;
+        public float GrassBrightness { get; set; } = 1.35f;
         public HashSet<byte> GrassTextureIndices { get; } = new() { 0 };
         public int Flushes { get; private set; }
         public int DrawnTriangles { get; private set; }
@@ -65,13 +101,34 @@ namespace Client.Main.Controls.Terrain
             _graphicsDevice = graphicsDevice;
             _data = data;
             _physics = physics;
-            _wind = wind;
+
+            int tileCount = Constants.TERRAIN_SIZE * Constants.TERRAIN_SIZE;
+            _terrainPlacementMask = new bool[tileCount];
+            _grassTileMask = new bool[tileCount];
+
+            // Wind animation is generated entirely in Grass.fx. The parameters remain in the
+            // constructor to preserve the existing construction API.
+            _ = wind;
+            _ = lightManager;
         }
 
-        private static readonly object _premulLock = new();
-        private static readonly HashSet<string> _premultipliedOnce = new(StringComparer.OrdinalIgnoreCase);
+        public void LoadContent(short worldIndex)
+        {
+            _ = EnsureContentLoadTask(worldIndex);
+        }
 
-        public async void LoadContent(short worldIndex)
+        private Task EnsureContentLoadTask(short worldIndex)
+        {
+            lock (_contentLoadLock)
+            {
+                if (_contentLoadTask == null || (_contentLoadTask.IsCompleted && !_texReady))
+                    _contentLoadTask = LoadContentCoreAsync(worldIndex);
+
+                return _contentLoadTask;
+            }
+        }
+
+        private async Task LoadContentCoreAsync(short worldIndex)
         {
             if (!Constants.DRAW_GRASS)
                 return;
@@ -83,23 +140,7 @@ namespace Client.Main.Controls.Terrain
             try
             {
                 _grassSpriteTexture = await TextureLoader.Instance.PrepareAndGetTexture(_grassSpritePath);
-                if (_grassSpriteTexture != null)
-                {
-                    bool doPremul = false;
-                    lock (_premulLock)
-                    {
-                        if (!_premultipliedOnce.Contains(_grassSpritePath))
-                        {
-                            _premultipliedOnce.Add(_grassSpritePath);
-                            doPremul = true;
-                        }
-                    }
-
-                    if (doPremul)
-                        PremultiplyAlpha(_grassSpriteTexture);
-
-                    _texReady = true;
-                }
+                _texReady = _grassSpriteTexture != null;
             }
             catch (Exception ex)
             {
@@ -109,6 +150,13 @@ namespace Client.Main.Controls.Terrain
             try
             {
                 _grassWindEffect ??= MuGame.Instance?.Content?.Load<Effect>("Grass");
+                CacheEffectParameters();
+
+                // A world can request a grass rebuild before asynchronous content loading
+                // finishes. Mark it for rebuilding on the render thread so the instanced
+                // technique is actually used instead of permanently retaining fallback data.
+                if (_grassInstancedTechnique != null && !_hardwareInstancingFailed)
+                    _fallbackRebuildPending = true;
             }
             catch (Exception ex)
             {
@@ -120,7 +168,7 @@ namespace Client.Main.Controls.Terrain
         public void EnsureContentLoaded(short worldIndex)
         {
             if (Constants.DRAW_GRASS && !_texReady)
-                LoadContent(worldIndex);
+                _ = EnsureContentLoadTask(worldIndex);
         }
 
         public void ResetMetrics()
@@ -134,15 +182,29 @@ namespace Client.Main.Controls.Terrain
         /// </summary>
         public void BuildAllGrass()
         {
-            for (int i = 0; i < _chunks.Count; i++)
-                _chunks[i].Dispose();
-            _chunks.Clear();
+            _fallbackRebuildPending = false;
+            DisposeChunks();
 
-            if (!Constants.DRAW_GRASS || _worldIndex == 11)
+            if (!Constants.DRAW_GRASS ||
+                _worldIndex == 11 ||
+                _graphicsDevice == null)
+            {
+                return;
+            }
+
+            // Decide the geometry format only after the shader and texture have finished
+            // loading. The actual rebuild is performed by Draw() on the graphics thread.
+            if (!_texReady || _grassWindEffect == null)
+            {
+                _fallbackRebuildPending = true;
+                return;
+            }
+
+            if (!PreparePlacementMasks())
                 return;
 
-            int chunksX = Constants.TERRAIN_SIZE / ChunkSize;
-            int chunksY = Constants.TERRAIN_SIZE / ChunkSize;
+            int chunksX = (Constants.TERRAIN_SIZE + ChunkSize - 1) / ChunkSize;
+            int chunksY = (Constants.TERRAIN_SIZE + ChunkSize - 1) / ChunkSize;
 
             for (int cy = 0; cy < chunksY; cy++)
             {
@@ -155,139 +217,389 @@ namespace Client.Main.Controls.Terrain
             }
         }
 
-        private GrassChunk BuildChunk(int chunkX, int chunkY)
+        /// <summary>
+        /// Precomputes terrain and texture eligibility once per rebuild. Missing terrain data is
+        /// treated as blocked so texture index 0 cannot accidentally generate grass everywhere.
+        /// </summary>
+        private bool PreparePlacementMasks()
         {
-            var vertices = new List<GrassVertexPositionColorTextureWind>(ChunkSize * ChunkSize * GrassPerTile * 6);
-            Vector3 minBounds = new Vector3(float.MaxValue);
-            Vector3 maxBounds = new Vector3(float.MinValue);
+            Array.Clear(_terrainPlacementMask, 0, _terrainPlacementMask.Length);
+            Array.Clear(_grassTileMask, 0, _grassTileMask.Length);
+            Array.Clear(_grassTextureLookup, 0, _grassTextureLookup.Length);
 
-            int startX = chunkX * ChunkSize;
-            int startY = chunkY * ChunkSize;
-            int endX = startX + ChunkSize;
-            int endY = startY + ChunkSize;
-
-            for (int y = startY; y < endY; y++)
+            if (_data?.HeightMap == null ||
+                _data.HeightMap.Length < _grassTileMask.Length ||
+                GrassTextureIndices.Count == 0)
             {
-                for (int x = startX; x < endX; x++)
-                {
-                    if (!GrassTextureIndices.Contains(_physics.GetBaseTextureIndexAt(x, y)))
-                        continue;
+                return false;
+            }
 
-                    int terrainIndex = y * Constants.TERRAIN_SIZE + x;
-                    Color staticLight = Color.White;
-                    if (_data.FinalLightMap != null &&
-                        terrainIndex >= 0 &&
-                        terrainIndex < _data.FinalLightMap.Length)
+            foreach (byte textureIndex in GrassTextureIndices)
+                _grassTextureLookup[textureIndex] = true;
+
+            bool hasAnyGrass = false;
+            for (int y = 0; y < Constants.TERRAIN_SIZE; y++)
+            {
+                int rowStart = y * Constants.TERRAIN_SIZE;
+                for (int x = 0; x < Constants.TERRAIN_SIZE; x++)
+                {
+                    int index = rowStart + x;
+                    bool terrainAllowed = !_physics.IsTerrainBlocked(x, y);
+                    _terrainPlacementMask[index] = terrainAllowed;
+
+                    if (!terrainAllowed ||
+                        !_physics.TryGetDominantTextureIndexAt(x, y, out byte textureIndex) ||
+                        !_grassTextureLookup[textureIndex])
                     {
-                        staticLight = _data.FinalLightMap[terrainIndex];
+                        continue;
                     }
 
-                    var tileLight = new Color(
-                        (byte)MathF.Min(staticLight.R * GrassBrightness, 255f),
-                        (byte)MathF.Min(staticLight.G * GrassBrightness, 255f),
-                        (byte)MathF.Min(staticLight.B * GrassBrightness, 255f));
-
-                    float windBase = _wind.GetWindValue(x, y);
-                    float windZBase = MathHelper.ToRadians(windBase * 0.35f);
-
-                    for (int i = 0; i < GrassPerTile; i++)
-                        AddGrassBlade(vertices, x, y, i, windZBase, tileLight, ref minBounds, ref maxBounds);
+                    _grassTileMask[index] = true;
+                    hasAnyGrass = true;
                 }
             }
 
-            if (vertices.Count == 0)
-                return null;
-
-            var chunk = new GrassChunk
-            {
-                VertexCount = vertices.Count,
-                Bounds = new BoundingBox(minBounds, maxBounds),
-                Center = (minBounds + maxBounds) * 0.5f,
-                VertexBuffer = new VertexBuffer(
-                    _graphicsDevice,
-                    GrassVertexPositionColorTextureWind.VertexDeclaration,
-                    vertices.Count,
-                    BufferUsage.WriteOnly)
-            };
-
-            chunk.VertexBuffer.SetData(vertices.ToArray());
-            return chunk;
+            return hasAnyGrass;
         }
 
-        private void AddGrassBlade(
-            List<GrassVertexPositionColorTextureWind> vertices,
+        private GrassChunk BuildChunk(int chunkX, int chunkY)
+        {
+            int maxInstanceCount = ChunkSize * ChunkSize * GrassCandidatesPerTile;
+            var instances = ArrayPool<GrassBladeInstanceData>.Shared.Rent(maxInstanceCount);
+
+            try
+            {
+                int instanceCount = 0;
+                Vector3 minBounds = new Vector3(float.MaxValue);
+                Vector3 maxBounds = new Vector3(float.MinValue);
+
+                int startX = chunkX * ChunkSize;
+                int startY = chunkY * ChunkSize;
+                int endX = Math.Min(startX + ChunkSize, Constants.TERRAIN_SIZE);
+                int endY = Math.Min(startY + ChunkSize, Constants.TERRAIN_SIZE);
+                float brightness = float.IsFinite(GrassBrightness)
+                    ? MathF.Max(0f, GrassBrightness)
+                    : 1f;
+
+                for (int y = startY; y < endY; y++)
+                {
+                    int rowStart = y * Constants.TERRAIN_SIZE;
+                    for (int x = startX; x < endX; x++)
+                    {
+                        int terrainIndex = rowStart + x;
+                        if (!_grassTileMask[terrainIndex])
+                            continue;
+
+                        Color staticLight = Color.White;
+                        if (_data.FinalLightMap != null &&
+                            (uint)terrainIndex < (uint)_data.FinalLightMap.Length)
+                        {
+                            staticLight = _data.FinalLightMap[terrainIndex];
+                        }
+
+                        float patchNoise = FractalPatchNoise(x, y);
+                        float patchDensity = MathHelper.Lerp(0.65f, 1.0f, patchNoise);
+
+                        for (int bladeIndex = 0; bladeIndex < GrassCandidatesPerTile; bladeIndex++)
+                        {
+                            float placementRoll = PseudoRandom(x, y, 701 + bladeIndex * 37);
+                            float placementChance = bladeIndex == 0
+                                ? MathHelper.Clamp(0.52f + patchDensity * 0.48f, 0f, 1f)
+                                : patchDensity * MathHelper.Lerp(
+                                    0.72f,
+                                    0.94f,
+                                    PseudoRandom(x, y, 809 + bladeIndex * 53));
+
+                            if (placementRoll > placementChance)
+                                continue;
+
+                            float shadeVariation = MathHelper.Lerp(
+                                0.88f,
+                                1.08f,
+                                PseudoRandom(x, y, 977 + bladeIndex * 29));
+                            float lightScale = brightness * shadeVariation;
+                            var bladeLight = new Color(
+                                (byte)MathF.Min(staticLight.R * lightScale, 255f),
+                                (byte)MathF.Min(staticLight.G * lightScale, 255f),
+                                (byte)MathF.Min(staticLight.B * lightScale, 255f),
+                                (byte)255);
+
+                            if (TryCreateGrassBladeInstance(
+                                x,
+                                y,
+                                bladeIndex,
+                                bladeLight,
+                                ref minBounds,
+                                ref maxBounds,
+                                out GrassBladeInstanceData instance))
+                            {
+                                instances[instanceCount++] = instance;
+                            }
+                        }
+                    }
+                }
+
+                if (instanceCount == 0)
+                    return null;
+
+                bool useHardwareInstancing = !_hardwareInstancingFailed && _grassInstancedTechnique != null;
+                var chunk = new GrassChunk
+                {
+                    InstanceCount = instanceCount,
+                    Bounds = new BoundingBox(minBounds, maxBounds),
+                    UsesHardwareInstancing = useHardwareInstancing
+                };
+
+                if (useHardwareInstancing)
+                {
+                    EnsureBladeTemplateBuffers();
+                    chunk.InstanceBuffer = new VertexBuffer(
+                        _graphicsDevice,
+                        GrassBladeInstanceData.VertexDeclaration,
+                        instanceCount,
+                        BufferUsage.WriteOnly);
+                    chunk.InstanceBuffer.SetData(instances, 0, instanceCount);
+                }
+                else
+                {
+                    int vertexCount = checked(instanceCount * VerticesPerBlade);
+                    var vertices = ArrayPool<GrassVertexPositionColorTextureWind>.Shared.Rent(vertexCount);
+                    try
+                    {
+                        int destination = 0;
+                        for (int i = 0; i < instanceCount; i++)
+                            ExpandGrassBladeInstance(in instances[i], vertices, ref destination);
+
+                        chunk.VertexCount = destination;
+                        chunk.VertexBuffer = new VertexBuffer(
+                            _graphicsDevice,
+                            GrassVertexPositionColorTextureWind.VertexDeclaration,
+                            destination,
+                            BufferUsage.WriteOnly);
+                        chunk.VertexBuffer.SetData(vertices, 0, destination);
+                    }
+                    finally
+                    {
+                        ArrayPool<GrassVertexPositionColorTextureWind>.Shared.Return(vertices);
+                    }
+                }
+
+                return chunk;
+            }
+            finally
+            {
+                ArrayPool<GrassBladeInstanceData>.Shared.Return(instances);
+            }
+        }
+
+        private bool TryCreateGrassBladeInstance(
             int tileX,
             int tileY,
             int bladeIndex,
-            float windZBase,
             Color lightColor,
             ref Vector3 minBounds,
-            ref Vector3 maxBounds)
+            ref Vector3 maxBounds,
+            out GrassBladeInstanceData instance)
         {
-            const float GrassUWidth = 0.30f;
+            instance = default;
 
-            float u0 = PseudoRandom(tileX, tileY, 123 + bladeIndex) * (1f - GrassUWidth);
+            float u0 = PseudoRandom(tileX, tileY, 123 + bladeIndex * 17) * (1f - GrassUWidth);
             float u1 = u0 + GrassUWidth;
-            float maxOffset = 0.5f - (GrassUWidth * 0.5f);
 
-            float rx = (PseudoRandom(tileX, tileY, 17 + bladeIndex) * 2f - 1f) * maxOffset;
-            float ry = (PseudoRandom(tileX, tileY, 91 + bladeIndex) * 2f - 1f) * maxOffset;
+            float rx = (PseudoRandom(tileX, tileY, 17 + bladeIndex * 31) * 2f - 1f) * GrassPlacementRadius;
+            float ry = (PseudoRandom(tileX, tileY, 91 + bladeIndex * 43) * 2f - 1f) * GrassPlacementRadius;
 
             float worldX = (tileX + 0.5f + rx) * Constants.TERRAIN_SCALE;
             float worldY = (tileY + 0.5f + ry) * Constants.TERRAIN_SCALE;
-            float h = _physics.RequestTerrainHeight(worldX, worldY);
 
-            float scale = MathHelper.Lerp(1.0f, GrassScaleMax, PseudoRandom(tileX, tileY, 33 + bladeIndex));
-            float jitter = MathHelper.ToRadians((PseudoRandom(tileX, tileY, 57 + bladeIndex) - 0.5f) * 2f * 90f);
-            float windRotationZ = windZBase + jitter;
+            float scaleNoise = PseudoRandom(tileX, tileY, 33 + bladeIndex * 47);
+            float scale = MathHelper.Lerp(GrassScaleMin, GrassScaleMax, scaleNoise * scaleNoise);
+            float widthVariation = MathHelper.Lerp(
+                0.86f,
+                1.14f,
+                PseudoRandom(tileX, tileY, 211 + bladeIndex * 19));
+            float heightVariation = MathHelper.Lerp(
+                0.90f,
+                1.12f,
+                PseudoRandom(tileX, tileY, 263 + bladeIndex * 23));
 
-            float w = GrassBladeBaseW * (u1 - u0) * scale;
-            float bladeHeight = GrassBladeBaseH * scale;
-            float hw = w * 0.5f;
-
-            float baseAngle = MathHelper.ToRadians(45f) + windRotationZ;
-            float cosBase = MathF.Cos(baseAngle);
-            float sinBase = MathF.Sin(baseAngle);
-
-            Vector3 basePos = new Vector3(worldX, worldY, h + 55f);
-
-            Vector3 wp1 = new Vector3(basePos.X + (-hw) * cosBase, basePos.Y + (-hw) * sinBase, basePos.Z);
-            Vector3 wp2 = new Vector3(basePos.X + (hw) * cosBase, basePos.Y + (hw) * sinBase, basePos.Z);
-            Vector3 wp3 = new Vector3(wp1.X, wp1.Y, basePos.Z + bladeHeight);
-            Vector3 wp4 = new Vector3(wp2.X, wp2.Y, basePos.Z + bladeHeight);
-
-            minBounds = Vector3.Min(minBounds, wp1);
-            minBounds = Vector3.Min(minBounds, wp2);
-            minBounds = Vector3.Min(minBounds, wp3);
-            minBounds = Vector3.Min(minBounds, wp4);
-            maxBounds = Vector3.Max(maxBounds, wp1);
-            maxBounds = Vector3.Max(maxBounds, wp2);
-            maxBounds = Vector3.Max(maxBounds, wp3);
-            maxBounds = Vector3.Max(maxBounds, wp4);
-
-            Vector2 t1 = new Vector2(u0, 1f);
-            Vector2 t2 = new Vector2(u1, 1f);
-            Vector2 t3 = new Vector2(u0, 0f);
-            Vector2 t4 = new Vector2(u1, 0f);
-
+            float width = GrassBladeBaseW * GrassUWidth * scale * widthVariation;
+            float bladeHeight = GrassBladeBaseH * scale * heightVariation;
+            float halfWidth = width * 0.5f;
+            float angle = PseudoRandom(tileX, tileY, 57 + bladeIndex * 59) * MathHelper.Pi;
+            float cosBase = MathF.Cos(angle);
+            float sinBase = MathF.Sin(angle);
             float dirX = -sinBase;
             float dirY = cosBase;
-            float phase = windRotationZ * 2.7f + basePos.X * 0.0012f + basePos.Y * 0.0011f;
-            float swayAmplitude = MathF.Max(6f, bladeHeight * 0.22f);
+            float swayAmplitude = MathF.Max(4f, bladeHeight * 0.16f);
 
-            Vector4 windBottom = new Vector4(dirX, dirY, phase, 0f);
-            Vector4 windTop = new Vector4(dirX, dirY, phase, swayAmplitude);
+            float endpoint1X = worldX - halfWidth * cosBase;
+            float endpoint1Y = worldY - halfWidth * sinBase;
+            float endpoint2X = worldX + halfWidth * cosBase;
+            float endpoint2Y = worldY + halfWidth * sinBase;
 
-            vertices.Add(new GrassVertexPositionColorTextureWind(wp1, lightColor, t1, windBottom));
-            vertices.Add(new GrassVertexPositionColorTextureWind(wp2, lightColor, t2, windBottom));
-            vertices.Add(new GrassVertexPositionColorTextureWind(wp3, lightColor, t3, windTop));
-            vertices.Add(new GrassVertexPositionColorTextureWind(wp2, lightColor, t2, windBottom));
-            vertices.Add(new GrassVertexPositionColorTextureWind(wp4, lightColor, t4, windTop));
-            vertices.Add(new GrassVertexPositionColorTextureWind(wp3, lightColor, t3, windTop));
+            float swayExtentX = MathF.Abs(dirX) * swayAmplitude;
+            float swayExtentY = MathF.Abs(dirY) * swayAmplitude;
+            float footprintMinX = MathF.Min(endpoint1X, endpoint2X) - swayExtentX;
+            float footprintMaxX = MathF.Max(endpoint1X, endpoint2X) + swayExtentX;
+            float footprintMinY = MathF.Min(endpoint1Y, endpoint2Y) - swayExtentY;
+            float footprintMaxY = MathF.Max(endpoint1Y, endpoint2Y) + swayExtentY;
+
+            if (!IsPlacementFootprintAllowed(
+                    footprintMinX,
+                    footprintMinY,
+                    footprintMaxX,
+                    footprintMaxY))
+            {
+                return false;
+            }
+
+            float baseHeight1 = _physics.RequestTerrainHeight(endpoint1X, endpoint1Y) - GrassBaseSink;
+            float baseHeight2 = _physics.RequestTerrainHeight(endpoint2X, endpoint2Y) - GrassBaseSink;
+            float lean = MathHelper.Lerp(
+                -0.08f,
+                0.08f,
+                PseudoRandom(tileX, tileY, 331 + bladeIndex * 61)) * bladeHeight;
+
+            minBounds = Vector3.Min(
+                minBounds,
+                new Vector3(footprintMinX, footprintMinY, MathF.Min(baseHeight1, baseHeight2)));
+            maxBounds = Vector3.Max(
+                maxBounds,
+                new Vector3(
+                    footprintMaxX,
+                    footprintMaxY,
+                    MathF.Max(baseHeight1, baseHeight2) + bladeHeight));
+
+            float phase = angle * 2.7f + worldX * 0.0012f + worldY * 0.0011f;
+            float densityThreshold = PseudoRandom(tileX, tileY, 1201 + bladeIndex * 71);
+
+            instance = new GrassBladeInstanceData(
+                new Vector4(worldX, worldY, baseHeight1, baseHeight2),
+                new Vector4(halfWidth, bladeHeight, cosBase, sinBase),
+                new Vector4(dirX, dirY, phase, swayAmplitude),
+                new Vector4(u0, u1, lean, densityThreshold),
+                lightColor);
+            return true;
+        }
+
+        private static void ExpandGrassBladeInstance(
+            in GrassBladeInstanceData instance,
+            GrassVertexPositionColorTextureWind[] vertices,
+            ref int vertexCount)
+        {
+            float centerX = instance.PositionHeights.X;
+            float centerY = instance.PositionHeights.Y;
+            float baseHeight1 = instance.PositionHeights.Z;
+            float baseHeight2 = instance.PositionHeights.W;
+            float halfWidth = instance.Shape.X;
+            float bladeHeight = instance.Shape.Y;
+            float cosBase = instance.Shape.Z;
+            float sinBase = instance.Shape.W;
+            float dirX = instance.Wind.X;
+            float dirY = instance.Wind.Y;
+            float lean = instance.UvLeanDensity.Z;
+
+            Vector3 wp1 = new(centerX - halfWidth * cosBase, centerY - halfWidth * sinBase, baseHeight1);
+            Vector3 wp2 = new(centerX + halfWidth * cosBase, centerY + halfWidth * sinBase, baseHeight2);
+            Vector3 wp3 = new(wp1.X + dirX * lean, wp1.Y + dirY * lean, baseHeight1 + bladeHeight);
+            Vector3 wp4 = new(wp2.X + dirX * lean, wp2.Y + dirY * lean, baseHeight2 + bladeHeight);
+
+            Vector2 t1 = new(instance.UvLeanDensity.X, 1f);
+            Vector2 t2 = new(instance.UvLeanDensity.Y, 1f);
+            Vector2 t3 = new(instance.UvLeanDensity.X, 0f);
+            Vector2 t4 = new(instance.UvLeanDensity.Y, 0f);
+            Vector4 windBottom = new(dirX, dirY, instance.Wind.Z, 0f);
+            Vector4 windTop = new(dirX, dirY, instance.Wind.Z, instance.Wind.W);
+
+            Color color = instance.Color;
+            color.A = (byte)Math.Clamp((int)(instance.UvLeanDensity.W * 255f), 0, 255);
+
+            vertices[vertexCount++] = new GrassVertexPositionColorTextureWind(wp1, color, t1, windBottom);
+            vertices[vertexCount++] = new GrassVertexPositionColorTextureWind(wp2, color, t2, windBottom);
+            vertices[vertexCount++] = new GrassVertexPositionColorTextureWind(wp3, color, t3, windTop);
+            vertices[vertexCount++] = new GrassVertexPositionColorTextureWind(wp2, color, t2, windBottom);
+            vertices[vertexCount++] = new GrassVertexPositionColorTextureWind(wp4, color, t4, windTop);
+            vertices[vertexCount++] = new GrassVertexPositionColorTextureWind(wp3, color, t3, windTop);
+        }
+
+        private void EnsureBladeTemplateBuffers()
+        {
+            if (_bladeTemplateVertexBuffer != null && !_bladeTemplateVertexBuffer.IsDisposed &&
+                _bladeTemplateIndexBuffer != null && !_bladeTemplateIndexBuffer.IsDisposed)
+            {
+                return;
+            }
+
+            _bladeTemplateVertexBuffer?.Dispose();
+            _bladeTemplateIndexBuffer?.Dispose();
+
+            var templateVertices = new[]
+            {
+                new GrassBladeVertex(new Vector2(-1f, 0f), new Vector2(0f, 1f)),
+                new GrassBladeVertex(new Vector2( 1f, 0f), new Vector2(1f, 1f)),
+                new GrassBladeVertex(new Vector2(-1f, 1f), new Vector2(0f, 0f)),
+                new GrassBladeVertex(new Vector2( 1f, 1f), new Vector2(1f, 0f)),
+            };
+            ushort[] indices = { 0, 1, 2, 1, 3, 2 };
+
+            _bladeTemplateVertexBuffer = new VertexBuffer(
+                _graphicsDevice,
+                GrassBladeVertex.VertexDeclaration,
+                templateVertices.Length,
+                BufferUsage.WriteOnly);
+            _bladeTemplateVertexBuffer.SetData(templateVertices);
+
+            _bladeTemplateIndexBuffer = new IndexBuffer(
+                _graphicsDevice,
+                IndexElementSize.SixteenBits,
+                indices.Length,
+                BufferUsage.WriteOnly);
+            _bladeTemplateIndexBuffer.SetData(indices);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool IsPlacementFootprintAllowed(
+            float minWorldX,
+            float minWorldY,
+            float maxWorldX,
+            float maxWorldY)
+        {
+            int minTileX = (int)MathF.Floor(minWorldX / Constants.TERRAIN_SCALE);
+            int minTileY = (int)MathF.Floor(minWorldY / Constants.TERRAIN_SCALE);
+            int maxTileX = (int)MathF.Floor((maxWorldX - FootprintBoundaryEpsilon) / Constants.TERRAIN_SCALE);
+            int maxTileY = (int)MathF.Floor((maxWorldY - FootprintBoundaryEpsilon) / Constants.TERRAIN_SCALE);
+
+            if (minTileX < 0 || minTileY < 0 ||
+                maxTileX >= Constants.TERRAIN_SIZE ||
+                maxTileY >= Constants.TERRAIN_SIZE)
+            {
+                return false;
+            }
+
+            for (int y = minTileY; y <= maxTileY; y++)
+            {
+                int rowStart = y * Constants.TERRAIN_SIZE;
+                for (int x = minTileX; x <= maxTileX; x++)
+                {
+                    if (!_terrainPlacementMask[rowStart + x])
+                        return false;
+                }
+            }
+
+            return true;
         }
 
         public void Draw()
         {
+            if (_fallbackRebuildPending &&
+                Constants.DRAW_GRASS &&
+                _texReady &&
+                _grassWindEffect != null)
+            {
+                BuildAllGrass();
+            }
+
             if (!Constants.DRAW_GRASS ||
                 _worldIndex == 11 ||
                 !_texReady ||
@@ -303,63 +615,217 @@ namespace Client.Main.Controls.Terrain
             var prevDepth = dev.DepthStencilState;
             var prevRaster = dev.RasterizerState;
             var prevSampler = dev.SamplerStates[0];
+            var prevIndices = dev.Indices;
+            bool rebuildFallback = false;
 
-            dev.BlendState = BlendState.AlphaBlend;
-            dev.DepthStencilState = DepthStencilState.Default;
-            dev.RasterizerState = RasterizerState.CullNone;
-            dev.SamplerStates[0] = SamplerState.PointClamp;
-
-            float timeSeconds = (float)(MuGame.Instance?.GameTime.TotalGameTime.TotalSeconds ?? 0.0);
-            _grassWindEffect.Parameters["World"]?.SetValue(Matrix.Identity);
-            _grassWindEffect.Parameters["View"]?.SetValue(Camera.Instance.View);
-            _grassWindEffect.Parameters["Projection"]?.SetValue(Camera.Instance.Projection);
-            _grassWindEffect.Parameters["GrassTexture"]?.SetValue(_grassSpriteTexture);
-            _grassWindEffect.Parameters["Time"]?.SetValue(timeSeconds);
-            _grassWindEffect.Parameters["WindSpeed"]?.SetValue(2.2f);
-            _grassWindEffect.Parameters["WindStrength"]?.SetValue(1.0f);
-            _grassWindEffect.Parameters["AlphaCutoff"]?.SetValue(64f / 255f);
-
-            var frustum = Camera.Instance.Frustum;
-            var camPos = Camera.Instance.Position;
-
-            if (_grassWindEffect.CurrentTechnique != null)
+            try
             {
-                foreach (var pass in _grassWindEffect.CurrentTechnique.Passes)
+                dev.BlendState = BlendState.Opaque;
+                dev.DepthStencilState = DepthStencilState.Default;
+                dev.RasterizerState = RasterizerState.CullNone;
+                dev.SamplerStates[0] = SamplerState.LinearClamp;
+
+                float timeSeconds = (float)(MuGame.Instance?.GameTime.TotalGameTime.TotalSeconds ?? 0.0);
+                _worldParameter?.SetValue(Matrix.Identity);
+                _viewParameter?.SetValue(Camera.Instance.View);
+                _projectionParameter?.SetValue(Camera.Instance.Projection);
+                _textureParameter?.SetValue(_grassSpriteTexture);
+                _timeParameter?.SetValue(timeSeconds);
+                _windSpeedParameter?.SetValue(1.55f);
+                _windStrengthParameter?.SetValue(0.68f);
+                _alphaCutoffParameter?.SetValue(0.36f);
+                _cameraPositionParameter?.SetValue(Camera.Instance.Position);
+                _densityFadeStartParameter?.SetValue(DensityFadeStart);
+                _densityFadeEndParameter?.SetValue(DensityFadeEnd);
+
+                var frustum = Camera.Instance.Frustum;
+                var camPos = Camera.Instance.Position;
+                bool useHardwareInstancing = !_hardwareInstancingFailed &&
+                                             _grassInstancedTechnique != null &&
+                                             _bladeTemplateVertexBuffer != null &&
+                                             !_bladeTemplateVertexBuffer.IsDisposed &&
+                                             _bladeTemplateIndexBuffer != null &&
+                                             !_bladeTemplateIndexBuffer.IsDisposed;
+                EffectTechnique technique = useHardwareInstancing
+                    ? _grassInstancedTechnique
+                    : _grassFallbackTechnique ?? _grassWindEffect.CurrentTechnique;
+                if (technique == null)
+                    return;
+
+                _grassWindEffect.CurrentTechnique = technique;
+                foreach (var pass in technique.Passes)
                 {
                     pass.Apply();
 
                     for (int i = 0; i < _chunks.Count; i++)
                     {
                         var chunk = _chunks[i];
-                        if (Vector3.DistanceSquared(camPos, chunk.Center) > MaxRenderDistanceSq)
+                        if (chunk == null)
+                            continue;
+
+                        if (DistanceSquaredToBoundsXY(camPos, chunk.Bounds) > ChunkCullDistanceSq)
                             continue;
 
                         if (frustum.Contains(chunk.Bounds) == ContainmentType.Disjoint)
                             continue;
 
-                        dev.SetVertexBuffer(chunk.VertexBuffer);
-                        dev.DrawPrimitives(PrimitiveType.TriangleList, 0, chunk.VertexCount / 3);
+                        if (useHardwareInstancing && chunk.UsesHardwareInstancing)
+                        {
+                            if (chunk.InstanceBuffer == null || chunk.InstanceBuffer.IsDisposed || chunk.InstanceCount <= 0)
+                                continue;
 
+                            _instancedVertexBindings[0] = new VertexBufferBinding(_bladeTemplateVertexBuffer);
+                            _instancedVertexBindings[1] = new VertexBufferBinding(chunk.InstanceBuffer, 0, 1);
+                            dev.SetVertexBuffers(_instancedVertexBindings);
+                            dev.Indices = _bladeTemplateIndexBuffer;
+                            dev.DrawInstancedPrimitives(
+                                PrimitiveType.TriangleList,
+                                0,
+                                0,
+                                2,
+                                chunk.InstanceCount);
+
+                            DrawnTriangles += chunk.InstanceCount * 2;
+                            Flushes++;
+                            continue;
+                        }
+
+                        if (chunk.VertexBuffer == null || chunk.VertexBuffer.IsDisposed || chunk.VertexCount <= 0)
+                            continue;
+
+                        dev.SetVertexBuffer(chunk.VertexBuffer);
+                        dev.Indices = null;
+                        dev.DrawPrimitives(PrimitiveType.TriangleList, 0, chunk.VertexCount / 3);
                         DrawnTriangles += chunk.VertexCount / 3;
                         Flushes++;
                     }
                 }
             }
+            catch (Exception ex) when (!_hardwareInstancingFailed)
+            {
+                _hardwareInstancingFailed = true;
+                _fallbackRebuildPending = true;
+                rebuildFallback = true;
+                Console.WriteLine($"Grass hardware instancing disabled after runtime failure: {ex.Message}");
+            }
+            finally
+            {
+                dev.SetVertexBuffer(null);
+                dev.Indices = prevIndices;
+                dev.BlendState = prevBlend;
+                dev.DepthStencilState = prevDepth;
+                dev.RasterizerState = prevRaster;
+                dev.SamplerStates[0] = prevSampler;
+            }
 
-            dev.SetVertexBuffer(null);
-            dev.BlendState = prevBlend;
-            dev.DepthStencilState = prevDepth;
-            dev.RasterizerState = prevRaster;
-            dev.SamplerStates[0] = prevSampler;
+            if (rebuildFallback || _fallbackRebuildPending)
+            {
+                _fallbackRebuildPending = false;
+                BuildAllGrass();
+            }
+        }
+
+        private void CacheEffectParameters()
+        {
+            if (_grassWindEffect == null)
+                return;
+
+            _worldParameter = _grassWindEffect.Parameters["World"];
+            _viewParameter = _grassWindEffect.Parameters["View"];
+            _projectionParameter = _grassWindEffect.Parameters["Projection"];
+            _textureParameter = _grassWindEffect.Parameters["GrassTexture"];
+            _timeParameter = _grassWindEffect.Parameters["Time"];
+            _windSpeedParameter = _grassWindEffect.Parameters["WindSpeed"];
+            _windStrengthParameter = _grassWindEffect.Parameters["WindStrength"];
+            _alphaCutoffParameter = _grassWindEffect.Parameters["AlphaCutoff"];
+            _cameraPositionParameter = _grassWindEffect.Parameters["CameraPosition"];
+            _densityFadeStartParameter = _grassWindEffect.Parameters["DensityFadeStart"];
+            _densityFadeEndParameter = _grassWindEffect.Parameters["DensityFadeEnd"];
+            _grassFallbackTechnique = FindTechnique(_grassWindEffect, "Grass") ?? _grassWindEffect.CurrentTechnique;
+            _grassInstancedTechnique = FindTechnique(_grassWindEffect, "GrassInstanced");
+        }
+
+        private static EffectTechnique FindTechnique(Effect effect, string name)
+        {
+            if (effect == null || string.IsNullOrEmpty(name))
+                return null;
+
+            for (int i = 0; i < effect.Techniques.Count; i++)
+            {
+                EffectTechnique technique = effect.Techniques[i];
+                if (string.Equals(technique.Name, name, StringComparison.Ordinal))
+                    return technique;
+            }
+
+            return null;
         }
 
         public void Dispose()
         {
+            DisposeChunks();
+            _bladeTemplateVertexBuffer?.Dispose();
+            _bladeTemplateVertexBuffer = null;
+            _bladeTemplateIndexBuffer?.Dispose();
+            _bladeTemplateIndexBuffer = null;
+            _grassWindEffect = null;
+        }
+
+        private void DisposeChunks()
+        {
             for (int i = 0; i < _chunks.Count; i++)
                 _chunks[i].Dispose();
-            _chunks.Clear();
 
-            _grassWindEffect = null;
+            _chunks.Clear();
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static float DistanceSquaredToBoundsXY(Vector3 point, BoundingBox bounds)
+        {
+            float dx = point.X < bounds.Min.X
+                ? bounds.Min.X - point.X
+                : point.X > bounds.Max.X
+                    ? point.X - bounds.Max.X
+                    : 0f;
+            float dy = point.Y < bounds.Min.Y
+                ? bounds.Min.Y - point.Y
+                : point.Y > bounds.Max.Y
+                    ? point.Y - bounds.Max.Y
+                    : 0f;
+            return dx * dx + dy * dy;
+        }
+
+        private static float FractalPatchNoise(int tileX, int tileY)
+        {
+            float broad = ValueNoise(tileX / 8f, tileY / 8f, 1501);
+            float medium = ValueNoise(tileX / 3.5f, tileY / 3.5f, 1601);
+            float value = broad * 0.72f + medium * 0.28f;
+            return SmoothStep(0.12f, 0.88f, value);
+        }
+
+        private static float ValueNoise(float x, float y, int salt)
+        {
+            int x0 = (int)MathF.Floor(x);
+            int y0 = (int)MathF.Floor(y);
+            float tx = x - x0;
+            float ty = y - y0;
+            tx = tx * tx * (3f - 2f * tx);
+            ty = ty * ty * (3f - 2f * ty);
+
+            float n00 = PseudoRandom(x0, y0, salt);
+            float n10 = PseudoRandom(x0 + 1, y0, salt);
+            float n01 = PseudoRandom(x0, y0 + 1, salt);
+            float n11 = PseudoRandom(x0 + 1, y0 + 1, salt);
+
+            float nx0 = MathHelper.Lerp(n00, n10, tx);
+            float nx1 = MathHelper.Lerp(n01, n11, tx);
+            return MathHelper.Lerp(nx0, nx1, ty);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static float SmoothStep(float edge0, float edge1, float value)
+        {
+            float t = MathHelper.Clamp((value - edge0) / (edge1 - edge0), 0f, 1f);
+            return t * t * (3f - 2f * t);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -372,29 +838,6 @@ namespace Client.Main.Controls.Terrain
             return (h & 0xFFFFFF) / 16777215f;
         }
 
-        private static void PremultiplyAlpha(Texture2D tex)
-        {
-            if (tex.Format != SurfaceFormat.Color || tex.IsDisposed)
-                return;
 
-            int len = tex.Width * tex.Height;
-            var px = new Color[len];
-            tex.GetData(px);
-
-            for (int i = 0; i < len; i++)
-            {
-                var c = px[i];
-                if (c.A == 255)
-                    continue;
-
-                px[i] = new Color(
-                    (byte)(c.R * c.A / 255),
-                    (byte)(c.G * c.A / 255),
-                    (byte)(c.B * c.A / 255),
-                    c.A);
-            }
-
-            tex.SetData(px);
-        }
     }
 }

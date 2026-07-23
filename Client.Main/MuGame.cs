@@ -1,9 +1,12 @@
-﻿using Client.Main.Configuration;
+using Client.Main.Configuration;
 using Client.Main.Content;
 using Client.Main.Controllers;
 using Client.Main.Controls;
+using Client.Main.Controls.UI.Game.Inventory;
 using Client.Main.Core.Client;
+using Client.Main.Core.Utilities;
 using Client.Main.Data;
+using Client.Main.Diagnostics;
 using Client.Main.Graphics;
 using Client.Main.Networking;
 using Client.Main.Objects;
@@ -15,11 +18,17 @@ using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
 using Microsoft.Xna.Framework.Input.Touch;
 using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Diagnostics;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
 using System.Threading.Tasks;
+using Client.Telemetry;
 
 
 namespace Client.Main
@@ -27,14 +36,46 @@ namespace Client.Main
     public class MuGame : Game
     {
         private const string LocalSettingsFileName = "appsettings.local.json";
+        public readonly record struct SlowFrameSnapshot(
+            long Sequence,
+            long FrameIndex,
+            long ObservedTimestamp,
+            double CpuFrameMs,
+            double UpdateMs,
+            double DrawMs,
+            double AllocatedKb,
+            double UpdateAllocatedKb,
+            double DrawAllocatedKb,
+            double ProcessAllocatedKb,
+            UpdatePassProfiler.Snapshot UpdatePasses,
+            RenderPassProfiler.Snapshot RenderPasses,
+            double LongestObjectUpdateMs,
+            string LongestObjectUpdateType,
+            string LongestObjectUpdateName,
+            ushort LongestObjectUpdateNetworkId);
+
+        public readonly record struct DrawExceptionSnapshot(
+            long Sequence,
+            long FrameIndex,
+            long ObservedTimestamp,
+            string Phase,
+            string ExceptionType,
+            string Message);
+
         private const int MaxMainThreadActionsPerFrame = 96;
-        private static readonly TimeSpan MaxMainThreadActionTimePerFrame = TimeSpan.FromMilliseconds(3);
+        private static readonly TimeSpan MaxMainThreadActionTimePerFrame = TimeSpan.FromMilliseconds(2);
         private static readonly TimeSpan SimulationFixedStep = TimeSpan.FromSeconds(1.0 / 60.0);
         private const int SimulationMaxStepsPerFrame = 4;
         private static readonly TimeSpan SimulationMaxAcceptedElapsed = TimeSpan.FromMilliseconds(250);
         // Static Fields
         private static Controllers.TaskScheduler _taskScheduler;
         private static readonly MainThreadDispatcher _mainThreadDispatcher = new(null, MaxMainThreadActionsPerFrame, MaxMainThreadActionTimePerFrame);
+        private static int _mainThreadId;
+        private static readonly FrameProfiler _frameProfiler = new();
+        private static long _slowFrameSequence;
+        private static SlowFrameSnapshot _latestSlowFrame;
+        private static long _drawExceptionSequence;
+        private static DrawExceptionSnapshot _latestDrawException;
 
         // Static Properties
         public static MuGame Instance { get; private set; }
@@ -48,11 +89,23 @@ namespace Client.Main
         public static Controllers.TaskScheduler TaskScheduler => _taskScheduler;
         public static int FrameIndex { get; private set; }
         public static int MainThreadPendingActions => _mainThreadDispatcher.PendingCount;
+        public static bool IsMainThread => _mainThreadId != 0 && Environment.CurrentManagedThreadId == _mainThreadId;
         public static int MainThreadProcessedActionsLastFrame => _mainThreadDispatcher.LastProcessedCount;
         public static long MainThreadProcessedActionsTotal => _mainThreadDispatcher.TotalProcessedCount;
+        public static double MainThreadProcessingMs => _mainThreadDispatcher.LastProcessDurationMs;
+        public static double MainThreadLongestActionMs => _mainThreadDispatcher.LastLongestActionDurationMs;
+        public static double MainThreadLongestActionQueueMs => _mainThreadDispatcher.LastLongestActionQueueMs;
+        public static string MainThreadLongestActionName => _mainThreadDispatcher.LastLongestActionName;
+        public static bool MainThreadBudgetExceeded => _mainThreadDispatcher.LastBudgetExceeded;
+        public static double MainThreadBudgetOverrunMs => _mainThreadDispatcher.LastBudgetOverrunMs;
+        public static MainThreadDispatcher.SlowActionSnapshot MainThreadLatestSlowAction => _mainThreadDispatcher.LatestSlowAction;
         public static int LastSimulationStepCount { get; private set; }
         public static double LastSimulationAcceptedElapsedMs { get; private set; }
         public static double LastSimulationAccumulationAlpha { get; private set; }
+        public static FrameProfiler.Snapshot FramePerformance => _frameProfiler.Current;
+        public static SlowFrameSnapshot LatestSlowFrame => _latestSlowFrame;
+        public static DrawExceptionSnapshot LatestDrawException => _latestDrawException;
+        public static TelemetryPublisher Diagnostics => Instance?._telemetryPublisher;
 
         // Instance Fields
         private readonly GraphicsDeviceManager _graphics;
@@ -62,17 +115,30 @@ namespace Client.Main
             SimulationMaxStepsPerFrame,
             SimulationMaxAcceptedElapsed);
         private bool _networkDisposed = false;
+        private CharacterState _characterState;
+        private ScopeManager _scopeManager;
+        private readonly SemaphoreSlim _sceneChangeLock = new(1, 1);
+        private int _sceneChangeGeneration;
         private float _scaleFactor;
+        private TelemetryPublisher _telemetryPublisher;
         private bool _effectCacheValid = false;
         private Point _lastEffectTargetSize;
         private Matrix _cachedEffectOrtho;
         private Vector2 _cachedEffectResolution;
         private Vector2 _lastValidMouseInBackBuffer;
+        private ulong _lastMouseRayCameraVersion = ulong.MaxValue;
+        private int _lastSlowFrameEventFrame = -1000;
+        private int _lastHighAllocationEventFrame = -1000;
+        private const double SlowCpuFrameEventThresholdMs = 25d;
+        private const double HighAllocationFrameThresholdKb = 256d;
+        private static readonly Color FallbackClearColor = new(12, 12, 20);
+        private string _currentDrawPhase = "Idle";
 
         // Public Instance Properties
         public BaseScene ActiveScene { get; private set; }
         public int Width => _graphics.PreferredBackBufferWidth;
         public int Height => _graphics.PreferredBackBufferHeight;
+        public bool IsVSyncEnabled => _graphics.SynchronizeWithVerticalRetrace;
         public GameWindow GameWindow => this.Window;
         public MouseState PrevMouseState { get; private set; }
         public MouseState Mouse { get; set; }
@@ -100,6 +166,7 @@ namespace Client.Main
         // Constructors
         public MuGame()
         {
+            _mainThreadId = Environment.CurrentManagedThreadId;
             Instance = this;
 
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
@@ -152,25 +219,120 @@ namespace Client.Main
         /// Schedules an action to be executed on the main game thread during the next Update cycle.
         /// </summary>
         /// <param name="action">The action to execute.</param>
-        public static void ScheduleOnMainThread(Action action)
+        public static void ScheduleOnMainThread(
+            Action action,
+            MainThreadDispatcher.WorkPriority priority = MainThreadDispatcher.WorkPriority.Normal,
+            string name = null)
         {
-            _mainThreadDispatcher.Enqueue(action);
+            _mainThreadDispatcher.Enqueue(action, priority, name);
         }
 
         /// <summary>
         /// Schedules a stateful action to be executed on the main game thread without creating a closure.
         /// </summary>
-        public static void ScheduleOnMainThread<TState>(Action<TState> action, TState state)
+        public static void ScheduleOnMainThread<TState>(
+            Action<TState> action,
+            TState state,
+            MainThreadDispatcher.WorkPriority priority = MainThreadDispatcher.WorkPriority.Normal,
+            string name = null)
         {
-            _mainThreadDispatcher.Enqueue(action, state);
+            _mainThreadDispatcher.Enqueue(action, state, priority, name);
         }
 
         /// <summary>
         /// Schedules an async action to be started on the main game thread.
         /// </summary>
-        public static void ScheduleOnMainThread(Func<Task> action)
+        public static void ScheduleOnMainThread(
+            Func<Task> action,
+            MainThreadDispatcher.WorkPriority priority = MainThreadDispatcher.WorkPriority.Normal,
+            string name = null)
         {
-            _mainThreadDispatcher.Enqueue(action);
+            _mainThreadDispatcher.Enqueue(action, priority, name);
+        }
+
+        /// <summary>
+        /// Suspends the current async workflow until the dispatcher reaches the next update.
+        /// The continuation is completed on the game thread, which allows expensive scene and
+        /// world transitions to be split into named, frame-budgeted phases without touching
+        /// graphics resources from a worker thread.
+        /// </summary>
+        public static MainThreadNextFrameAwaitable YieldToNextFrameAsync(
+            string name,
+            MainThreadDispatcher.WorkPriority priority = MainThreadDispatcher.WorkPriority.High)
+            => new(
+                _mainThreadDispatcher,
+                priority,
+                string.IsNullOrWhiteSpace(name) ? "MainThread.Yield" : name);
+
+        /// <summary>
+        /// Awaitable which schedules the async state-machine continuation itself for the next
+        /// dispatcher frame. Unlike completing a TaskCompletionSource inside the dispatcher,
+        /// this cannot resume a chain of parent async methods inline in the current action.
+        /// </summary>
+        public readonly struct MainThreadNextFrameAwaitable
+        {
+            private readonly MainThreadDispatcher _dispatcher;
+            private readonly MainThreadDispatcher.WorkPriority _priority;
+            private readonly string _name;
+
+            internal MainThreadNextFrameAwaitable(
+                MainThreadDispatcher dispatcher,
+                MainThreadDispatcher.WorkPriority priority,
+                string name)
+            {
+                _dispatcher = dispatcher;
+                _priority = priority;
+                _name = name;
+            }
+
+            public Awaiter GetAwaiter() => new(_dispatcher, _priority, _name);
+
+            public readonly struct Awaiter : ICriticalNotifyCompletion
+            {
+                private readonly MainThreadDispatcher _dispatcher;
+                private readonly MainThreadDispatcher.WorkPriority _priority;
+                private readonly string _name;
+
+                internal Awaiter(
+                    MainThreadDispatcher dispatcher,
+                    MainThreadDispatcher.WorkPriority priority,
+                    string name)
+                {
+                    _dispatcher = dispatcher;
+                    _priority = priority;
+                    _name = name;
+                }
+
+                public bool IsCompleted => false;
+                public void GetResult() { }
+
+                public void OnCompleted(Action continuation)
+                    => QueueContinuation(continuation);
+
+                public void UnsafeOnCompleted(Action continuation)
+                    => QueueContinuation(continuation);
+
+                private void QueueContinuation(Action continuation)
+                {
+                    if (continuation == null)
+                        throw new ArgumentNullException(nameof(continuation));
+
+                    _dispatcher.EnqueueNextFrame(continuation, _priority, _name);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Clears rolling frame statistics after a scene or world boundary. Current-frame
+        /// timing remains valid, while the next frame starts a fresh wall-time interval.
+        /// </summary>
+        public static void ResetFramePerformanceWindow(string reason)
+        {
+            _frameProfiler.ResetRollingWindow();
+            Instance?._telemetryPublisher?.PublishEvent(
+                "performance",
+                $"Frame statistics reset: {reason}",
+                TelemetrySeverity.Info);
         }
 
         private static bool ValidateSettings(MuOnlineSettings settings, ILogger logger)
@@ -222,6 +384,13 @@ namespace Client.Main
 
             Constants.DYNAMIC_LIGHT_UPDATE_FPS = dynamicLightUpdateFps;
             Constants.ANIMATION_UPDATE_FPS = animationUpdateFps;
+            Constants.ENABLE_CROWD_SPATIAL_CULLING = graphics.EnableCrowdSpatialCulling;
+            Constants.ENABLE_WALKER_CROWD_INSTANCING = graphics.EnableWalkerCrowdInstancing;
+            Constants.ENABLE_ANIMATION_THROTTLING = graphics.EnableAnimationThrottling;
+            Constants.ENABLE_SHARED_ANIMATION_PALETTES = graphics.EnableSharedAnimationPalettes;
+            Constants.ENABLE_BMD_MESH_BATCHING = graphics.EnableBmdMeshBatching;
+            Constants.ENABLE_EFFECT_POOLING = graphics.EnableEffectPooling;
+            Constants.RENDER_METRICS_LEVEL = Math.Clamp(graphics.RenderMetricsLevel, 0, 2);
         }
 
         public static void DisposeInstance()
@@ -244,7 +413,7 @@ namespace Client.Main
             }
             _logger.LogInformation(">>> ChangeScene<{SceneType}>() called (generic)", typeof(T).Name);
             BaseScene newScene = new T(); // Creating an instance using the parameterless constructor
-            ChangeSceneInternal(newScene); // Calling the helper method
+            _ = ObserveSceneChangeAsync(ChangeSceneInternalAsync(newScene));
         }
 
         // NEW method accepting a scene instance
@@ -256,7 +425,7 @@ namespace Client.Main
                 throw new ArgumentNullException(nameof(newScene));
             }
             _logger.LogInformation(">>> ChangeScene(BaseScene newScene) called with scene type: {SceneType}", newScene.GetType().Name);
-            ChangeSceneInternal(newScene); // Calling the helper method
+            _ = ObserveSceneChangeAsync(ChangeSceneInternalAsync(newScene));
         }
 
         // Protected Instance Methods
@@ -354,14 +523,33 @@ namespace Client.Main
             // --- Initialize Network Manager ---
             // Needs CharacterState and ScopeManager - create basic instances for now
             // You'll likely manage these more centrally later
-            var characterState = new CharacterState(AppLoggerFactory);
-            var scopeManager = new ScopeManager(AppLoggerFactory, characterState);
-            Network = new NetworkManager(AppLoggerFactory, AppSettings, characterState, scopeManager);
+            _characterState = new CharacterState(AppLoggerFactory);
+            _scopeManager = new ScopeManager(AppLoggerFactory, _characterState);
+            Network = new NetworkManager(AppLoggerFactory, AppSettings, _characterState, _scopeManager);
             bootLogger.LogInformation("✅ Network Manager initialized.");
 
             // Initialize TaskScheduler
-            _taskScheduler = new Controllers.TaskScheduler(AppLoggerFactory);
+            _taskScheduler = new Controllers.TaskScheduler(AppLoggerFactory, _mainThreadDispatcher);
             bootLogger.LogInformation("✅ TaskScheduler initialized.");
+
+            var diagnosticsOptions = AppConfiguration.GetSection("Diagnostics").Get<TelemetryPublisherOptions>()
+                ?? new TelemetryPublisherOptions();
+            if (OperatingSystem.IsAndroid() || OperatingSystem.IsIOS())
+                diagnosticsOptions.Enabled = false;
+
+            if (diagnosticsOptions.Enabled)
+            {
+                _telemetryPublisher = new TelemetryPublisher(
+                    diagnosticsOptions,
+                    AppLoggerFactory.CreateLogger<TelemetryPublisher>());
+                _telemetryPublisher.Start();
+                bootLogger.LogInformation("✅ Diagnostics telemetry enabled. Pipe={PipeName}", diagnosticsOptions.PipeName);
+            }
+            else
+            {
+                _telemetryPublisher = null;
+                bootLogger.LogInformation("Diagnostics telemetry is disabled.");
+            }
 
             IsMouseVisible = false; // Keep this if you want a custom cursor
 
@@ -431,14 +619,21 @@ namespace Client.Main
 
         protected override void UnloadContent()
         {
+            BmdPreviewRenderer.ClearCache(releaseGpuResources: true);
+            UiRenderTargetPool.Clear();
             base.UnloadContent();
             GraphicsManager.Instance.Dispose();
             DisposeNetworkSafely();   // ← only place called in UnloadContent
+            DisposeTelemetrySafely();
             AppLoggerFactory?.Dispose(); // AppLoggerFactory can be null if Initialize failed early
         }
 
         protected override void Update(GameTime gameTime)
         {
+            _frameProfiler.BeginUpdate(FrameIndex + 1L);
+            UpdatePassProfiler.BeginFrame(enabled: true);
+
+            long dispatcherStarted = UpdatePassProfiler.Start();
             UPSCounter.Instance.CalcUPS(gameTime);
 
             var simStep = _simulationClock.Advance(gameTime.ElapsedGameTime);
@@ -446,36 +641,46 @@ namespace Client.Main
             LastSimulationAcceptedElapsedMs = simStep.AcceptedElapsed.TotalMilliseconds;
             LastSimulationAccumulationAlpha = simStep.InterpolationAlpha;
 
-            int workScale = Math.Max(1, simStep.StepCount);
-
-            ProcessMainThreadActions(workScale);
-
-            // Process prioritized tasks using the task scheduler
-            _taskScheduler?.ProcessFrame(workScale);
+            // Keep background/main-thread work on a fixed budget. Scaling it after a slow
+            // frame creates a feedback loop that makes the next frame even slower.
+            ProcessMainThreadActions();
+            UpdatePassProfiler.AddDispatcher(dispatcherStarted);
 
             try // outer try
             {
+                long globalStarted = UpdatePassProfiler.Start();
                 GameTime = gameTime;
                 FrameIndex++;
                 UpdateInputInfo(gameTime);
                 CheckShaderToggles();
                 SunCycleManager.Update();
                 Camera.Instance.UpdateShake((float)gameTime.ElapsedGameTime.TotalSeconds);
+                UpdatePassProfiler.AddGlobal(globalStarted);
 
+                long sceneStarted = UpdatePassProfiler.Start();
                 try // inner try for ActiveScene.Update
                 {
                     ActiveScene?.Update(gameTime);
                 }
                 catch (Exception sceneEx)
                 {
+                    long exceptionStarted = UpdatePassProfiler.Start();
+                    UpdatePassProfiler.RecordSceneException(sceneEx, FrameIndex);
                     _logger?.LogCritical(sceneEx, "Unhandled exception in ActiveScene.Update ({SceneType})!", ActiveScene?.GetType().Name ?? "null");
-                    // Consider stopping the game or returning to a safe scene
-                    // Exit();
+                    UpdatePassProfiler.AddSceneException(exceptionStarted);
+                    // Keep the client alive, but retain the exception in telemetry so a slow
+                    // frame caused by synchronous logging is not reported as unexplained.
+                }
+                finally
+                {
+                    UpdatePassProfiler.AddScene(sceneStarted);
                 }
 
                 try // inner try for base.Update
                 {
+                    long frameworkStarted = UpdatePassProfiler.Start();
                     base.Update(gameTime);
+                    UpdatePassProfiler.AddFramework(frameworkStarted);
                 }
                 catch (Exception baseEx)
                 {
@@ -489,16 +694,31 @@ namespace Client.Main
                 _logger?.LogCritical(e, "Unhandled exception in MuGame.Update loop (outside scene/base update)!");
                 // Exit();
             }
+            finally
+            {
+                _frameProfiler.EndUpdate();
+                UpdatePassProfiler.EndFrame(_frameProfiler.Current.UpdateMs);
+            }
         }
 
-        private void ProcessMainThreadActions(int workScale)
+        private void ProcessMainThreadActions()
         {
-            _mainThreadDispatcher.ProcessPending(workScale);
+            _taskScheduler?.BeginFrame();
+            _mainThreadDispatcher.ProcessPending();
+            _taskScheduler?.EndFrame(_mainThreadDispatcher.LastProcessDurationMs);
         }
 
         protected override void LoadContent()
         {
             GraphicsManager.Instance.Init(GraphicsDevice, Content);
+
+            // Warm up the item database before inventory/NPC shop packets arrive. Public
+            // lookups remain synchronous for compatibility, but normally complete from memory.
+            _ = ItemDatabase.PreloadAsync().ContinueWith(t =>
+            {
+                if (t.Exception != null)
+                    _logger?.LogWarning(t.Exception, "Failed to preload item database");
+            }, System.Threading.Tasks.TaskScheduler.Default);
 
             // --- LOAD PLAYER IDLE POSE DATA ---
             // Load bone transformations from Player.bmd for inventory item rendering
@@ -527,44 +747,324 @@ namespace Client.Main
             }
             // --- END NETWORK CONNECTION ---
 
-            // Load the initial scene (e.g., LoginScene) AFTER network connection starts
-            ChangeSceneAsync(Constants.ENTRY_SCENE).ContinueWith(t =>
-            {
-                if (t.Exception != null)
-                    _logger?.LogDebug($"Error changing scene: {t.Exception}");
-            });
+            // Load the initial scene (e.g., LoginScene) AFTER network connection starts.
+            _ = ObserveSceneChangeAsync(ChangeSceneAsync(Constants.ENTRY_SCENE));
         }
 
         protected override void Draw(GameTime gameTime)
         {
+            bool publishTelemetry = _telemetryPublisher?.TryBeginSnapshot() == true;
+            _frameProfiler.BeginDraw();
+
+            // Keep pass timings current on every frame. The additional Stopwatch reads are
+            // negligible compared with rendering and make slow-frame events self-contained.
+            RenderPassProfiler.BeginFrame(enabled: true);
+            _currentDrawPhase = "Frame.Begin";
             try
             {
-                // Initialize frame-based optimizations
+                _currentDrawPhase = "Frame.Metrics";
                 DynamicBufferPool.BeginFrame(FrameIndex);
                 BMDLoader.Instance.BeginFrame();
                 ModelObject.BeginFrameGpuSkinningMetrics();
 
                 FPSCounter.Instance.CalcFPS(gameTime);
+                bool recoveredFrame = false;
                 if (ShouldUseIntermediateRenderTarget())
                 {
-                    DrawSceneToMainRenderTarget(gameTime);
-                    ApplyPostProcessingEffects();
+                    _currentDrawPhase = "RenderTargets.Ensure";
+                    bool alphaRgbEnabled = GraphicsManager.Instance.IsAlphaRGBEnabled && GraphicsManager.Instance.AlphaRGBEffect != null;
+                    bool fxaaEnabled = GraphicsManager.Instance.IsFXAAEnabled && GraphicsManager.Instance.FXAAEffect != null;
+                    int postProcessPasses = (alphaRgbEnabled ? 1 : 0) + (fxaaEnabled ? 1 : 0);
+                    bool gameSceneRecovery = ActiveScene is GameScene;
+                    GraphicsManager.Instance.EnsureRenderTargets(
+                        requireTempTarget1: postProcessPasses >= 1,
+                        requireTempTarget2: postProcessPasses >= 2,
+                        requireRecoveryTarget: gameSceneRecovery);
+
+                    bool containedRenderFailure = DrawSceneToMainRenderTarget(gameTime);
+                    if (gameSceneRecovery &&
+                        containedRenderFailure &&
+                        GraphicsManager.Instance.HasRecoveryFrame)
+                    {
+                        // WorldControl contains individual model/batch failures so one bad newly
+                        // loaded object does not terminate the client. Do not treat that partial
+                        // render as a complete frame or replace the last known-good scene with it.
+                        _currentDrawPhase = "Frame.RecoverContainedRenderFailure";
+                        DrawEmergencyFallbackFrame();
+                        recoveredFrame = true;
+                    }
+                    else
+                    {
+                        _currentDrawPhase = "PostProcess";
+                        var postProcessStarted = RenderPassProfiler.Start();
+                        ApplyPostProcessingEffects();
+                        RenderPassProfiler.AddPostProcess(postProcessStarted);
+                    }
                 }
                 else
                 {
                     DrawSceneDirectToBackBuffer(gameTime);
                 }
+
+                _currentDrawPhase = "FrameworkDraw";
+                var frameworkDrawStarted = RenderPassProfiler.Start();
                 base.Draw(gameTime);
+                RenderPassProfiler.AddFrameworkDraw(frameworkDrawStarted);
+
+                // Commit only a fully completed GameScene frame. The next frame renders into
+                // the alternate target after a deterministic black clear, while the just-
+                // completed image remains untouched for emergency recovery.
+                if (ActiveScene is GameScene && !recoveredFrame)
+                    GraphicsManager.Instance.CommitSceneFrame();
+
+                _currentDrawPhase = "Frame.Complete";
             }
-            catch (Exception e)
+            catch (Exception exception)
             {
-                _logger?.LogDebug(e, "Exception in MuGame");
+                RecordDrawException(exception, _currentDrawPhase);
+                DrawEmergencyFallbackFrame();
             }
             finally
             {
-                // Ensure that no render target is active to avoid the Present error
-                GraphicsDevice.SetRenderTarget(null);
+                try
+                {
+                    GraphicsDevice.SetRenderTarget(null);
+                }
+                catch (Exception resetException)
+                {
+                    RecordDrawException(resetException, "Frame.Finally.ResetRenderTarget");
+                }
+
+                _currentDrawPhase = "Idle";
+                _frameProfiler.EndDraw();
+                PublishSlowCpuFrameEvent();
+                PublishHighAllocationFrameEvent();
+                if (publishTelemetry)
+                    _telemetryPublisher?.PublishSnapshot(this);
             }
+        }
+
+        private void RecordDrawException(Exception exception, string phase)
+        {
+            long sequence = Interlocked.Increment(ref _drawExceptionSequence);
+            _latestDrawException = new DrawExceptionSnapshot(
+                sequence,
+                FrameIndex,
+                Stopwatch.GetTimestamp(),
+                phase ?? "Unknown",
+                exception.GetType().FullName ?? exception.GetType().Name,
+                exception.Message);
+
+            _logger?.LogError(
+                exception,
+                "Unhandled draw exception in phase {DrawPhase} on frame {FrameIndex}. Emergency fallback frame will be presented.",
+                phase,
+                FrameIndex);
+
+            _telemetryPublisher?.PublishEvent(
+                "draw-exception",
+                $"Unhandled draw exception in {phase}",
+                TelemetrySeverity.Error,
+                new Dictionary<string, string>
+                {
+                    ["phase"] = phase ?? "Unknown",
+                    ["frameIndex"] = FrameIndex.ToString(CultureInfo.InvariantCulture),
+                    ["exceptionType"] = exception.GetType().FullName ?? exception.GetType().Name,
+                    ["message"] = exception.Message
+                });
+        }
+
+        private void DrawEmergencyFallbackFrame()
+        {
+            try
+            {
+                GraphicsDevice.SetRenderTarget(null);
+                Helpers.SpriteBatchScope.ForceReset();
+
+                SpriteBatch sprite = GraphicsManager.Instance?.Sprite;
+                var graphics = GraphicsManager.Instance;
+                RenderTarget2D preservedScene = graphics?.RecoveryRenderTarget;
+                if (ActiveScene is GameScene &&
+                    graphics?.HasRecoveryFrame == true &&
+                    sprite != null && preservedScene != null && !preservedScene.IsDisposed)
+                {
+                    // Present the preserved/partially recovered scene instead of replacing the
+                    // whole frame with a dark clear. GameScene renders through a preserved
+                    // intermediate target specifically so a contained loading/render fault
+                    // cannot produce a one-frame black flash.
+                    sprite.Begin(
+                        SpriteSortMode.Deferred,
+                        BlendState.Opaque,
+                        GraphicsManager.GetQualityLinearSamplerState(),
+                        DepthStencilState.None,
+                        RasterizerState.CullNone,
+                        null,
+                        Matrix.Identity);
+                    sprite.Draw(preservedScene, GraphicsDevice.Viewport.Bounds, Color.White);
+                    sprite.End();
+                    return;
+                }
+
+                GraphicsDevice.Clear(FallbackClearColor);
+                Texture2D pixel = GraphicsManager.Instance?.Pixel;
+                if (pixel == null || sprite == null || pixel.IsDisposed)
+                    return;
+
+                sprite.Begin(
+                    SpriteSortMode.Deferred,
+                    BlendState.Opaque,
+                    SamplerState.PointClamp,
+                    DepthStencilState.None,
+                    RasterizerState.CullNone,
+                    null,
+                    Matrix.Identity);
+                sprite.Draw(pixel, GraphicsDevice.Viewport.Bounds, FallbackClearColor);
+                sprite.End();
+            }
+            catch (Exception fallbackException)
+            {
+                _logger?.LogError(fallbackException, "Failed to draw emergency fallback frame.");
+            }
+        }
+
+        private void PublishSlowCpuFrameEvent()
+        {
+            var frame = _frameProfiler.Current;
+            if (frame.CpuFrameMs < SlowCpuFrameEventThresholdMs)
+                return;
+
+            var passes = RenderPassProfiler.Current;
+            var updatePasses = UpdatePassProfiler.Current;
+            var slowWorldMetrics = ActiveScene?.World?.FrameMetrics;
+            long slowSequence = Interlocked.Increment(ref _slowFrameSequence);
+            _latestSlowFrame = new SlowFrameSnapshot(
+                slowSequence,
+                FrameIndex,
+                Stopwatch.GetTimestamp(),
+                frame.CpuFrameMs,
+                frame.UpdateMs,
+                frame.DrawMs,
+                frame.AllocatedKb,
+                frame.UpdateAllocatedKb,
+                frame.DrawAllocatedKb,
+                frame.ProcessAllocatedKb,
+                updatePasses,
+                passes,
+                slowWorldMetrics?.LongestObjectUpdateMs ?? 0d,
+                slowWorldMetrics?.LongestObjectUpdateType,
+                slowWorldMetrics?.LongestObjectUpdateName,
+                slowWorldMetrics?.LongestObjectUpdateNetworkId ?? 0);
+
+            // Avoid flooding the event stream during a sustained slow period. The latest full
+            // record above is still retained and exported in every subsequent snapshot.
+            if (FrameIndex - _lastSlowFrameEventFrame < 15 && frame.CpuFrameMs < 100d)
+                return;
+
+            _lastSlowFrameEventFrame = FrameIndex;
+            var world = ActiveScene?.World;
+            var worldMetrics = world?.FrameMetrics;
+            var terrainMetrics = world?.Terrain?.FrameMetrics;
+            int individuallyDrawnGpuSkinnedMeshes = Math.Max(
+                0,
+                ModelObject.LastFrameGpuSkinnedMeshesDrawn
+                - ModelObject.LastFrameGpuSkinnedBatchedMeshes
+                - ModelObject.LastFrameStaticMapInstancedMeshInstances
+                - ModelObject.LastFrameWalkerCrowdMultiPoseMeshInstances);
+            int estimatedDrawCalls = (terrainMetrics?.DrawCalls ?? 0)
+                + individuallyDrawnGpuSkinnedMeshes
+                + ModelObject.LastFrameGpuSkinnedBatchDrawCalls
+                + ModelObject.LastFrameStaticMapInstancedDrawCalls
+                + ModelObject.LastFrameWalkerCrowdMultiPoseDrawCalls
+                + ModelObject.LastFrameModelFallbackDrawCalls;
+            string Number(double value) => value.ToString("F3", CultureInfo.InvariantCulture);
+
+            var properties = new Dictionary<string, string>(20)
+            {
+                ["frameIndex"] = FrameIndex.ToString(CultureInfo.InvariantCulture),
+                ["scene"] = ActiveScene?.GetType().Name ?? "None",
+                ["worldIndex"] = world?.WorldIndex.ToString(CultureInfo.InvariantCulture) ?? "",
+                ["cpuFrameMs"] = Number(frame.CpuFrameMs),
+                ["updateMs"] = Number(frame.UpdateMs),
+                ["drawMs"] = Number(frame.DrawMs),
+                ["sceneDrawMs"] = Number(passes.SceneDrawMs),
+                ["worldObjectsMs"] = Number(passes.WorldObjectsMs),
+                ["terrainOpaqueMs"] = Number(passes.TerrainOpaqueMs),
+                ["frameworkDrawMs"] = Number(passes.FrameworkDrawMs),
+                ["allocatedKb"] = Number(frame.AllocatedKb),
+                ["updateAllocatedKb"] = Number(_frameProfiler.LastUpdateAllocatedKb),
+                ["drawAllocatedKb"] = Number(_frameProfiler.LastDrawAllocatedKb),
+                ["visibleObjects"] = (worldMetrics?.VisibleObjects ?? 0).ToString(CultureInfo.InvariantCulture),
+                ["estimatedDrawCalls"] = estimatedDrawCalls.ToString(CultureInfo.InvariantCulture),
+                ["terrainDrawCalls"] = (terrainMetrics?.DrawCalls ?? 0).ToString(CultureInfo.InvariantCulture),
+                ["mainAction"] = MainThreadLongestActionName ?? string.Empty,
+                ["mainActionMs"] = Number(MainThreadLongestActionMs),
+                ["mainQueue"] = MainThreadPendingActions.ToString(CultureInfo.InvariantCulture),
+                ["isActive"] = IsActive.ToString(),
+                ["updateDispatcherMs"] = Number(updatePasses.DispatcherMs),
+                ["updateGlobalMs"] = Number(updatePasses.GlobalMs),
+                ["updateSceneMs"] = Number(updatePasses.SceneMs),
+                ["updateFrameworkMs"] = Number(updatePasses.FrameworkMs),
+                ["sceneInputMs"] = Number(updatePasses.SceneInputMs),
+                ["sceneControlTreeMs"] = Number(updatePasses.SceneControlTreeMs),
+                ["scenePostMs"] = Number(updatePasses.ScenePostMs),
+                ["worldUpdateBaseMs"] = Number(updatePasses.WorldBaseMs),
+                ["worldInitializationMs"] = Number(updatePasses.WorldInitializationMs),
+                ["worldVisibilityMs"] = Number(updatePasses.WorldVisibilityMs),
+                ["worldUpdateCullMs"] = Number(updatePasses.WorldCullMs),
+                ["worldHoverMs"] = Number(updatePasses.WorldHoverMs),
+                ["updateUnaccountedMs"] = Number(updatePasses.UnaccountedMs),
+                ["sceneExceptionMs"] = Number(updatePasses.SceneExceptionMs),
+                ["sceneExceptionType"] = updatePasses.SceneExceptionType ?? string.Empty,
+                ["sceneDrawAllocatedKb"] = Number(passes.SceneDrawAllocatedKb),
+                ["worldObjectsAllocatedKb"] = Number(passes.WorldObjectsAllocatedKb),
+                ["terrainOpaqueAllocatedKb"] = Number(passes.TerrainOpaqueAllocatedKb),
+                ["frameworkDrawAllocatedKb"] = Number(passes.FrameworkDrawAllocatedKb)
+            };
+
+            _telemetryPublisher?.PublishEvent(
+                "slow-frame",
+                $"CPU frame {frame.CpuFrameMs:F1} ms in {properties["scene"]}",
+                frame.CpuFrameMs >= 50d ? TelemetrySeverity.Warning : TelemetrySeverity.Info,
+                properties);
+        }
+
+        private void PublishHighAllocationFrameEvent()
+        {
+            var frame = _frameProfiler.Current;
+            if (frame.AllocatedKb < HighAllocationFrameThresholdKb ||
+                FrameIndex - _lastHighAllocationEventFrame < 120)
+            {
+                return;
+            }
+
+            _lastHighAllocationEventFrame = FrameIndex;
+            var passes = RenderPassProfiler.Current;
+            var properties = new Dictionary<string, string>(14)
+            {
+                ["frameIndex"] = FrameIndex.ToString(CultureInfo.InvariantCulture),
+                ["scene"] = ActiveScene?.GetType().Name ?? "None",
+                ["worldIndex"] = ActiveScene?.World?.WorldIndex.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                ["allocatedKb"] = frame.AllocatedKb.ToString("F3", CultureInfo.InvariantCulture),
+                ["processAllocatedKb"] = frame.ProcessAllocatedKb.ToString("F3", CultureInfo.InvariantCulture),
+                ["updateAllocatedKb"] = _frameProfiler.LastUpdateAllocatedKb.ToString("F3", CultureInfo.InvariantCulture),
+                ["drawAllocatedKb"] = _frameProfiler.LastDrawAllocatedKb.ToString("F3", CultureInfo.InvariantCulture),
+                ["updateMs"] = frame.UpdateMs.ToString("F3", CultureInfo.InvariantCulture),
+                ["drawMs"] = frame.DrawMs.ToString("F3", CultureInfo.InvariantCulture),
+                ["sceneDrawMs"] = passes.SceneDrawMs.ToString("F3", CultureInfo.InvariantCulture),
+                ["worldObjectsMs"] = passes.WorldObjectsMs.ToString("F3", CultureInfo.InvariantCulture),
+                ["sceneDrawAllocatedKb"] = passes.SceneDrawAllocatedKb.ToString("F3", CultureInfo.InvariantCulture),
+                ["worldObjectsAllocatedKb"] = passes.WorldObjectsAllocatedKb.ToString("F3", CultureInfo.InvariantCulture),
+                ["terrainOpaqueAllocatedKb"] = passes.TerrainOpaqueAllocatedKb.ToString("F3", CultureInfo.InvariantCulture),
+                ["frameworkDrawAllocatedKb"] = passes.FrameworkDrawAllocatedKb.ToString("F3", CultureInfo.InvariantCulture),
+                ["visibleObjects"] = (ActiveScene?.World?.FrameMetrics.VisibleObjects ?? 0).ToString(CultureInfo.InvariantCulture),
+                ["isActive"] = IsActive.ToString()
+            };
+
+            _telemetryPublisher?.PublishEvent(
+                "high-allocation",
+                $"Allocated {frame.AllocatedKb:F0} KB in one frame ({properties["scene"]})",
+                TelemetrySeverity.Warning,
+                properties);
         }
 
         protected override void Dispose(bool disposing)
@@ -572,6 +1072,8 @@ namespace Client.Main
             if (disposing)
             {
                 DisposeNetworkSafely();   // ← won't be called a second time
+                _taskScheduler?.Dispose();
+                DisposeTelemetrySafely();
                 AppLoggerFactory?.Dispose();
             }
             base.Dispose(disposing);
@@ -579,55 +1081,131 @@ namespace Client.Main
         }
 
         // Private Instance Methods
-        // Private helper method for changing scenes
-        private async void ChangeSceneInternal(BaseScene newScene)
+        // Private helper method for changing scenes. Scene changes are serialized so two
+        // network/UI requests cannot dispose and initialize scenes concurrently.
+        private async Task ChangeSceneInternalAsync(BaseScene newScene)
         {
-            _logger.LogInformation("--- ChangeSceneInternal: Starting scene change to {SceneType}...", newScene.GetType().Name);
+            if (newScene == null)
+                throw new ArgumentNullException(nameof(newScene));
 
-            // Optional: Show loading screen before disposing the old scene
-            // ShowLoadingScreen();
-
-            // Dispose the old scene
-            if (ActiveScene != null)
-            {
-                _logger.LogDebug("--- ChangeSceneInternal: Disposing previous scene ({SceneType})...", ActiveScene.GetType().Name);
-                ActiveScene.Dispose();
-                _logger.LogDebug("--- ChangeSceneInternal: Previous scene disposed.");
-            }
-            ActiveScene = null; // Ensure there's no reference while loading the new one
-
-            // Set the new scene
-            ActiveScene = newScene;
-            _logger.LogDebug("--- ChangeSceneInternal: ActiveScene set to {SceneType}.", ActiveScene.GetType().Name);
-
-            // Initialize/Load the new scene (assuming Initialize/Load is asynchronous)
+            int requestGeneration = Interlocked.Increment(ref _sceneChangeGeneration);
+            await _sceneChangeLock.WaitAsync();
             try
             {
-                _logger.LogDebug("--- ChangeSceneInternal: Starting initialization for {SceneType}...", ActiveScene.GetType().Name);
-
-                if (ActiveScene is BaseScene baseScene)
+                if (requestGeneration != Volatile.Read(ref _sceneChangeGeneration))
                 {
-                    await baseScene.InitializeWithProgressReporting(null);
-                }
-                else
-                {
-                    await ActiveScene.Initialize();
+                    newScene.Dispose();
+                    return;
                 }
 
-                _logger.LogDebug("--- ChangeSceneInternal: Initialization completed for {SceneType}.", ActiveScene.GetType().Name);
+                string sceneName = newScene.GetType().Name;
+                _logger?.LogInformation("--- Scene change starting: {SceneType}", sceneName);
+                _telemetryPublisher?.PublishEvent("scene", $"Loading {sceneName}", TelemetrySeverity.Info);
+
+                // Returning to the dispatcher before transition work prevents the event
+                // handler which requested the scene from owning the complete transition
+                // cost (previously HandleEnteredGame could block for more than 150 ms).
+                await YieldToNextFrameAsync(
+                    $"SceneChange.{sceneName}.Prepare",
+                    MainThreadDispatcher.WorkPriority.Critical);
+
+                ushort? sourceMapId = ActiveScene?.World?.MapId;
+                bool preserveCurrentMapScope =
+                    newScene is GameScene &&
+                    sourceMapId.HasValue &&
+                    sourceMapId.Value != _characterState.MapId;
+                _scopeManager?.BeginWorldTransition(sourceMapId, preserveCurrentMapScope);
+                ModelObject.ResetWorldScopedInstancingState();
+
+                BaseScene previousScene = ActiveScene;
+                ActiveScene = null;
+
+                await YieldToNextFrameAsync(
+                    $"SceneChange.{sceneName}.DisposePrevious",
+                    MainThreadDispatcher.WorkPriority.Critical);
+
+                if (previousScene != null)
+                {
+                    try
+                    {
+                        previousScene.Dispose();
+                    }
+                    catch (Exception disposeException)
+                    {
+                        _logger?.LogError(
+                            disposeException,
+                            "Failed disposing previous scene {SceneType}.",
+                            previousScene.GetType().Name);
+                    }
+                }
+
+                await YieldToNextFrameAsync(
+                    $"SceneChange.{sceneName}.ReleasePreviewCache",
+                    MainThreadDispatcher.WorkPriority.High);
+
+                BmdPreviewRenderer.ClearCache(releaseGpuResources: true);
+                ActiveScene = newScene;
+                _frameProfiler.ResetRollingWindow();
+
+                try
+                {
+                    await YieldToNextFrameAsync(
+                        $"SceneChange.{sceneName}.Initialize",
+                        MainThreadDispatcher.WorkPriority.Critical);
+                    await newScene.InitializeWithProgressReporting(null);
+
+                    // Scene initialization may complete from a dispatcher continuation. Force
+                    // the parent transition to unwind before its final phase is queued.
+                    await Task.Yield();
+                }
+                catch (Exception ex)
+                {
+                    if (ReferenceEquals(ActiveScene, newScene))
+                        ActiveScene = null;
+
+                    try
+                    {
+                        newScene.Dispose();
+                    }
+                    catch (Exception disposeException)
+                    {
+                        _logger?.LogDebug(disposeException, "Failed disposing scene after initialization error.");
+                    }
+
+                    _scopeManager?.CompleteWorldTransition();
+                    _logger?.LogError(ex, "Scene initialization failed for {SceneType}.", sceneName);
+                    _telemetryPublisher?.PublishEvent(
+                        "scene",
+                        $"Failed to load {sceneName}: {ex.Message}",
+                        TelemetrySeverity.Error);
+                    return;
+                }
+
+                await YieldToNextFrameAsync(
+                    $"SceneChange.{sceneName}.Finalize",
+                    MainThreadDispatcher.WorkPriority.Critical);
+
+                _scopeManager?.CompleteWorldTransition();
+                ResetFramePerformanceWindow($"scene {sceneName} ready");
+                _logger?.LogInformation("--- Scene change completed: {SceneType}", sceneName);
+                _telemetryPublisher?.PublishEvent("scene", $"Loaded {sceneName}", TelemetrySeverity.Info);
+            }
+            finally
+            {
+                _sceneChangeLock.Release();
+            }
+        }
+
+        private async Task ObserveSceneChangeAsync(Task sceneChangeTask)
+        {
+            try
+            {
+                await sceneChangeTask.ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "!!! ChangeSceneInternal: Exception during Initialize() for {SceneType}.", ActiveScene.GetType().Name);
-                // Handle error - maybe return to LoginScene?
-                // ActiveScene = new LoginScene(); // Emergency return
-                // await ActiveScene.Initialize();
-                return; // End scene change after error
+                _logger?.LogError(ex, "Unhandled scene change failure.");
             }
-
-            // Optional: Hide loading screen after the new scene is loaded
-            // HideLoadingScreen();
-            _logger.LogInformation("<<< ChangeSceneInternal: Scene change to {SceneType} complete.", ActiveScene.GetType().Name);
         }
 
         private void CheckShaderToggles()
@@ -648,22 +1226,35 @@ namespace Client.Main
 
         public void ApplyGraphicsOptions()
         {
+            bool graphicsDeviceChangeRequired = false;
 #if !(ANDROID || IOS)
-            _graphics.SynchronizeWithVerticalRetrace = !Constants.UNLIMITED_FPS && !Constants.DISABLE_VSYNC;
-            IsFixedTimeStep = !Constants.UNLIMITED_FPS;
-            TargetElapsedTime = Constants.UNLIMITED_FPS
+            bool runUncapped = Constants.UNLIMITED_FPS || Constants.DISABLE_VSYNC;
+            bool desiredVSync = !runUncapped;
+            graphicsDeviceChangeRequired |=
+                _graphics.SynchronizeWithVerticalRetrace != desiredVSync;
+            _graphics.SynchronizeWithVerticalRetrace = desiredVSync;
+            IsFixedTimeStep = !runUncapped;
+            TargetElapsedTime = runUncapped
                 ? TimeSpan.FromMilliseconds(1)
                 : TimeSpan.FromSeconds(1.0 / 60.0);
 #endif
+            graphicsDeviceChangeRequired |=
+                _graphics.PreferMultiSampling != Constants.MSAA_ENABLED;
             _graphics.PreferMultiSampling = Constants.MSAA_ENABLED;
-            _graphics.ApplyChanges();
+
+            // ApplyChanges recreates the backbuffer and render targets. Avoid doing that for
+            // no-op UI refreshes because it can produce a visible black frame.
+            if (graphicsDeviceChangeRequired)
+                _graphics.ApplyChanges();
         }
 
-        private async Task ChangeSceneAsync(Type sceneType)
+        private Task ChangeSceneAsync(Type sceneType)
         {
-            ActiveScene?.Dispose();
-            ActiveScene = (BaseScene)Activator.CreateInstance(sceneType);
-            await ActiveScene.Initialize();
+            if (sceneType == null)
+                throw new ArgumentNullException(nameof(sceneType));
+
+            var scene = (BaseScene)Activator.CreateInstance(sceneType);
+            return ChangeSceneInternalAsync(scene);
         }
 
         private void UpdateInputInfo(GameTime gameTime)
@@ -797,8 +1388,15 @@ namespace Client.Main
                     shouldUpdateRay = true;
             }
 
+            ulong cameraVersion = Camera.Instance.StateVersion;
+            if (_lastMouseRayCameraVersion != cameraVersion)
+                shouldUpdateRay = true;
+
             if (shouldUpdateRay)
+            {
                 UpdateMouseRay();
+                _lastMouseRayCameraVersion = cameraVersion;
+            }
         }
 
         private void UpdateMouseRay()
@@ -846,38 +1444,66 @@ namespace Client.Main
             MouseRay = new Ray(nearPoint, direction);
         }
 
-        private void DrawSceneToMainRenderTarget(GameTime gameTime)
+        private bool DrawSceneToMainRenderTarget(GameTime gameTime)
         {
+            var world = ActiveScene?.World;
+            long renderFailureSequence = world?.FrameMetrics.LastRenderFailureSequence ?? 0;
+
             GraphicsDevice.SetRenderTarget(GraphicsManager.Instance.MainRenderTarget);
-            GraphicsDevice.Clear(Color.Black);
+
+            // Always start the current image from the canonical scene background. Keeping
+            // color data from an older frame caused stale terrain/objects to remain visible
+            // in map holes. A separate recovery target now owns the last complete frame.
+            GraphicsDevice.Clear(FallbackClearColor);
 
             // Ensure correct culling for 3D models
             GraphicsDevice.RasterizerState = RasterizerState.CullCounterClockwise;
             GraphicsDevice.DepthStencilState = DepthStencilState.Default;
             GraphicsDevice.BlendState = BlendState.AlphaBlend;
 
+            _currentDrawPhase = "Scene.Draw";
+            var sceneDrawStarted = RenderPassProfiler.Start();
             ActiveScene?.Draw(gameTime);
+            RenderPassProfiler.AddSceneDraw(sceneDrawStarted);
+
+            _currentDrawPhase = "Scene.DrawAfter";
+            var sceneAfterStarted = RenderPassProfiler.Start();
             ActiveScene?.DrawAfter(gameTime);
+            RenderPassProfiler.AddSceneAfter(sceneAfterStarted);
 
             GraphicsDevice.SetRenderTarget(null);
+            return world != null &&
+                   world.FrameMetrics.LastRenderFailureSequence != renderFailureSequence;
         }
 
         private void DrawSceneDirectToBackBuffer(GameTime gameTime)
         {
             GraphicsDevice.SetRenderTarget(null);
-            GraphicsDevice.Clear(Color.Black);
+            GraphicsDevice.Clear(FallbackClearColor);
 
             // Keep the same scene state setup as the intermediate render path.
             GraphicsDevice.RasterizerState = RasterizerState.CullCounterClockwise;
             GraphicsDevice.DepthStencilState = DepthStencilState.Default;
             GraphicsDevice.BlendState = BlendState.AlphaBlend;
 
+            _currentDrawPhase = "Scene.Draw";
+            var sceneDrawStarted = RenderPassProfiler.Start();
             ActiveScene?.Draw(gameTime);
+            RenderPassProfiler.AddSceneDraw(sceneDrawStarted);
+
+            _currentDrawPhase = "Scene.DrawAfter";
+            var sceneAfterStarted = RenderPassProfiler.Start();
             ActiveScene?.DrawAfter(gameTime);
+            RenderPassProfiler.AddSceneAfter(sceneAfterStarted);
         }
 
-        private static bool ShouldUseIntermediateRenderTarget()
+        private bool ShouldUseIntermediateRenderTarget()
         {
+            // GameScene always renders off-screen so a late render/resource failure can
+            // present preserved scene color instead of flashing the backbuffer black.
+            if (ActiveScene is GameScene)
+                return true;
+
             // Required when resolution scaling is active or gamma-correction pass is needed.
             if (MathF.Abs(Constants.RENDER_SCALE - 1.0f) > 0.0001f || Constants.MSAA_ENABLED)
                 return true;
@@ -894,18 +1520,21 @@ namespace Client.Main
         private void ApplyPostProcessingEffects()
         {
             RenderTarget2D sourceTarget = GraphicsManager.Instance.MainRenderTarget;
-            RenderTarget2D destTarget = GraphicsManager.Instance.TempTarget1;
 
             if (GraphicsManager.Instance.IsAlphaRGBEnabled && GraphicsManager.Instance.AlphaRGBEffect != null)
             {
-                ApplyEffect(GraphicsManager.Instance.AlphaRGBEffect, sourceTarget, destTarget);
-                GraphicsManager.Instance.SwapTargets(ref sourceTarget, ref destTarget);
+                RenderTarget2D destination = GraphicsManager.Instance.TempTarget1;
+                ApplyEffect(GraphicsManager.Instance.AlphaRGBEffect, sourceTarget, destination);
+                sourceTarget = destination;
             }
 
             if (GraphicsManager.Instance.IsFXAAEnabled && GraphicsManager.Instance.FXAAEffect != null)
             {
-                ApplyEffect(GraphicsManager.Instance.FXAAEffect, sourceTarget, destTarget);
-                GraphicsManager.Instance.SwapTargets(ref sourceTarget, ref destTarget);
+                RenderTarget2D destination = ReferenceEquals(sourceTarget, GraphicsManager.Instance.MainRenderTarget)
+                    ? GraphicsManager.Instance.TempTarget1
+                    : GraphicsManager.Instance.TempTarget2;
+                ApplyEffect(GraphicsManager.Instance.FXAAEffect, sourceTarget, destination);
+                sourceTarget = destination;
             }
 
             DrawFinalImageToScreen(sourceTarget);
@@ -914,8 +1543,9 @@ namespace Client.Main
         private void ApplyEffect(Effect effect, RenderTarget2D source, RenderTarget2D destination)
         {
             GraphicsDevice.SetRenderTarget(destination);
-            GraphicsDevice.Clear(Color.Transparent);
 
+            // Every post-processing pass covers the full destination. Clearing and
+            // alpha-blending add bandwidth without changing the final image.
             EnsureEffectCache(destination.Width, destination.Height);
 
             if (effect == GraphicsManager.Instance.FXAAEffect)
@@ -928,17 +1558,15 @@ namespace Client.Main
                 effect.Parameters["WorldViewProjection"]?.SetValue(_cachedEffectOrtho);
             }
 
-            GraphicsManager.Instance.Sprite.Begin(SpriteSortMode.Immediate, BlendState.AlphaBlend, GraphicsManager.GetQualityLinearSamplerState(), DepthStencilState.None, RasterizerState.CullNone, effect);
+            GraphicsManager.Instance.Sprite.Begin(SpriteSortMode.Immediate, BlendState.Opaque, GraphicsManager.GetQualityLinearSamplerState(), DepthStencilState.None, RasterizerState.CullNone, effect);
             GraphicsManager.Instance.Sprite.Draw(source, GraphicsDevice.Viewport.Bounds, Color.White);
             GraphicsManager.Instance.Sprite.End();
-
-            // Deactivate render target after each effect
-            GraphicsDevice.SetRenderTarget(null);
         }
 
         private void DrawFinalImageToScreen(RenderTarget2D sourceTarget)
         {
-            GraphicsDevice.Clear(Color.Black);
+            GraphicsDevice.SetRenderTarget(null);
+            GraphicsDevice.Clear(FallbackClearColor);
 
             Effect gammaEffect = Constants.MSAA_ENABLED ? GraphicsManager.Instance.GammaCorrectionEffect : null;
 
@@ -1061,6 +1689,22 @@ namespace Client.Main
         /// swallowing <see cref="ObjectDisposedException"/> which occurs,
         /// if the CancellationTokenSource inside NetworkManager was already disposed.
         /// </summary>
+        private void DisposeTelemetrySafely()
+        {
+            var publisher = Interlocked.Exchange(ref _telemetryPublisher, null);
+            if (publisher == null)
+                return;
+
+            try
+            {
+                publisher.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+            catch (Exception telemetryDisposeException)
+            {
+                _logger?.LogDebug(telemetryDisposeException, "Failed disposing diagnostics telemetry publisher.");
+            }
+        }
+
         private void DisposeNetworkSafely()
         {
             if (_networkDisposed || Network == null)

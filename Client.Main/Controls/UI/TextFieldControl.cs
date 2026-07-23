@@ -142,11 +142,11 @@ namespace Client.Main.Controls.UI
 
         protected void UpdateScrollOffset()
         {
-            if (GraphicsManager.Instance?.Font == null) return;
+            SpriteFont font = GraphicsManager.GetUiFont(FontSize, out float scaleFactor);
+            if (font == null) return;
 
-            float scaleFactor = FontSize / Constants.BASE_FONT_SIZE;
             var textToDisplay = MaskValue ? new string('*', _inputText.Length) : _inputText.ToString();
-            var textWidth = GraphicsManager.Instance.Font.MeasureString(textToDisplay).X * scaleFactor;
+            var textWidth = font.MeasureString(textToDisplay).X * scaleFactor;
             float maxVisibleWidth = DisplayRectangle.Width - TextMargin * 2;
 
             _scrollOffset = textWidth > maxVisibleWidth ? textWidth - maxVisibleWidth : 0;
@@ -333,6 +333,7 @@ namespace Client.Main.Controls.UI
                 GraphicsManager.Instance.Sprite,
                 SpriteSortMode.Deferred,
                 BlendState.AlphaBlend,
+                SamplerState.LinearClamp,
                 transform: UiScaler.SpriteTransform))
             {
                 var spriteBatch = GraphicsManager.Instance.Sprite;
@@ -383,7 +384,7 @@ namespace Client.Main.Controls.UI
 
         private void DrawTextAndCursor(SpriteBatch spriteBatch)
         {
-            var font = GraphicsManager.Instance.Font;
+            SpriteFont font = GraphicsManager.GetUiFont(FontSize, out float scale);
             if (font == null) return;
 
             var gd = GraphicsManager.Instance.GraphicsDevice;
@@ -397,7 +398,6 @@ namespace Client.Main.Controls.UI
             gd.ScissorRectangle = Rectangle.Intersect(originalScissorRect, area);
             gd.RasterizerState = new RasterizerState { ScissorTestEnable = true };
 
-            float scale = FontSize / Constants.BASE_FONT_SIZE;
             string text = MaskValue ? new string('*', _inputText.Length) : _inputText.ToString();
             Vector2 textPos = new Vector2(DisplayRectangle.X + TextMargin - _scrollOffset,
                                           DisplayRectangle.Y + (DisplayRectangle.Height - font.MeasureString("A").Y * scale) / 2f);

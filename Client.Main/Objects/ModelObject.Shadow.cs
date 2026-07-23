@@ -15,15 +15,82 @@ namespace Client.Main.Objects
     {
         private static readonly VertexPositionTexture[] BlobShadowVertices =
         [
-            new VertexPositionTexture(new Vector3(-1f, 0f, -1f), new Vector2(0f, 1f)),
-            new VertexPositionTexture(new Vector3(1f, 0f, -1f), new Vector2(1f, 1f)),
-            new VertexPositionTexture(new Vector3(1f, 0f, 1f), new Vector2(1f, 0f)),
-            new VertexPositionTexture(new Vector3(-1f, 0f, 1f), new Vector2(0f, 0f))
+            // MU worlds use X/Y as the ground plane and Z as height. Keeping the blob in
+            // XY avoids the legacy projected-mesh rotations which could turn actor shadows
+            // nearly vertical or push them below the terrain.
+            new VertexPositionTexture(new Vector3(-1f, -1f, 0f), new Vector2(0f, 1f)),
+            new VertexPositionTexture(new Vector3(1f, -1f, 0f), new Vector2(1f, 1f)),
+            new VertexPositionTexture(new Vector3(1f, 1f, 0f), new Vector2(1f, 0f)),
+            new VertexPositionTexture(new Vector3(-1f, 1f, 0f), new Vector2(0f, 0f))
         ];
 
         private static readonly short[] BlobShadowIndices = [0, 1, 2, 0, 2, 3];
         private static readonly object BlobShadowTextureLock = new();
         private static Texture2D _blobShadowTexture;
+
+        private ModelObject GetShadowActorRoot()
+        {
+            ModelObject root = this;
+            while (root.Parent is ModelObject parentModel)
+                root = parentModel;
+            return root;
+        }
+
+        private bool IsPlayerOrNpcShadowPart()
+        {
+            ModelObject root = GetShadowActorRoot();
+            return root is PlayerObject || root is NPCObject;
+        }
+
+        private bool UsesRenderedShadowMapForCurrentObject()
+        {
+            if (!Constants.ENABLE_DYNAMIC_LIGHTING_SHADER)
+                return false;
+
+            var renderer = GraphicsManager.Instance.ShadowMapRenderer;
+            ModelObject casterRoot = GetShadowActorRoot();
+            return renderer?.IsReady == true && renderer.HasRenderedCaster(casterRoot);
+        }
+
+        private bool SupportsGpuSkinnedShadowCaster()
+        {
+            var effect = GraphicsManager.Instance.DynamicLightingEffect;
+            return TryGetTechnique(effect, "ShadowCaster_Skinned") != null;
+        }
+
+        private bool NeedsModularShadowSafetyBlob()
+        {
+            if (this is not WalkerObject)
+                return false;
+
+            int substantialParts = 0;
+            int childCount = Children.Count;
+            for (int i = 0; i < childCount; i++)
+            {
+                if (Children[i] is not ModelObject child ||
+                    child.Hidden ||
+                    !child.RenderShadow ||
+                    child.Status != GameControlStatus.Ready ||
+                    child.Model?.Meshes == null)
+                {
+                    continue;
+                }
+
+                substantialParts++;
+                if (substantialParts >= 2)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private bool RequiresPersistentActorGroundShadow()
+        {
+            // Player-model actors are assembled from multiple asynchronously prepared parts.
+            // A shadow-map update may temporarily contain only one part (for example a helmet),
+            // so keep a stable root footprint independently of caster completeness.
+            return this is PlayerObject || this is NPCObject;
+        }
 
         private bool ValidateWorldMatrix(Matrix matrix)
         {
@@ -33,6 +100,36 @@ namespace Client.Main.Objects
                     return false;
             }
             return true;
+        }
+
+        private bool TryGetGroundBlobShadowMatrix(out Matrix shadowWorld)
+        {
+            shadowWorld = Matrix.Identity;
+
+            try
+            {
+                if (World?.Terrain == null)
+                    return false;
+
+                ModelObject root = this;
+                while (root.Parent is ModelObject parentModel)
+                    root = parentModel;
+
+                Vector3 position = root.WorldPosition.Translation;
+                float terrainHeight = World.Terrain.RequestTerrainHeight(position.X, position.Y);
+                if (!float.IsFinite(terrainHeight))
+                    return false;
+
+                const float groundBias = 0.75f;
+                shadowWorld = Matrix.CreateRotationZ(root.TotalAngle.Z) *
+                              Matrix.CreateTranslation(position.X, position.Y, terrainHeight + groundBias);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogDebug("Error creating ground blob shadow matrix: {Message}", ex.Message);
+                return false;
+            }
         }
 
         private bool TryGetShadowMatrix(out Matrix shadowWorld)
@@ -58,7 +155,6 @@ namespace Client.Main.Objects
 
                 Vector3 position = WorldPosition.Translation;
                 float terrainH = World.Terrain.RequestTerrainHeight(position.X, position.Y);
-                terrainH += terrainH * 0.5f;
 
                 float heightAboveTerrain = position.Z - terrainH;
                 float angleRad = MathHelper.ToRadians(45);
@@ -107,9 +203,15 @@ namespace Client.Main.Objects
                 if (effect == null || blobTexture == null)
                     return;
 
+                ModelEffectBindings bindings = GetModelEffectBindings(effect);
+                EffectTechnique shadowTechnique = TryGetTechnique(effect, "Shadow");
+                if (shadowTechnique == null)
+                    return;
+
                 var previousBlend = GraphicsDevice.BlendState;
                 var previousDepth = GraphicsDevice.DepthStencilState;
                 var previousRaster = GraphicsDevice.RasterizerState;
+                var previousTechnique = effect.CurrentTechnique;
 
                 float constBias = 1f / (1 << 24);
                 RasterizerState shadowRasterizer = GraphicsManager.GetCachedRasterizerState(constBias * -20, CullMode.None);
@@ -117,6 +219,7 @@ namespace Client.Main.Objects
                 GraphicsDevice.BlendState = Blendings.ShadowBlend;
                 GraphicsDevice.DepthStencilState = DepthStencilState.DepthRead;
                 GraphicsDevice.RasterizerState = shadowRasterizer;
+                effect.CurrentTechnique = shadowTechnique;
 
                 try
                 {
@@ -125,12 +228,12 @@ namespace Client.Main.Objects
                     float scaleX = MathF.Max(45f, localWidth * 0.55f);
                     float scaleZ = MathF.Max(45f, localDepth * 0.55f);
 
-                    Matrix blobWorld = Matrix.CreateScale(scaleX, 1f, scaleZ) * shadowWorld;
+                    Matrix blobWorld = Matrix.CreateScale(scaleX, scaleZ, 1f) * shadowWorld;
 
-                    effect.Parameters["World"]?.SetValue(blobWorld);
-                    effect.Parameters["ViewProjection"]?.SetValue(view * projection);
-                    effect.Parameters["ShadowTint"]?.SetValue(new Vector4(0f, 0f, 0f, shadowOpacity));
-                    effect.Parameters["ShadowTexture"]?.SetValue(blobTexture);
+                    bindings.World?.SetValue(blobWorld);
+                    bindings.ViewProjection?.SetValue(view * projection);
+                    bindings.ShadowTint?.SetValue(new Vector4(0f, 0f, 0f, shadowOpacity));
+                    bindings.ShadowTexture?.SetValue(blobTexture);
 
                     foreach (var pass in effect.CurrentTechnique.Passes)
                     {
@@ -150,6 +253,8 @@ namespace Client.Main.Objects
                     GraphicsDevice.BlendState = previousBlend;
                     GraphicsDevice.DepthStencilState = previousDepth;
                     GraphicsDevice.RasterizerState = previousRaster;
+                    if (previousTechnique != null)
+                        effect.CurrentTechnique = previousTechnique;
                 }
             }
             catch (Exception ex)
@@ -166,7 +271,7 @@ namespace Client.Main.Objects
                 if (MuGame.Instance.ActiveScene?.World is WorldControl world && !world.EnableShadows)
                     return;
 
-                if (IsHiddenMesh(mesh) || _boneVertexBuffers == null)
+                if (IsHiddenMesh(mesh) || _meshes == null)
                     return;
 
                 if (!ValidateWorldMatrix(WorldPosition))
@@ -175,8 +280,8 @@ namespace Client.Main.Objects
                     return;
                 }
 
-                VertexBuffer vertexBuffer = _boneVertexBuffers[mesh];
-                IndexBuffer indexBuffer = _boneIndexBuffers[mesh];
+                VertexBuffer vertexBuffer = _meshes[mesh].CpuVertexBuffer;
+                IndexBuffer indexBuffer = _meshes[mesh].CpuIndexBuffer;
                 if (vertexBuffer == null || indexBuffer == null)
                     return;
 
@@ -198,13 +303,14 @@ namespace Client.Main.Objects
                 try
                 {
                     var effect = GraphicsManager.Instance.ShadowEffect;
-                    if (effect == null || _boneTextures?[mesh] == null)
+                    if (effect == null || _meshes?[mesh]?.Texture == null)
                         return;
 
-                    effect.Parameters["World"]?.SetValue(shadowWorld);
-                    effect.Parameters["ViewProjection"]?.SetValue(view * projection);
-                    effect.Parameters["ShadowTint"]?.SetValue(new Vector4(0, 0, 0, shadowOpacity));
-                    effect.Parameters["ShadowTexture"]?.SetValue(_boneTextures[mesh]);
+                    ModelEffectBindings bindings = GetModelEffectBindings(effect);
+                    bindings.World?.SetValue(shadowWorld);
+                    bindings.ViewProjection?.SetValue(view * projection);
+                    bindings.ShadowTint?.SetValue(new Vector4(0, 0, 0, shadowOpacity));
+                    bindings.ShadowTexture?.SetValue(_meshes[mesh].Texture);
 
                     foreach (var pass in effect.CurrentTechnique.Passes)
                     {
@@ -266,16 +372,18 @@ namespace Client.Main.Objects
             }
         }
 
-        public virtual void DrawShadowCaster(Effect shadowEffect, Matrix lightViewProjection)
+        public virtual int DrawShadowCaster(Effect shadowEffect, Matrix lightViewProjection)
         {
             if (shadowEffect == null)
-                return;
+                return 0;
 
+            int drawnMeshCount = 0;
             int shadowSize = GraphicsManager.Instance.ShadowMapRenderer?.ShadowMap?.Width ?? Math.Max(256, Constants.SHADOW_MAP_SIZE);
             Vector2 shadowTexel = new Vector2(1f / shadowSize, 1f / shadowSize);
 
-            // Draw own meshes if available
-            if (Model?.Meshes != null && _boneTextures != null)
+            // Draw own meshes if available. A missing technique or one invalid body part
+            // must not suppress valid child casters.
+            if (Model?.Meshes != null && _meshes != null)
             {
                 try
                 {
@@ -283,102 +391,101 @@ namespace Client.Main.Objects
                     var prevBlend = gd.BlendState;
                     var prevDepth = gd.DepthStencilState;
                     var prevRaster = gd.RasterizerState;
-                    var prevTechnique = shadowEffect?.CurrentTechnique;
+                    var prevTechnique = shadowEffect.CurrentTechnique;
 
-                    var shadowCasterTechnique = TryGetTechnique(shadowEffect, "ShadowCaster");
-                    var shadowCasterSkinnedTechnique = TryGetTechnique(shadowEffect, "ShadowCaster_Skinned");
-                    if (shadowCasterTechnique == null)
-                        return;
-
-                    shadowEffect?.Parameters["World"]?.SetValue(WorldPosition);
-                    shadowEffect?.Parameters["LightViewProjection"]?.SetValue(lightViewProjection);
-                    shadowEffect?.Parameters["ShadowMapTexelSize"]?.SetValue(shadowTexel);
-                    shadowEffect?.Parameters["ShadowBias"]?.SetValue(Constants.SHADOW_BIAS);
-                    shadowEffect?.Parameters["ShadowNormalBias"]?.SetValue(Constants.SHADOW_NORMAL_BIAS);
-                    shadowEffect?.Parameters["SunDirection"]?.SetValue(GraphicsManager.Instance.ShadowMapRenderer?.LightDirection ?? Constants.SUN_DIRECTION);
-                    shadowEffect?.Parameters["UseProceduralTerrainUV"]?.SetValue(0.0f);
-                    shadowEffect?.Parameters["IsWaterTexture"]?.SetValue(0.0f);
-
-                    gd.BlendState = BlendState.Opaque;
-                    gd.DepthStencilState = DepthStencilState.Default;
-
-                    int meshCount = Model.Meshes.Length;
-                    EffectTechnique activeTechnique = null;
-                    int uploadedSkinnedBoneCount = 0;
-
-                    for (int i = 0; i < meshCount; i++)
+                    try
                     {
-                        if (IsHiddenMesh(i))
-                            continue;
-
-                        bool useGpuSkinning = shadowCasterSkinnedTechnique != null &&
-                                              _gpuSkinMeshEnabled != null &&
-                                              (uint)i < (uint)_gpuSkinMeshEnabled.Length &&
-                                              _gpuSkinMeshEnabled[i] &&
-                                              _gpuSkinVertexBuffers != null &&
-                                              (uint)i < (uint)_gpuSkinVertexBuffers.Length &&
-                                              _gpuSkinVertexBuffers[i] != null &&
-                                              _gpuSkinIndexBuffers != null &&
-                                              (uint)i < (uint)_gpuSkinIndexBuffers.Length &&
-                                              _gpuSkinIndexBuffers[i] != null;
-
-                        VertexBuffer vb = useGpuSkinning ? _gpuSkinVertexBuffers[i] : _boneVertexBuffers?[i];
-                        IndexBuffer ib = useGpuSkinning ? _gpuSkinIndexBuffers[i] : _boneIndexBuffers?[i];
-                        var tex = _boneTextures[i];
-                        if (vb == null || ib == null || tex == null)
-                            continue;
-
-                        if (useGpuSkinning)
+                        ModelEffectBindings bindings = GetModelEffectBindings(shadowEffect);
+                        var shadowCasterTechnique = bindings.GetTechnique("ShadowCaster");
+                        var shadowCasterSkinnedTechnique = bindings.GetTechnique("ShadowCaster_Skinned");
+                        if (shadowCasterTechnique != null)
                         {
-                            int requiredBoneCount = _gpuSkinBoneCounts != null && (uint)i < (uint)_gpuSkinBoneCounts.Length
-                                ? _gpuSkinBoneCounts[i]
-                                : 0;
+                            bindings.World?.SetValue(WorldPosition);
+                            bindings.LightViewProjection?.SetValue(lightViewProjection);
+                            bindings.ShadowMapTexelSize?.SetValue(shadowTexel);
+                            bindings.ShadowBias?.SetValue(Constants.SHADOW_BIAS);
+                            bindings.ShadowNormalBias?.SetValue(Constants.SHADOW_NORMAL_BIAS);
+                            bindings.SunDirection?.SetValue(GraphicsManager.Instance.ShadowMapRenderer?.LightDirection ?? Constants.SUN_DIRECTION);
+                            bindings.UseProceduralTerrainUv?.SetValue(0.0f);
+                            bindings.IsWaterTexture?.SetValue(0.0f);
 
-                            if (requiredBoneCount > uploadedSkinnedBoneCount)
+                            gd.BlendState = BlendState.Opaque;
+                            gd.DepthStencilState = DepthStencilState.Default;
+
+                            int meshCount = Model.Meshes.Length;
+                            EffectTechnique activeTechnique = null;
+                            int uploadedSkinnedBoneCount = 0;
+
+                            for (int i = 0; i < meshCount; i++)
                             {
-                                if (!TryUploadGpuSkinBoneMatrices(shadowEffect, requiredBoneCount))
+                                if (IsHiddenMesh(i))
+                                    continue;
+
+                                bool useGpuSkinning = shadowCasterSkinnedTechnique != null &&
+                                                      EnsureGpuSkinnedMeshForMainPass(i);
+
+                                VertexBuffer vb = useGpuSkinning ? _meshes[i].GpuVertexBuffer : _meshes?[i]?.CpuVertexBuffer;
+                                IndexBuffer ib = useGpuSkinning ? _meshes[i].GpuIndexBuffer : _meshes?[i]?.CpuIndexBuffer;
+                                var tex = _meshes[i].Texture;
+                                if (vb == null || ib == null || tex == null)
+                                    continue;
+
+                                if (useGpuSkinning)
                                 {
-                                    useGpuSkinning = false;
-                                    vb = _boneVertexBuffers?[i];
-                                    ib = _boneIndexBuffers?[i];
-                                    if (vb == null || ib == null)
-                                        continue;
+                                    int requiredBoneCount = _meshes != null && (uint)i < (uint)_meshes.Length
+                                        ? _meshes[i].GpuBoneCount
+                                        : 0;
+
+                                    if (requiredBoneCount > uploadedSkinnedBoneCount)
+                                    {
+                                        if (!TryUploadGpuSkinBoneMatrices(shadowEffect, bindings, requiredBoneCount))
+                                        {
+                                            useGpuSkinning = false;
+                                            vb = _meshes?[i]?.CpuVertexBuffer;
+                                            ib = _meshes?[i]?.CpuIndexBuffer;
+                                            if (vb == null || ib == null)
+                                                continue;
+                                        }
+                                        else
+                                        {
+                                            uploadedSkinnedBoneCount = requiredBoneCount;
+                                        }
+                                    }
                                 }
-                                else
+
+                                var targetTechnique = useGpuSkinning ? shadowCasterSkinnedTechnique : shadowCasterTechnique;
+                                if (targetTechnique != activeTechnique)
                                 {
-                                    uploadedSkinnedBoneCount = requiredBoneCount;
+                                    shadowEffect.CurrentTechnique = targetTechnique;
+                                    activeTechnique = targetTechnique;
                                 }
+
+                                bool isTwoSided = IsMeshTwoSided(i, IsBlendMesh(i));
+                                gd.RasterizerState = isTwoSided ? _cullNone : _cullClockwise;
+                                bindings.DiffuseTexture?.SetValue(tex);
+
+                                foreach (var pass in shadowEffect.CurrentTechnique.Passes)
+                                {
+                                    pass.Apply();
+                                    gd.SetVertexBuffer(vb);
+                                    gd.Indices = ib;
+                                    gd.DrawIndexedPrimitives(
+                                        PrimitiveType.TriangleList,
+                                        0, 0, ib.IndexCount / 3);
+                                }
+
+                                drawnMeshCount++;
                             }
                         }
-
-                        var targetTechnique = useGpuSkinning ? shadowCasterSkinnedTechnique : shadowCasterTechnique;
-                        if (targetTechnique != activeTechnique)
-                        {
-                            shadowEffect.CurrentTechnique = targetTechnique;
-                            activeTechnique = targetTechnique;
-                        }
-
-                        bool isTwoSided = IsMeshTwoSided(i, IsBlendMesh(i));
-                        gd.RasterizerState = isTwoSided ? _cullNone : _cullClockwise;
-
-                        shadowEffect?.Parameters["DiffuseTexture"]?.SetValue(tex);
-
-                        foreach (var pass in shadowEffect.CurrentTechnique.Passes)
-                        {
-                            pass.Apply();
-                            gd.SetVertexBuffer(vb);
-                            gd.Indices = ib;
-                            gd.DrawIndexedPrimitives(
-                                PrimitiveType.TriangleList,
-                                0, 0, ib.IndexCount / 3);
-                        }
                     }
-
-                    gd.BlendState = prevBlend;
-                    gd.DepthStencilState = prevDepth;
-                    gd.RasterizerState = prevRaster;
-                    if (prevTechnique != null)
-                        shadowEffect.CurrentTechnique = prevTechnique;
+                    finally
+                    {
+                        gd.BlendState = prevBlend;
+                        gd.DepthStencilState = prevDepth;
+                        gd.RasterizerState = prevRaster;
+                        if (prevTechnique != null)
+                            shadowEffect.CurrentTechnique = prevTechnique;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -386,10 +493,7 @@ namespace Client.Main.Objects
                 }
             }
 
-            // Recursively draw shadow casters for all children (armor, weapons, helm, etc.)
-            // Note: We don't use modelChild.Visible here because it includes OutOfView check,
-            // and children may not have their OutOfView properly updated since they're not in World.Objects directly.
-            // Instead, we check Status, Hidden, and RenderShadow directly.
+            // Recursively draw shadow casters for all children (armor, weapons, helm, etc.).
             int childCount = Children.Count;
             bool skipSmallParts = Constants.SHADOW_SKIP_SMALL_PARTS;
             for (int i = 0; i < childCount; i++)
@@ -400,13 +504,14 @@ namespace Client.Main.Objects
                     !modelChild.Hidden &&
                     modelChild.RenderShadow)
                 {
-                    // Skip small parts (weapons, gloves, boots) for performance if enabled
                     if (skipSmallParts && IsSmallShadowPart(modelChild))
                         continue;
 
-                    modelChild.DrawShadowCaster(shadowEffect, lightViewProjection);
+                    drawnMeshCount += modelChild.DrawShadowCaster(shadowEffect, lightViewProjection);
                 }
             }
+
+            return drawnMeshCount;
         }
 
         /// <summary>

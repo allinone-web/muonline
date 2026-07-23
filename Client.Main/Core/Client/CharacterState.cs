@@ -59,6 +59,23 @@ namespace Client.Main.Core.Client
         /// Gets or sets when this effect was activated.
         /// </summary>
         public DateTime ActivatedAt { get; set; } = DateTime.UtcNow;
+
+        public string Name { get; set; } = string.Empty;
+
+        public string ValueText { get; set; } = string.Empty;
+
+        public TimeSpan? Duration { get; set; }
+
+        public DateTime? ExpiresAt { get; set; }
+
+        public TimeSpan? GetRemainingTime(DateTime now)
+        {
+            if (!ExpiresAt.HasValue)
+                return null;
+
+            var remaining = ExpiresAt.Value - now;
+            return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+        }
     }
 
     /// <summary>
@@ -143,6 +160,12 @@ namespace Client.Main.Core.Client
         public ushort Vitality { get; set; } = 0;
         public ushort Energy { get; set; } = 0;
         public ushort Leadership { get; set; } = 0;
+
+        // Fruit points reported by CharacterInformation (F3/03).
+        public ushort UsedFruitPoints { get; private set; } = 0;
+        public ushort MaxFruitPoints { get; private set; } = 0;
+        public ushort UsedNegativeFruitPoints { get; private set; } = 0;
+        public ushort MaxNegativeFruitPoints { get; private set; } = 0;
 
         // Combat speeds (provided by server, Season 6)
         public ushort AttackSpeed { get; private set; } = 0;
@@ -1136,6 +1159,18 @@ namespace Client.Main.Core.Client
                                    MaximumMana, MaximumAbility);
         }
 
+        public void UpdateFruitPoints(
+            ushort usedFruitPoints,
+            ushort maxFruitPoints,
+            ushort usedNegativeFruitPoints,
+            ushort maxNegativeFruitPoints)
+        {
+            UsedFruitPoints = usedFruitPoints;
+            MaxFruitPoints = maxFruitPoints;
+            UsedNegativeFruitPoints = usedNegativeFruitPoints;
+            MaxNegativeFruitPoints = maxNegativeFruitPoints;
+        }
+
         /// <summary>
         /// Updates the character's position coordinates.
         /// </summary>
@@ -1614,12 +1649,18 @@ namespace Client.Main.Core.Client
         {
             ushort maskedId = (ushort)(playerId & 0x7FFF);
             var key = (effectId, maskedId);
+            var definition = BuffDefinitionRegistry.Get((BuffEffectId)effectId);
+            var activatedAt = DateTime.UtcNow;
             _activeBuffs[key] = new ActiveBuffState
             {
                 EffectId = effectId,
                 PlayerIdRaw = playerId,
                 PlayerIdMasked = maskedId,
-                ActivatedAt = DateTime.UtcNow
+                ActivatedAt = activatedAt,
+                Name = definition.Name,
+                ValueText = definition.ValueText,
+                Duration = definition.Duration,
+                ExpiresAt = definition.Duration.HasValue ? activatedAt + definition.Duration.Value : null
             };
             ActiveBuffsChanged?.Invoke();
             _logger.LogDebug("Buff activated. Effect ID: {EffectId}, Player ID: {PlayerId} (masked {MaskedId})", effectId, playerId, maskedId);
@@ -1653,6 +1694,27 @@ namespace Client.Main.Core.Client
             return _activeBuffs.Values
                 .Where(b => b.PlayerIdMasked == selfMasked)
                 .OrderBy(b => b.ActivatedAt);
+        }
+
+        public void ExpireActiveBuffs()
+        {
+            if (_activeBuffs.IsEmpty)
+                return;
+
+            DateTime now = DateTime.UtcNow;
+            bool changed = false;
+
+            foreach (var kv in _activeBuffs)
+            {
+                var buff = kv.Value;
+                if (!buff.ExpiresAt.HasValue || buff.ExpiresAt.Value > now)
+                    continue;
+
+                changed |= _activeBuffs.TryRemove(kv.Key, out _);
+            }
+
+            if (changed)
+                ActiveBuffsChanged?.Invoke();
         }
 
         public bool HasActiveBuff(byte effectId, ushort playerId)

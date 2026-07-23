@@ -2,6 +2,7 @@
 using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Models;
+using Client.Main.Objects.Effects;
 using Client.Main.Objects.Player;
 using Client.Main.Core.Utilities;
 using Microsoft.Xna.Framework;
@@ -13,17 +14,22 @@ namespace Client.Main.Objects.Monsters
     public class DeathCow : MonsterObject
     {
         private WeaponObject _rightHandWeapon;
+        private GlowingEyesEffect _eyeGlow;
 
         public DeathCow()
         {
             RenderShadow = true;
-            Scale = 1.1f; // Set according to C++ Setting_Monster
+            Scale = 1.1f;
             _rightHandWeapon = new WeaponObject
             {
                 LinkParentAnimation = false,
                 ParentBoneLink = 42
             };
             Children.Add(_rightHandWeapon);
+
+            // Eyes: bones 22 (L), 23 (R) — original RenderEye(o, 22, 23)
+            _eyeGlow = new GlowingEyesEffect { LeftEyeBone = 22, RightEyeBone = 23, GlowColor = new Color(80, 180, 255) };
+            Children.Add(_eyeGlow);
         }
 
         public override async Task Load()

@@ -72,7 +72,7 @@ namespace Client.Main.Content
             ushort c1 = BitConverter.ToUInt16(data, offset + 2);
             uint lookup = BitConverter.ToUInt32(data, offset + 4);
 
-            Color[] colors = new Color[4];
+            Span<Color> colors = stackalloc Color[4];
             colors[0] = Unpack565(c0);
             colors[1] = Unpack565(c1);
 
@@ -111,7 +111,7 @@ namespace Client.Main.Content
             ushort c1 = BitConverter.ToUInt16(data, colorOffset + 2);
             uint lookup = BitConverter.ToUInt32(data, colorOffset + 4);
 
-            Color[] colors = new Color[4];
+            Span<Color> colors = stackalloc Color[4];
             colors[0] = Unpack565(c0);
             colors[1] = Unpack565(c1);
             colors[2] = Lerp(colors[0], colors[1], 1f / 3f);
@@ -144,7 +144,7 @@ namespace Client.Main.Content
             byte a1 = data[offset + 1];
             ulong alphaLookup = BitConverter.ToUInt64(data, offset) >> 16; // Skip a0, a1
 
-            float[] alphas = new float[8];
+            Span<float> alphas = stackalloc float[8];
             alphas[0] = a0;
             alphas[1] = a1;
 
@@ -167,7 +167,7 @@ namespace Client.Main.Content
             ushort c1 = BitConverter.ToUInt16(data, colorOffset + 2);
             uint colorLookup = BitConverter.ToUInt32(data, colorOffset + 4);
 
-            Color[] colors = new Color[4];
+            Span<Color> colors = stackalloc Color[4];
             colors[0] = Unpack565(c0);
             colors[1] = Unpack565(c1);
             colors[2] = Lerp(colors[0], colors[1], 1f / 3f);
@@ -221,8 +221,12 @@ namespace Client.Main.Content
         /// </summary>
         private static void SetPixel(byte[] rgba, int x, int y, int width, Color c)
         {
-            // DXT works on 4x4 blocks, so textures might be padded
-            // We assume width/height passed here match the texture dimensions
+            // DXT blocks are 4x4 and edge blocks can extend past a non-aligned width.
+            // Reject those pixels before calculating the linear index to avoid wrapping
+            // them into the next row.
+            if ((uint)x >= (uint)width || y < 0)
+                return;
+
             int idx = (y * width + x) * 4;
             if (idx + 3 < rgba.Length)
             {

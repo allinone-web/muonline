@@ -1,6 +1,7 @@
 ﻿using Client.Main.Content;
 using Client.Main.Controllers;
 using Client.Main.Controls;
+using Client.Main.Objects.Effects;
 using Client.Main.Objects.Player;
 using Client.Main.Core.Utilities;
 using Microsoft.Xna.Framework;
@@ -16,6 +17,7 @@ namespace Client.Main.Objects.Monsters
     public class Tantalos : MonsterObject
     {
         private WeaponObject _rightHandWeapon;
+        private GlowingEyesEffect _eyeGlow;
 
         public Tantalos()
         {
@@ -28,6 +30,19 @@ namespace Client.Main.Objects.Monsters
                 ParentBoneLink = 43
             };
             Children.Add(_rightHandWeapon);
+
+            // Eyes: bones 24 (Right), 25 (Left) — original MoveEye(o, b, 24, 25)
+            _eyeGlow = new GlowingEyesEffect
+            {
+                LeftEyeBone = 25,
+                RightEyeBone = 24,
+                GlowColor = new Color(30, 120, 255),
+                GlowScale = 1.1f,
+                GlowAlpha = 0.9f,
+                TrailWidth = 5f,
+                TrailDuration = 0.6f
+            };
+            Children.Add(_eyeGlow);
         }
 
         public override async Task Load()

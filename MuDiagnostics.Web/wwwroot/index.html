@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>MU Client Diagnostics</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#overview" aria-label="MU Client Diagnostics">
+        <span class="brand-mark" aria-hidden="true"><span></span></span>
+        <span><strong>MU Diagnostics</strong><small>client telemetry</small></span>
+      </a>
+      <nav class="nav" aria-label="Sekcje dashboardu">
+        <a class="nav-link active" href="#overview"><span class="nav-icon">01</span><span>Overview</span></a>
+        <a class="nav-link" href="#rendering"><span class="nav-icon">02</span><span>Rendering</span></a>
+        <a class="nav-link" href="#animation"><span class="nav-icon">03</span><span>Animation</span></a>
+        <a class="nav-link" href="#runtime"><span class="nav-icon">04</span><span>Runtime</span></a>
+        <a class="nav-link" href="#analysis"><span class="nav-icon">05</span><span>Analysis</span></a>
+        <a class="nav-link" href="#events"><span class="nav-icon">06</span><span>Events</span></a>
+      </nav>
+      <div class="sidebar-status">
+        <div class="status-line"><span id="sidebar-dot" class="status-dot offline"></span><span id="sidebar-status">Oczekiwanie na klienta</span></div>
+        <div id="sidebar-session" class="mono muted">brak sesji</div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div>
+          <h1>Client performance</h1>
+          <p id="context-line">Uruchom klienta gry, aby rozpocząć pomiary.</p>
+        </div>
+        <div class="toolbar">
+          <label class="select-wrap">Zakres
+            <select id="range-select">
+              <option value="60">1 min</option>
+              <option value="300" selected>5 min</option>
+              <option value="900">15 min</option>
+              <option value="1800">30 min</option>
+            </select>
+          </label>
+          <button id="pause-button" class="button secondary" type="button">Wstrzymaj</button>
+          <a id="export-button" class="button secondary" href="/api/export.csv?seconds=300">Eksport CSV</a>
+          <a id="report-button" class="button secondary" href="/api/report.md?seconds=300">Raport MD</a>
+          <button id="import-button" class="button secondary" type="button">Analizuj CSV</button>
+          <input id="import-file" class="visually-hidden" type="file" accept=".csv,text/csv">
+          <button id="reset-button" class="button danger" type="button">Wyczyść</button>
+        </div>
+      </header>
+
+      <main>
+        <section id="overview" class="dashboard-section">
+          <div class="section-heading">
+            <div><h2>Overview</h2><p>Najważniejsze wskaźniki bieżącej sesji.</p></div>
+            <div id="health-badge" class="health-badge waiting"><span></span><strong>WAITING</strong></div>
+          </div>
+
+          <div class="kpi-grid">
+            <article class="kpi"><span>FPS</span><strong id="kpi-fps">—</strong><small id="kpi-fps-note">brak danych</small></article>
+            <article class="kpi"><span>Full frame p95</span><strong id="kpi-p95">—</strong><small>pełny odstęp między klatkami</small></article>
+            <article class="kpi"><span>Full frame p99</span><strong id="kpi-p99">—</strong><small>stabilność najgorszych klatek</small></article>
+            <article class="kpi"><span>Draw calls</span><strong id="kpi-draws">—</strong><small>estymacja głównych passów</small></article>
+            <article class="kpi"><span>Visible objects</span><strong id="kpi-visible">—</strong><small id="kpi-culling-note">culling —</small></article>
+            <article class="kpi"><span>Working set</span><strong id="kpi-memory">—</strong><small id="kpi-cpu-note">CPU —</small></article>
+          </div>
+
+          <div class="overview-grid">
+            <article class="panel chart-panel wide">
+              <div class="panel-header"><div><h3>Full frame interval</h3><p>p50, p95 i p99 z rzeczywistego odstępu klatek</p></div><div class="legend"><span class="s1">p50</span><span class="s2">p95</span><span class="s3">p99</span></div></div>
+              <canvas id="frame-chart" height="280"></canvas>
+            </article>
+            <article class="panel health-panel">
+              <div class="panel-header"><div><h3>Session health</h3><p>Automatyczna ocena klienta</p></div></div>
+              <div class="health-score"><strong id="health-score">—</strong><span>/100</span></div>
+              <div class="health-list">
+                <div><span>Frame pacing</span><strong id="health-frame">—</strong></div>
+                <div><span>Main thread</span><strong id="health-main">—</strong></div>
+                <div><span>GPU animation</span><strong id="health-animation">—</strong></div>
+                <div><span>Memory / GC</span><strong id="health-memory">—</strong></div>
+              </div>
+              <div id="health-advice" class="health-advice">Czekam na pierwsze próbki telemetryczne.</div>
+            </article>
+          </div>
+        </section>
+
+        <section id="rendering" class="dashboard-section">
+          <div class="section-heading"><div><h2>Rendering</h2><p>Teren, obiekty świata, oświetlenie i draw calle.</p></div></div>
+          <div class="two-column">
+            <article class="panel chart-panel"><div class="panel-header"><div><h3>Rendering load</h3><p>Draw calle i widoczne obiekty</p></div><div class="legend"><span class="s1">draws</span><span class="s4">objects</span></div></div><canvas id="render-chart" height="250"></canvas></article>
+            <article class="panel chart-panel"><div class="panel-header"><div><h3>CPU frame split</h3><p>Update i Draw</p></div><div class="legend"><span class="s2">update</span><span class="s5">draw</span></div></div><canvas id="cpu-chart" height="250"></canvas></article>
+          </div>
+          <div class="metric-groups">
+            <article class="metric-group"><h3>Terrain</h3><dl><div><dt>Draw calls</dt><dd id="terrain-draws">—</dd></div><div><dt>Triangles</dt><dd id="terrain-triangles">—</dd></div><div><dt>Blocks / cells</dt><dd id="terrain-blocks">—</dd></div><div><dt>Grass draws</dt><dd id="grass-draws">—</dd></div></dl></article>
+            <article class="metric-group"><h3>World culling</h3><dl><div><dt>Candidates</dt><dd id="cull-candidates">—</dd></div><div><dt>Visible</dt><dd id="cull-visible">—</dd></div><div><dt>Cull time</dt><dd id="cull-time">—</dd></div><div><dt>Animation skip</dt><dd id="anim-skips">—</dd></div></dl></article>
+            <article class="metric-group"><h3>Lighting</h3><dl><div><dt>Registered</dt><dd id="lights-registered">—</dd></div><div><dt>Visible / uploaded</dt><dd id="lights-visible">—</dd></div><div><dt>Terrain shader</dt><dd id="terrain-gpu">—</dd></div><div><dt>Object shader</dt><dd id="objects-gpu">—</dd></div></dl></article>
+            <article class="metric-group"><h3>CPU render passes</h3><dl><div><dt>Scene / after</dt><dd id="pass-scene">—</dd></div><div><dt>World objects / terrain</dt><dd id="pass-world">—</dd></div><div><dt>Shadow / post</dt><dd id="pass-effects">—</dd></div><div><dt>Item previews</dt><dd id="pass-preview">—</dd></div></dl></article>
+          </div>
+        </section>
+
+        <section id="animation" class="dashboard-section">
+          <div class="section-heading"><div><h2>Animation & instancing</h2><p>GPU skinning, multi-pose, atlas kości i batching.</p></div></div>
+          <div class="two-column">
+            <article class="panel chart-panel"><div class="panel-header"><div><h3>Multi-pose efficiency</h3><p>Instancje meshy względem draw calli</p></div><div class="legend"><span class="s4">instances</span><span class="s3">draws</span><span class="s6">poses</span></div></div><canvas id="animation-chart" height="250"></canvas></article>
+            <article class="panel chart-panel"><div class="panel-header"><div><h3>Palette traffic</h3><p>Upload atlasu kości</p></div><div class="legend"><span class="s2">KB</span><span class="s5">uploads</span><span class="s6">dirty rows</span></div></div><canvas id="palette-chart" height="250"></canvas></article>
+          </div>
+          <div class="metric-groups">
+            <article class="metric-group"><h3>GPU skinning</h3><dl><div><dt>Status</dt><dd id="gpu-status">—</dd></div><div><dt>Skinned meshes</dt><dd id="gpu-meshes">—</dd></div><div><dt>Batch draws / meshes</dt><dd id="gpu-batches">—</dd></div><div><dt>Batch efficiency</dt><dd id="gpu-efficiency">—</dd></div></dl></article>
+            <article class="metric-group"><h3>Multi-pose</h3><dl><div><dt>Status</dt><dd id="mp-status">—</dd></div><div><dt>Objects / poses</dt><dd id="mp-objects">—</dd></div><div><dt>Mesh instances</dt><dd id="mp-instances">—</dd></div><div><dt>Instances / draw</dt><dd id="mp-efficiency">—</dd></div></dl></article>
+            <article class="metric-group"><h3>Static instancing</h3><dl><div><dt>Status</dt><dd id="static-status">—</dd></div><div><dt>Objects</dt><dd id="static-objects">—</dd></div><div><dt>Mesh instances</dt><dd id="static-instances">—</dd></div><div><dt>Draw calls</dt><dd id="static-draws">—</dd></div></dl></article>
+            <article class="metric-group"><h3>Multi-pose eligibility</h3><dl><div><dt>Attempts / queued</dt><dd id="mp-attempts">—</dd></div><div><dt>Object / mesh rejects</dt><dd id="mp-reject-policy">—</dd></div><div><dt>Buffer / bone rejects</dt><dd id="mp-reject-data">—</dd></div><div><dt>CPU fallback draws</dt><dd id="cpu-fallbacks">—</dd></div></dl></article>
+            <article class="metric-group"><h3>Eligibility reasons</h3><dl><div><dt>Children / material</dt><dd id="mp-reject-visual">—</dd></div><div><dt>Animation / one-shot</dt><dd id="mp-reject-animation">—</dd></div><div><dt>Visibility / mutable</dt><dd id="mp-reject-state">—</dd></div><div><dt>Unsupported / renderer</dt><dd id="mp-reject-platform">—</dd></div></dl></article>
+          </div>
+        </section>
+
+        <section id="runtime" class="dashboard-section">
+          <div class="section-heading"><div><h2>Runtime & memory</h2><p>Kolejki, alokacje, proces i cache zasobów.</p></div></div>
+          <div class="two-column">
+            <article class="panel chart-panel"><div class="panel-header"><div><h3>Memory</h3><p>Working set i managed heap</p></div><div class="legend"><span class="s1">working MB</span><span class="s6">managed MB</span></div></div><canvas id="memory-chart" height="250"></canvas></article>
+            <article class="panel chart-panel"><div class="panel-header"><div><h3>Allocation pressure</h3><p>Alokacje na klatkę i kolejki</p></div><div class="legend"><span class="s2">alloc KB</span><span class="s3">main queue</span><span class="s5">tasks</span></div></div><canvas id="runtime-chart" height="250"></canvas></article>
+          </div>
+          <div class="metric-groups">
+            <article class="metric-group"><h3>Process</h3><dl><div><dt>CPU</dt><dd id="process-cpu">—</dd></div><div><dt>Working / private</dt><dd id="process-memory">—</dd></div><div><dt>Managed heap</dt><dd id="managed-memory">—</dd></div><div><dt>Threads</dt><dd id="process-threads">—</dd></div></dl></article>
+            <article class="metric-group"><h3>Queues & GC</h3><dl><div><dt>Main processed / queued</dt><dd id="main-queue">—</dd></div><div><dt>Tasks processed / queued</dt><dd id="task-queue">—</dd></div><div><dt>Main-thread time</dt><dd id="main-time">—</dd></div><div><dt>GC 0 / 1 / 2</dt><dd id="gc-counts">—</dd></div></dl></article>
+            <article class="metric-group"><h3>Frame pacing</h3><dl><div><dt>Current full / CPU</dt><dd id="frame-current">—</dd></div><div><dt>Outside profiler</dt><dd id="frame-unaccounted">—</dd></div><div><dt>Window / VSync</dt><dd id="frame-state">—</dd></div><div><dt>Longest main action</dt><dd id="main-longest">—</dd></div></dl></article>
+            <article class="metric-group"><h3>BMD cache</h3><dl><div><dt>Hit / miss</dt><dd id="bmd-hit">—</dd></div><div><dt>GPU mesh / batch</dt><dd id="bmd-gpu">—</dd></div><div><dt>Topologies</dt><dd id="bmd-topology">—</dd></div><div><dt>Pruned</dt><dd id="bmd-pruned">—</dd></div></dl></article>
+            <article class="metric-group"><h3>Update breakdown</h3><dl><div><dt>Dispatcher / global</dt><dd id="update-core">—</dd></div><div><dt>Scene / framework</dt><dd id="update-scene">—</dd></div><div><dt>Controls / post</dt><dd id="update-controls">—</dd></div><div><dt>World init / visibility</dt><dd id="update-world">—</dd></div></dl></article>
+            <article class="metric-group"><h3>Game update details</h3><dl><div><dt>Buffs / notifications</dt><dd id="update-game-services">—</dd></div><div><dt>Scope / interaction</dt><dd id="update-game-actions">—</dd></div><div><dt>Housekeeping</dt><dd id="update-game-housekeeping">—</dd></div><div><dt>Longest object update</dt><dd id="world-longest-update">—</dd></div></dl></article>
+            <article class="metric-group"><h3>Allocation & path</h3><dl><div><dt>Update / Draw KB</dt><dd id="alloc-split">—</dd></div><div><dt>Path total / length</dt><dd id="path-total">—</dd></div><div><dt>Queue / facing</dt><dd id="path-parts">—</dd></div><div><dt>Build / send scheduling</dt><dd id="path-send">—</dd></div></dl></article>
+            <article class="metric-group"><h3>BMD miss reasons</h3><dl><div><dt>Pose / owner</dt><dd id="bmd-miss-pose">—</dd></div><div><dt>Index / missing</dt><dd id="bmd-miss-storage">—</dd></div><div><dt>Asset / mesh</dt><dd id="bmd-miss-identity">—</dd></div><div><dt>Color / bypass</dt><dd id="bmd-miss-other">—</dd></div><div><dt>Top miss model</dt><dd id="bmd-miss-top">—</dd></div></dl></article>
+            <article class="metric-group"><h3>Teleport & render faults</h3><dl><div><dt>Player Z / expected</dt><dd id="player-height">—</dd></div><div><dt>Height error</dt><dd id="player-height-error">—</dd></div><div><dt>Contained object faults</dt><dd id="render-faults">—</dd></div><div><dt>Last draw exception</dt><dd id="draw-exception">—</dd></div></dl></article>
+          </div>
+        </section>
+
+
+        <section id="analysis" class="dashboard-section">
+          <div class="section-heading">
+            <div><h2>Automated analysis</h2><p>Analiza stabilnych fragmentów sesji, skoków i trendów pamięci.</p></div>
+            <div id="analysis-source" class="count-label">live telemetry</div>
+          </div>
+
+          <div class="analysis-kpi-grid">
+            <article class="kpi analysis-kpi"><span>Primary bottleneck</span><strong id="analysis-bottleneck">—</strong><small id="analysis-summary">brak danych</small></article>
+            <article class="kpi analysis-kpi"><span>Steady FPS</span><strong id="analysis-fps">—</strong><small>median / 5th percentile</small></article>
+            <article class="kpi analysis-kpi"><span>Full / CPU p95</span><strong id="analysis-frame-p95">—</strong><small>rzeczywisty odstęp / Update + Draw</small></article>
+            <article class="kpi analysis-kpi"><span>Draw share</span><strong id="analysis-draw-share">—</strong><small>udział Draw w Update + Draw</small></article>
+            <article class="kpi analysis-kpi"><span>Allocation rate</span><strong id="analysis-allocation">—</strong><small>estymacja MB/s</small></article>
+            <article class="kpi analysis-kpi"><span>Memory trend</span><strong id="analysis-memory-slope">—</strong><small>working set MB/min</small></article>
+          </div>
+
+          <div class="two-column analysis-grid">
+            <article class="panel analysis-panel">
+              <div class="panel-header"><div><h3>Recommendations</h3><p>Najważniejsze działania według bieżących danych</p></div></div>
+              <div id="analysis-recommendations" class="recommendation-list"><div class="empty-state">Czekam na wystarczającą liczbę próbek.</div></div>
+            </article>
+            <article class="panel analysis-panel">
+              <div class="panel-header"><div><h3>Data quality</h3><p>Zakres i wiarygodność analizy</p></div></div>
+              <dl class="analysis-facts">
+                <div><dt>Samples</dt><dd id="analysis-samples">—</dd></div>
+                <div><dt>Duration</dt><dd id="analysis-duration">—</dd></div>
+                <div><dt>Sample interval</dt><dd id="analysis-interval">—</dd></div>
+                <div><dt>Scene transitions</dt><dd id="analysis-transitions">—</dd></div>
+                <div><dt>Render pass timing</dt><dd id="analysis-pass-data">—</dd></div>
+                <div><dt>Multi-pose reasons</dt><dd id="analysis-mp-data">—</dd></div>
+              </dl>
+              <p id="analysis-quality-note" class="quality-note">—</p>
+            </article>
+          </div>
+
+          <article class="panel table-panel">
+            <div class="panel-header"><div><h3>Scene and world segments</h3><p>Pierwsze sekundy każdego segmentu są wyłączone ze steady-state.</p></div></div>
+            <div class="table-scroll">
+              <table class="analysis-table">
+                <thead><tr><th>Scene</th><th>World</th><th>Duration</th><th>FPS med / p05</th><th>Full / CPU p95</th><th>Update / Draw</th><th>Visible</th><th>GPU meshes</th><th>WS trend</th></tr></thead>
+                <tbody id="analysis-segments"><tr><td colspan="9" class="empty-cell">Brak danych</td></tr></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="panel table-panel">
+            <div class="panel-header"><div><h3>Detected spikes</h3><p>Najdroższe próbki w stabilnym segmencie wraz z dominującym passem.</p></div></div>
+            <div class="table-scroll">
+              <table class="analysis-table">
+                <thead><tr><th>Time</th><th>Frame</th><th>Update</th><th>Draw</th><th>Main</th><th>Category</th><th>Dominant pass</th><th>Alloc</th></tr></thead>
+                <tbody id="analysis-spikes"><tr><td colspan="8" class="empty-cell">Brak wykrytych skoków</td></tr></tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
+        <section id="events" class="dashboard-section">
+          <div class="section-heading"><div><h2>Events & alerts</h2><p>Zdarzenia klienta i automatycznie wykryte problemy.</p></div><span id="event-count" class="count-label">0 events</span></div>
+          <article class="panel event-panel">
+            <div id="event-list" class="event-list"><div class="empty-state">Brak zdarzeń. Alerty pojawią się tutaj automatycznie.</div></div>
+          </article>
+        </section>
+      </main>
+    </div>
+  </div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

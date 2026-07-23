@@ -10,7 +10,6 @@ using Microsoft.Xna.Framework.Graphics;
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
-using System.Threading;
 using System.Threading.Tasks;
 using Client.Main.Controls;
 using Client.Main.Models;
@@ -51,24 +50,71 @@ namespace Client.Main.Objects
         private static readonly RasterizerState _cullClockwise = RasterizerState.CullClockwise;
         private static readonly RasterizerState _cullNone = RasterizerState.CullNone;
 
-        private static int _animationStrideSeed = 0;
         private static int _gpuSkinnedMeshesDrawnThisFrame = 0;
+        private static int _modelFallbackDrawCallsThisFrame = 0;
+        private static int _sharedAnimationPaletteHitsThisFrame = 0;
+        private static int _sharedAnimationPaletteMissesThisFrame = 0;
+        private static int _gpuSkinnedBatchDrawCallsThisFrame = 0;
+        private static int _gpuSkinnedBatchedMeshesThisFrame = 0;
+        private static bool _gpuSkinnedMeshBatchingFailed;
 
         // Track per-pass preparation to avoid re-uploading shared effect parameters per mesh
         private static int _drawModelInvocationCounter = 0;
         public static int LastFrameGpuSkinnedMeshesDrawn { get; private set; }
+        public static int LastFrameModelDrawCalls { get; private set; }
+        public static int LastFrameModelFallbackDrawCalls { get; private set; }
+        public static int LastFrameModelInstancedDrawCalls { get; private set; }
+        public static int LastFrameSharedAnimationPaletteHits { get; private set; }
+        public static int LastFrameSharedAnimationPaletteMisses { get; private set; }
+        public static int LastFrameGpuSkinnedBatchDrawCalls { get; private set; }
+        public static int LastFrameGpuSkinnedBatchedMeshes { get; private set; }
         public static bool IsGpuSkinningBackendSupported => SupportsGpuDynamicSkinning;
+        public static bool IsGpuSkinnedMeshBatchingRuntimeDisabled => _gpuSkinnedMeshBatchingFailed;
 
         public static void BeginFrameGpuSkinningMetrics()
         {
             LastFrameGpuSkinnedMeshesDrawn = _gpuSkinnedMeshesDrawnThisFrame;
+            LastFrameModelFallbackDrawCalls = _modelFallbackDrawCallsThisFrame;
+            LastFrameSharedAnimationPaletteHits = _sharedAnimationPaletteHitsThisFrame;
+            LastFrameSharedAnimationPaletteMisses = _sharedAnimationPaletteMissesThisFrame;
+            LastFrameGpuSkinnedBatchDrawCalls = _gpuSkinnedBatchDrawCallsThisFrame;
+            LastFrameGpuSkinnedBatchedMeshes = _gpuSkinnedBatchedMeshesThisFrame;
             _gpuSkinnedMeshesDrawnThisFrame = 0;
+            _modelFallbackDrawCallsThisFrame = 0;
+            _sharedAnimationPaletteHitsThisFrame = 0;
+            _sharedAnimationPaletteMissesThisFrame = 0;
+            _gpuSkinnedBatchDrawCallsThisFrame = 0;
+            _gpuSkinnedBatchedMeshesThisFrame = 0;
+            PruneSharedAnimationPaletteCache(MuGame.FrameIndex);
             BeginFrameStaticMapInstancingMetrics();
         }
 
-        private static void RegisterGpuSkinnedMeshDraw()
+        private static void RegisterGpuSkinnedMeshDraw(int meshInstanceCount = 1)
         {
-            _gpuSkinnedMeshesDrawnThisFrame++;
+            if (meshInstanceCount > 0)
+                _gpuSkinnedMeshesDrawnThisFrame += meshInstanceCount;
+        }
+
+        private static void RegisterGpuSkinnedBatchDraw(int meshCount)
+        {
+            _gpuSkinnedBatchDrawCallsThisFrame++;
+            if (meshCount > 0)
+                _gpuSkinnedBatchedMeshesThisFrame += meshCount;
+        }
+
+        private static void RegisterModelFallbackDrawCall()
+        {
+            _modelFallbackDrawCallsThisFrame++;
+        }
+
+        private static void RegisterSharedAnimationPaletteHit()
+        {
+            _sharedAnimationPaletteHitsThisFrame++;
+        }
+
+        private static void RegisterSharedAnimationPaletteMiss()
+        {
+            _sharedAnimationPaletteMissesThisFrame++;
         }
 
         public static ILoggerFactory AppLoggerFactory { get; private set; }
@@ -82,26 +128,14 @@ namespace Client.Main.Objects
 
         #region Instance Fields - Graphics Resources
 
-        private DynamicVertexBuffer[] _boneVertexBuffers;
-        private DynamicIndexBuffer[] _boneIndexBuffers;
-        private VertexBuffer[] _gpuSkinVertexBuffers;
-        private IndexBuffer[] _gpuSkinIndexBuffers;
-        private int[] _gpuSkinBoneCounts;
-        private bool[] _gpuSkinMeshEnabled;
-        private Texture2D[] _boneTextures;
-        private TextureScript[] _scriptTextures;
-        private TextureData[] _dataTextures;
+        // Per-mesh consolidated state replaces 15 parallel arrays.
+        private MeshRuntimeState[] _meshes;
 
         // Cached hint for world-level batching/sorting (avoids scanning mesh textures during Sort comparisons)
         private Texture2D _sortTextureHint;
         private bool _sortTextureHintDirty = true;
 
-        private bool[] _meshIsRGBA;
-        private bool[] _meshHiddenByScript;
-        private bool[] _meshBlendByScript;
-        private string[] _meshTexturePath;
         private int[] _staticMapInstancedMeshFrameTags;
-
         private int[] _blendMeshIndicesScratch;
 
         #endregion
@@ -117,6 +151,16 @@ namespace Client.Main.Objects
 
         protected int _priorActionIndex = 0;
         protected double _animTime = 0.0;
+        public double GetAnimationTime() => _animTime;
+        public double GetLoopedAnimationTime()
+        {
+            if (Model == null || Model.Actions == null || CurrentAction >= Model.Actions.Length)
+                return _animTime;
+            var action = Model.Actions[CurrentAction];
+            if (action == null || action.NumAnimationKeys <= 0)
+                return _animTime;
+            return _animTime % action.NumAnimationKeys;
+        }
 
         private LocalAnimationState _lastAnimationState;
         private bool _animationStateValid = false;
@@ -126,27 +170,18 @@ namespace Client.Main.Objects
         #region Instance Fields - Buffer State
 
         private bool _renderShadow = false;
-        private uint _invalidatedBufferFlags = uint.MaxValue; // Start with all flags set
+        private MeshDirtyFlags _invalidatedBufferFlags = MeshDirtyFlags.All;
         private float _blendMeshLight = 1f;
         private bool _contentLoaded = false;
         private bool _boundingComputed = false;
         private bool _dynamicBuffersFrozen = false;
 
-        // Buffer invalidation flags
-        private const uint BUFFER_FLAG_ANIMATION = 1u << 0;      // Animation/bones changed
-        private const uint BUFFER_FLAG_LIGHTING = 1u << 1;       // Lighting changed
-        private const uint BUFFER_FLAG_TRANSFORM = 1u << 2;      // World transform changed
-        private const uint BUFFER_FLAG_MATERIAL = 1u << 3;       // Material properties changed
-        private const uint BUFFER_FLAG_TEXTURE = 1u << 4;        // Texture changed
-        private const uint BUFFER_FLAG_ALL = uint.MaxValue;      // Force full rebuild
-
-        // Exposed equivalents for derived classes (to avoid magic numbers)
-        protected const uint BufferFlagAnimation = BUFFER_FLAG_ANIMATION;
-        protected const uint BufferFlagLighting = BUFFER_FLAG_LIGHTING;
-        protected const uint BufferFlagTransform = BUFFER_FLAG_TRANSFORM;
-        protected const uint BufferFlagMaterial = BUFFER_FLAG_MATERIAL;
-        protected const uint BufferFlagTexture = BUFFER_FLAG_TEXTURE;
-        protected const uint BufferFlagAll = BUFFER_FLAG_ALL;
+        protected const MeshDirtyFlags BufferFlagAnimation = MeshDirtyFlags.Animation;
+        protected const MeshDirtyFlags BufferFlagLighting = MeshDirtyFlags.Lighting;
+        protected const MeshDirtyFlags BufferFlagTransform = MeshDirtyFlags.Transform;
+        protected const MeshDirtyFlags BufferFlagMaterial = MeshDirtyFlags.Material;
+        protected const MeshDirtyFlags BufferFlagTexture = MeshDirtyFlags.Texture;
+        protected const MeshDirtyFlags BufferFlagAll = MeshDirtyFlags.All;
 
         // Bounding box update optimization
         private int _boundingFrameCounter = BoundingUpdateInterval;
@@ -154,18 +189,53 @@ namespace Client.Main.Objects
 
         // Enhanced animation caching system
         private Matrix[] _cachedBoneMatrix = null;
+        private Matrix[] _lastCachedBoneSource = null;
+        private uint _lastCachedBonePoseVersion = uint.MaxValue;
         private int _lastCachedAction = -1;
         private float _lastCachedAnimTime = -1;
         private bool _boneMatrixCacheValid = false;
 
-        private MeshBufferCache[] _meshBufferCache;
         private const int MaxGpuSkinBones = 256;
-#if WINDOWS_DX
-        private const bool SupportsGpuDynamicSkinning = true;
-#else
-        private const bool SupportsGpuDynamicSkinning = false;
-#endif
+        private static Effect _gpuSkinCapabilityDynamicEffect;
+        private static Effect _gpuSkinCapabilityItemEffect;
+        private static Effect _gpuSkinCapabilityMonsterEffect;
+        private static bool _gpuSkinCapability;
+
+        // Detect support from compiled effects instead of relying on project symbols.
+        // GPU geometry is shared by all material paths; every path still verifies its
+        // own skinned technique before it is selected for a mesh.
+        private static bool SupportsGpuDynamicSkinning
+        {
+            get
+            {
+                var graphics = GraphicsManager.Instance;
+                var dynamicEffect = graphics?.DynamicLightingEffect;
+                var itemEffect = graphics?.ItemMaterialEffect;
+                var monsterEffect = graphics?.MonsterMaterialEffect;
+
+                if (ReferenceEquals(dynamicEffect, _gpuSkinCapabilityDynamicEffect) &&
+                    ReferenceEquals(itemEffect, _gpuSkinCapabilityItemEffect) &&
+                    ReferenceEquals(monsterEffect, _gpuSkinCapabilityMonsterEffect))
+                {
+                    return _gpuSkinCapability;
+                }
+
+                _gpuSkinCapabilityDynamicEffect = dynamicEffect;
+                _gpuSkinCapabilityItemEffect = itemEffect;
+                _gpuSkinCapabilityMonsterEffect = monsterEffect;
+                _gpuSkinCapability =
+                    TryGetTechnique(dynamicEffect, "DynamicLighting_Skinned") != null ||
+                    TryGetTechnique(itemEffect, "BasicColorDrawing_Skinned") != null ||
+                    TryGetTechnique(monsterEffect, "MonsterMaterialDrawing_Skinned") != null;
+
+                return _gpuSkinCapability;
+            }
+        }
+
         private Matrix[] _gpuSkinBoneUploadBuffer = Array.Empty<Matrix>();
+        private int _gpuSkinBoneUploadCount;
+        private Matrix[] _gpuSkinPreparedBoneSource;
+        private uint _gpuSkinPreparedPoseVersion = uint.MaxValue;
 
         #endregion
 
@@ -180,7 +250,7 @@ namespace Client.Main.Objects
         private Vector2 _lastLightSampleCell = new Vector2(float.MaxValue);
         private Vector3 _lastSampledLight = Vector3.Zero;
 
-        private readonly DynamicLightGpuUploader _dynamicLightUploader = new(32);
+        private static readonly DynamicLightGpuUploader _dynamicLightUploader = new(32);
 
         private int _drawModelInvocationId = 0;
         private int _dynamicLightingPreparedInvocationId = -1;
@@ -192,11 +262,11 @@ namespace Client.Main.Objects
         #region Instance Fields - Cached State
 
         private float _animationStepAccumulatorSeconds = 0f;
+        private double _lastAnimationTotalSeconds; // TotalGameTime at last Animation() call — used to compute true elapsed when throttled
         private uint _animationPoseVersion = 0;
         private uint _lastLinkedParentPoseVersion = uint.MaxValue;
         private ModelObject _lastLinkedParentModel = null;
         private double _lastFrameTimeMs = 0; // To track timing in methods without GameTime
-        private double _lastStrideAnimationBufferUpdateTimeMs = double.NegativeInfinity;
         private float _drawShaderTimeSeconds = 0f;
         private int _animationSampleActionIndex = -1;
         private int _animationSampleFrame0 = 0;
@@ -204,7 +274,6 @@ namespace Client.Main.Objects
         private int _animationSampleInterpolationBucket = 0;
         private bool _animationSampleValid = false;
 
-        private readonly int _animationStrideOffset;
 
         #endregion
 
@@ -214,7 +283,12 @@ namespace Client.Main.Objects
         public Color Color { get; set; } = Color.White;
         public ItemDefinition ItemDefinition { get; set; }
         protected Matrix[] BoneTransform { get; set; }
-        public Matrix[] GetBoneTransforms() => BoneTransform;
+        // Shared animation palettes are immutable render snapshots. They are kept
+        // separate from the writable per-object BoneTransform array so a monster can
+        // enter a shared pose without copying every matrix and can detach safely when
+        // an action transition starts.
+        private Matrix[] _sharedAnimationRenderBones;
+        public Matrix[] GetBoneTransforms() => GetEffectiveBoneTransforms();
         public int CurrentAction { get; set; }
         public int CurrentFrame { get; private set; }
         public int ParentBoneLink { get; set; } = -1;
@@ -228,6 +302,7 @@ namespace Client.Main.Objects
                 if (_model != value)
                 {
                     _model = value;
+                    InvalidateMeshRenderPlan();
                     // If the model changes after the object has already been loaded,
                     // we need to re-run the content loading logic to update buffers, textures, etc.
                     if (Status is GameControlStatus.Ready or GameControlStatus.Error)
@@ -242,12 +317,11 @@ namespace Client.Main.Objects
         {
             get
             {
-                if (ParentBoneLink >= 0 && Parent != null && Parent is ModelObject modelObject)
+                if (ParentBoneLink >= 0 && Parent is ModelObject modelObject)
                 {
-                    if (modelObject.BoneTransform != null && ParentBoneLink < modelObject.BoneTransform.Length)
-                    {
-                        return modelObject.BoneTransform[ParentBoneLink];
-                    }
+                    Matrix[] parentBones = modelObject.GetEffectiveBoneTransforms();
+                    if (parentBones != null && ParentBoneLink < parentBones.Length)
+                        return parentBones[ParentBoneLink];
                 }
                 return Matrix.Identity;
             }
@@ -267,18 +341,36 @@ namespace Client.Main.Objects
                     return;
 
                 _hiddenMesh = value;
-                _sortTextureHintDirty = true;
-                _sortTextureHint = null;
+                InvalidateMeshRenderPlan();
             }
         }
 
         public int BlendMesh
         {
             get => _blendMesh;
-            set => _blendMesh = value;
+            set
+            {
+                if (_blendMesh == value)
+                    return;
+
+                _blendMesh = value;
+                InvalidateMeshRenderPlan();
+            }
         }
 
-        public BlendState BlendMeshState { get; set; } = BlendState.Additive;
+        private BlendState _blendMeshState = BlendState.Additive;
+        public BlendState BlendMeshState
+        {
+            get => _blendMeshState;
+            set
+            {
+                if (ReferenceEquals(_blendMeshState, value))
+                    return;
+
+                _blendMeshState = value;
+                InvalidateMeshRenderPlan();
+            }
+        }
 
         public float BlendMeshLight
         {
@@ -286,11 +378,22 @@ namespace Client.Main.Objects
             set
             {
                 _blendMeshLight = value;
-                InvalidateBuffers(BUFFER_FLAG_MATERIAL);
+                InvalidateBuffers(MeshDirtyFlags.Material);
             }
         }
 
-        public bool RenderShadow { get => _renderShadow; set { _renderShadow = value; OnRenderShadowChanged(); } }
+        public bool RenderShadow
+        {
+            get => _renderShadow;
+            set
+            {
+                if (_renderShadow == value)
+                    return;
+
+                _renderShadow = value;
+                OnRenderShadowChanged();
+            }
+        }
         public float AnimationSpeed { get; set; } = 4f;
         public bool ContinuousAnimation { get; set; }
 
@@ -325,13 +428,17 @@ namespace Client.Main.Objects
 
         public int AnimationUpdateStride { get; private set; } = 1;
         protected virtual bool RequiresPerFrameAnimation => false;
-        public bool RequiresPerFrameWorldUpdate => RequiresPerFrameAnimation;
+        public bool RequiresPerFrameWorldUpdate => RequiresPerFrameAnimation || UsesMutableMeshData;
         protected virtual bool AllowAnimationUpdates => true;
         protected virtual bool AllowLightingUpdates => true;
         protected virtual bool AllowDynamicLightingShader => true;
         protected virtual bool AllowMapObjectInstancing => true;
         protected virtual bool UsesMutableMeshData => false;
+        protected virtual bool PreserveBlendMeshesInLowQuality => false;
         protected virtual bool FreezeDynamicBuffersAfterFirstBuild => false;
+        public override WorldObjectRenderPolicy RenderPolicy => base.RenderPolicy.With(
+            alwaysUpdate: RequiresPerFrameWorldUpdate,
+            preserveBlendMeshesInLowQuality: PreserveBlendMeshesInLowQuality);
         internal uint AnimationPoseVersion => _animationPoseVersion;
 
         #endregion
@@ -341,8 +448,7 @@ namespace Client.Main.Objects
         public ModelObject()
         {
             _logger = AppLoggerFactory?.CreateLogger(GetType());
-            MatrixChanged += (_s, _e) => UpdateWorldPosition();
-            _animationStrideOffset = Interlocked.Increment(ref _animationStrideSeed) & 31;
+            // MatrixChanged subscription removed - UpdateWorldPosition was a no-op
         }
 
         #endregion
@@ -359,11 +465,7 @@ namespace Client.Main.Objects
             {
                 // This is a valid state, e.g., when an item is unequipped.
                 // Clear out graphics resources to ensure it becomes invisible.
-                _boneVertexBuffers = null;
-                _boneIndexBuffers = null;
-                _boneTextures = null;
-                _scriptTextures = null;
-                _dataTextures = null;
+                _meshes = null;
                 _logger?.LogDebug("Model is null for {ObjectName}. Clearing buffers. This is likely an unequip action.", ObjectName);
                 // Set to Ready because it's a valid, though non-renderable, state.
                 Status = GameControlStatus.Ready;
@@ -371,22 +473,9 @@ namespace Client.Main.Objects
             }
 
             int meshCount = Model.Meshes.Length;
-            _boneVertexBuffers = new DynamicVertexBuffer[meshCount];
-            _boneIndexBuffers = new DynamicIndexBuffer[meshCount];
-            _gpuSkinVertexBuffers = new VertexBuffer[meshCount];
-            _gpuSkinIndexBuffers = new IndexBuffer[meshCount];
-            _gpuSkinBoneCounts = new int[meshCount];
-            _gpuSkinMeshEnabled = new bool[meshCount];
-            _boneTextures = new Texture2D[meshCount];
-            _scriptTextures = new TextureScript[meshCount];
-            _dataTextures = new TextureData[meshCount];
-
-            UpdateWorldPosition();
-
-            _meshIsRGBA = new bool[meshCount];
-            _meshHiddenByScript = new bool[meshCount];
-            _meshBlendByScript = new bool[meshCount];
-            _meshTexturePath = new string[meshCount];
+            _meshes = new MeshRuntimeState[meshCount];
+            for (int i = 0; i < meshCount; i++)
+                _meshes[i] = new MeshRuntimeState { BufferCache = new MeshBufferCache { IsValid = false } };
 
             // PERFORMANCE: Preload all textures during LoadContent to avoid SetData during gameplay
             var texturePreloadTasks = new List<Task>();
@@ -396,54 +485,37 @@ namespace Client.Main.Objects
                 var mesh = Model.Meshes[meshIndex];
                 string texturePath = BMDLoader.Instance.GetTexturePath(Model, mesh.TexturePath);
 
-                _meshTexturePath[meshIndex] = texturePath;
+                _meshes[meshIndex].TexturePath = texturePath;
 
-                // Preload texture data asynchronously to avoid lazy loading during render
                 if (!string.IsNullOrEmpty(texturePath))
-                {
                     texturePreloadTasks.Add(TextureLoader.Instance.Prepare(texturePath));
-                }
-
-                // Materialize Texture2D later in main-thread render/update path (SetDynamicBuffers).
-                _boneTextures[meshIndex] = null;
             }
 
-            // Wait for all textures to be preloaded
             if (texturePreloadTasks.Count > 0)
-            {
                 await Task.WhenAll(texturePreloadTasks);
-            }
 
             for (int meshIndex = 0; meshIndex < meshCount; meshIndex++)
             {
-                string texturePath = _meshTexturePath[meshIndex];
-                _scriptTextures[meshIndex] = TextureLoader.Instance.GetScript(texturePath);
-                _dataTextures[meshIndex] = TextureLoader.Instance.Get(texturePath);
-
-                _meshIsRGBA[meshIndex] = _dataTextures[meshIndex]?.Components == 4;
-                _meshHiddenByScript[meshIndex] = _scriptTextures[meshIndex]?.HiddenMesh ?? false;
-                _meshBlendByScript[meshIndex] = _scriptTextures[meshIndex]?.Bright ?? false;
+                string texturePath = _meshes[meshIndex].TexturePath;
+                _meshes[meshIndex].Script = TextureLoader.Instance.GetScript(texturePath);
+                _meshes[meshIndex].Data = TextureLoader.Instance.Get(texturePath);
+                _meshes[meshIndex].IsRgba = _meshes[meshIndex].Data?.Components == 4;
+                _meshes[meshIndex].HiddenByScript = _meshes[meshIndex].Script?.HiddenMesh ?? false;
+                _meshes[meshIndex].BlendByScript = _meshes[meshIndex].Script?.Bright ?? false;
             }
 
-            _sortTextureHintDirty = true;
-            _sortTextureHint = null;
+            InvalidateMeshRenderPlan();
 
             _blendMeshIndicesScratch = new int[meshCount];
             _staticMapInstancedMeshFrameTags = new int[meshCount];
 
-            // Initialize mesh buffer cache
-            _meshBufferCache = new MeshBufferCache[meshCount];
-            for (int i = 0; i < meshCount; i++)
-            {
-                _meshBufferCache[i] = new MeshBufferCache { IsValid = false };
-            }
-
-            InvalidateBuffers(BUFFER_FLAG_ALL);
+            InvalidateBuffers(MeshDirtyFlags.All);
             _dynamicBuffersFrozen = false;
             _contentLoaded = true;
 
             if (Model?.Bones != null && Model.Bones.Length > 0)
             {
+                _sharedAnimationRenderBones = null;
                 BoneTransform = new Matrix[Model.Bones.Length];
 
                 // Pre-allocate blend buffer to avoid allocations during action transitions
@@ -475,7 +547,7 @@ namespace Client.Main.Objects
         {
             if (World == null || !_contentLoaded || !Visible) return;
 
-            if (!LinkParentAnimation && AllowAnimationUpdates)
+            if (!LinkParentAnimation && AllowAnimationUpdates && !FreezeAnimationPose)
             {
                 Animation(gameTime);
             }
@@ -496,7 +568,12 @@ namespace Client.Main.Objects
                 uint parentPoseVersion = parent.AnimationPoseVersion;
                 if (_lastLinkedParentPoseVersion != parentPoseVersion)
                 {
-                    InvalidateBuffers(BUFFER_FLAG_ANIMATION);
+                    // Linked equipment uses the parent's bone palette, but the per-buffer
+                    // cache is keyed by this object's pose version. Advance the child
+                    // version whenever the effective parent pose changes, otherwise the
+                    // cache can incorrectly keep the first uploaded animation frame.
+                    unchecked { _animationPoseVersion++; }
+                    InvalidateBuffers(MeshDirtyFlags.Animation);
                     _lastLinkedParentPoseVersion = parentPoseVersion;
                 }
             }
@@ -513,7 +590,9 @@ namespace Client.Main.Objects
                         // Keep nearby animations smooth; only throttle when low-quality is active.
                         // Attachments with animated material effects (e.g. item glow) must stay per-frame.
                         bool forcePerFrameStride = HasRealtimeMaterialAnimation();
-                        desiredStride = (walker.IsOneShotPlaying || forcePerFrameStride) ? 1 : (LowQuality ? 4 : 1);
+                        desiredStride = (walker.IsOneShotPlaying || forcePerFrameStride)
+                            ? 1
+                            : walker.AnimationUpdateStride;
                     }
 
                     if (AnimationUpdateStride != desiredStride)
@@ -529,37 +608,32 @@ namespace Client.Main.Objects
                 bool hasDynamicLightingShader = Constants.ENABLE_DYNAMIC_LIGHTING_SHADER &&
                                                GraphicsManager.Instance.DynamicLightingEffect != null;
 
-                Vector3 currentLight;
-
-                // CPU lighting path (shader disabled): sample terrain light on a small grid
-                if (!hasDynamicLightingShader && LightEnabled && World?.Terrain != null)
-                {
-                    var pos = WorldPosition.Translation;
-                    var cell = new Vector2(
-                        MathF.Floor(pos.X / _LIGHT_SAMPLE_GRID),
-                        MathF.Floor(pos.Y / _LIGHT_SAMPLE_GRID));
-
-                    if (_lastLightSampleCell != cell)
-                    {
-                        // Terrain base light
-                        _lastSampledLight = World.Terrain.EvaluateTerrainLight(pos.X, pos.Y);
-                        // Include dynamic lights on CPU path only
-                        _lastSampledLight += World.Terrain.EvaluateDynamicLight(new Vector2(pos.X, pos.Y));
-                        _lastLightSampleCell = cell;
-                    }
-
-                    currentLight = _lastSampledLight + Light;
-                }
-                else
-                {
-                    currentLight = LightEnabled && World?.Terrain != null
-                        ? World.Terrain.EvaluateTerrainLight(WorldPosition.Translation.X, WorldPosition.Translation.Y) + Light
-                        : Light;
-                }
-
-                // PERFORMANCE: Only invalidate lighting for CPU lighting path - shader lighting doesn't need buffer rebuilds
+                // The shader path samples terrain/dynamic lighting during draw. Do not perform
+                // an additional terrain lookup here because its result cannot invalidate a CPU buffer.
                 if (!hasDynamicLightingShader)
                 {
+                    Vector3 currentLight;
+
+                    if (LightEnabled && World?.Terrain != null)
+                    {
+                        var pos = WorldPosition.Translation;
+                        var cell = new Vector2(
+                            MathF.Floor(pos.X / _LIGHT_SAMPLE_GRID),
+                            MathF.Floor(pos.Y / _LIGHT_SAMPLE_GRID));
+
+                        if (_lastLightSampleCell != cell)
+                        {
+                            _lastSampledLight = EvaluateCombinedTerrainLight(pos.X, pos.Y);
+                            _lastLightSampleCell = cell;
+                        }
+
+                        currentLight = _lastSampledLight + Light;
+                    }
+                    else
+                    {
+                        currentLight = Light;
+                    }
+
                     // Reduce throttling for PlayerObjects to ensure proper rendering
                     bool isMainPlayer = this is PlayerObject p && p.IsMainWalker;
                     double lightUpdateInterval = isMainPlayer
@@ -575,7 +649,7 @@ namespace Client.Main.Objects
                         bool lightChanged = Vector3.DistanceSquared(currentLight, _lastFrameLight) > lightThreshold;
                         if (lightChanged)
                         {
-                            InvalidateBuffers(BUFFER_FLAG_LIGHTING);
+                            InvalidateBuffers(MeshDirtyFlags.Lighting);
                             _lastFrameLight = currentLight;
                         }
                         _lastLightUpdateTime = currentTime;
@@ -601,48 +675,61 @@ namespace Client.Main.Objects
         public override void Dispose()
         {
             base.Dispose();
+            if (IsLoadInProgress)
+                return;
 
             Model = null;
             BoneTransform = null;
-            _invalidatedBufferFlags = 0;
+            _sharedAnimationRenderBones = null;
+            _invalidatedBufferFlags = MeshDirtyFlags.None;
             ReleaseDynamicBuffers();
 
-            // Release graphics resources and mark content as unloaded
-            _boneVertexBuffers = null;
-            _boneIndexBuffers = null;
-            _gpuSkinVertexBuffers = null;
-            _gpuSkinIndexBuffers = null;
-            _gpuSkinBoneCounts = null;
-            _gpuSkinMeshEnabled = null;
-            _boneTextures = null;
-            _scriptTextures = null;
-            _dataTextures = null;
-            _meshIsRGBA = null;
-            _meshHiddenByScript = null;
-            _meshBlendByScript = null;
-            _meshTexturePath = null;
+            _meshes = null;
             _staticMapInstancedMeshFrameTags = null;
             _blendMeshIndicesScratch = null;
             _contentLoaded = false;
             _boundingComputed = false;
 
-            // Clear cache references
             _cachedBoneMatrix = null;
+            _lastCachedBoneSource = null;
+            _lastCachedBonePoseVersion = uint.MaxValue;
             _boneMatrixCacheValid = false;
-            _meshBufferCache = null;
+            _gpuSkinBoneUploadBuffer = Array.Empty<Matrix>();
+            _gpuSkinBoneUploadCount = 0;
+            _gpuSkinPreparedBoneSource = null;
+            _gpuSkinPreparedPoseVersion = uint.MaxValue;
             _animationStateValid = false;
             _animationStepAccumulatorSeconds = 0f;
             _animationPoseVersion = 0;
             _lastLinkedParentPoseVersion = uint.MaxValue;
             _lastLinkedParentModel = null;
 
-            ReleaseMeshGroups();
+            ReleaseFastMeshBatchBuffers();
+            ClearMeshRenderPlans();
             _meshGroupPool.Clear();
         }
 
         #endregion
 
         #region Helper Methods
+
+        private Vector3 EvaluateCombinedTerrainLight(float x, float y)
+        {
+            var terrain = World?.Terrain;
+            if (!LightEnabled || terrain == null)
+                return Vector3.Zero;
+
+            Vector3 result = terrain.EvaluateTerrainLight(x, y);
+            if (Constants.ENABLE_DYNAMIC_LIGHTS)
+            {
+                // Dynamic-light CPU values use the legacy 0..255 scale, while
+                // baked terrain light is normalized to 0..1. Normalize before
+                // combining them for vertex-color fallback paths.
+                result += terrain.EvaluateDynamicLight(new Vector2(x, y)) / 255f;
+            }
+
+            return Vector3.Clamp(result, Vector3.Zero, Vector3.One);
+        }
 
         private bool HasWalkerAncestor()
         {
@@ -683,22 +770,47 @@ namespace Client.Main.Objects
                 return;
 
             AnimationUpdateStride = newStride;
-            _lastStrideAnimationBufferUpdateTimeMs = double.NegativeInfinity;
         }
 
         private void OnRenderShadowChanged()
         {
+            bool modularActorRoot = this is PlayerObject || this is NPCObject;
             foreach (var obj in Children)
             {
-                if (obj is ModelObject modelObj && modelObj.LinkParentAnimation)
+                if (obj is ModelObject modelObj &&
+                    (modularActorRoot || modelObj.LinkParentAnimation || modelObj.ParentBoneLink >= 0))
+                {
                     modelObj.RenderShadow = RenderShadow;
+                }
             }
         }
 
-        private void UpdateWorldPosition()
+        private int ResolveBoundingUpdateInterval()
         {
-            // World transformation changes no longer force buffer rebuilds.
-            // Lighting updates will trigger invalidation when needed.
+            if (IsMouseHover)
+                return BoundingUpdateInterval;
+
+            if (this is WalkerObject walker && (walker.IsMainWalker || walker.IsOneShotPlaying))
+                return BoundingUpdateInterval;
+
+            var camera = Camera.Instance;
+            if (camera == null)
+                return BoundingUpdateInterval;
+
+            Vector3 position = WorldPosition.Translation;
+            Vector3 cameraPosition = camera.Position;
+            float dx = position.X - cameraPosition.X;
+            float dy = position.Y - cameraPosition.Y;
+            float distanceSquared = dx * dx + dy * dy;
+
+            const float mediumDistanceSquared = 900f * 900f;
+            const float farDistanceSquared = 1500f * 1500f;
+            if (distanceSquared > farDistanceSquared)
+                return 30;
+            if (distanceSquared > mediumDistanceSquared)
+                return 12;
+
+            return BoundingUpdateInterval;
         }
 
         private void UpdateBoundings()
@@ -706,13 +818,17 @@ namespace Client.Main.Objects
             if (!RequiresPerFrameAnimation && _contentLoaded && _boundingComputed)
                 return;
 
-            // Recalculate bounding box only every few frames
-            if (_boundingFrameCounter++ < BoundingUpdateInterval)
+            // Animated local bounds change much less than the object transform itself.
+            // Keep nearby/interactive actors accurate, but avoid sampling every animated
+            // mesh at the same frequency when it occupies only a few pixels on screen.
+            int boundingUpdateInterval = ResolveBoundingUpdateInterval();
+            if (_boundingComputed && _boundingFrameCounter++ < boundingUpdateInterval)
                 return;
 
             _boundingFrameCounter = 0;
 
-            if (Model?.Meshes == null || Model.Meshes.Length == 0 || BoneTransform == null) return;
+            Matrix[] activeBones = GetEffectiveBoneTransforms();
+            if (Model?.Meshes == null || Model.Meshes.Length == 0 || activeBones == null) return;
 
             // Use faster min/max calculation with cached vectors
             Vector3 min = _maxValueVector;
@@ -720,7 +836,7 @@ namespace Client.Main.Objects
 
             bool hasValidVertices = false;
             var meshes = Model.Meshes;
-            var bones = BoneTransform;
+            var bones = activeBones;
             int boneCount = bones.Length;
 
             // Optimized: Only sample every 4th vertex for performance while maintaining accuracy
@@ -779,7 +895,7 @@ namespace Client.Main.Objects
             if (WorldPosition != newWorldPosition)
             {
                 WorldPosition = newWorldPosition;
-                InvalidateBuffers(BUFFER_FLAG_TRANSFORM);
+                InvalidateBuffers(MeshDirtyFlags.Transform);
             }
         }
 

@@ -14,6 +14,7 @@ using Microsoft.Xna.Framework.Graphics;
 using System;
 using System.Diagnostics;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using static LEA.Symmetric.Lea;
 
@@ -31,6 +32,8 @@ namespace Client.Main.Objects
         private bool _isTransformDirty = true;
         private bool _hidden = false;
         private GameControlStatus _status = GameControlStatus.NonInitialized;
+        private int _disposeRequested;
+        private int _loadInProgress;
 
         private ILogger _logger = ModelObject.AppLoggerFactory?.CreateLogger<WorldObject>();
 
@@ -46,7 +49,6 @@ namespace Client.Main.Objects
         public DepthStencilState DepthState { get; set; } = DepthStencilState.Default;
 
         private SpriteFont _font;
-        private Texture2D _whiteTexture;
 
         // PERFORMANCE: Static bbox indices to avoid per-frame allocation
         private static readonly int[] BoundingBoxIndices = new int[]
@@ -62,26 +64,7 @@ namespace Client.Main.Objects
         private readonly Vector3[] _bboxCorners = new Vector3[8];
         private readonly StringBuilder _bboxInfoBuilder = new(256);
 
-        // Static frame counter for staggered updates
-        private static int _globalFrameCounter = 0;
         private readonly int _updateOffset; // Unique offset for each object to stagger updates
-        private const int HoverChecksPerFrame = 32;
-        private static int _hoverFrame = -1;
-        private static int _hoverChecksThisFrame = 0;
-
-        // Debug counters
-        public static int TotalSkippedUpdates { get; private set; } = 0;
-        public static int TotalUpdatesPerformed { get; private set; } = 0;
-        private static int _lastResetTime = Environment.TickCount;
-
-        public static string GetOptimizationStats()
-        {
-            int total = TotalSkippedUpdates + TotalUpdatesPerformed;
-            if (total == 0) return "No updates tracked yet";
-
-            float skipPercentage = (TotalSkippedUpdates / (float)total) * 100f;
-            return $"Updates: {TotalUpdatesPerformed}, Skipped: {TotalSkippedUpdates} ({skipPercentage:F1}%)";
-        }
 
         public bool LinkParentAnimation { get; set; }
         public ChildrenCollection<WorldObject> Children { get; private set; }
@@ -99,11 +82,11 @@ namespace Client.Main.Objects
         public BlendState BlendState { get; set; } = BlendState.Opaque;
         public float Alpha { get; set; } = 1f;
         public float TotalAlpha { get => (Parent?.TotalAlpha ?? 1f) * Alpha; }
-        public Vector3 Position { get => _position; set { if (_position != value) { if (_position != value) { _position = value; OnPositionChanged(); } } } }
-        public Vector3 Angle { get => _angle; set { if (_angle != value) { if (_angle != value) { _angle = value; OnAngleChanged(); } } } }
+        public Vector3 Position { get => _position; set { if (_position != value) { _position = value; OnPositionChanged(); } } }
+        public Vector3 Angle { get => _angle; set { if (_angle != value) { _angle = value; OnAngleChanged(); } } }
         public Vector3 TotalAngle { get => (Parent?.TotalAngle ?? Vector3.Zero) + Angle; }
 
-        public float Scale { get => _scale; set { if (_scale != value) { if (_scale != value) { _scale = value; OnScaleChanged(); } } } }
+        public float Scale { get => _scale; set { if (_scale != value) { _scale = value; OnScaleChanged(); } } }
         public float TotalScale { get => (Parent?.Scale ?? 1f) * Scale; }
         public Matrix WorldPosition { get => _worldPosition; set { if (_worldPosition != value) { _worldPosition = value; OnWorldPositionChanged(); } } }
         public bool Interactive { get => _interactive; set { _interactive = value; } }
@@ -113,16 +96,46 @@ namespace Client.Main.Objects
         /// Indicates that the object is far from the camera and should be rendered in lower quality.
         /// </summary>
         public bool LowQuality { get; private set; }
+        public virtual bool ForceVisibleInWorld => false;
+        public virtual WorldObjectRenderPolicy RenderPolicy =>
+            ForceVisibleInWorld
+                ? WorldObjectRenderPolicy.Default.With(forceVisible: true)
+                : WorldObjectRenderPolicy.Default;
         internal int UpdateOffset => _updateOffset;
         public bool Visible => Status == GameControlStatus.Ready && !Hidden;
+
+        /// <summary>
+        /// Identifies the concrete WorldControl instance which first owned this object. NPC
+        /// roots are not transferable between worlds; retaining this value lets the next
+        /// world reject a stale object which survived an asynchronous scene transition.
+        /// </summary>
+        internal long OwningWorldInstanceId { get; set; }
+
+        protected bool IsDisposeRequested => Volatile.Read(ref _disposeRequested) != 0;
+        protected bool IsLoadInProgress => Volatile.Read(ref _loadInProgress) != 0;
         public WorldControl World { get => _world; set { if (_world != value) { var prev = _world; _world = value; OnWorldChanged(value, prev); } } }
+
+        /// <summary>
+        /// Resets the lifecycle flags of an object which is explicitly owned by a safe object pool.
+        /// The object must not be returned to the pool while asynchronous loading is still active.
+        /// </summary>
+        protected bool TryResetLifecycleForReuse()
+        {
+            if (IsLoadInProgress)
+                return false;
+
+            Interlocked.Exchange(ref _disposeRequested, 0);
+            Interlocked.Exchange(ref _loadInProgress, 0);
+            Status = GameControlStatus.NonInitialized;
+            return true;
+        }
         public short Type { get; set; }
         public bool IsMapPlacementObject { get; set; }
         public Color BoundingBoxColor { get; set; } = Color.GreenYellow;
         protected GraphicsDevice GraphicsDevice => MuGame.Instance.GraphicsDevice;
 
         public event EventHandler MatrixChanged;
-        public bool IsMouseHover { get; private set; }
+        public bool IsMouseHover { get; internal set; }
         public float DebugFontSize { get; set; } = 12f;
 
         public event EventHandler Click;
@@ -157,13 +170,24 @@ namespace Client.Main.Objects
         private void Children_ControlAdded(object sender, ChildrenEventArgs<WorldObject> e)
         {
             e.Control.World = World;
+
+            // Walker roots enable shadows in the base constructor before their modular body
+            // parts are attached. Propagate that already-established contract to animated or
+            // bone-linked model children as they are added; otherwise only an occasional helm
+            // or root mesh can enter the shadow-map pass.
+            if (this is ModelObject parentModel && e.Control is ModelObject childModel)
+            {
+                bool isDirectModularActorPart = parentModel is PlayerObject || parentModel is NPCObject;
+                if (isDirectModularActorPart || childModel.LinkParentAnimation || childModel.ParentBoneLink >= 0)
+                    childModel.RenderShadow = parentModel.RenderShadow;
+            }
         }
 
         protected virtual void OnWorldChanged(WorldControl newWorld, WorldControl prevWorld)
         {
-            var children = Children.ToArray();
-            for (var i = 0; i < children.Length; i++)
-                Children[i].World = newWorld;
+            var children = Children.GetSnapshot();
+            for (var i = 0; i < children.Count; i++)
+                children[i].World = newWorld;
 
             if (newWorld is WalkableWorldControl && this is WalkerObject walker)
                 walker.OnDirectionChanged();
@@ -174,33 +198,69 @@ namespace Client.Main.Objects
 
         public virtual async Task Load()
         {
+            if (IsDisposeRequested || Status == GameControlStatus.Disposed)
+                return;
+
             if (Status != GameControlStatus.NonInitialized)
                 return;
 
+            Interlocked.Exchange(ref _loadInProgress, 1);
             try
             {
                 Status = GameControlStatus.Initializing;
 
-                if (World == null) throw new ApplicationException("World is not assigned to object");
-
-                var tasks = new Task[Children.Count + 1];
-
-                tasks[0] = LoadContent();
+                if (World == null || IsDisposeRequested)
+                {
+                    Interlocked.Exchange(ref _loadInProgress, 0);
+                    if (IsDisposeRequested)
+                        Dispose();
+                    else
+                        Status = GameControlStatus.NonInitialized;
+                    return;
+                }
 
                 var snapshot = Children.GetSnapshot();
+                var tasks = new Task[snapshot.Count + 1];
+                tasks[0] = LoadContent();
 
                 for (var i = 0; i < snapshot.Count; i++)
                     tasks[i + 1] = snapshot[i].Load();
 
                 await Task.WhenAll(tasks);
 
+                // Dispose may be requested while asynchronous content is still loading.
+                // Never block the render thread waiting for that work. Instead, let it
+                // finish and invoke the virtual Dispose path again so derived classes can
+                // release resources that completed after the first disposal request.
+                if (IsDisposeRequested || Status == GameControlStatus.Disposed)
+                {
+                    Interlocked.Exchange(ref _loadInProgress, 0);
+                    Dispose();
+                    return;
+                }
+
+                if (World == null)
+                {
+                    Interlocked.Exchange(ref _loadInProgress, 0);
+                    Status = GameControlStatus.NonInitialized;
+                    return;
+                }
+
                 RecalculateWorldPosition();
                 UpdateWorldBoundingBox();
-
+                Interlocked.Exchange(ref _loadInProgress, 0);
                 Status = GameControlStatus.Ready;
             }
             catch (Exception e)
             {
+                if (IsDisposeRequested || Status == GameControlStatus.Disposed)
+                {
+                    Interlocked.Exchange(ref _loadInProgress, 0);
+                    Dispose();
+                    return;
+                }
+
+                Interlocked.Exchange(ref _loadInProgress, 0);
                 _logger?.LogDebug(e, "Exception in WorldObject");
                 Status = GameControlStatus.Error;
             }
@@ -215,73 +275,13 @@ namespace Client.Main.Objects
         {
             if (Status == GameControlStatus.NonInitialized)
             {
-                // World objects are initialized by WorldControl's budgeted queue.
-                // Keep the legacy fallback for detached/child objects.
-                if (World == null || Parent != null)
-                    Load().ConfigureAwait(false);
-
+                // WorldControl owns initialization and applies a strict per-frame budget.
+                // Starting Load() here would bypass backpressure and create spawn-time spikes.
                 return;
             }
             if (Status != GameControlStatus.Ready) return;
 
-            // Increment once per *frame time*, not per object update
-            _globalFrameCounter = (int)(gameTime.TotalGameTime.TotalSeconds * 60.0);
-
-            if (Constants.SHOW_DEBUG_PANEL)
-            {
-                TotalUpdatesPerformed++;
-
-                if (Environment.TickCount - _lastResetTime > 5000)
-                {
-                    _lastResetTime = Environment.TickCount;
-                    TotalSkippedUpdates = 0;
-                    TotalUpdatesPerformed = 0;
-                }
-            }
-
-            var scene = World?.Scene;
-            if ((Interactive || Constants.DRAW_BOUNDING_BOXES) && scene != null)
-            {
-                bool uiBlockingHover = scene.MouseHoverControl is not null && scene.MouseHoverControl != scene.World;
-                bool objectBlockingHover = scene.MouseHoverObject is not null;
-
-                if (!uiBlockingHover && !objectBlockingHover)
-                {
-                    bool parentIsMouseHover = Parent?.IsMouseHover ?? false;
-
-                    bool wouldBeMouseHover = parentIsMouseHover;
-                    if (!parentIsMouseHover)
-                    {
-                        bool isImportantHoverCheck = this is WalkerObject;
-                        if (TryBeginHoverCheck(isImportantHoverCheck))
-                        {
-                            float? intersectionDistance = MuGame.Instance.MouseRay.Intersects(BoundingBoxWorld);
-                            ContainmentType contains = BoundingBoxWorld.Contains(MuGame.Instance.MouseRay.Position);
-                            wouldBeMouseHover = intersectionDistance.HasValue || contains == ContainmentType.Contains;
-                        }
-                        else
-                        {
-                            if (Constants.SHOW_DEBUG_PANEL)
-                                TotalSkippedUpdates++;
-
-                            wouldBeMouseHover = false;
-                        }
-                    }
-
-                    IsMouseHover = wouldBeMouseHover;
-
-                    if (!parentIsMouseHover && IsMouseHover && scene.MouseHoverObject is null)
-                        scene.MouseHoverObject = this;
-                }
-                else
-                {
-                    IsMouseHover = false;
-                }
-            }
-            else
-            {
-                IsMouseHover = false;
-            }
+            // Hover picking is handled by WorldHoverSystem, called from WorldControl.RenderObjects.
 
             var objects = Children;
             for (int i = objects.Count - 1; i >= 0; i--)
@@ -302,8 +302,18 @@ namespace Client.Main.Objects
         {
             if (!Visible) return;
 
+            // Bounding boxes and hover labels are rendered once by BaseScene's batched
+            // overlay pass on desktop. Android keeps the legacy per-object overlay path.
+#if ANDROID
             DrawBoundingBox2D();
             DrawHoverName();
+#endif
+            DrawChildrenAfterOnly(gameTime);
+        }
+
+        internal void DrawChildrenAfterOnly(GameTime gameTime)
+        {
+            if (!Visible) return;
 
             var objects = Children;
             for (int i = 0; i < objects.Count; i++)
@@ -366,17 +376,16 @@ namespace Client.Main.Objects
             void draw()
             {
                 // Draw background rectangle directly (no border for hover names)
-                if (_whiteTexture == null)
-                {
-                    _whiteTexture = new Texture2D(GraphicsDevice, 1, 1);
-                    _whiteTexture.SetData([Color.White]);
-                }
+                Texture2D whiteTexture = GraphicsManager.Instance.Pixel;
+                if (whiteTexture == null || whiteTexture.IsDisposed)
+                    return;
+
                 var bgRect = new Rectangle(
                     (int)(textPos.X - 4),
                     (int)(textPos.Y - 2),
                     (int)(size.X + 8),
                     (int)(size.Y + 4));
-                sb.Draw(_whiteTexture, bgRect, bgColor);
+                sb.Draw(whiteTexture, bgRect, bgColor);
 
                 // Draw text on top
                 sb.DrawString(_font, name, textPos, textColor, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
@@ -410,31 +419,33 @@ namespace Client.Main.Objects
 
         public virtual void Dispose()
         {
+            Interlocked.Exchange(ref _disposeRequested, 1);
+
             if (Status == GameControlStatus.Disposed)
                 return;
 
-            if (Status == GameControlStatus.Initializing)
-            {
-                Thread.Sleep(100);
-                Dispose();
-            }
-
+            // Disposal must never wait for asynchronous loading on the main/render thread.
+            // Load() observes the request after its current await and re-enters the virtual
+            // Dispose path, allowing derived classes to clean up resources created late.
             Status = GameControlStatus.Disposed;
 
             // Centralized safeguard: detach any terrain dynamic lights owned by this object.
             World?.Terrain?.RemoveDynamicLightsByOwner(this);
 
-            var children = Children.ToArray();
-            for (int i = 0; i < children.Length; i++)
-            {
+            Children.ControlAdded -= Children_ControlAdded;
+
+            var children = Children.GetSnapshot();
+            for (int i = 0; i < children.Count; i++)
                 children[i].Dispose();
-            }
             Children.Clear();
 
             Parent?.Children.Remove(this);
             Parent = null;
 
-            _whiteTexture?.Dispose();
+            // Break the reference to the disposed world. Besides preventing old scenes from
+            // being retained, this makes all late asynchronous continuations fail their
+            // expected-world checks instead of publishing data into a new scene.
+            World = null;
         }
 
         protected virtual void OnPositionChanged()
@@ -465,11 +476,11 @@ namespace Client.Main.Objects
             if (current != null)
             {
                 current.MatrixChanged += OnParentMatrixChanged;
+                World = current.World;
             }
             MarkTransformDirty();
             RecalculateWorldPosition();
         }
-
 
         protected virtual void OnBoundingBoxLocalChanged() => UpdateWorldBoundingBox();
 
@@ -526,10 +537,10 @@ namespace Client.Main.Objects
 
             GraphicsDevice.DepthStencilState = DepthStencilState.Default;
 
-            Vector3[] corners = BoundingBoxWorld.GetCorners();
+            BoundingBoxWorld.GetCorners(_bboxCorners);
 
             for (int i = 0; i < 8; i++)
-                _bboxVerts[i] = new VertexPositionColor(corners[i], BoundingBoxColor);
+                _bboxVerts[i] = new VertexPositionColor(_bboxCorners[i], BoundingBoxColor);
 
             GraphicsManager.Instance.BoundingBoxEffect3D.View = Camera.Instance.View;
             GraphicsManager.Instance.BoundingBoxEffect3D.Projection = Camera.Instance.Projection;
@@ -628,36 +639,16 @@ namespace Client.Main.Objects
         }
 
 
-        private void DrawTextBackground(SpriteBatch spriteBatch, Rectangle rect, Color color, float layerDepth = 0f)
+        private static void DrawTextBackground(SpriteBatch spriteBatch, Rectangle rect, Color color, float layerDepth = 0f)
         {
-            if (_whiteTexture == null)
-            {
-                _whiteTexture = new Texture2D(GraphicsDevice, 1, 1);
-                _whiteTexture.SetData([Color.White]);
-            }
-            // Draw border first (even deeper/earlier)
+            Texture2D whiteTexture = GraphicsManager.Instance.Pixel;
+            if (whiteTexture == null || whiteTexture.IsDisposed)
+                return;
+
             var borderColor = Color.White * 0.3f;
             var borderRect = new Rectangle(rect.X - 1, rect.Y - 1, rect.Width + 2, rect.Height + 2);
-            spriteBatch.Draw(_whiteTexture, borderRect, null, borderColor, 0f, Vector2.Zero, SpriteEffects.None, layerDepth + 0.0001f);
-
-            // Draw background on top of border
-            spriteBatch.Draw(_whiteTexture, rect, null, color, 0f, Vector2.Zero, SpriteEffects.None, layerDepth);
-        }
-
-        private static bool TryBeginHoverCheck(bool isImportant)
-        {
-            int frame = _globalFrameCounter;
-            if (_hoverFrame != frame)
-            {
-                _hoverFrame = frame;
-                _hoverChecksThisFrame = 0;
-            }
-
-            if (!isImportant && _hoverChecksThisFrame >= HoverChecksPerFrame)
-                return false;
-
-            _hoverChecksThisFrame++;
-            return true;
+            spriteBatch.Draw(whiteTexture, borderRect, null, borderColor, 0f, Vector2.Zero, SpriteEffects.None, layerDepth + 0.0001f);
+            spriteBatch.Draw(whiteTexture, rect, null, color, 0f, Vector2.Zero, SpriteEffects.None, layerDepth);
         }
 
         internal void SetLowQuality(bool value)

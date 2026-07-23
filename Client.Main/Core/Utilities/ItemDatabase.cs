@@ -9,25 +9,25 @@ using Client.Data.BMD;
 using Client.Main.Controls.UI.Game.Inventory;
 using Microsoft.Extensions.Logging;
 using System.Text;
+using System.Threading;
 
 namespace Client.Main.Core.Utilities
 {
     public static class ItemDatabase
     {
         /// <summary>Lookup cache: (Group, Id) → item definition.</summary>
-        private static readonly Lazy<Dictionary<(byte Group, short Id), ItemDefinition>> _definitions;
+        private static readonly Lazy<Task<Dictionary<(byte Group, short Id), ItemDefinition>>> _definitionsTask =
+            new(() => Task.Run(InitializeItemDataAsync), LazyThreadSafetyMode.ExecutionAndPublication);
         private static readonly ILogger _logger = MuGame.AppLoggerFactory?.CreateLogger("ItemDatabase");
 
-        static ItemDatabase()
-        {
-            // Use Lazy with Task.Run to avoid blocking the static constructor
-            // This prevents deadlocks when ItemBMDReader.Load() needs the UI thread
-            _definitions = new Lazy<Dictionary<(byte Group, short Id), ItemDefinition>>(() =>
-            {
-                // Run initialization on a background thread to avoid deadlock
-                return Task.Run(InitializeItemDataAsync).GetAwaiter().GetResult();
-            });
-        }
+        private static Dictionary<(byte Group, short Id), ItemDefinition> Definitions
+            => _definitionsTask.Value.GetAwaiter().GetResult();
+
+        /// <summary>
+        /// Starts loading item definitions during application startup so the first inventory or
+        /// shop access does not synchronously initialize the whole database on the render thread.
+        /// </summary>
+        public static Task PreloadAsync() => _definitionsTask.Value;
 
         /// <summary>
         /// Loads items.bmd from an embedded resource and builds the definition table.
@@ -120,7 +120,7 @@ namespace Client.Main.Core.Utilities
 
         public static ItemDefinition GetItemDefinition(byte group, short id)
         {
-            _definitions.Value.TryGetValue((group, id), out var def);
+            Definitions.TryGetValue((group, id), out var def);
 
             return def;
         }
@@ -134,7 +134,7 @@ namespace Client.Main.Core.Utilities
             }
 
             // Fast path: exact (case-insensitive) match.
-            foreach (var def in _definitions.Value.Values)
+            foreach (var def in Definitions.Values)
             {
                 if (def?.Name != null && def.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
                 {
@@ -150,7 +150,7 @@ namespace Client.Main.Core.Utilities
                 return false;
             }
 
-            foreach (var def in _definitions.Value.Values)
+            foreach (var def in Definitions.Values)
             {
                 if (def?.Name == null)
                 {
@@ -206,12 +206,12 @@ namespace Client.Main.Core.Utilities
 
         public static IEnumerable<ItemDefinition> GetItemDefinitions(byte group)
         {
-            return _definitions.Value.Where(predicate => predicate.Key.Group == group).Select(p => p.Value);
+            return Definitions.Where(predicate => predicate.Key.Group == group).Select(p => p.Value);
         }
 
         public static IEnumerable<ItemDefinition> GetWeapons()
         {
-            return _definitions.Value.Where(predicate => predicate.Key.Group <= 6).Select(p => p.Value);
+            return Definitions.Where(predicate => predicate.Key.Group <= 6).Select(p => p.Value);
         }
         public static IEnumerable<ItemDefinition> GetWings()
         {
@@ -231,15 +231,15 @@ namespace Client.Main.Core.Utilities
                 467, 468, 469, 472, 473, 474,
                 480, 489, 490, 496,
             ];
-            return _definitions.Value.Where(predicate => predicate.Key.Group == 12 && wingIds.Contains(predicate.Key.Id)).Select(p => p.Value);
+            return Definitions.Where(predicate => predicate.Key.Group == 12 && wingIds.Contains(predicate.Key.Id)).Select(p => p.Value);
         }
         public static IEnumerable<ItemDefinition> GetArmors()
         {
-            return _definitions.Value.Where(predicate => predicate.Key.Group == 8).Select(p => p.Value);
+            return Definitions.Where(predicate => predicate.Key.Group == 8).Select(p => p.Value);
         }
         public static IEnumerable<ItemDefinition> GetPets()
         {
-            return _definitions.Value.Where(predicate => predicate.Key.Group == 13).Select(p => p.Value);
+            return Definitions.Where(predicate => predicate.Key.Group == 13).Select(p => p.Value);
         }
 
         public static ItemDefinition GetItemDefinition(ReadOnlySpan<byte> itemData)

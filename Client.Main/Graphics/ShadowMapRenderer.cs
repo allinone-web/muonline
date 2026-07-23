@@ -7,7 +7,7 @@ using Client.Main.Objects;
 using Client.Main.Objects.Player;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
-using System.Threading.Tasks;
+using System.Runtime.CompilerServices;
 
 namespace Client.Main.Graphics
 {
@@ -20,18 +20,60 @@ namespace Client.Main.Graphics
         private readonly GraphicsDevice _graphicsDevice;
         private RenderTarget2D _shadowMap;
         private int _frameCounter = 0;
-        private readonly List<(ModelObject model, float distSq)> _casterCandidates = new(64);
+        private readonly List<WorldObject> _nearbyObjects = new(256);
+        private readonly PriorityQueue<ModelObject, float> _closestCasters = new();
+        private readonly List<ModelObject> _selectedCasters = new(128);
+        private readonly HashSet<ModelObject> _renderedCasters = new();
         private readonly BoundingFrustum _lightFrustum = new BoundingFrustum(Matrix.Identity);
+        private readonly ConditionalWeakTable<Effect, ShadowEffectBindings> _effectBindings = new();
         private Vector3 _lastCameraPosition = new(float.NaN, float.NaN, float.NaN);
         private Vector3 _lastCameraTarget = new(float.NaN, float.NaN, float.NaN);
         private float _lastShadowDistance = float.NaN;
         private bool _forceRender = true;
-        private readonly object _candidateMergeLock = new();
-        private const int ParallelCasterThreshold = 160;
-        private static readonly ParallelOptions CandidateParallelOptions = new()
+        private bool _shadowCasterSupported;
+        private int _lastWorldGeometryTick = int.MinValue;
+        private ulong _currentCasterSignature;
+        private ulong _renderedCasterSignature = ulong.MaxValue;
+        private bool _casterSelectionValid;
+
+
+        private sealed class ShadowEffectBindings
         {
-            MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1)
-        };
+            public ShadowEffectBindings(Effect effect)
+            {
+                ShadowCasterTechnique = FindTechnique(effect, "ShadowCaster");
+                DynamicLightingTechnique = FindTechnique(effect, "DynamicLighting");
+                LightViewProjection = effect.Parameters["LightViewProjection"];
+                ShadowMapTexelSize = effect.Parameters["ShadowMapTexelSize"];
+                ShadowBias = effect.Parameters["ShadowBias"];
+                ShadowNormalBias = effect.Parameters["ShadowNormalBias"];
+                SunDirection = effect.Parameters["SunDirection"];
+                ShadowsEnabled = effect.Parameters["ShadowsEnabled"];
+                ShadowMap = effect.Parameters["ShadowMap"];
+            }
+
+            public EffectTechnique ShadowCasterTechnique { get; }
+            public EffectTechnique DynamicLightingTechnique { get; }
+            public EffectParameter LightViewProjection { get; }
+            public EffectParameter ShadowMapTexelSize { get; }
+            public EffectParameter ShadowBias { get; }
+            public EffectParameter ShadowNormalBias { get; }
+            public EffectParameter SunDirection { get; }
+            public EffectParameter ShadowsEnabled { get; }
+            public EffectParameter ShadowMap { get; }
+
+            private static EffectTechnique FindTechnique(Effect effect, string name)
+            {
+                for (int i = 0; i < effect.Techniques.Count; i++)
+                {
+                    EffectTechnique technique = effect.Techniques[i];
+                    if (string.Equals(technique.Name, name, StringComparison.Ordinal))
+                        return technique;
+                }
+
+                return null;
+            }
+        }
 
         public Matrix LightView { get; private set; } = Matrix.Identity;
         public Matrix LightProjection { get; private set; } = Matrix.Identity;
@@ -43,16 +85,35 @@ namespace Client.Main.Graphics
         public bool IsReady => _shadowMap != null && Constants.ENABLE_SHADOW_MAPPING && Constants.SUN_ENABLED
             && !(Constants.ENABLE_DAY_NIGHT_CYCLE && SunCycleManager.IsNight);
 
+        /// <summary>
+        /// Returns true only when the actor (or its modular root) is represented in the
+        /// currently rendered shadow map. A globally ready shadow target does not imply
+        /// that every nearby NPC was selected when the caster budget was reached.
+        /// </summary>
+        public bool HasRenderedCaster(ModelObject model)
+        {
+            if (!IsReady || model == null)
+                return false;
+
+            ModelObject root = model;
+            while (root.Parent is ModelObject parentModel)
+                root = parentModel;
+
+            return _renderedCasters.Contains(root);
+        }
+
         public ShadowMapRenderer(GraphicsDevice graphicsDevice)
         {
             _graphicsDevice = graphicsDevice ?? throw new ArgumentNullException(nameof(graphicsDevice));
-            EnsureRenderTarget();
+            // Allocate the shadow target lazily when shadow mapping is actually rendered.
         }
 
         public void Dispose()
         {
             _shadowMap?.Dispose();
             _shadowMap = null;
+            _shadowCasterSupported = false;
+            _renderedCasters.Clear();
         }
 
         public void EnsureRenderTarget()
@@ -90,21 +151,31 @@ namespace Client.Main.Graphics
                     0,
                     RenderTargetUsage.DiscardContents);
             }
+            _renderedCasters.Clear();
             _forceRender = true; // make sure the new target is populated before reuse
         }
 
         public void RenderShadowMap(WorldControl world)
         {
             if (world == null || !world.EnableShadows || !Constants.ENABLE_SHADOW_MAPPING || !Constants.SUN_ENABLED)
+            {
+                _renderedCasters.Clear();
                 return;
+            }
 
             // Skip shadow rendering at night when day-night cycle is active
             if (Constants.ENABLE_DAY_NIGHT_CYCLE && SunCycleManager.IsNight)
+            {
+                _renderedCasters.Clear();
                 return;
+            }
 
             var camera = Camera.Instance;
             if (camera == null)
+            {
+                _renderedCasters.Clear();
                 return;
+            }
 
             _frameCounter++;
             int updateInterval = Math.Max(1, Constants.SHADOW_UPDATE_INTERVAL);
@@ -115,20 +186,59 @@ namespace Client.Main.Graphics
             bool cameraChanged = HasCameraChanged(camera, shadowDistance);
             float frustumGuardBand = Math.Max(5f, shadowDistance * 0.01f);
 
-            // Always update when camera/light range changed; otherwise respect interval for static views
-            if (!_forceRender && !cameraChanged && _frameCounter % updateInterval != 0)
+            int worldTick = Controls.WorldControl.WorldGeometryTick;
+            bool worldGeometryChanged = worldTick != _lastWorldGeometryTick;
+
+            // The global geometry tick also changes for moving objects outside the current
+            // shadow area. Refresh the bounded local selection and compare a quantized caster
+            // signature before deciding to rebuild the expensive map.
+            if (_forceRender || cameraChanged || worldGeometryChanged || !_casterSelectionValid)
+            {
+                BuildCasterSelection(world, camera, shadowDistance, frustumGuardBand, cameraChanged);
+                _lastWorldGeometryTick = worldTick;
+            }
+            else
+            {
+                // Animation and rotation changes do not necessarily increment the world's
+                // spatial geometry tick. Rehash only the already bounded caster list so
+                // animated nearby shadows remain current without scanning the whole world.
+                _currentCasterSignature = ComputeCasterSignature(_selectedCasters);
+            }
+
+            bool relevantCastersChanged = _currentCasterSignature != _renderedCasterSignature;
+            if (!_forceRender && !cameraChanged && !relevantCastersChanged)
                 return;
 
+            // Throttle by preset interval. A pending signature remains different from the
+            // rendered signature, so a deferred update is not accidentally lost.
+            if (!_forceRender && _frameCounter % updateInterval != 0)
+                return;
+
+            var shadowEffect = GraphicsManager.Instance.DynamicLightingEffect;
+            if (shadowEffect == null || _shadowMap == null)
+            {
+                _renderedCasters.Clear();
+                return;
+            }
+
+            ShadowEffectBindings bindings = _effectBindings.GetValue(
+                shadowEffect,
+                static effect => new ShadowEffectBindings(effect));
+            _shadowCasterSupported = bindings.ShadowCasterTechnique != null;
+            if (!_shadowCasterSupported)
+            {
+                _renderedCasters.Clear();
+                _renderedCasterSignature = _currentCasterSignature;
+                _forceRender = false;
+                return;
+            }
+
             UpdateLightMatrices(camera, shadowDistance);
+            BuildCasterSelection(world, camera, shadowDistance, frustumGuardBand, skipLightFrustum: false);
             _lastCameraPosition = camera.Position;
             _lastCameraTarget = camera.Target;
             _forceRender = false;
             _lightFrustum.Matrix = LightViewProjection;
-            var lightFrustum = _lightFrustum;
-
-            var shadowEffect = GraphicsManager.Instance.DynamicLightingEffect;
-            if (shadowEffect == null || _shadowMap == null)
-                return;
 
             var previousTargets = _graphicsDevice.GetRenderTargets();
             var previousViewport = _graphicsDevice.Viewport;
@@ -139,84 +249,29 @@ namespace Client.Main.Graphics
                 _graphicsDevice.Viewport = new Viewport(0, 0, _shadowMap.Width, _shadowMap.Height);
                 _graphicsDevice.Clear(ClearOptions.Target | ClearOptions.DepthBuffer, Color.White, 1f, 0);
 
-                shadowEffect.CurrentTechnique = shadowEffect.Techniques["ShadowCaster"];
-                shadowEffect.Parameters["LightViewProjection"]?.SetValue(LightViewProjection);
-                shadowEffect.Parameters["ShadowMapTexelSize"]?.SetValue(new Vector2(1f / _shadowMap.Width, 1f / _shadowMap.Height));
-                shadowEffect.Parameters["ShadowBias"]?.SetValue(Constants.SHADOW_BIAS);
-                shadowEffect.Parameters["ShadowNormalBias"]?.SetValue(Constants.SHADOW_NORMAL_BIAS);
-                shadowEffect.Parameters["SunDirection"]?.SetValue(LightDirection);
+                shadowEffect.CurrentTechnique = bindings.ShadowCasterTechnique;
+                bindings.LightViewProjection?.SetValue(LightViewProjection);
+                bindings.ShadowMapTexelSize?.SetValue(new Vector2(1f / _shadowMap.Width, 1f / _shadowMap.Height));
+                bindings.ShadowBias?.SetValue(Constants.SHADOW_BIAS);
+                bindings.ShadowNormalBias?.SetValue(Constants.SHADOW_NORMAL_BIAS);
+                bindings.SunDirection?.SetValue(LightDirection);
 
                 // Terrain as caster
                 world.Terrain?.RenderShadowMap(shadowEffect, LightViewProjection);
 
-                // Collect and sort shadow casters by distance (closest first for best quality)
-                float maxDistanceSq = Constants.SHADOW_DISTANCE * Constants.SHADOW_DISTANCE;
-                Vector3 focus = Camera.Instance.Target;
-                if (focus == Vector3.Zero)
-                    focus = Camera.Instance.Position;
-
-                _casterCandidates.Clear();
-                var snapshot = world.Objects.GetSnapshot();
-
-                bool useParallelCulling = Environment.ProcessorCount > 1 &&
-                                          snapshot.Count >= ParallelCasterThreshold;
-
-                if (useParallelCulling)
+                _renderedCasters.Clear();
+                for (int i = 0; i < _selectedCasters.Count; i++)
                 {
-                    Parallel.For(
-                        0,
-                        snapshot.Count,
-                        CandidateParallelOptions,
-                        () => new List<(ModelObject model, float distSq)>(16),
-                        (i, _, localCandidates) =>
-                        {
-                            TryCollectCasterCandidate(
-                                snapshot[i],
-                                lightFrustum,
-                                frustumGuardBand,
-                                focus,
-                                maxDistanceSq,
-                                localCandidates);
-                            return localCandidates;
-                        },
-                        localCandidates =>
-                        {
-                            if (localCandidates.Count == 0)
-                                return;
-
-                            lock (_candidateMergeLock)
-                            {
-                                _casterCandidates.AddRange(localCandidates);
-                            }
-                        });
-                }
-                else
-                {
-                    for (int i = 0; i < snapshot.Count; i++)
-                    {
-                        TryCollectCasterCandidate(
-                            snapshot[i],
-                            lightFrustum,
-                            frustumGuardBand,
-                            focus,
-                            maxDistanceSq,
-                            _casterCandidates);
-                    }
+                    ModelObject caster = _selectedCasters[i];
+                    if (caster.DrawShadowCaster(shadowEffect, LightViewProjection) > 0)
+                        _renderedCasters.Add(caster);
                 }
 
-                // Sort by distance (closest first) and limit count
-                _casterCandidates.Sort((a, b) => a.distSq.CompareTo(b.distSq));
-                int maxCasters = Math.Max(1, Constants.SHADOW_MAX_CASTERS);
-                int casterCount = Math.Min(_casterCandidates.Count, maxCasters);
+                _renderedCasterSignature = _currentCasterSignature;
 
-                for (int i = 0; i < casterCount; i++)
-                {
-                    var (model, _) = _casterCandidates[i];
-                    model.DrawShadowCaster(shadowEffect, LightViewProjection);
-                }
-
-                // Restore default technique for later draws
-                shadowEffect.CurrentTechnique = shadowEffect.Techniques["DynamicLighting"];
+                // Restore the regular technique when this effect exposes one.
+                if (bindings.DynamicLightingTechnique != null)
+                    shadowEffect.CurrentTechnique = bindings.DynamicLightingTechnique;
             }
             finally
             {
@@ -229,22 +284,143 @@ namespace Client.Main.Graphics
             }
         }
 
+        private void BuildCasterSelection(
+            WorldControl world,
+            Camera camera,
+            float shadowDistance,
+            float frustumGuardBand,
+            bool skipLightFrustum)
+        {
+            _lightFrustum.Matrix = LightViewProjection;
+            float maxDistance = Math.Min(shadowDistance, Math.Max(100f, Constants.SHADOW_DISTANCE));
+            float maxDistanceSq = maxDistance * maxDistance;
+            Vector3 focus = camera.Target;
+            if (focus == Vector3.Zero)
+                focus = camera.Position;
+
+            int maxCasters = Math.Max(1, Constants.SHADOW_MAX_CASTERS);
+            _nearbyObjects.Clear();
+            _closestCasters.Clear();
+            _selectedCasters.Clear();
+            world.CollectObjectsNear(focus, maxDistance + frustumGuardBand, _nearbyObjects);
+
+            for (int i = 0; i < _nearbyObjects.Count; i++)
+            {
+                TryQueueCasterCandidate(
+                    _nearbyObjects[i],
+                    _lightFrustum,
+                    frustumGuardBand,
+                    focus,
+                    maxDistanceSq,
+                    maxCasters,
+                    _closestCasters,
+                    !skipLightFrustum);
+            }
+
+            while (_closestCasters.TryDequeue(out ModelObject model, out _))
+                _selectedCasters.Add(model);
+
+            _selectedCasters.Sort(static (left, right) =>
+                RuntimeHelpers.GetHashCode(left).CompareTo(RuntimeHelpers.GetHashCode(right)));
+            _currentCasterSignature = ComputeCasterSignature(_selectedCasters);
+            _casterSelectionValid = true;
+        }
+
+        private static ulong ComputeCasterSignature(List<ModelObject> casters)
+        {
+            const ulong offset = 1469598103934665603UL;
+            const ulong prime = 1099511628211UL;
+            const float quantization = 4f;
+            ulong hash = offset;
+
+            for (int i = 0; i < casters.Count; i++)
+            {
+                ModelObject caster = casters[i];
+                Matrix world = caster.WorldPosition;
+                Vector3 position = world.Translation;
+                uint identity = unchecked((uint)RuntimeHelpers.GetHashCode(caster));
+                uint modelIdentity = unchecked((uint)(caster.Model != null
+                    ? RuntimeHelpers.GetHashCode(caster.Model)
+                    : 0));
+                int qx = (int)MathF.Round(position.X / quantization);
+                int qy = (int)MathF.Round(position.Y / quantization);
+                int qz = (int)MathF.Round(position.Z / quantization);
+                int qM11 = (int)MathF.Round(world.M11 * 128f);
+                int qM12 = (int)MathF.Round(world.M12 * 128f);
+                int qM21 = (int)MathF.Round(world.M21 * 128f);
+                int qM22 = (int)MathF.Round(world.M22 * 128f);
+
+                hash ^= identity;
+                hash *= prime;
+                hash ^= modelIdentity;
+                hash *= prime;
+                hash ^= caster.AnimationPoseVersion;
+                hash *= prime;
+
+                // Modular player/NPC actors load and swap body-part models independently.
+                // Include direct child readiness/model state so the shadow map refreshes
+                // when armor, boots, helm, wings or weapons become drawable.
+                int childCount = caster.Children.Count;
+                hash ^= unchecked((uint)childCount);
+                hash *= prime;
+                for (int childIndex = 0; childIndex < childCount; childIndex++)
+                {
+                    if (caster.Children[childIndex] is not ModelObject child)
+                        continue;
+
+                    uint childIdentity = unchecked((uint)RuntimeHelpers.GetHashCode(child));
+                    uint childModelIdentity = unchecked((uint)(child.Model != null
+                        ? RuntimeHelpers.GetHashCode(child.Model)
+                        : 0));
+                    uint childState = unchecked((uint)child.Status) |
+                                      (child.Hidden ? 1u << 8 : 0u) |
+                                      (child.RenderShadow ? 1u << 9 : 0u);
+
+                    hash ^= childIdentity;
+                    hash *= prime;
+                    hash ^= childModelIdentity;
+                    hash *= prime;
+                    hash ^= childState;
+                    hash *= prime;
+                }
+
+                hash ^= unchecked((uint)qx);
+                hash *= prime;
+                hash ^= unchecked((uint)qy);
+                hash *= prime;
+                hash ^= unchecked((uint)qz);
+                hash *= prime;
+                hash ^= unchecked((uint)qM11);
+                hash *= prime;
+                hash ^= unchecked((uint)qM12);
+                hash *= prime;
+                hash ^= unchecked((uint)qM21);
+                hash *= prime;
+                hash ^= unchecked((uint)qM22);
+                hash *= prime;
+            }
+
+            hash ^= unchecked((uint)casters.Count);
+            return hash * prime;
+        }
+
         public void ApplyShadowParameters(Effect effect)
         {
             if (effect == null)
                 return;
 
-            bool enabled = IsReady && _shadowMap != null;
-            effect.Parameters["ShadowsEnabled"]?.SetValue(enabled ? 1.0f : 0.0f);
-            effect.Parameters["ShadowMap"]?.SetValue(enabled ? _shadowMap : null);
-            effect.Parameters["LightViewProjection"]?.SetValue(LightViewProjection);
-            effect.Parameters["ShadowMapTexelSize"]?.SetValue(_shadowMap != null
+            bool enabled = IsReady && _shadowMap != null && _shadowCasterSupported;
+            ShadowEffectBindings bindings = _effectBindings.GetValue(effect, static value => new ShadowEffectBindings(value));
+            bindings.ShadowsEnabled?.SetValue(enabled ? 1.0f : 0.0f);
+            bindings.ShadowMap?.SetValue(enabled ? _shadowMap : null);
+            bindings.LightViewProjection?.SetValue(LightViewProjection);
+            bindings.ShadowMapTexelSize?.SetValue(_shadowMap != null
                 ? new Vector2(1f / _shadowMap.Width, 1f / _shadowMap.Height)
                 : Vector2.Zero);
-            effect.Parameters["ShadowBias"]?.SetValue(Constants.SHADOW_BIAS);
-            effect.Parameters["ShadowNormalBias"]?.SetValue(Constants.SHADOW_NORMAL_BIAS);
+            bindings.ShadowBias?.SetValue(Constants.SHADOW_BIAS);
+            bindings.ShadowNormalBias?.SetValue(Constants.SHADOW_NORMAL_BIAS);
             // Shader expects SunDirection as light->world; it internally negates it to get the vector toward the light.
-            effect.Parameters["SunDirection"]?.SetValue(LightDirection);
+            bindings.SunDirection?.SetValue(LightDirection);
         }
 
         private float ComputeShadowDistance(Camera camera)
@@ -261,7 +437,10 @@ namespace Client.Main.Graphics
 
             int shadowMapSize = _shadowMap?.Width ?? Math.Max(256, Constants.SHADOW_MAP_SIZE);
             float texelWorldSize = shadowDistance / shadowMapSize;
-            float thresholdSq = Math.Max(1f, texelWorldSize * texelWorldSize);
+            // Light view snaps focus to texel grid, so sub-2-texel camera moves produce no
+            // visible change. Loosen threshold to skip redundant re-renders during slow pans.
+            float positionTexels = texelWorldSize * 2f;
+            float thresholdSq = Math.Max(1f, positionTexels * positionTexels);
 
             if (Vector3.DistanceSquared(camera.Position, _lastCameraPosition) > thresholdSq)
                 return true;
@@ -330,13 +509,15 @@ namespace Client.Main.Graphics
             return new BoundingBox(box.Min - margin, box.Max + margin);
         }
 
-        private static void TryCollectCasterCandidate(
+        private static void TryQueueCasterCandidate(
             WorldObject worldObject,
             BoundingFrustum lightFrustum,
             float frustumGuardBand,
             Vector3 focus,
             float maxDistanceSq,
-            List<(ModelObject model, float distSq)> destination)
+            int maxCasters,
+            PriorityQueue<ModelObject, float> destination,
+            bool testLightFrustum)
         {
             if (worldObject is not ModelObject model)
                 return;
@@ -344,16 +525,43 @@ namespace Client.Main.Graphics
             if (!model.Visible || model.Status == GameControlStatus.Disposed || !model.RenderShadow)
                 return;
 
-            Vector3 objPos = model.WorldPosition.Translation;
-            BoundingBox bounds = ExpandBoundingBox(model.BoundingBoxWorld, frustumGuardBand);
-            if (lightFrustum.Contains(bounds) == ContainmentType.Disjoint)
+            Vector3 objectPosition = model.WorldPosition.Translation;
+            float distanceSquared = Vector3.DistanceSquared(objectPosition, focus);
+            if (distanceSquared > maxDistanceSq)
                 return;
 
-            float distSq = Vector3.DistanceSquared(objPos, focus);
-            if (distSq > maxDistanceSq)
+            if (testLightFrustum)
+            {
+                BoundingBox bounds = ExpandBoundingBox(model.BoundingBoxWorld, frustumGuardBand);
+                if (lightFrustum.Contains(bounds) == ContainmentType.Disjoint)
+                    return;
+            }
+
+            // Keep player/NPC actor shadows stable when the caster budget is saturated.
+            // The real distance still gates the candidate above; this weighted score only
+            // decides which in-range actors survive the bounded selection.
+            float selectionScore = distanceSquared;
+            if (model is PlayerObject player)
+                selectionScore *= player.IsMainWalker ? 0.05f : 0.35f;
+            else if (model is NPCObject)
+                selectionScore *= 0.55f;
+
+            // PriorityQueue dequeues the smallest priority. Negating the score keeps the
+            // least important selected caster at the head, so it can be replaced in O(log N).
+            float priority = -selectionScore;
+            if (destination.Count < maxCasters)
+            {
+                destination.Enqueue(model, priority);
+                return;
+            }
+
+            destination.TryPeek(out _, out float farthestPriority);
+            float worstSelectionScore = -farthestPriority;
+            if (selectionScore >= worstSelectionScore)
                 return;
 
-            destination.Add((model, distSq));
+            destination.Dequeue();
+            destination.Enqueue(model, priority);
         }
     }
 }

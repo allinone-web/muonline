@@ -353,15 +353,8 @@ namespace Client.Main.Controls.UI.SelectCharacter
             if (_backgroundSurface == null || _surfaceNeedsRedraw || 
                 _backgroundSurface.Width != ViewSize.X || _backgroundSurface.Height != ViewSize.Y)
             {
-                _backgroundSurface?.Dispose();
-                _backgroundSurface = new RenderTarget2D(
-                    device,
-                    ViewSize.X,
-                    ViewSize.Y,
-                    false,
-                    SurfaceFormat.Color,
-                    DepthFormat.None
-                );
+                Client.Main.Graphics.UiRenderTargetPool.Return(_backgroundSurface);
+                _backgroundSurface = Client.Main.Graphics.UiRenderTargetPool.Rent(device, ViewSize.X, ViewSize.Y);
                 
                 // Render background to surface
                 var oldTargets = device.GetRenderTargets();
@@ -419,7 +412,7 @@ namespace Client.Main.Controls.UI.SelectCharacter
 
         public override void Dispose()
         {
-            _backgroundSurface?.Dispose();
+            Client.Main.Graphics.UiRenderTargetPool.Return(_backgroundSurface);
             _backgroundSurface = null;
             base.Dispose();
         }

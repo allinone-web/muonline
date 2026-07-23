@@ -1,4 +1,4 @@
-﻿using Client.Data.Texture;
+using Client.Data.Texture;
 using Microsoft.Xna.Framework.Graphics;
 
 namespace Client.Main.Content
@@ -9,5 +9,6 @@ namespace Client.Main.Content
         public TextureScript Script { get; set; }
         public Texture2D Texture { get; set; }
         public DateTime LastAccessUtc { get; set; } = DateTime.UtcNow;
+        public int LastAccessFrame;
     }
 }

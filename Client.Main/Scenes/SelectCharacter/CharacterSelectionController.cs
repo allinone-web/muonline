@@ -11,6 +11,7 @@ using MUnique.OpenMU.Network.Packets;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Client.Main.Scenes.SelectCharacter
@@ -59,12 +60,14 @@ namespace Client.Main.Scenes.SelectCharacter
             WorldControl world,
             GameControl scene,
             Vector3 displayPosition,
-            Vector3 displayAngle)
+            Vector3 displayAngle,
+            CancellationToken cancellationToken = default)
         {
+            ArgumentNullException.ThrowIfNull(characterInfos);
             _logger.LogInformation("Creating {Count} character objects...", characterInfos.Count);
 
-            // Dispose old objects
-            DisposeCharacters(world, scene);
+            await DisposeCharactersAsync(world, scene, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
 
             _characterInfos.Clear();
             _characterInfos.AddRange(characterInfos);
@@ -76,10 +79,10 @@ namespace Client.Main.Scenes.SelectCharacter
                 return;
             }
 
-            var loading = new List<Task>(characterInfos.Count);
-
-            foreach (var (name, cls, lvl, appearanceBytes) in characterInfos)
+            for (int i = 0; i < characterInfos.Count; i++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                var (name, cls, lvl, appearanceBytes) = characterInfos[i];
                 var player = new PlayerObject(new AppearanceData(appearanceBytes))
                 {
                     Name = name,
@@ -94,37 +97,42 @@ namespace Client.Main.Scenes.SelectCharacter
 
                 player.Click += OnPlayerClick;
 
-                _characters.Add(player);
-                world.Objects.Add(player);
-                loading.Add(player.Load());
-
-                var label = new LabelControl
+                try
                 {
-                    Text = $"Lv.{lvl}  {name}",
-                    FontSize = 14,
-                    TextColor = Color.White,
-                    HasShadow = true,
-                    ShadowColor = Color.Black * 0.8f,
-                    ShadowOffset = new Vector2(1, 1),
-                    UseManualPosition = true,
-                    Visible = false
-                };
+                    // Load before publication so the world initialization queue cannot race
+                    // this scene-owned character load.
+                    await player.Load();
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (player.Status != GameControlStatus.Ready)
+                    {
+                        throw new InvalidOperationException(
+                            $"Selection character '{name}' failed to load (status: {player.Status}).");
+                    }
 
-                _labels.Add(player, label);
-                scene.Controls.Add(label);
-                label.BringToFront();
+                    var label = CreateCharacterLabel(lvl, name);
+                    _characters.Add(player);
+                    _labels.Add(player, label);
+                    world.Objects.Add(player);
+                    scene.Controls.Add(label);
+                    label.BringToFront();
+                }
+                catch
+                {
+                    player.Click -= OnPlayerClick;
+                    player.Dispose();
+                    throw;
+                }
             }
-
-            await Task.WhenAll(loading);
-
-            // Note: Cursor.BringToFront() is handled by the scene after creation
-
-            _logger.LogInformation("Finished creating and loading character objects and labels.");
 
             if (_characters.Count > 0)
-            {
                 SetActiveCharacter(0);
-            }
+
+            await MuGame.YieldToNextFrameAsync(
+                "CharacterSelection.PrepareVisibility",
+                MainThreadDispatcher.WorkPriority.High);
+            world.PrepareInitialVisibilitySnapshot();
+
+            _logger.LogInformation("Finished creating and loading character objects and labels.");
         }
 
         // Overload for TestAnimationScene compatibility (uses PlayerClass and AppearanceConfig)
@@ -137,7 +145,6 @@ namespace Client.Main.Scenes.SelectCharacter
         {
             _logger.LogInformation("Creating {Count} character objects (AppearanceConfig version)...", characters.Count);
 
-            // Dispose old objects
             DisposeCharacters(world, scene);
 
             _characterInfos.Clear();
@@ -145,14 +152,9 @@ namespace Client.Main.Scenes.SelectCharacter
             _characterInfos.AddRange(converted);
             _activeIndex = -1;
 
-            if (characters.Count == 0)
+            for (int i = 0; i < characters.Count; i++)
             {
-                _logger.LogInformation("No characters provided for selection.");
-                return;
-            }
-
-            foreach (var (name, cls, lvl, appearanceConfig) in characters)
-            {
+                var (name, _, lvl, appearanceConfig) = characters[i];
                 var player = new PlayerObject(new AppearanceData())
                 {
                     Name = name,
@@ -166,35 +168,51 @@ namespace Client.Main.Scenes.SelectCharacter
                 };
 
                 player.Click += OnPlayerClick;
-
-                _characters.Add(player);
-                world.Objects.Add(player);
-                await player.Load(appearanceConfig.PlayerClass);
-                await player.UpdateEquipmentAppearanceFromConfig(appearanceConfig);
-
-                var label = new LabelControl
+                try
                 {
-                    Text = $"Lv.{lvl}  {name}",
-                    FontSize = 14,
-                    TextColor = Color.White,
-                    HasShadow = true,
-                    ShadowColor = Color.Black * 0.8f,
-                    ShadowOffset = new Vector2(1, 1),
-                    UseManualPosition = true,
-                    Visible = false
-                };
+                    await player.Load(appearanceConfig.PlayerClass);
+                    await player.UpdateEquipmentAppearanceFromConfig(appearanceConfig);
+                    if (player.Status != GameControlStatus.Ready)
+                    {
+                        throw new InvalidOperationException(
+                            $"Selection character '{name}' failed to load (status: {player.Status}).");
+                    }
 
-                _labels.Add(player, label);
-                scene.Controls.Add(label);
-                label.BringToFront();
+                    var label = CreateCharacterLabel(lvl, name);
+                    _characters.Add(player);
+                    _labels.Add(player, label);
+                    world.Objects.Add(player);
+                    scene.Controls.Add(label);
+                    label.BringToFront();
+                }
+                catch
+                {
+                    player.Click -= OnPlayerClick;
+                    player.Dispose();
+                    throw;
+                }
             }
-
-            _logger.LogInformation("Finished creating and loading character objects and labels.");
 
             if (_characters.Count > 0)
-            {
                 SetActiveCharacter(0);
-            }
+
+            world.PrepareInitialVisibilitySnapshot();
+            _logger.LogInformation("Finished creating and loading character objects and labels.");
+        }
+
+        private static LabelControl CreateCharacterLabel(ushort level, string name)
+        {
+            return new LabelControl
+            {
+                Text = $"Lv.{level}  {name}",
+                FontSize = 14,
+                TextColor = Color.White,
+                HasShadow = true,
+                ShadowColor = Color.Black * 0.8f,
+                ShadowOffset = new Vector2(1, 1),
+                UseManualPosition = true,
+                Visible = false
+            };
         }
 
         // === Active Character Management ===
@@ -212,11 +230,6 @@ namespace Client.Main.Scenes.SelectCharacter
                 return;
             }
 
-            if (_activeIndex == index)
-            {
-                return;
-            }
-
             for (int i = 0; i < _characters.Count; i++)
             {
                 var player = _characters[i];
@@ -226,19 +239,51 @@ namespace Client.Main.Scenes.SelectCharacter
                 player.Interactive = isActive;
 
                 if (_labels.TryGetValue(player, out var label))
-                {
                     label.Visible = isActive;
-                }
             }
 
             _activeIndex = index;
 
-            // Play a random emote animation when character is selected
             var activePlayer = _characters[index];
-            if (activePlayer != null && !activePlayer.Hidden)
+            activePlayer.PlayAction(activePlayer.GetCorrectIdleAction());
+
+            if (activePlayer.World != null)
             {
-                PlayRandomEmote(activePlayer);
+                activePlayer.World.ActivateObjectForRendering(
+                    activePlayer,
+                    forceFullVisibilityRebuild: !activePlayer.World.IsObjectVisibleInSnapshot(activePlayer));
             }
+        }
+
+        internal void EnsureActiveCharacterVisible(WorldControl world)
+        {
+            var activePlayer = ActiveCharacter;
+            if (activePlayer == null || world == null || !ReferenceEquals(activePlayer.World, world))
+                return;
+
+            if (activePlayer.Status != GameControlStatus.Ready)
+            {
+                _logger.LogWarning(
+                    "Active selection character {CharacterName} is not ready ({Status}).",
+                    activePlayer.Name,
+                    activePlayer.Status);
+                return;
+            }
+
+            bool needsRepair = activePlayer.Hidden || !world.IsObjectVisibleInSnapshot(activePlayer);
+            if (activePlayer.Hidden)
+                activePlayer.Hidden = false;
+
+            world.ClearObjectRenderFault(activePlayer);
+            if (needsRepair)
+            {
+                world.ActivateObjectForRendering(
+                    activePlayer,
+                    forceFullVisibilityRebuild: true);
+            }
+
+            if (_labels.TryGetValue(activePlayer, out var label))
+                label.Visible = true;
         }
 
         // === Emote Animations ===
@@ -317,6 +362,42 @@ namespace Client.Main.Scenes.SelectCharacter
         }
 
         // === Cleanup ===
+        private async Task DisposeCharactersAsync(
+            WorldControl world,
+            GameControl scene,
+            CancellationToken cancellationToken)
+        {
+            int processed = 0;
+            while (_characters.Count > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int last = _characters.Count - 1;
+                var player = _characters[last];
+                _characters.RemoveAt(last);
+                player.Click -= OnPlayerClick;
+
+                if (_labels.Remove(player, out var label))
+                {
+                    scene?.Controls.Remove(label);
+                    label.Dispose();
+                }
+
+                world?.Objects.Remove(player);
+                player.Dispose();
+                processed++;
+
+                if (_characters.Count > 0)
+                {
+                    await MuGame.YieldToNextFrameAsync(
+                        $"CharacterSelection.DisposeSlot.{processed}",
+                        MainThreadDispatcher.WorkPriority.High);
+                }
+            }
+
+            _characterInfos.Clear();
+            _activeIndex = -1;
+        }
+
         private void DisposeCharacters(WorldControl world, GameControl scene)
         {
             foreach (var player in _characters)
@@ -333,6 +414,8 @@ namespace Client.Main.Scenes.SelectCharacter
                 label.Dispose();
             }
             _labels.Clear();
+            _characterInfos.Clear();
+            _activeIndex = -1;
         }
 
         public void Dispose()

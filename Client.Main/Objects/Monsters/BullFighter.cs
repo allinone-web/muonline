@@ -3,6 +3,7 @@ using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Core.Utilities;
 using Client.Main.Models;
+using Client.Main.Objects.Effects;
 using Client.Main.Objects.Player;
 using Microsoft.Xna.Framework;
 using System.Threading.Tasks;
@@ -13,6 +14,8 @@ namespace Client.Main.Objects.Monsters
     public class BullFighter : MonsterObject
     {
         private WeaponObject _rightHandWeapon;
+        private MonsterBreathEffect _breath;
+
         public BullFighter()
         {
             RenderShadow = true;
@@ -20,9 +23,22 @@ namespace Client.Main.Objects.Monsters
             _rightHandWeapon = new WeaponObject
             {
                 LinkParentAnimation = false,
-                ParentBoneLink = 42, // Right hand bone for monsters
+                ParentBoneLink = 42,
             };
             Children.Add(_rightHandWeapon);
+
+            // Breath smoke from mouth (bone 24) during idle/walk animation windows
+            _breath = new MonsterBreathEffect
+            {
+                SourceBone = 24,
+                EmissionRate = 20f,
+                Triggers = new()
+                {
+                    new() { ActionIndex = (byte)MonsterActionType.Stop1, FrameStart = 15, FrameEnd = 20 },
+                    new() { ActionIndex = (byte)MonsterActionType.Stop2, FrameStart = 20, FrameEnd = 25 },
+                }
+            };
+            Children.Add(_breath);
         }
 
         public override async Task Load()

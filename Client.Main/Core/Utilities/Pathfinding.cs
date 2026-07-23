@@ -1,8 +1,9 @@
-﻿using Client.Main.Controls;
+using Client.Main.Controls;
 using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Client.Main.Core.Utilities
 {
@@ -45,56 +46,108 @@ namespace Client.Main.Core.Utilities
 
         // Thread-local buffers to avoid per-call allocations in A*
         private static readonly ThreadLocal<PathfindingContext> _ctx = new(() => new PathfindingContext());
+        private static readonly SemaphoreSlim _workerGate = new(Math.Clamp(Environment.ProcessorCount / 4, 1, 2));
 
         public static List<Vector2> FindPath(Vector2 start, Vector2 goal, WorldControl world)
+            => FindPath(start, goal, world, CancellationToken.None);
+
+        public static Task<List<Vector2>> FindPathAsync(
+            Vector2 start,
+            Vector2 goal,
+            WorldControl world,
+            CancellationToken cancellationToken)
+            => RunBoundedAsync(
+                token => FindPath(start, goal, world, token),
+                cancellationToken);
+
+        /// <summary>
+        /// Executes a CPU pathfinding job through the shared bounded worker gate. Compound
+        /// searches (for example, finding an accessible tile around an NPC) use this method so
+        /// they cannot bypass the global pathfinding concurrency limit with a raw Task.Run.
+        /// </summary>
+        public static async Task<T> RunBoundedAsync<T>(
+            Func<CancellationToken, T> work,
+            CancellationToken cancellationToken)
         {
+            ArgumentNullException.ThrowIfNull(work);
+
+            await _workerGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return await Task.Run(
+                    () => work(cancellationToken),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _workerGate.Release();
+            }
+        }
+
+        public static List<Vector2> FindPath(
+            Vector2 start,
+            Vector2 goal,
+            WorldControl world,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(world);
+            cancellationToken.ThrowIfCancellationRequested();
+
             var ctx = _ctx.Value;
             ctx.Clear();
+            int expandedNodes = 0;
 
-            PathNode startNode = ctx.GetOrCreateNode(start);
-            PathNode goalNode = ctx.GetOrCreateNode(goal);
-
-            startNode.GCost = 0;
-            startNode.HCost = Heuristic(start, goal);
-            ctx.OpenSet.Enqueue(startNode, startNode.FCost);
-
-            while (ctx.OpenSet.Count > 0)
+            try
             {
-                PathNode currentNode = ctx.OpenSet.Dequeue();
+                PathNode startNode = ctx.GetOrCreateNode(start);
+                PathNode goalNode = ctx.GetOrCreateNode(goal);
 
-                if (currentNode.Position == goalNode.Position)
-                {
-                    var path = RetracePath(startNode, currentNode);
-                    ctx.ReleaseNodes();
-                    return path;
-                }
+                startNode.GCost = 0;
+                startNode.HCost = Heuristic(start, goal);
+                ctx.OpenSet.Enqueue(startNode, startNode.FCost);
 
-                if (!ctx.ClosedSet.Add(currentNode.Position))
+                while (ctx.OpenSet.Count > 0)
                 {
-                    continue; // Node has already been processed
-                }
+                    if ((expandedNodes++ & 63) == 0)
+                        cancellationToken.ThrowIfCancellationRequested();
 
-                foreach (Vector2 neighborPos in GetNeighbors(currentNode.Position, world))
-                {
-                    if (ctx.ClosedSet.Contains(neighborPos))
+                    PathNode currentNode = ctx.OpenSet.Dequeue();
+
+                    if (currentNode.Position == goalNode.Position)
+                        return RetracePath(startNode, currentNode);
+
+                    if (!ctx.ClosedSet.Add(currentNode.Position))
                         continue;
 
-                    PathNode neighborNode = ctx.GetOrCreateNode(neighborPos);
-                    float tentativeGCost = currentNode.GCost + Distance(currentNode.Position, neighborPos);
-
-                    if (tentativeGCost < neighborNode.GCost)
+                    // Avoid the iterator allocation previously created for every expanded node.
+                    for (int directionIndex = 0; directionIndex < Directions.Length; directionIndex++)
                     {
-                        neighborNode.GCost = tentativeGCost;
-                        neighborNode.HCost = Heuristic(neighborPos, goal);
-                        neighborNode.Parent = currentNode;
+                        Vector2 neighborPos = currentNode.Position + Directions[directionIndex];
+                        if (!IsWithinMapBounds(neighborPos, world) || !world.IsWalkable(neighborPos))
+                            continue;
 
-                        ctx.OpenSet.Enqueue(neighborNode, neighborNode.FCost);
+                        if (ctx.ClosedSet.Contains(neighborPos))
+                            continue;
+
+                        PathNode neighborNode = ctx.GetOrCreateNode(neighborPos);
+                        float tentativeGCost = currentNode.GCost + Distance(currentNode.Position, neighborPos);
+
+                        if (tentativeGCost < neighborNode.GCost)
+                        {
+                            neighborNode.GCost = tentativeGCost;
+                            neighborNode.HCost = Heuristic(neighborPos, goal);
+                            neighborNode.Parent = currentNode;
+                            ctx.OpenSet.Enqueue(neighborNode, neighborNode.FCost);
+                        }
                     }
                 }
-            }
 
-            ctx.ReleaseNodes();
-            return null; // Path not found
+                return null;
+            }
+            finally
+            {
+                ctx.ReleaseNodes();
+            }
         }
 
         private static float Heuristic(Vector2 a, Vector2 b)
@@ -105,18 +158,6 @@ namespace Client.Main.Core.Utilities
         private static float Distance(Vector2 a, Vector2 b)
         {
             return Vector2.Distance(a, b);
-        }
-
-        private static IEnumerable<Vector2> GetNeighbors(Vector2 position, WorldControl world)
-        {
-            foreach (var direction in Directions)
-            {
-                Vector2 neighbor = position + direction;
-                if (IsWithinMapBounds(neighbor, world) && world.IsWalkable(neighbor))
-                {
-                    yield return neighbor;
-                }
-            }
         }
 
         private static bool IsWithinMapBounds(Vector2 position, WorldControl world)

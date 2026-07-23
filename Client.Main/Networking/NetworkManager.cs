@@ -1,4 +1,5 @@
 using Client.Main.Configuration;
+using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Core.Client;
 using Client.Main.Core.Models;
@@ -70,6 +71,7 @@ namespace Client.Main.Networking
         public ClientConnectionState CurrentState => _currentState;
         public bool IsConnected => _connectionManager.IsConnected;
         public CharacterState GetCharacterState() => _characterState;
+        public void UpdateBuffs() => _packetRouter.UpdateBuffs();
         public Task SendClientReadyAfterMapChangeAsync()
             => _characterService.SendClientReadyAfterMapChangeAsync();
 
@@ -379,83 +381,116 @@ namespace Client.Main.Networking
         // Internal Methods
         internal void ProcessCharacterRespawn(ushort mapId, byte x, byte y, byte direction)
         {
-            _logger.LogInformation("ProcessCharacterRespawn: MapID={MapId}, X={X}, Y={Y}, Direction={Direction}", mapId, x, y, direction);
+            _logger.LogInformation(
+                "ProcessCharacterRespawn: MapID={MapId}, X={X}, Y={Y}, Direction={Direction}",
+                mapId,
+                x,
+                y,
+                direction);
 
-            bool previousInGameStatus = _characterState.IsInGame;
             _characterState.UpdateMap(mapId);
             _characterState.UpdatePosition(x, y);
             _characterState.IsInGame = true;
 
-            MuGame.ScheduleOnMainThread(async () =>
+            MuGame.ScheduleOnMainThread(
+                () => ProcessCharacterRespawnOnMainThreadAsync(mapId, x, y, direction),
+                MainThreadDispatcher.WorkPriority.Critical,
+                "ProcessCharacterRespawn.Begin");
+        }
+
+        private async Task ProcessCharacterRespawnOnMainThreadAsync(
+            ushort mapId,
+            byte x,
+            byte y,
+            byte direction)
+        {
+            try
             {
-                try
+                var game = MuGame.Instance;
+                if (game?.ActiveScene is SelectCharacterScene)
                 {
-                    var game = MuGame.Instance;
-                    // Avoid racing with SelectCharacterScene which will switch to GameScene
-                    if (game?.ActiveScene is SelectCharacterScene)
+                    _logger.LogInformation(
+                        "ProcessCharacterRespawn: Currently in SelectCharacterScene; deferring scene change to it.");
+                    return;
+                }
+
+                if (game?.ActiveScene is not GameScene scene)
+                {
+                    _logger.LogWarning(
+                        "ProcessCharacterRespawn: ActiveScene is not GameScene. Changing scene.");
+                    game?.ChangeScene(new GameScene());
+                    return;
+                }
+
+                var currentWorld = scene.World as WalkableWorldControl;
+                bool mapChanged = currentWorld == null || currentWorld.MapId != mapId;
+                _logger.LogDebug(
+                    "ProcessCharacterRespawn: CurrentWorldIndex: {CurrentIdx}, NewMapId: {NewMapId}, MapChanged: {MapChanged}",
+                    currentWorld?.WorldIndex,
+                    mapId,
+                    mapChanged);
+
+                await MuGame.YieldToNextFrameAsync(
+                    "ProcessCharacterRespawn.ResetHero",
+                    MainThreadDispatcher.WorkPriority.Critical);
+
+                if (!ReferenceEquals(MuGame.Instance?.ActiveScene, scene))
+                    return;
+
+                var hero = scene.Hero;
+                hero.Reset();
+
+                // Hide the hero before changing its logical tile. Reading TargetPosition here
+                // would use the old world's terrain and cache an invalid Z value for the new map.
+                if (mapChanged)
+                    hero.Hidden = true;
+
+                hero.Location = new Vector2(x, y);
+                hero.Direction = (Client.Main.Models.Direction)direction;
+                hero.InvalidateTerrainTarget();
+
+                if (!mapChanged)
+                    hero.SnapToTerrainHeight();
+
+                if (mapChanged)
+                {
+                    if (GameScene.MapWorldRegistry.TryGetValue((byte)mapId, out var worldType))
                     {
-                        _logger.LogInformation("ProcessCharacterRespawn: Currently in SelectCharacterScene; deferring scene change to it.");
-                        return;
-                    }
-                    if (game?.ActiveScene is not GameScene gs)
-                    {
-                        _logger.LogWarning("ProcessCharacterRespawn: ActiveScene is not GameScene. Changing scene.");
-                        game.ChangeScene(new GameScene());
-                        return;
-                    }
-
-                    var currentWorld = gs.World as WalkableWorldControl;
-                    bool mapChanged = currentWorld == null || currentWorld.MapId != mapId;
-
-                    _logger.LogDebug("ProcessCharacterRespawn: CurrentWorldIndex: {CurrentIdx}, NewMapId: {NewMapId}, MapChanged: {MapChangedFlag}",
-                        currentWorld?.WorldIndex, mapId, mapChanged);
-
-                    var hero = gs.Hero;
-                    hero.Reset();
-                    hero.Location = new Vector2(x, y);
-                    hero.Direction = (Client.Main.Models.Direction)direction;
-                    // Synchronize MoveTargetPosition to prevent walk animation after teleport
-                    hero.MoveTargetPosition = hero.TargetPosition;
-                    hero.Position = hero.TargetPosition;
-
-                    if (mapChanged)
-                    {
-                        _logger.LogInformation("ProcessCharacterRespawn: Map has changed. Requesting world change to map {MapId}", mapId);
-                        if (GameScene.MapWorldRegistry.TryGetValue((byte)mapId, out var worldType))
-                        {
-                            await gs.ChangeMap(worldType);
-                        }
-                        else
-                        {
-                            _logger.LogWarning("ProcessCharacterRespawn: Unknown mapId {MapId} for world change. Creating new GameScene.", mapId);
-                            game.ChangeScene(new GameScene());
-                        }
+                        await MuGame.YieldToNextFrameAsync(
+                            "ProcessCharacterRespawn.BeginMapChange",
+                            MainThreadDispatcher.WorkPriority.Critical);
+                        await scene.ChangeMap(worldType);
                     }
                     else
                     {
-                        _logger.LogInformation("ProcessCharacterRespawn: Same map ({MapId}). Updating hero position.", mapId);
-                        if (currentWorld != null && !ReferenceEquals(currentWorld.Walker, hero))
-                        {
-                            _logger.LogWarning("ProcessCharacterRespawn: Walker reference mismatch on same-map teleport. Rebinding local walker.");
-                            currentWorld.Walker = hero;
-                        }
-
-                        if (currentWorld != null && !currentWorld.Objects.Contains(hero))
-                        {
-                            _logger.LogWarning("ProcessCharacterRespawn: Hero missing from world objects after same-map teleport. Re-attaching hero.");
-                            currentWorld.Objects.Add(hero);
-                        }
-
-                        hero.Hidden = false;
-                        _logger.LogInformation("ProcessCharacterRespawn: Sending ClientReadyAfterMapChange for same map teleport/respawn.");
-                        await _characterService.SendClientReadyAfterMapChangeAsync();
+                        _logger.LogWarning(
+                            "ProcessCharacterRespawn: Unknown mapId {MapId}; recreating GameScene.",
+                            mapId);
+                        game.ChangeScene(new GameScene());
                     }
+                    return;
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error in ProcessCharacterRespawn.");
-                }
-            });
+
+                if (currentWorld != null && !ReferenceEquals(currentWorld.Walker, hero))
+                    currentWorld.Walker = hero;
+
+                if (currentWorld != null && !currentWorld.Objects.Contains(hero))
+                    currentWorld.Objects.Add(hero);
+
+                hero.SnapToTerrainHeight();
+                hero.Hidden = false;
+                await _characterService.SendClientReadyAfterMapChangeAsync();
+                await MuGame.YieldToNextFrameAsync(
+                    "ProcessCharacterRespawn.Finalize",
+                    MainThreadDispatcher.WorkPriority.Critical);
+
+                if (ReferenceEquals(MuGame.Instance?.ActiveScene, scene))
+                    MuGame.ResetFramePerformanceWindow($"respawn map {mapId}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in ProcessCharacterRespawn.");
+            }
         }
 
         internal void UpdateState(ClientConnectionState newState)

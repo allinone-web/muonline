@@ -321,6 +321,12 @@ namespace Client.Main.Controls.UI.Game.Skills
                 drawH);
 
             spriteBatch.Draw(_iconTexture, iconRect, _iconSource, Color.White * Alpha);
+
+            // Cooldown overlay (dark fill from top to bottom proportional to remaining time)
+            DrawCooldownOverlay(spriteBatch, iconRect);
+
+            // Cooldown timer text (centered, large)
+            DrawCooldownTimer(spriteBatch, font, iconRect);
         }
 
         private void DrawFooter(SpriteBatch spriteBatch, Texture2D pixel, Rectangle rect)
@@ -461,6 +467,7 @@ namespace Client.Main.Controls.UI.Game.Skills
             string skillName = SkillDatabase.GetSkillName(_skill.SkillId);
             ushort manaCost = SkillDatabase.GetSkillManaCost(_skill.SkillId);
             ushort agCost = SkillDatabase.GetSkillAGCost(_skill.SkillId);
+            uint range = SkillDatabase.GetSkillRange(_skill.SkillId);
             var skillType = SkillDatabase.GetSkillType(_skill.SkillId);
 
             string typeText = skillType switch
@@ -477,22 +484,46 @@ namespace Client.Main.Controls.UI.Game.Skills
             {
                 tooltip += $"\nMana: {manaCost}";
                 if (agCost > 0)
-                {
                     tooltip += $"   AG: {agCost}";
-                }
             }
 
             if (skillDef != null)
             {
                 if (skillDef.Damage > 0)
-                {
                     tooltip += $"\nDamage: {skillDef.Damage}";
-                }
+
+                if (range > 0)
+                    tooltip += $"\nRange: {range}";
 
                 if (skillDef.RequiredLevel > 0)
-                {
                     tooltip += $"\nRequired Lv: {skillDef.RequiredLevel}";
+
+                // Stat requirements (SourceMain: DemendConditionCheckSkill display)
+                bool hasStats = skillDef.RequiredStrength > 0 || skillDef.RequiredDexterity > 0
+                             || skillDef.RequiredEnergy > 0 || skillDef.RequiredLeadership > 0;
+                if (hasStats)
+                {
+                    tooltip += "\n---";
+                    if (skillDef.RequiredStrength > 0)
+                        tooltip += $"\nStr: {skillDef.RequiredStrength}";
+                    if (skillDef.RequiredDexterity > 0)
+                        tooltip += $"\nDex: {skillDef.RequiredDexterity}";
+                    if (skillDef.RequiredEnergy > 0)
+                    {
+                        int baseEnergy = 20;
+                        int level = skillDef.RequiredLevel > 0 ? skillDef.RequiredLevel : 1;
+                        int reqEnergy = baseEnergy + (skillDef.RequiredEnergy * level * 4 / 100);
+                        tooltip += $"\nEne: {reqEnergy}";
+                    }
+                    if (skillDef.RequiredLeadership > 0)
+                        tooltip += $"\nCmd: {skillDef.RequiredLeadership}";
                 }
+
+                if (skillDef.Delay > 0)
+                    tooltip += $"\nCooldown: {skillDef.Delay / 1000f:F1}s";
+
+                if (skillDef.MasteryType > 0)
+                    tooltip += $"\nMastery: Tier {skillDef.MasteryType}";
             }
 
             _tooltipText = tooltip;
@@ -515,6 +546,71 @@ namespace Client.Main.Controls.UI.Game.Skills
 
             _iconTexture = TextureLoader.Instance.GetTexture2D(frame.TexturePath);
             _iconSource = frame.SourceRectangle;
+        }
+
+        /// <summary>
+        /// Draws a dark semi-transparent overlay over the icon proportional to remaining cooldown.
+        /// The overlay covers from the top of the icon down to a position proportional to cooldown ratio.
+        /// </summary>
+        private void DrawCooldownOverlay(SpriteBatch spriteBatch, Rectangle iconRect)
+        {
+            if (_skill == null)
+                return;
+
+            var pixel = GraphicsManager.Instance.Pixel;
+            if (pixel == null) return;
+
+            var gameTime = MuGame.Instance?.GameTime;
+            double now = gameTime?.TotalGameTime.TotalMilliseconds ?? Environment.TickCount64;
+            float ratio = Core.Client.SkillCooldownTracker.GetCooldownRatio(_skill.SkillId, now);
+            if (ratio <= 0f)
+                return;
+
+            int overlayHeight = Math.Max(1, (int)(iconRect.Height * ratio));
+
+            var overlayRect = new Rectangle(
+                iconRect.X,
+                iconRect.Y,
+                iconRect.Width,
+                overlayHeight);
+
+            // Dark overlay
+            spriteBatch.Draw(pixel, overlayRect, new Color(0, 0, 0, 160) * Alpha);
+
+            // Bright edge at the bottom of the overlay (the cooldown "sweep" line)
+            spriteBatch.Draw(
+                pixel,
+                new Rectangle(overlayRect.X, overlayRect.Y + overlayHeight - 1, overlayRect.Width, 1),
+                ModernHudTheme.Accent * 0.5f * Alpha);
+        }
+
+        /// <summary>
+        /// Draws remaining cooldown time in seconds over the center of the icon.
+        /// </summary>
+        private void DrawCooldownTimer(SpriteBatch spriteBatch, SpriteFont? font, Rectangle iconRect)
+        {
+            if (_skill == null || font == null)
+                return;
+
+            var gameTime = MuGame.Instance?.GameTime;
+            double now = gameTime?.TotalGameTime.TotalMilliseconds ?? Environment.TickCount64;
+            int remainingMs = Core.Client.SkillCooldownTracker.GetRemainingMs(_skill.SkillId, now);
+            if (remainingMs <= 0)
+                return;
+
+            string timerText = remainingMs >= 1000
+                ? $"{(remainingMs + 999) / 1000}"   // whole seconds
+                : $"{(remainingMs + 99) / 100f:F1}"; // one decimal
+
+            float textScale = 0.6f;
+            Vector2 textSize = font.MeasureString(timerText) * textScale;
+            float tx = iconRect.X + (iconRect.Width - textSize.X) * 0.5f;
+            float ty = iconRect.Y + (iconRect.Height - textSize.Y) * 0.5f;
+
+            spriteBatch.DrawString(font, timerText, new Vector2(tx + 1f, ty + 1f),
+                Color.Black * 0.85f, 0f, Vector2.Zero, textScale, SpriteEffects.None, 0f);
+            spriteBatch.DrawString(font, timerText, new Vector2(tx, ty),
+                ModernHudTheme.TextWhite, 0f, Vector2.Zero, textScale, SpriteEffects.None, 0f);
         }
     }
 }

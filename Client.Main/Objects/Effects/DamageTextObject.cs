@@ -9,6 +9,7 @@ using Client.Main.Models;
 using Client.Main.Objects.Player;
 using Client.Main.Scenes;
 using Client.Main.Controls;
+using System.Threading;
 
 namespace Client.Main.Objects.Effects
 {
@@ -62,7 +63,10 @@ namespace Client.Main.Objects.Effects
         private const float GlowAlphaMul = 0.15f;  // was 0.30–0.60
         private const float HighlightAlphaMul = 0.075f; // was 0.15
 
+        private const int MaxPoolSize = 256;
         private static readonly System.Collections.Concurrent.ConcurrentBag<DamageTextObject> _pool = new();
+        private static int _poolCount;
+        public static int PoolCount => Volatile.Read(ref _poolCount);
 
         // ---------------------------------------------------------------------
 
@@ -73,8 +77,9 @@ namespace Client.Main.Objects.Effects
 
         public static DamageTextObject Rent(string text, ushort targetId, Color color)
         {
-            if (_pool.TryTake(out var obj))
+            if (Constants.ENABLE_EFFECT_POOLING && _pool.TryTake(out var obj))
             {
+                Interlocked.Decrement(ref _poolCount);
                 obj.Reset(text, targetId, color);
                 return obj;
             }
@@ -89,7 +94,15 @@ namespace Client.Main.Objects.Effects
             }
             finally
             {
-                _pool.Add(this);
+                if (Constants.ENABLE_EFFECT_POOLING &&
+                    Interlocked.Increment(ref _poolCount) <= MaxPoolSize)
+                {
+                    _pool.Add(this);
+                }
+                else
+                {
+                    Interlocked.Decrement(ref _poolCount);
+                }
             }
         }
 
@@ -283,15 +296,23 @@ namespace Client.Main.Objects.Effects
             }
 
             // --------------------------------------------------------------------------
-            using (new SpriteBatchScope(
-                spriteBatch,
-                SpriteSortMode.Deferred,
-                BlendState.AlphaBlend,
-                SamplerState.AnisotropicClamp,
-                DepthStencilState.None,
-                RasterizerState.CullNone,
-                null,
-                UiScaler.SpriteTransform))
+            // When WorldControl.DrawAfterPass already opened a shared damage-text batch,
+            // skip our own scope and draw straight into it (saves Begin/End per instance).
+            bool ownScope = !SpriteBatchScope.BatchIsBegun;
+            SpriteBatchScope scope = default;
+            if (ownScope)
+            {
+                scope = new SpriteBatchScope(
+                    spriteBatch,
+                    SpriteSortMode.Deferred,
+                    BlendState.AlphaBlend,
+                    SamplerState.AnisotropicClamp,
+                    DepthStencilState.None,
+                    RasterizerState.CullNone,
+                    null,
+                    UiScaler.SpriteTransform);
+            }
+            try
             {
                 // Shadow (only for bigger text)
                 if (scale > 0.8f)
@@ -358,6 +379,11 @@ namespace Client.Main.Objects.Effects
                             0f, origin, scale * 1.02f, SpriteEffects.None, 0f);
                     }
                 }
+            }
+            finally
+            {
+                if (ownScope)
+                    scope.Dispose();
             }
         }
 

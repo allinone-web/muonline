@@ -18,6 +18,7 @@ using MUnique.OpenMU.Network.Packets;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Client.Main.Scenes
@@ -95,6 +96,8 @@ namespace Client.Main.Scenes
         private CharacterCreationDialog _characterCreationDialog;
         private string _currentlySelectedCharacterName = null;
         private bool _isIntentionalLogout = false;
+        private readonly SemaphoreSlim _characterRefreshLock = new(1, 1);
+        private CancellationTokenSource _characterRefreshCancellation;
 
         // UI Panel rendering
         private Rectangle _characterPanelRect;
@@ -439,11 +442,14 @@ namespace Client.Main.Scenes
             try
             {
                 UpdateLoadProgress("Creating Select World...", 0.05f);
-                _selectWorld = new SelectWorld();
+                _selectWorld = new SelectWorld { Visible = false };
                 Controls.Add(_selectWorld);
 
                 UpdateLoadProgress("Initializing Select World (Graphics)...", 0.1f);
                 await _selectWorld.Initialize();
+                await MuGame.YieldToNextFrameAsync(
+                    "CharacterSelection.AttachWorld",
+                    MainThreadDispatcher.WorkPriority.Critical);
                 World = _selectWorld;
                 UpdateLoadProgress("Select World Initialized.", 0.35f);
                 _logger.LogInformation("--- SelectCharacterScene: SelectWorld initialized and set.");
@@ -463,6 +469,12 @@ namespace Client.Main.Scenes
 
                 // Connect to world
                 _selectWorld.SetController(_characterController);
+
+                // Attaching the world invalidates control-tree state. Let that frame finish
+                // before constructing and publishing character slots.
+                await MuGame.YieldToNextFrameAsync(
+                    "CharacterSelection.CreateSlots",
+                    MainThreadDispatcher.WorkPriority.High);
 
                 if (_characters.Any())
                 {
@@ -504,7 +516,16 @@ namespace Client.Main.Scenes
                         UpdateLoadProgress("No characters to configure.", characterCreationEndProgress);
                     }
 
-                    UpdateLoadProgress("Character Objects Ready.", 0.90f);
+                    UpdateLoadProgress("Preparing first character-selection frame...", 0.90f);
+                    await _selectWorld.PrepareInitialRenderResourcesAsync(
+                        "CharacterSelection.PrewarmWorld");
+                    await MuGame.YieldToNextFrameAsync(
+                        "CharacterSelection.ActivateWorld",
+                        MainThreadDispatcher.WorkPriority.Critical);
+                    _selectWorld.Visible = true;
+                    _characterController.EnsureActiveCharacterVisible(_selectWorld);
+                    _selectWorld.PrepareInitialVisibilitySnapshot();
+                    UpdateLoadProgress("Character Objects Ready.", 0.94f);
                     _logger.LogInformation("--- SelectCharacterScene: Character creation finished.");
                 }
                 else
@@ -514,6 +535,16 @@ namespace Client.Main.Scenes
                     _logger.LogWarning("--- SelectCharacterScene: {Message}", message);
                     UpdateLoadProgress(message, 0.90f);
                     UpdateNavigationButtonState();
+                }
+
+                if (!_selectWorld.Visible)
+                {
+                    await _selectWorld.PrepareInitialRenderResourcesAsync(
+                        "CharacterSelection.PrewarmEmptyWorld");
+                    await MuGame.YieldToNextFrameAsync(
+                        "CharacterSelection.ActivateEmptyWorld",
+                        MainThreadDispatcher.WorkPriority.Critical);
+                    _selectWorld.Visible = true;
                 }
             }
             catch (Exception ex)
@@ -529,6 +560,9 @@ namespace Client.Main.Scenes
                 UpdateLoadProgress("Character Selection Ready.", 1.0f);
                 _logger.LogInformation("<<< SelectCharacterScene LoadSceneContentWithProgress finished.");
             }
+
+            // Do not complete the parent scene-initialization chain inside the activation action.
+            await Task.Yield();
         }
 
         public override void AfterLoad()
@@ -636,6 +670,10 @@ namespace Client.Main.Scenes
             _logger.LogDebug("Disposing SelectCharacterScene.");
             UnsubscribeFromNetworkEvents();
 
+            var refreshCancellation = Interlocked.Exchange(ref _characterRefreshCancellation, null);
+            refreshCancellation?.Cancel();
+            refreshCancellation?.Dispose();
+
             if (_characterController != null)
             {
                 _characterController.CharacterClicked -= OnControllerCharacterClicked;
@@ -691,33 +729,97 @@ namespace Client.Main.Scenes
         private void HandleCharacterListReceived(object sender,
             List<(string Name, CharacterClassNumber Class, ushort Level, byte[] Appearance)> characters)
         {
-            _logger.LogInformation("SelectCharacterScene.HandleCharacterListReceived: Received {Count} characters", characters?.Count ?? 0);
-            
-            MuGame.ScheduleOnMainThread(() =>
+            var snapshot = characters?.ToList()
+                ?? new List<(string Name, CharacterClassNumber Class, ushort Level, byte[] Appearance)>();
+            _logger.LogInformation(
+                "SelectCharacterScene.HandleCharacterListReceived: Received {Count} characters",
+                snapshot.Count);
+
+            var refreshCancellation = new CancellationTokenSource();
+            var previousCancellation = Interlocked.Exchange(
+                ref _characterRefreshCancellation,
+                refreshCancellation);
+            previousCancellation?.Cancel();
+            previousCancellation?.Dispose();
+            CancellationToken token = refreshCancellation.Token;
+
+            MuGame.ScheduleOnMainThread(
+                () => RefreshCharacterListAsync(snapshot, token),
+                MainThreadDispatcher.WorkPriority.High,
+                "HandleCharacterListReceived.RefreshInPlace");
+        }
+
+        private async Task RefreshCharacterListAsync(
+            List<(string Name, CharacterClassNumber Class, ushort Level, byte[] Appearance)> characters,
+            CancellationToken cancellationToken)
+        {
+            await _characterRefreshLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
+                await MuGame.YieldToNextFrameAsync(
+                    "CharacterSelection.Refresh.Begin",
+                    MainThreadDispatcher.WorkPriority.High);
+
+                if (MuGame.Instance.ActiveScene != this || _characterController == null || _selectWorld == null)
+                    return;
+
+                string selectedName = _currentlySelectedCharacterName;
+                _isSelectionInProgress = true;
+                UpdateNavigationButtonState();
+
+                _characters.Clear();
+                _characters.AddRange(characters);
+
+                await _characterController.CreateCharactersAsync(
+                    _characters,
+                    _selectWorld,
+                    this,
+                    _selectWorld.CharacterDisplayPosition,
+                    _selectWorld.CharacterDisplayAngle,
+                    cancellationToken);
+
+                cancellationToken.ThrowIfCancellationRequested();
                 if (MuGame.Instance.ActiveScene != this)
-                {
-                    _logger.LogWarning("Scene changed, aborting character list refresh.");
                     return;
+
+                int selectedIndex = -1;
+                if (!string.IsNullOrEmpty(selectedName))
+                {
+                    selectedIndex = _characters.FindIndex(character =>
+                        string.Equals(character.Name, selectedName, StringComparison.Ordinal));
                 }
 
-                if (characters == null || characters.Count == 0)
-                {
-                    _logger.LogError("Received null or empty character list.");
-                    return;
-                }
+                if (selectedIndex < 0 && _characters.Count > 0)
+                    selectedIndex = 0;
 
-                try
-                {
-                    _logger.LogInformation("Reloading SelectCharacterScene with updated list...");
-                    var newScene = new SelectCharacterScene(characters, _networkManager);
-                    MuGame.Instance.ChangeScene(newScene);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error reloading SelectCharacterScene.");
-                }
-            });
+                _currentCharacterIndex = selectedIndex;
+                _currentlySelectedCharacterName = selectedIndex >= 0
+                    ? _characters[selectedIndex].Name
+                    : null;
+                if (selectedIndex >= 0)
+                    _characterController.SetActiveCharacter(selectedIndex);
+
+                _selectedCharacterInfo = null;
+                PositionNavigationButtons();
+                _logger.LogInformation(
+                    "Character selection refreshed in place with {Count} slots.",
+                    _characters.Count);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogDebug("Character selection refresh superseded by a newer list.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error refreshing SelectCharacterScene in place.");
+            }
+            finally
+            {
+                _isSelectionInProgress = false;
+                if (MuGame.Instance.ActiveScene == this)
+                    UpdateNavigationButtonState();
+                _characterRefreshLock.Release();
+            }
         }
 
         private void HandleEnteredGame(object sender, EventArgs e)
@@ -764,7 +866,7 @@ namespace Client.Main.Scenes
                 {
                     _logger.LogWarning("<<< SelectCharacterScene.HandleEnteredGame (UI Thread): Scene changed before execution. Aborting change to GameScene.");
                 }
-            });
+            }, MainThreadDispatcher.WorkPriority.Critical, "HandleEnteredGame");
         }
 
         private void HandleNetworkError(object sender, string errorMessage)

@@ -6,23 +6,55 @@ using Microsoft.Xna.Framework.Graphics;
 namespace Client.Main.Helpers
 {
     /// <summary>
-    /// Manages nested SpriteBatch.Begin/End calls, preserving and restoring all parameters.
+    /// Manages nested SpriteBatch.Begin/End calls while preserving the previous batch state.
+    /// Identical nested states reuse the active batch instead of forcing another End/Begin pair.
     /// </summary>
     public struct SpriteBatchScope : IDisposable
     {
-        private readonly SpriteBatch _batch;
-        private static readonly Stack<SavedState> _stack = new();
+        [ThreadStatic]
+        private static Stack<ScopeEntry> _threadStack;
 
+        private readonly SpriteBatch _batch;
         private readonly SavedState _myState;
         private readonly DepthStencilState _prevDepth;
         private readonly RasterizerState _prevRaster;
-        private readonly SamplerState _prevSampler; // NEW
+        private readonly SamplerState _prevSampler;
+        private readonly bool _ownsTransition;
         private readonly bool _active;
 
+        private static Stack<ScopeEntry> Stack => _threadStack ??= new Stack<ScopeEntry>(8);
+
         /// <summary>
-        /// True if there is currently an open SpriteBatch (anywhere in the stack).
+        /// True if a SpriteBatch is currently open on this thread.
         /// </summary>
-        public static bool BatchIsBegun => _stack.Count > 0;
+        public static bool BatchIsBegun => Stack.Count > 0;
+
+        /// <summary>
+        /// Clears a corrupted nested SpriteBatch scope after a contained render exception.
+        /// Only the currently active batch is ended; all bookkeeping entries are then removed
+        /// so the next object starts from a known state.
+        /// </summary>
+        internal static void ForceReset()
+        {
+            var stack = Stack;
+            if (stack.Count == 0)
+                return;
+
+            try
+            {
+                ScopeEntry current = stack.Peek();
+                current.State.End(current.Batch);
+            }
+            catch
+            {
+                // The batch may already have been ended by the failing object. Clearing the
+                // bookkeeping stack is still required to allow recovery on the next draw.
+            }
+            finally
+            {
+                stack.Clear();
+            }
+        }
 
         public SpriteBatchScope(
             SpriteBatch batch,
@@ -37,7 +69,6 @@ namespace Client.Main.Helpers
             _batch = batch ?? throw new ArgumentNullException(nameof(batch));
 
             var gd = batch.GraphicsDevice;
-
             _prevDepth = gd.DepthStencilState;
             _prevRaster = gd.RasterizerState;
             _prevSampler = gd.SamplerStates[0];
@@ -49,14 +80,29 @@ namespace Client.Main.Helpers
                 depth,
                 raster,
                 effect,
-                transform
-            );
+                transform);
 
-            if (_stack.Count > 0)
-                _stack.Peek().End(_batch);
+            var stack = Stack;
+            if (stack.Count > 0)
+            {
+                ScopeEntry current = stack.Peek();
+                if (ReferenceEquals(current.Batch, batch) && current.State.Equals(_myState))
+                {
+                    stack.Push(new ScopeEntry(batch, _myState, ownsTransition: false));
+                    _ownsTransition = false;
+                    _active = true;
+                    return;
+                }
 
-            _myState.Begin(_batch);
-            _stack.Push(_myState);
+                // End the batch that is actually active. The old implementation used
+                // the newly requested batch here, which is incorrect when two different
+                // SpriteBatch instances are nested.
+                current.State.End(current.Batch);
+            }
+
+            _myState.Begin(batch);
+            stack.Push(new ScopeEntry(batch, _myState, ownsTransition: true));
+            _ownsTransition = true;
             _active = true;
         }
 
@@ -65,32 +111,44 @@ namespace Client.Main.Helpers
             if (!_active)
                 return;
 
-            _stack.Pop().End(_batch);
+            var stack = Stack;
+            if (stack.Count == 0)
+                return;
 
-            var gd = _batch.GraphicsDevice;
+            ScopeEntry entry = stack.Pop();
+            if (!_ownsTransition || !entry.OwnsTransition)
+                return;
 
-            // Restore all states
+            entry.State.End(entry.Batch);
+
+            var gd = entry.Batch.GraphicsDevice;
             gd.DepthStencilState = _prevDepth;
             gd.RasterizerState = _prevRaster;
             gd.SamplerStates[0] = _prevSampler;
 
-            if (_stack.Count > 0)
-                _stack.Peek().Begin(_batch);
+            if (stack.Count > 0)
+            {
+                ScopeEntry previous = stack.Peek();
+                previous.State.Begin(previous.Batch);
+            }
         }
 
-        /// <summary>
-        /// Holds all parameters necessary to Begin/End a SpriteBatch with the same settings.
-        /// </summary>
-        private readonly struct SavedState
+        private readonly struct ScopeEntry
         {
-            public readonly SpriteSortMode Sort;
-            public readonly BlendState Blend;
-            public readonly SamplerState Sampler;
-            public readonly DepthStencilState Depth;
-            public readonly RasterizerState Raster;
-            public readonly Effect Effect;
-            public readonly Matrix? Transform;
+            public ScopeEntry(SpriteBatch batch, SavedState state, bool ownsTransition)
+            {
+                Batch = batch;
+                State = state;
+                OwnsTransition = ownsTransition;
+            }
 
+            public SpriteBatch Batch { get; }
+            public SavedState State { get; }
+            public bool OwnsTransition { get; }
+        }
+
+        private readonly struct SavedState : IEquatable<SavedState>
+        {
             public SavedState(
                 SpriteSortMode sort,
                 BlendState blend,
@@ -104,9 +162,42 @@ namespace Client.Main.Helpers
                 Blend = blend;
                 Sampler = sampler;
                 Depth = depth;
-                Raster = raster;
+                Rasterizer = raster;
                 Effect = effect;
                 Transform = transform;
+            }
+
+            public SpriteSortMode Sort { get; }
+            public BlendState Blend { get; }
+            public SamplerState Sampler { get; }
+            public DepthStencilState Depth { get; }
+            public RasterizerState Rasterizer { get; }
+            public Effect Effect { get; }
+            public Matrix? Transform { get; }
+
+            public bool Equals(SavedState other)
+            {
+                return Sort == other.Sort &&
+                       ReferenceEquals(Blend, other.Blend) &&
+                       ReferenceEquals(Sampler, other.Sampler) &&
+                       ReferenceEquals(Depth, other.Depth) &&
+                       ReferenceEquals(Rasterizer, other.Rasterizer) &&
+                       ReferenceEquals(Effect, other.Effect) &&
+                       Nullable.Equals(Transform, other.Transform);
+            }
+
+            public override bool Equals(object obj) => obj is SavedState other && Equals(other);
+
+            public override int GetHashCode()
+            {
+                return HashCode.Combine(
+                    Sort,
+                    Blend,
+                    Sampler,
+                    Depth,
+                    Rasterizer,
+                    Effect,
+                    Transform);
             }
 
             public void Begin(SpriteBatch batch)
@@ -116,10 +207,9 @@ namespace Client.Main.Helpers
                     Blend,
                     Sampler,
                     Depth,
-                    Raster,
+                    Rasterizer,
                     Effect,
-                    Transform
-                );
+                    Transform);
             }
 
             public void End(SpriteBatch batch)

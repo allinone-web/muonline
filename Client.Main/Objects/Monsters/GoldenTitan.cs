@@ -3,18 +3,24 @@ using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Extensions;
 using Client.Main.Models;
+using Client.Main.Objects.Effects;
 using Microsoft.Xna.Framework;
 using System.Threading.Tasks;
 
 namespace Client.Main.Objects.Monsters
 {
     [NpcInfo(53, "Golden Titan")]
-    public class GoldenTitan : MonsterObject // Uses Titan model but different sounds
+    public class GoldenTitan : MonsterObject
     {
+        private GlowingEyesEffect _eyeGlow;
+
         public GoldenTitan()
         {
             RenderShadow = true;
-            Scale = 1.8f; // Set according to C++ Setting_Monster
+            Scale = 1.8f;
+
+            _eyeGlow = new GlowingEyesEffect { LeftEyeBone = 27, RightEyeBone = 28, GlowColor = new Color(80, 170, 255) };
+            Children.Add(_eyeGlow);
         }
 
         public override async Task Load()

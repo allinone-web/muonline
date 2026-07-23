@@ -22,7 +22,7 @@ namespace Client.Main.Helpers
     {
         private List<T> _controls = new List<T>();
         private volatile bool _snapshotDirty = true;
-        private IReadOnlyList<T> _snapshot = Array.Empty<T>();
+        private T[] _snapshot = Array.Empty<T>();
         private readonly object _lock = new object();
 
         public T Parent { get; private set; }
@@ -69,6 +69,36 @@ namespace Client.Main.Helpers
             lock (_lock)
             {
                 return _controls.IndexOf(control);
+            }
+        }
+
+        public bool MoveToEnd(T control)
+        {
+            lock (_lock)
+            {
+                int index = _controls.IndexOf(control);
+                if (index < 0 || index == _controls.Count - 1)
+                    return false;
+
+                _controls.RemoveAt(index);
+                _controls.Add(control);
+                InvalidateSnapshot();
+                return true;
+            }
+        }
+
+        public bool MoveToStart(T control)
+        {
+            lock (_lock)
+            {
+                int index = _controls.IndexOf(control);
+                if (index <= 0)
+                    return false;
+
+                _controls.RemoveAt(index);
+                _controls.Insert(0, control);
+                InvalidateSnapshot();
+                return true;
             }
         }
 
@@ -134,15 +164,38 @@ namespace Client.Main.Helpers
             }
         }
 
-        public IEnumerator<T> GetEnumerator() => EnumerateSnapshot().GetEnumerator();
+        public Enumerator GetEnumerator() => new(GetSnapshotArray());
 
-        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+        IEnumerator<T> IEnumerable<T>.GetEnumerator() => new Enumerator(GetSnapshotArray());
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() =>
+            new Enumerator(GetSnapshotArray());
 
-        private IEnumerable<T> EnumerateSnapshot()
+        public struct Enumerator : IEnumerator<T>
         {
-            var snapshot = GetSnapshotArray();
-            for (int i = 0; i < snapshot.Count; i++)
-                yield return snapshot[i];
+            private readonly T[] _items;
+            private int _index;
+
+            internal Enumerator(T[] items)
+            {
+                _items = items ?? Array.Empty<T>();
+                _index = -1;
+            }
+
+            public T Current => _items[_index];
+            object System.Collections.IEnumerator.Current => Current;
+
+            public bool MoveNext()
+            {
+                int next = _index + 1;
+                if ((uint)next >= (uint)_items.Length)
+                    return false;
+
+                _index = next;
+                return true;
+            }
+
+            public void Reset() => _index = -1;
+            public void Dispose() { }
         }
 
         public bool Contains(T item)
@@ -218,7 +271,7 @@ namespace Client.Main.Helpers
 
         private void InvalidateSnapshot() => _snapshotDirty = true;
 
-        private IReadOnlyList<T> GetSnapshotArray()
+        private T[] GetSnapshotArray()
         {
             lock (_lock)
             {

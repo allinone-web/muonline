@@ -3,6 +3,7 @@ using Client.Main.Models;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System;
+using System.Text;
 
 namespace Client.Main.Controls.UI
 {
@@ -29,6 +30,8 @@ namespace Client.Main.Controls.UI
         private string _renderedText;
         private float _fontSize = 12f;
         private float _scaleFactor;
+        private Vector2 _baseTextSize;
+        private SpriteFont _renderFont;
 
         // Properties
 
@@ -105,17 +108,16 @@ namespace Client.Main.Controls.UI
         // Methods
         public override void Draw(GameTime gameTime)
         {
-            if (!Visible || string.IsNullOrEmpty(_renderedText) || GraphicsManager.Instance.Font == null)
+            if (!Visible || string.IsNullOrEmpty(_renderedText) || _renderFont == null)
                 return;
 
             var sb = GraphicsManager.Instance.Sprite;
-            var font = GraphicsManager.Instance.Font;
+            var font = _renderFont;
 
             Vector2 textPosition = DisplayRectangle.Location.ToVector2();
 
-            var baseTextSize = font.MeasureString(_renderedText) * _scaleFactor;
-            var totalTextWidth = (int)Math.Ceiling(baseTextSize.X);
-            var totalTextHeight = (int)Math.Ceiling(baseTextSize.Y);
+            var totalTextWidth = (int)Math.Ceiling(_baseTextSize.X);
+            var totalTextHeight = (int)Math.Ceiling(_baseTextSize.Y);
 
             if (HasShadow)
             {
@@ -149,18 +151,18 @@ namespace Client.Main.Controls.UI
                 sb.Draw(GraphicsManager.Instance.Pixel, backgroundRect, BackgroundColor * Alpha);
             }
 
-            Matrix italicTransform = Matrix.Identity;
+            Matrix combinedTransform = UiScaler.SpriteTransform;
             if (IsItalic)
             {
                 const float skew = 0.2f;
-                italicTransform = Matrix.CreateTranslation(-textPosition.X, -textPosition.Y, 0f) *
-                                  MatrixExtensions.CreateSkew(-skew, 0f) *
-                                  Matrix.CreateTranslation(textPosition.X, textPosition.Y, 0f);
+                var italicTransform = Matrix.CreateTranslation(-textPosition.X, -textPosition.Y, 0f) *
+                                      MatrixExtensions.CreateSkew(-skew, 0f) *
+                                      Matrix.CreateTranslation(textPosition.X, textPosition.Y, 0f);
+                combinedTransform = italicTransform * UiScaler.SpriteTransform;
             }
 
             sb.End();
-            var combinedTransform = italicTransform * UiScaler.SpriteTransform;
-            sb.Begin(SpriteSortMode.Deferred, BlendState.NonPremultiplied, SamplerState.LinearClamp, null, null, null, combinedTransform);
+            sb.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp, null, null, null, combinedTransform);
 
             if (HasShadow)
             {
@@ -207,16 +209,17 @@ namespace Client.Main.Controls.UI
             if (string.IsNullOrEmpty(Text) || GraphicsManager.Instance?.Font == null)
             {
                 _renderedText = string.Empty;
+                _baseTextSize = Vector2.Zero;
                 ControlSize = Point.Zero;
                 return;
             }
 
-            _renderedText = SafeFormat(Text, TextArgs);
-            _scaleFactor = FontSize / Constants.BASE_FONT_SIZE;
+            _renderedText = SafeFormat(Text, TextArgs).Normalize(NormalizationForm.FormC);
+            _renderFont = GraphicsManager.GetUiFont(FontSize, out _scaleFactor);
 
-            var baseTextSize = GraphicsManager.Instance.Font.MeasureString(_renderedText) * _scaleFactor;
-            var totalWidth = baseTextSize.X;
-            var totalHeight = baseTextSize.Y;
+            _baseTextSize = _renderFont.MeasureString(_renderedText) * _scaleFactor;
+            var totalWidth = _baseTextSize.X;
+            var totalHeight = _baseTextSize.Y;
 
             if (HasShadow)
             {

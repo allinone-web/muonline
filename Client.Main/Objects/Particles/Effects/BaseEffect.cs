@@ -1,5 +1,4 @@
-﻿using Microsoft.Xna.Framework;
-using System.Linq;
+using Microsoft.Xna.Framework;
 
 namespace Client.Main.Objects.Particles.Effects
 {
@@ -11,7 +10,16 @@ namespace Client.Main.Objects.Particles.Effects
 
         public T GetEffect<T>() where T : BaseEffect
         {
-            return Particle.Effects.OfType<T>().FirstOrDefault();
+            if (Particle?.Effects == null)
+                return null;
+
+            for (int i = 0; i < Particle.Effects.Length; i++)
+            {
+                if (Particle.Effects[i] is T effect)
+                    return effect;
+            }
+
+            return null;
         }
 
         public abstract BaseEffect Copy();

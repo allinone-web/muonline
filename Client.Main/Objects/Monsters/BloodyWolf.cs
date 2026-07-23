@@ -1,21 +1,22 @@
 ﻿using Client.Main.Content;
 using Client.Main.Controllers;
 using Client.Main.Controls;
+using Client.Main.Objects.Effects;
 using Microsoft.Xna.Framework;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Client.Main.Objects.Monsters
 {
     [NpcInfo(60, "BloodyWolf")]
     public class BloodyWolf : MonsterObject
     {
+        private GlowingEyesEffect _eyeGlow;
+
         public BloodyWolf()
         {
             Scale = 2.2f;
+
+            _eyeGlow = new GlowingEyesEffect { LeftEyeBone = 12, RightEyeBone = 11, GlowColor = new Color(40, 110, 255) };
+            Children.Add(_eyeGlow);
         }
 
         public override async Task Load()

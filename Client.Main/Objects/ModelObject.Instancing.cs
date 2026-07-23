@@ -14,6 +14,34 @@ namespace Client.Main.Objects
 {
     public abstract partial class ModelObject
     {
+        private static readonly Dictionary<Type, bool> NpcCrowdRenderingCompatibility = new();
+
+        private static bool UsesDefaultNpcCrowdRendering(NPCObject npc)
+        {
+            Type type = npc.GetType();
+            lock (NpcCrowdRenderingCompatibility)
+            {
+                if (NpcCrowdRenderingCompatibility.TryGetValue(type, out bool compatible))
+                    return compatible;
+
+                compatible = IsInheritedFromModelObject(type, "Draw", typeof(GameTime))
+                    && IsInheritedFromModelObject(type, "DrawAfter", typeof(GameTime))
+                    && IsInheritedFromModelObject(type, "DrawMesh", typeof(int))
+                    && IsInheritedFromModelObject(type, "DrawMeshWithItemMaterial", typeof(int))
+                    && IsInheritedFromModelObject(type, "DrawMeshWithMonsterMaterial", typeof(int))
+                    && IsInheritedFromModelObject(type, "DrawMeshWithDynamicLighting", typeof(int));
+
+                NpcCrowdRenderingCompatibility[type] = compatible;
+                return compatible;
+            }
+        }
+
+        private static bool IsInheritedFromModelObject(Type type, string methodName, Type parameterType)
+        {
+            var method = type.GetMethod(methodName, new[] { parameterType });
+            return method?.DeclaringType == typeof(ModelObject);
+        }
+
         internal enum StaticMapInstancingQueueResult
         {
             None,
@@ -60,9 +88,9 @@ namespace Client.Main.Objects
             }
         }
 
-        private readonly struct MonsterCrowdInstancingBatchKey : IEquatable<MonsterCrowdInstancingBatchKey>
+        private readonly struct WalkerCrowdInstancingBatchKey : IEquatable<WalkerCrowdInstancingBatchKey>
         {
-            public MonsterCrowdInstancingBatchKey(
+            public WalkerCrowdInstancingBatchKey(
                 BMD model,
                 int meshIndex,
                 Texture2D texture,
@@ -70,7 +98,8 @@ namespace Client.Main.Objects
                 int actionIndex,
                 int frame0,
                 int frame1,
-                int interpolationBucket)
+                int interpolationBucket,
+                int transitionPoseDiscriminator)
             {
                 Model = model;
                 MeshIndex = meshIndex;
@@ -80,6 +109,7 @@ namespace Client.Main.Objects
                 Frame0 = frame0;
                 Frame1 = frame1;
                 InterpolationBucket = interpolationBucket;
+                TransitionPoseDiscriminator = transitionPoseDiscriminator;
             }
 
             public BMD Model { get; }
@@ -90,8 +120,9 @@ namespace Client.Main.Objects
             public int Frame0 { get; }
             public int Frame1 { get; }
             public int InterpolationBucket { get; }
+            public int TransitionPoseDiscriminator { get; }
 
-            public bool Equals(MonsterCrowdInstancingBatchKey other)
+            public bool Equals(WalkerCrowdInstancingBatchKey other)
             {
                 return ReferenceEquals(Model, other.Model)
                     && MeshIndex == other.MeshIndex
@@ -100,10 +131,11 @@ namespace Client.Main.Objects
                     && ActionIndex == other.ActionIndex
                     && Frame0 == other.Frame0
                     && Frame1 == other.Frame1
-                    && InterpolationBucket == other.InterpolationBucket;
+                    && InterpolationBucket == other.InterpolationBucket
+                    && TransitionPoseDiscriminator == other.TransitionPoseDiscriminator;
             }
 
-            public override bool Equals(object obj) => obj is MonsterCrowdInstancingBatchKey other && Equals(other);
+            public override bool Equals(object obj) => obj is WalkerCrowdInstancingBatchKey other && Equals(other);
 
             public override int GetHashCode()
             {
@@ -118,6 +150,7 @@ namespace Client.Main.Objects
                     hash = (hash * 31) + Frame0;
                     hash = (hash * 31) + Frame1;
                     hash = (hash * 31) + InterpolationBucket;
+                    hash = (hash * 31) + TransitionPoseDiscriminator;
                     return hash;
                 }
             }
@@ -148,7 +181,7 @@ namespace Client.Main.Objects
             }
         }
 
-        private sealed class MonsterCrowdInstancingBatch : IDisposable
+        private sealed class WalkerCrowdInstancingBatch : IDisposable
         {
             public VertexBuffer GeometryVertexBuffer;
             public IndexBuffer GeometryIndexBuffer;
@@ -176,9 +209,11 @@ namespace Client.Main.Objects
         private static readonly Dictionary<StaticMapInstancingBatchKey, StaticMapInstancingBatch> _staticMapInstancingBatches = new Dictionary<StaticMapInstancingBatchKey, StaticMapInstancingBatch>(128);
         private static readonly List<StaticMapInstancingBatch> _staticMapInstancingActiveBatches = new List<StaticMapInstancingBatch>(128);
         private static readonly DynamicLightGpuUploader _staticInstancingLightUploader = new(32);
-        private static readonly Dictionary<MonsterCrowdInstancingBatchKey, MonsterCrowdInstancingBatch> _monsterCrowdInstancingBatches = new Dictionary<MonsterCrowdInstancingBatchKey, MonsterCrowdInstancingBatch>(128);
-        private static readonly List<MonsterCrowdInstancingBatch> _monsterCrowdInstancingActiveBatches = new List<MonsterCrowdInstancingBatch>(128);
-        private static bool _staticMapInstancingFailed = false;
+        private static readonly Dictionary<WalkerCrowdInstancingBatchKey, WalkerCrowdInstancingBatch> _walkerCrowdInstancingBatches = new Dictionary<WalkerCrowdInstancingBatchKey, WalkerCrowdInstancingBatch>(128);
+        private static readonly List<WalkerCrowdInstancingBatch> _walkerCrowdInstancingActiveBatches = new List<WalkerCrowdInstancingBatch>(128);
+        private static bool _staticMapInstancingFailed;
+        private static bool _walkerCrowdInstancingFailed;
+        private static Effect _cachedStaticMapInstancingEffect;
         private static EffectTechnique _cachedStaticMapInstancingTechnique;
         private static readonly Matrix _identity = Matrix.Identity;
 
@@ -194,7 +229,8 @@ namespace Client.Main.Objects
         public static int LastFrameStaticMapInstancedDrawCalls { get; private set; }
         public static int LastFrameStaticMapInstancingFallbacks { get; private set; }
         public static bool IsStaticMapInstancingBackendSupported => SupportsGpuDynamicSkinning;
-        public static bool IsStaticMapInstancingRuntimeDisabled => _staticMapInstancingFailed;
+        public static bool IsStaticMapInstancingRuntimeDisabled =>
+            _staticMapInstancingFailed || (_walkerCrowdInstancingFailed && _walkerCrowdMultiPoseInstancingFailed);
 
         private static void BeginFrameStaticMapInstancingMetrics()
         {
@@ -209,6 +245,7 @@ namespace Client.Main.Objects
             _staticMapInstancedBatchesThisFrame = 0;
             _staticMapInstancedDrawCallsThisFrame = 0;
             _staticMapInstancingFallbacksThisFrame = 0;
+            BeginFrameWalkerCrowdMultiPoseMetrics();
         }
 
         internal static void RegisterStaticMapInstancingFallback()
@@ -229,12 +266,18 @@ namespace Client.Main.Objects
             return modelObject.TryQueueStaticMapObjectForInstancing();
         }
 
-        internal static bool TryQueueMonsterCrowdForInstancing(WorldObject obj)
+        internal static bool IsWalkerCrowdInstancingCandidate(WorldObject obj)
         {
-            if (obj is not ModelObject modelObject)
+            return obj is MonsterObject ||
+                   obj is NPCObject npc && UsesDefaultNpcCrowdRendering(npc);
+        }
+
+        internal static bool TryQueueWalkerCrowdForInstancing(WorldObject obj)
+        {
+            if (obj is not ModelObject modelObject || !IsWalkerCrowdInstancingCandidate(obj))
                 return false;
 
-            return modelObject.TryQueueMonsterCrowdForInstancing();
+            return modelObject.TryQueueWalkerCrowdForInstancing();
         }
 
         internal static void FlushStaticMapInstancingBatches(WorldControl world)
@@ -256,10 +299,12 @@ namespace Client.Main.Objects
                 return;
             }
 
+            ModelEffectBindings bindings = GetModelEffectBindings(effect);
             var gd = graphicsManager.GraphicsDevice;
             var prevBlend = gd.BlendState;
             var prevRaster = gd.RasterizerState;
             var prevSampler = gd.SamplerStates[0];
+            var prevTechnique = effect.CurrentTechnique;
 
             try
             {
@@ -292,7 +337,7 @@ namespace Client.Main.Objects
                     batch.InstanceBuffer.SetData(batch.UploadBuffer, 0, instanceCount, SetDataOptions.Discard);
 
                     gd.RasterizerState = batch.TwoSided ? RasterizerState.CullNone : RasterizerState.CullClockwise;
-                    effect.Parameters["DiffuseTexture"]?.SetValue(batch.Texture);
+                    bindings.DiffuseTexture?.SetValue(batch.Texture);
 
                     batch.VertexBindings[0] = new VertexBufferBinding(batch.GeometryVertexBuffer);
                     batch.VertexBindings[1] = new VertexBufferBinding(batch.InstanceBuffer, 0, 1);
@@ -321,6 +366,7 @@ namespace Client.Main.Objects
             }
             finally
             {
+                effect.CurrentTechnique = prevTechnique;
                 gd.BlendState = prevBlend;
                 gd.RasterizerState = prevRaster;
                 gd.SamplerStates[0] = prevSampler;
@@ -328,14 +374,14 @@ namespace Client.Main.Objects
             }
         }
 
-        internal static void FlushMonsterCrowdInstancingBatches(WorldControl world)
+        private static void FlushWalkerCrowdLegacyInstancingBatches(WorldControl world)
         {
-            if (_monsterCrowdInstancingActiveBatches.Count == 0)
+            if (_walkerCrowdInstancingActiveBatches.Count == 0)
                 return;
 
-            if (_staticMapInstancingFailed || !IsMonsterCrowdInstancingSupported())
+            if (_walkerCrowdInstancingFailed || !IsWalkerCrowdLegacyInstancingSupported())
             {
-                ClearMonsterCrowdInstancingQueues();
+                ClearWalkerCrowdLegacyInstancingQueues();
                 return;
             }
 
@@ -343,14 +389,16 @@ namespace Client.Main.Objects
             var effect = graphicsManager.DynamicLightingEffect;
             if (effect == null || _cachedStaticMapInstancingTechnique == null)
             {
-                ClearMonsterCrowdInstancingQueues();
+                ClearWalkerCrowdLegacyInstancingQueues();
                 return;
             }
 
+            ModelEffectBindings bindings = GetModelEffectBindings(effect);
             var gd = graphicsManager.GraphicsDevice;
             var prevBlend = gd.BlendState;
             var prevRaster = gd.RasterizerState;
             var prevSampler = gd.SamplerStates[0];
+            var prevTechnique = effect.CurrentTechnique;
 
             try
             {
@@ -359,9 +407,9 @@ namespace Client.Main.Objects
                 gd.BlendState = BlendState.Opaque;
                 gd.SamplerStates[0] = GraphicsManager.GetQualityLinearSamplerState();
 
-                for (int i = 0; i < _monsterCrowdInstancingActiveBatches.Count; i++)
+                for (int i = 0; i < _walkerCrowdInstancingActiveBatches.Count; i++)
                 {
-                    var batch = _monsterCrowdInstancingActiveBatches[i];
+                    var batch = _walkerCrowdInstancingActiveBatches[i];
                     int instanceCount = batch.Instances.Count;
                     if (instanceCount <= 0 ||
                         batch.GeometryVertexBuffer == null ||
@@ -383,12 +431,17 @@ namespace Client.Main.Objects
                     batch.InstanceBuffer.SetData(batch.UploadBuffer, 0, instanceCount, SetDataOptions.Discard);
 
                     gd.RasterizerState = batch.TwoSided ? RasterizerState.CullNone : RasterizerState.CullClockwise;
-                    effect.Parameters["DiffuseTexture"]?.SetValue(batch.Texture);
+                    bindings.DiffuseTexture?.SetValue(batch.Texture);
 
                     batch.VertexBindings[0] = new VertexBufferBinding(batch.GeometryVertexBuffer);
                     batch.VertexBindings[1] = new VertexBufferBinding(batch.InstanceBuffer, 0, 1);
                     gd.SetVertexBuffers(batch.VertexBindings);
                     gd.Indices = batch.GeometryIndexBuffer;
+
+                    // Count every GPU-skinned mesh instance. Previously the metric only
+                    // counted the non-instanced path, making crowd-instanced monsters look
+                    // as if GPU skinning had been disabled.
+                    RegisterGpuSkinnedMeshDraw(instanceCount);
 
                     int passCount = effect.CurrentTechnique.Passes.Count;
                     for (int p = 0; p < passCount; p++)
@@ -405,20 +458,33 @@ namespace Client.Main.Objects
             }
             catch (Exception ex)
             {
-                _staticMapInstancingFailed = true;
-                MuGame.AppLoggerFactory?.CreateLogger<ModelObject>()?.LogWarning(ex, "Monster crowd hardware instancing disabled after runtime failure.");
+                _walkerCrowdInstancingFailed = true;
+                MuGame.AppLoggerFactory?.CreateLogger<ModelObject>()?.LogWarning(ex, "Walker crowd hardware instancing disabled after runtime failure.");
             }
             finally
             {
+                effect.CurrentTechnique = prevTechnique;
                 gd.BlendState = prevBlend;
                 gd.RasterizerState = prevRaster;
                 gd.SamplerStates[0] = prevSampler;
-                ClearMonsterCrowdInstancingQueues();
+                ClearWalkerCrowdLegacyInstancingQueues();
             }
         }
 
         internal static bool HasPendingStaticMapInstancingBatches() => _staticMapInstancingActiveBatches.Count > 0;
-        internal static bool HasPendingMonsterCrowdInstancingBatches() => _monsterCrowdInstancingActiveBatches.Count > 0;
+        private static bool HasPendingWalkerCrowdLegacyInstancingBatches() => _walkerCrowdInstancingActiveBatches.Count > 0;
+
+        /// <summary>
+        /// Clears only per-frame, world-scoped instance queues. Persistent geometry buffers stay
+        /// cached, but no transform, pose row or side-pass from the disposed world can be drawn
+        /// by the next scene. This must run on the main/render thread during world transitions.
+        /// </summary>
+        internal static void ResetWorldScopedInstancingState()
+        {
+            ClearStaticMapInstancingQueues();
+            ClearWalkerCrowdLegacyInstancingQueues();
+            ClearWalkerCrowdMultiPoseQueues();
+        }
 
         private static void EnsureInstanceUploadBuffer(StaticMapInstancingBatch batch, int instanceCount)
         {
@@ -448,7 +514,7 @@ namespace Client.Main.Objects
             batch.InstanceBufferCapacity = capacity;
         }
 
-        private static void EnsureInstanceUploadBuffer(MonsterCrowdInstancingBatch batch, int instanceCount)
+        private static void EnsureInstanceUploadBuffer(WalkerCrowdInstancingBatch batch, int instanceCount)
         {
             if (batch.UploadBuffer.Length >= instanceCount)
                 return;
@@ -457,7 +523,7 @@ namespace Client.Main.Objects
             batch.UploadBuffer = new StaticModelInstanceData[newSize];
         }
 
-        private static void EnsureInstanceVertexBuffer(GraphicsDevice gd, MonsterCrowdInstancingBatch batch, int instanceCount)
+        private static void EnsureInstanceVertexBuffer(GraphicsDevice gd, WalkerCrowdInstancingBatch batch, int instanceCount)
         {
             if (batch.InstanceBuffer != null &&
                 !batch.InstanceBuffer.IsDisposed &&
@@ -484,12 +550,12 @@ namespace Client.Main.Objects
             _staticMapInstancingActiveBatches.Clear();
         }
 
-        private static void ClearMonsterCrowdInstancingQueues()
+        private static void ClearWalkerCrowdLegacyInstancingQueues()
         {
-            for (int i = 0; i < _monsterCrowdInstancingActiveBatches.Count; i++)
-                _monsterCrowdInstancingActiveBatches[i].Instances.Clear();
+            for (int i = 0; i < _walkerCrowdInstancingActiveBatches.Count; i++)
+                _walkerCrowdInstancingActiveBatches[i].Instances.Clear();
 
-            _monsterCrowdInstancingActiveBatches.Clear();
+            _walkerCrowdInstancingActiveBatches.Clear();
         }
 
         private static bool IsStaticMapInstancingSupported()
@@ -505,13 +571,19 @@ namespace Client.Main.Objects
             if (effect == null)
                 return false;
 
-            _cachedStaticMapInstancingTechnique ??= TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced");
+            if (!ReferenceEquals(_cachedStaticMapInstancingEffect, effect))
+            {
+                _cachedStaticMapInstancingEffect = effect;
+                _cachedStaticMapInstancingTechnique = TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced");
+            }
+
             return _cachedStaticMapInstancingTechnique != null;
         }
 
-        private static bool IsMonsterCrowdInstancingSupported()
+        private static bool IsWalkerCrowdLegacyInstancingSupported()
         {
-            if (_staticMapInstancingFailed ||
+            if (_walkerCrowdInstancingFailed ||
+                !Constants.ENABLE_WALKER_CROWD_INSTANCING ||
                 !Constants.ENABLE_GPU_SKINNING ||
                 !SupportsGpuDynamicSkinning)
             {
@@ -522,7 +594,12 @@ namespace Client.Main.Objects
             if (effect == null)
                 return false;
 
-            _cachedStaticMapInstancingTechnique ??= TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced");
+            if (!ReferenceEquals(_cachedStaticMapInstancingEffect, effect))
+            {
+                _cachedStaticMapInstancingEffect = effect;
+                _cachedStaticMapInstancingTechnique = TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced");
+            }
+
             return _cachedStaticMapInstancingTechnique != null;
         }
 
@@ -531,7 +608,7 @@ namespace Client.Main.Objects
             if (!CanUseStaticMapInstancing())
                 return StaticMapInstancingQueueResult.None;
 
-            if (Model?.Meshes == null || _boneTextures == null)
+            if (Model?.Meshes == null || _meshes == null)
                 return StaticMapInstancingQueueResult.None;
 
             int meshCount = Model.Meshes.Length;
@@ -563,7 +640,7 @@ namespace Client.Main.Objects
                 }
 
                 bool twoSided = IsMeshTwoSided(meshIndex, false);
-                Texture2D texture = _boneTextures[meshIndex];
+                Texture2D texture = _meshes[meshIndex].Texture;
                 var key = new StaticMapInstancingBatchKey(Model, meshIndex, texture, twoSided);
                 if (!_staticMapInstancingBatches.TryGetValue(key, out var batch))
                 {
@@ -602,12 +679,12 @@ namespace Client.Main.Objects
                 : StaticMapInstancingQueueResult.Partial;
         }
 
-        private bool TryQueueMonsterCrowdForInstancing()
+        private bool TryQueueWalkerCrowdLegacyForInstancing()
         {
-            if (!CanUseMonsterCrowdInstancing())
+            if (!CanUseWalkerCrowdInstancing())
                 return false;
 
-            if (Model?.Meshes == null || _boneTextures == null)
+            if (Model?.Meshes == null || _meshes == null)
                 return false;
 
             int meshCount = Model.Meshes.Length;
@@ -616,10 +693,10 @@ namespace Client.Main.Objects
 
             for (int meshIndex = 0; meshIndex < meshCount; meshIndex++)
             {
-                if (!ShouldQueueMonsterCrowdMesh(meshIndex))
+                if (!ShouldQueueWalkerCrowdMesh(meshIndex))
                     continue;
 
-                if (!CanUseMonsterCrowdMeshForInstancing(meshIndex))
+                if (!CanUseWalkerCrowdMeshForInstancing(meshIndex))
                     return false;
 
                 queuedAnyMesh = true;
@@ -630,7 +707,7 @@ namespace Client.Main.Objects
 
             for (int meshIndex = 0; meshIndex < meshCount; meshIndex++)
             {
-                if (!ShouldQueueMonsterCrowdMesh(meshIndex))
+                if (!ShouldQueueWalkerCrowdMesh(meshIndex))
                     continue;
 
                 if (!BMDLoader.Instance.TryGetGpuSkinnedMeshBuffers(
@@ -646,7 +723,7 @@ namespace Client.Main.Objects
 
             for (int meshIndex = 0; meshIndex < meshCount; meshIndex++)
             {
-                if (!ShouldQueueMonsterCrowdMesh(meshIndex))
+                if (!ShouldQueueWalkerCrowdMesh(meshIndex))
                     continue;
 
                 if (!BMDLoader.Instance.TryGetGpuSkinnedMeshBuffers(
@@ -660,21 +737,35 @@ namespace Client.Main.Objects
                 }
 
                 bool twoSided = IsMeshTwoSided(meshIndex, false);
-                Texture2D texture = _boneTextures[meshIndex];
-                var key = new MonsterCrowdInstancingBatchKey(
+                Texture2D texture = _meshes[meshIndex].Texture;
+                // During an action cross-fade the final bone palette also depends on the
+                // previous action and the per-object blend progress. Keep the object on the
+                // GPU-instanced path, but isolate that temporary palette in a one-object batch.
+                // Once blending finishes the discriminator returns to zero and matching
+                // monsters are grouped together again.
+                int transitionPoseDiscriminator = _isBlending
+                    ? RuntimeHelpers.GetHashCode(this)
+                    : 0;
+                int batchActionIndex = _isBlending ? -1 : _animationSampleActionIndex;
+                int batchFrame0 = _isBlending ? 0 : _animationSampleFrame0;
+                int batchFrame1 = _isBlending ? 0 : _animationSampleFrame1;
+                int batchInterpolationBucket = _isBlending ? 0 : _animationSampleInterpolationBucket;
+
+                var key = new WalkerCrowdInstancingBatchKey(
                     Model,
                     meshIndex,
                     texture,
                     twoSided,
-                    _animationSampleActionIndex,
-                    _animationSampleFrame0,
-                    _animationSampleFrame1,
-                    _animationSampleInterpolationBucket);
+                    batchActionIndex,
+                    batchFrame0,
+                    batchFrame1,
+                    batchInterpolationBucket,
+                    transitionPoseDiscriminator);
 
-                if (!_monsterCrowdInstancingBatches.TryGetValue(key, out var batch))
+                if (!_walkerCrowdInstancingBatches.TryGetValue(key, out var batch))
                 {
-                    batch = new MonsterCrowdInstancingBatch();
-                    _monsterCrowdInstancingBatches[key] = batch;
+                    batch = new WalkerCrowdInstancingBatch();
+                    _walkerCrowdInstancingBatches[key] = batch;
                 }
 
                 batch.GeometryVertexBuffer = geometryVB;
@@ -687,7 +778,7 @@ namespace Client.Main.Objects
                 if (batch.Instances.Count == 0)
                 {
                     batch.PoseSource = this;
-                    _monsterCrowdInstancingActiveBatches.Add(batch);
+                    _walkerCrowdInstancingActiveBatches.Add(batch);
                 }
 
                 batch.Instances.Add(instanceData);
@@ -725,32 +816,81 @@ namespace Client.Main.Objects
             return true;
         }
 
-        private bool CanUseMonsterCrowdInstancing()
+        private enum WalkerCrowdRejectionReason
         {
-            if (!IsMonsterCrowdInstancingSupported())
-                return false;
+            None,
+            Unsupported,
+            Children,
+            TypeOrRenderer,
+            MutableMesh,
+            Visibility,
+            Animation,
+            OneShot,
+            Material
+        }
 
-            if (this is not MonsterObject monster)
+        private bool CanUseWalkerCrowdInstancing() =>
+            CanUseWalkerCrowdInstancing(out _);
+
+        private bool CanUseWalkerCrowdInstancing(out WalkerCrowdRejectionReason reason)
+        {
+            if (!IsWalkerCrowdInstancingSupported())
+            {
+                reason = WalkerCrowdRejectionReason.Unsupported;
                 return false;
+            }
+
+            if (Children.Count > 0)
+            {
+                reason = WalkerCrowdRejectionReason.Children;
+                return false;
+            }
+
+            WalkerObject walker;
+            bool isMonster = this is MonsterObject;
+            if (isMonster)
+                walker = (MonsterObject)this;
+            else if (this is NPCObject npc && UsesDefaultNpcCrowdRendering(npc))
+                walker = npc;
+            else
+            {
+                reason = WalkerCrowdRejectionReason.TypeOrRenderer;
+                return false;
+            }
 
             if (UsesMutableMeshData)
+            {
+                reason = WalkerCrowdRejectionReason.MutableMesh;
                 return false;
+            }
 
-            if (!Visible || IsMouseHover || Model?.Meshes == null || Model.Meshes.Length == 0)
+            if (!Visible || Model?.Meshes == null || Model.Meshes.Length == 0)
+            {
+                reason = WalkerCrowdRejectionReason.Visibility;
                 return false;
+            }
 
-            if (LinkParentAnimation || ParentBoneLink >= 0 || ContinuousAnimation || _isBlending || !_animationSampleValid)
+            if (LinkParentAnimation || ParentBoneLink >= 0 || ContinuousAnimation || !_animationSampleValid ||
+                _animationSampleActionIndex < 0)
+            {
+                reason = WalkerCrowdRejectionReason.Animation;
                 return false;
+            }
 
-            if (monster.IsDead || monster.IsOneShotPlaying)
+            if (walker.IsOneShotPlaying &&
+                (!isMonster || !walker.IsAttackOrSkillAnimationPlaying()))
+            {
+                reason = WalkerCrowdRejectionReason.OneShot;
                 return false;
+            }
 
-            if (TotalAlpha < 0.999f || EnableCustomShader)
+            if (TotalAlpha < 0.999f || EnableCustomShader || HasVisibleTransparentMapMesh())
+            {
+                reason = WalkerCrowdRejectionReason.Material;
                 return false;
+            }
 
-            if (_animationSampleActionIndex < 0)
-                return false;
-
+            reason = WalkerCrowdRejectionReason.None;
             return true;
         }
 
@@ -769,7 +909,7 @@ namespace Client.Main.Objects
             if (!ShouldQueueStaticMapMesh(meshIndex))
                 return false;
 
-            if (_boneTextures == null || meshIndex >= _boneTextures.Length || _boneTextures[meshIndex] == null)
+            if (_meshes == null || meshIndex >= _meshes.Length || _meshes[meshIndex].Texture == null)
                 return false;
 
             var shaderSelection = DetermineShaderForMesh(meshIndex);
@@ -779,12 +919,12 @@ namespace Client.Main.Objects
             return shaderSelection.UseDynamicLighting;
         }
 
-        private bool CanUseMonsterCrowdMeshForInstancing(int meshIndex)
+        private bool CanUseWalkerCrowdMeshForInstancing(int meshIndex)
         {
             if (Model?.Meshes == null || meshIndex < 0 || meshIndex >= Model.Meshes.Length)
                 return false;
 
-            if (_boneTextures == null || meshIndex >= _boneTextures.Length || _boneTextures[meshIndex] == null)
+            if (_meshes == null || meshIndex >= _meshes.Length || _meshes[meshIndex].Texture == null)
                 return false;
 
             var shaderSelection = DetermineShaderForMesh(meshIndex);
@@ -815,9 +955,9 @@ namespace Client.Main.Objects
                 return false;
 
             bool isBlend = IsBlendMesh(meshIndex);
-            bool isRGBA = _meshIsRGBA != null &&
-                          (uint)meshIndex < (uint)_meshIsRGBA.Length &&
-                          _meshIsRGBA[meshIndex];
+            bool isRGBA = _meshes != null &&
+                          (uint)meshIndex < (uint)_meshes.Length &&
+                          _meshes[meshIndex].IsRgba;
 
             if (isBlend || isRGBA)
                 return false;
@@ -838,9 +978,9 @@ namespace Client.Main.Objects
                     continue;
 
                 bool isBlend = IsBlendMesh(meshIndex);
-                bool isRGBA = _meshIsRGBA != null &&
-                              (uint)meshIndex < (uint)_meshIsRGBA.Length &&
-                              _meshIsRGBA[meshIndex];
+                bool isRGBA = _meshes != null &&
+                              (uint)meshIndex < (uint)_meshes.Length &&
+                              _meshes[meshIndex].IsRgba;
 
                 if (isBlend || isRGBA)
                     return true;
@@ -854,7 +994,7 @@ namespace Client.Main.Objects
             return false;
         }
 
-        private bool ShouldQueueMonsterCrowdMesh(int meshIndex)
+        private bool ShouldQueueWalkerCrowdMesh(int meshIndex)
         {
             if (Model?.Meshes == null || meshIndex < 0 || meshIndex >= Model.Meshes.Length)
                 return false;
@@ -863,9 +1003,9 @@ namespace Client.Main.Objects
                 return false;
 
             bool isBlend = IsBlendMesh(meshIndex);
-            bool isRGBA = _meshIsRGBA != null &&
-                          (uint)meshIndex < (uint)_meshIsRGBA.Length &&
-                          _meshIsRGBA[meshIndex];
+            bool isRGBA = _meshes != null &&
+                          (uint)meshIndex < (uint)_meshes.Length &&
+                          _meshes[meshIndex].IsRgba;
 
             return !isRGBA && !isBlend;
         }
@@ -876,7 +1016,7 @@ namespace Client.Main.Objects
             if (LightEnabled && World?.Terrain != null)
             {
                 Vector3 worldTranslation = WorldPosition.Translation;
-                meshLight = World.Terrain.EvaluateTerrainLight(worldTranslation.X, worldTranslation.Y) + Light;
+                meshLight = EvaluateCombinedTerrainLight(worldTranslation.X, worldTranslation.Y) + Light;
             }
 
             float lightScale = TotalAlpha;
@@ -887,25 +1027,30 @@ namespace Client.Main.Objects
             return new Color((byte)r, (byte)g, (byte)b, alpha);
         }
 
-        private static void PrepareStaticMapInstancingEffect(Effect effect, WorldControl world)
+        private static void PrepareStaticMapInstancingEffect(
+            Effect effect,
+            WorldControl world,
+            EffectTechnique technique = null)
         {
-            if (effect == null || _cachedStaticMapInstancingTechnique == null)
+            EffectTechnique selectedTechnique = technique ?? _cachedStaticMapInstancingTechnique;
+            if (effect == null || selectedTechnique == null)
                 return;
 
-            effect.CurrentTechnique = _cachedStaticMapInstancingTechnique;
+            effect.CurrentTechnique = selectedTechnique;
 
             var camera = Camera.Instance;
             if (camera == null)
                 return;
 
-            effect.Parameters["World"]?.SetValue(_identity);
-            effect.Parameters["View"]?.SetValue(camera.View);
-            effect.Parameters["Projection"]?.SetValue(camera.Projection);
-            effect.Parameters["WorldViewProjection"]?.SetValue(camera.View * camera.Projection);
-            effect.Parameters["EyePosition"]?.SetValue(camera.Position);
-            effect.Parameters["Alpha"]?.SetValue(1f);
-            effect.Parameters["TerrainDynamicIntensityScale"]?.SetValue(1.5f);
-            effect.Parameters["DebugLightingAreas"]?.SetValue(Constants.DEBUG_LIGHTING_AREAS ? 1.0f : 0.0f);
+            ModelEffectBindings bindings = GetModelEffectBindings(effect);
+            bindings.World?.SetValue(_identity);
+            bindings.View?.SetValue(camera.View);
+            bindings.Projection?.SetValue(camera.Projection);
+            bindings.WorldViewProjection?.SetValue(camera.View * camera.Projection);
+            bindings.EyePosition?.SetValue(camera.Position);
+            bindings.Alpha?.SetValue(1f);
+            bindings.TerrainDynamicIntensityScale?.SetValue(1.5f);
+            bindings.DebugLightingAreas?.SetValue(Constants.DEBUG_LIGHTING_AREAS ? 1.0f : 0.0f);
 
             Vector3 sunDir = GraphicsManager.Instance.ShadowMapRenderer?.LightDirection ?? Constants.SUN_DIRECTION;
             if (sunDir.LengthSquared() < 0.0001f)
@@ -913,11 +1058,11 @@ namespace Client.Main.Objects
             sunDir = Vector3.Normalize(sunDir);
             bool sunEnabled = Constants.SUN_ENABLED && (world?.IsSunWorld ?? true);
 
-            effect.Parameters["SunDirection"]?.SetValue(sunDir);
-            effect.Parameters["SunColor"]?.SetValue(_sunColor);
-            effect.Parameters["SunStrength"]?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveSunStrength() : 0f);
-            effect.Parameters["ShadowStrength"]?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
-            effect.Parameters["AmbientLight"]?.SetValue(_ambientLightVector * SunCycleManager.AmbientMultiplier);
+            bindings.SunDirection?.SetValue(sunDir);
+            bindings.SunColor?.SetValue(_sunColor);
+            bindings.SunStrength?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveSunStrength() : 0f);
+            bindings.ShadowStrength?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
+            bindings.AmbientLight?.SetValue(_ambientLightVector * SunCycleManager.AmbientMultiplier);
 
             GraphicsManager.Instance.ShadowMapRenderer?.ApplyShadowParameters(effect);
             UploadStaticMapInstancingDynamicLights(effect, world);
@@ -948,7 +1093,14 @@ namespace Client.Main.Objects
                 : Vector2.Zero;
             float focusRadius = ResolveStaticMapInstancingLightCoverageRadius();
 
-            _staticInstancingLightUploader.Upload(effect, visibleLights, focus, maxLights, focusRadius);
+            _staticInstancingLightUploader.Upload(
+                effect,
+                visibleLights,
+                focus,
+                maxLights,
+                focusRadius,
+                terrain.VisibleLightsVersion,
+                cacheCellSize: 192f);
         }
 
         private static float ResolveStaticMapInstancingLightCoverageRadius()

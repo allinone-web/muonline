@@ -141,7 +141,7 @@ namespace Client.Main.Controls.UI.Game.Hud
 
         public override void Dispose()
         {
-            _staticSurface?.Dispose();
+            Client.Main.Graphics.UiRenderTargetPool.Return(_staticSurface);
             _staticSurface = null;
             base.Dispose();
         }
@@ -189,15 +189,15 @@ namespace Client.Main.Controls.UI.Game.Hud
             var gd = GraphicsManager.Instance?.GraphicsDevice;
             if (gd == null) return;
 
-            _staticSurface?.Dispose();
-            _staticSurface = new RenderTarget2D(gd, ControlSize.X, ControlSize.Y, false, SurfaceFormat.Color, DepthFormat.None);
+            Client.Main.Graphics.UiRenderTargetPool.Return(_staticSurface);
+            _staticSurface = Client.Main.Graphics.UiRenderTargetPool.Rent(gd, ControlSize.X, ControlSize.Y);
 
             var prev = gd.GetRenderTargets();
             gd.SetRenderTarget(_staticSurface);
             gd.Clear(Color.Transparent);
 
             var sb = GraphicsManager.Instance.Sprite;
-            using (new SpriteBatchScope(sb, SpriteSortMode.Deferred, BlendState.AlphaBlend))
+            using (new SpriteBatchScope(sb, SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp))
             {
                 DrawStaticElements(sb);
             }
