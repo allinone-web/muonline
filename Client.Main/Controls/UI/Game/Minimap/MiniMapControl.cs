@@ -3,13 +3,10 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
-using Client.Main.Content;
+using Client.Data.ATT;
 using Client.Main.Controllers;
 using Client.Main.Controls;
-using Client.Main.Controls.UI.Common;
-using Client.Main.Controls.UI.Game.Common;
 using Client.Main.Core.Utilities;
 using Client.Main.Helpers;
 using Client.Main.Models;
@@ -32,22 +29,20 @@ namespace Client.Main.Controls.UI.Game
             Portal
         }
 
-        private enum ResizeCorner : byte
-        {
-            None,
-            TopLeft,
-            TopRight,
-            BottomLeft,
-            BottomRight
-        }
-
-        private const int WindowWidth = 272;
-        private const int WindowHeight = 300;
-        private const int HeaderHeight = 34;
-        private const int MapSize = 240;
-        private const int MapLeft = 16;
-        private const int MapTop = 44;
-        private const int MapPadding = 8;
+        private const int WindowWidth = 560;
+        private const int WindowHeight = 475;
+        private const int MapSize = 520;
+        private const int MapDisplayHeight = 455;
+        private const int MapLeft = 20;
+        private const int MapTop = 10;
+        private const int EdgeMaskSize = 128;
+        private const int TerrainSize = 256;
+        private const int TerrainTexturePadding = 128;
+        private const int TerrainTextureSize = TerrainSize + TerrainTexturePadding * 2;
+        private const float ContourHeightStep = 60f;
+        private const float ReliefHeightRange = 450f;
+        private const int ReliefLayerCount = 4;
+        private const float ReliefLayerOffset = 3f;
         private const int MarkerRecordCount = 100;
         private const int MarkerRecordSize = 113;
         private const int LegacyHeaderSize = 45;
@@ -57,35 +52,48 @@ namespace Client.Main.Controls.UI.Game
         private const float MinZoom = 800f;
         private const float MaxZoom = 1800f;
         private const float ZoomStep = 200f;
-        private const float MapWorldSize = 256f;
         private const float MarkerHoverRadius = 10f;
-        private const float MinWindowScale = 0.65f;
-        private const float MaxWindowScale = 1.75f;
-        private const int ResizeHandleSize = 14;
 
         private static readonly byte[] BuxCode = { 0xFC, 0xCF, 0xAB };
         private static readonly Color PortalMarkerColor = new(190, 120, 255);
         private static readonly Matrix MapRotationMatrix = Matrix.CreateRotationZ(MapRotation);
+        private static readonly Vector3 ReliefLightDirection = Vector3.Normalize(new Vector3(-0.55f, -0.45f, 0.75f));
+
+        private static class OverlayTheme
+        {
+            public static readonly Color MapTint = new(184, 218, 230);
+            public static readonly Color Npc = new(102, 210, 235);
+            public static readonly Color Monster = new(236, 78, 78);
+            public static readonly Color Player = new(92, 224, 142);
+            public static readonly Color Hero = new(255, 211, 112);
+            public static readonly Color Caption = new(220, 226, 230);
+            public static readonly Color Text = new(240, 244, 246);
+            public static readonly Color Dark = new(12, 18, 24);
+        }
 
         private readonly GameScene _gameScene;
         private readonly List<MiniMapMarker> _markers = new();
         private readonly List<(Vector2 Position, string Text)> _hoverTargets = new();
+        private readonly BlendState _edgeMaskBlendState = new()
+        {
+            ColorSourceBlend = Blend.Zero,
+            ColorDestinationBlend = Blend.SourceAlpha,
+            ColorBlendFunction = BlendFunction.Add,
+            AlphaSourceBlend = Blend.Zero,
+            AlphaDestinationBlend = Blend.SourceAlpha,
+            AlphaBlendFunction = BlendFunction.Add
+        };
 
-        private Texture2D _mapTexture;
-        private RenderTarget2D _staticSurface;
+        private Texture2D _terrainMapTexture;
+        private Texture2D _terrainReliefTexture;
+        private Texture2D _edgeMaskTexture;
         private RenderTarget2D _mapSurface;
-        private bool _staticSurfaceDirty = true;
+        private Color[] _terrainMapPixels;
+        private Color[] _terrainReliefPixels;
+        private bool _terrainTextureDirty;
         private SpriteFont _font;
         private float _zoom = InitialZoom;
         private int _loadGeneration;
-        private bool _closeHovered;
-        private bool _closePressed;
-        private bool _isDragging;
-        private bool _isResizing;
-        private Point _dragOffset;
-        private ResizeCorner _resizeCorner;
-        private ResizeCorner _hoveredResizeCorner;
-        private Point _resizeAnchor;
         private string _tooltipText;
         private Vector2 _tooltipPosition;
         private string _worldName;
@@ -94,12 +102,12 @@ namespace Client.Main.Controls.UI.Game
         {
             _gameScene = scene ?? throw new ArgumentNullException(nameof(scene));
 
-            Align = ControlAlign.Top | ControlAlign.Right;
-            Margin = new Margin { Top = 42, Right = 18 };
+            Align = ControlAlign.HorizontalCenter | ControlAlign.VerticalCenter;
+            Offset = new Point(0, -55);
             AutoViewSize = false;
             ControlSize = new Point(WindowWidth, WindowHeight);
             ViewSize = ControlSize;
-            Interactive = true;
+            Interactive = false;
             Visible = false;
         }
 
@@ -107,7 +115,6 @@ namespace Client.Main.Controls.UI.Game
         {
             await base.Load();
             _font = GraphicsManager.Instance.Font;
-            InvalidateStaticSurface();
         }
 
         public async Task LoadContentForWorld(short worldIndex)
@@ -120,7 +127,9 @@ namespace Client.Main.Controls.UI.Game
                 worldName = MapDatabase.GetMapName((ushort)Math.Max(0, worldIndex - 1));
             }
 
-            Texture2D mapTexture = await LoadMapTextureAsync(worldIndex);
+            Color[] terrainMapPixels = BuildTerrainMapPixels(
+                _gameScene.World?.Terrain,
+                out Color[] terrainReliefPixels);
             List<MiniMapMarker> markers = await LoadMarkersAsync(worldName);
 
             if (generation != _loadGeneration)
@@ -128,20 +137,260 @@ namespace Client.Main.Controls.UI.Game
                 return;
             }
 
-            _mapTexture = mapTexture;
+            _terrainMapPixels = terrainMapPixels;
+            _terrainReliefPixels = terrainReliefPixels;
+            _terrainTextureDirty = true;
             _worldName = worldName;
             _markers.Clear();
             _markers.AddRange(markers);
             _hoverTargets.Clear();
             _zoom = InitialZoom;
-            InvalidateStaticSurface();
         }
 
-        private static async Task<Texture2D> LoadMapTextureAsync(short worldIndex)
+        private static Color[] BuildTerrainMapPixels(
+            TerrainControl terrain,
+            out Color[] reliefPixels)
         {
-            string basePath = $"World{worldIndex}/mini_map";
-            Texture2D texture = await TextureLoader.Instance.PrepareAndGetTexture(basePath + ".ozt");
-            return texture ?? await TextureLoader.Instance.PrepareAndGetTexture(basePath + ".tga");
+            reliefPixels = null;
+            if (terrain == null)
+            {
+                return null;
+            }
+
+            var flags = new TWFlags[TerrainSize * TerrainSize];
+            var heights = new float[flags.Length];
+            float minimumHeight = float.MaxValue;
+            float maximumHeight = float.MinValue;
+
+            for (int y = 0; y < TerrainSize; y++)
+            {
+                for (int x = 0; x < TerrainSize; x++)
+                {
+                    int index = y * TerrainSize + x;
+                    TWFlags tileFlags = terrain.RequestTerrainFlag(x, y);
+                    float height = terrain.RequestTerrainHeight(
+                        x * Constants.TERRAIN_SCALE,
+                        y * Constants.TERRAIN_SCALE);
+
+                    flags[index] = tileFlags;
+                    heights[index] = height;
+
+                    if (!tileFlags.HasFlag(TWFlags.NoGround))
+                    {
+                        minimumHeight = MathF.Min(minimumHeight, height);
+                        maximumHeight = MathF.Max(maximumHeight, height);
+                    }
+                }
+            }
+
+            if (minimumHeight == float.MaxValue || maximumHeight == float.MinValue)
+            {
+                minimumHeight = 0f;
+                maximumHeight = 1f;
+            }
+
+            float heightRange = MathHelper.Clamp(
+                maximumHeight - minimumHeight,
+                1f,
+                ReliefHeightRange);
+            var pixels = new Color[TerrainTextureSize * TerrainTextureSize];
+            reliefPixels = new Color[pixels.Length];
+            for (int y = 0; y < TerrainSize; y++)
+            {
+                for (int x = 0; x < TerrainSize; x++)
+                {
+                    int index = y * TerrainSize + x;
+                    TWFlags tileFlags = flags[index];
+                    int terrainClass = GetTerrainClass(tileFlags);
+                    bool hardEdge = HasDifferentNeighbour(flags, x, y, terrainClass, 1);
+                    bool softEdge = !hardEdge && HasDifferentNeighbour(flags, x, y, terrainClass, 2);
+                    bool contour = terrainClass != 0 && IsHeightContour(heights, x, y);
+                    float normalizedHeight = MathHelper.Clamp(
+                        (heights[index] - minimumHeight) / heightRange,
+                        0f,
+                        1f);
+                    float reliefLight = GetReliefLight(heights, x, y);
+                    int noise = ((x * 37) ^ (y * 19)) & 7;
+
+                    Color color = GetTerrainColor(
+                        tileFlags,
+                        terrainClass,
+                        hardEdge,
+                        softEdge,
+                        contour,
+                        normalizedHeight,
+                        reliefLight,
+                        noise);
+                    int textureX = y + TerrainTexturePadding;
+                    int textureY = x + TerrainTexturePadding;
+                    int textureIndex = textureY * TerrainTextureSize + textureX;
+                    pixels[textureIndex] = color;
+
+                    if (terrainClass != 0)
+                    {
+                        int reliefAlpha = (int)MathF.Round(MathHelper.Lerp(
+                            8f,
+                            190f,
+                            MathF.Pow(normalizedHeight, 0.7f)));
+                        reliefPixels[textureIndex] = Color.FromNonPremultiplied(
+                            18,
+                            34,
+                            48,
+                            reliefAlpha);
+                    }
+                }
+            }
+
+            return pixels;
+        }
+
+        private static float GetReliefLight(float[] heights, int tileX, int tileY)
+        {
+            float left = GetTerrainHeight(heights, tileX - 1, tileY);
+            float right = GetTerrainHeight(heights, tileX + 1, tileY);
+            float top = GetTerrainHeight(heights, tileX, tileY - 1);
+            float bottom = GetTerrainHeight(heights, tileX, tileY + 1);
+            const float reliefSlopeScale = 35f;
+            var normal = Vector3.Normalize(new Vector3(
+                -(right - left) / reliefSlopeScale,
+                -(bottom - top) / reliefSlopeScale,
+                1f));
+            float diffuse = MathF.Max(0f, Vector3.Dot(normal, ReliefLightDirection));
+            float lighting = 0.12f + diffuse * 1.05f;
+            return MathHelper.Clamp(lighting, 0f, 1f);
+        }
+
+        private static bool IsHeightContour(float[] heights, int tileX, int tileY)
+        {
+            int currentBand = (int)MathF.Floor(GetTerrainHeight(heights, tileX, tileY) / ContourHeightStep);
+            int rightBand = (int)MathF.Floor(GetTerrainHeight(heights, tileX + 1, tileY) / ContourHeightStep);
+            int bottomBand = (int)MathF.Floor(GetTerrainHeight(heights, tileX, tileY + 1) / ContourHeightStep);
+            return currentBand != rightBand || currentBand != bottomBand;
+        }
+
+        private static float GetTerrainHeight(float[] heights, int tileX, int tileY)
+        {
+            int x = Math.Clamp(tileX, 0, TerrainSize - 1);
+            int y = Math.Clamp(tileY, 0, TerrainSize - 1);
+            return heights[y * TerrainSize + x];
+        }
+
+        private static int GetTerrainClass(TWFlags flags)
+        {
+            if (flags.HasFlag(TWFlags.NoGround)) return 0;
+            if (flags.HasFlag(TWFlags.Height)) return 1;
+            if (flags.HasFlag(TWFlags.NoMove)) return 2;
+            if (flags.HasFlag(TWFlags.SafeZone)) return 3;
+            if (flags.HasFlag(TWFlags.Water)) return 4;
+            return 5;
+        }
+
+        private static bool HasDifferentNeighbour(
+            TWFlags[] flags,
+            int tileX,
+            int tileY,
+            int terrainClass,
+            int radius)
+        {
+            for (int offsetY = -radius; offsetY <= radius; offsetY++)
+            {
+                for (int offsetX = -radius; offsetX <= radius; offsetX++)
+                {
+                    if (Math.Abs(offsetX) != radius && Math.Abs(offsetY) != radius)
+                    {
+                        continue;
+                    }
+
+                    int x = tileX + offsetX;
+                    int y = tileY + offsetY;
+                    if ((uint)x >= TerrainSize || (uint)y >= TerrainSize)
+                    {
+                        if (terrainClass != 0)
+                        {
+                            return true;
+                        }
+                        continue;
+                    }
+
+                    if (GetTerrainClass(flags[y * TerrainSize + x]) != terrainClass)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static Color GetTerrainColor(
+            TWFlags flags,
+            int terrainClass,
+            bool hardEdge,
+            bool softEdge,
+            bool contour,
+            float normalizedHeight,
+            float reliefLight,
+            int noise)
+        {
+            int red;
+            int green;
+            int blue;
+            int alpha;
+
+            switch (terrainClass)
+            {
+                case 0:
+                    red = 80; green = 110; blue = 124; alpha = 0;
+                    break;
+                case 1:
+                    red = 226; green = 176; blue = 96; alpha = 128 + noise;
+                    break;
+                case 2:
+                    red = 118; green = 150; blue = 164; alpha = 72 + noise;
+                    break;
+                case 3:
+                    red = 86; green = 220; blue = 174; alpha = 112 + noise;
+                    break;
+                case 4:
+                    red = 74; green = 150; blue = 220; alpha = 96 + noise;
+                    break;
+                default:
+                    red = 126; green = 174; blue = 190; alpha = 88 + noise;
+                    break;
+            }
+
+            if (hardEdge)
+            {
+                alpha = terrainClass == 0 ? 112 : 198;
+                if (!flags.HasFlag(TWFlags.Height))
+                {
+                    red = Math.Max(red, 174);
+                    green = Math.Max(green, 208);
+                    blue = Math.Max(blue, 218);
+                }
+            }
+            else if (softEdge)
+            {
+                alpha = Math.Max(alpha, terrainClass == 0 ? 34 : 78);
+            }
+
+            float illumination = MathHelper.Lerp(0.46f, 1.42f, reliefLight);
+            red = Math.Clamp((int)MathF.Round(
+                red * MathHelper.Lerp(0.72f, 1.34f, normalizedHeight) * illumination), 0, 255);
+            green = Math.Clamp((int)MathF.Round(
+                green * MathHelper.Lerp(0.78f, 1.22f, normalizedHeight) * illumination), 0, 255);
+            blue = Math.Clamp((int)MathF.Round(
+                blue * MathHelper.Lerp(0.86f, 1.06f, normalizedHeight) * illumination), 0, 255);
+
+            if (contour)
+            {
+                red = Math.Max(red, 204);
+                green = Math.Max(green, 214);
+                blue = Math.Max(blue, 202);
+                alpha = Math.Max(alpha, 158);
+            }
+
+            return Color.FromNonPremultiplied(red, green, blue, alpha);
         }
 
         private async Task<List<MiniMapMarker>> LoadMarkersAsync(string worldName)
@@ -297,13 +546,8 @@ namespace Client.Main.Controls.UI.Game
             }
 
             Visible = true;
-            if (Align == ControlAlign.None)
-            {
-                SetManualScreenPosition(DisplayRectangle.X, DisplayRectangle.Y);
-            }
-            BringToFront();
 
-            if (_mapTexture == null && _gameScene.World != null)
+            if (_terrainMapPixels == null && _gameScene.World != null)
             {
                 _ = LoadContentForWorld(_gameScene.World.WorldIndex);
             }
@@ -312,19 +556,11 @@ namespace Client.Main.Controls.UI.Game
         public void Hide()
         {
             Visible = false;
-            _isDragging = false;
-            _isResizing = false;
-            _closePressed = false;
-            _resizeCorner = ResizeCorner.None;
-            _hoveredResizeCorner = ResizeCorner.None;
             _tooltipText = null;
             if (Scene?.FocusControl == this)
             {
                 Scene.FocusControl = null;
             }
-
-            // SourceMain5.2 sends the close-NPC notification when this window closes.
-            _ = MuGame.Network?.GetCharacterService()?.SendCloseNpcRequestAsync();
         }
 
         public override void Update(GameTime gameTime)
@@ -344,141 +580,16 @@ namespace Client.Main.Controls.UI.Game
             }
 
             Point mousePosition = MuGame.Instance.UiMouseState.Position;
-            Rectangle closeRectangle = GetCloseButtonRectangle();
-            _closeHovered = closeRectangle.Contains(mousePosition);
-            _hoveredResizeCorner = GetResizeCorner(mousePosition);
-
-            bool leftPressed = MuGame.Instance.UiMouseState.LeftButton == ButtonState.Pressed;
-            bool leftJustPressed = leftPressed &&
-                                   MuGame.Instance.PrevUiMouseState.LeftButton == ButtonState.Released;
-            bool leftJustReleased = !leftPressed &&
-                                    MuGame.Instance.PrevUiMouseState.LeftButton == ButtonState.Pressed;
-
-            if (leftJustPressed)
-            {
-                _closePressed = _closeHovered;
-                if (!_closePressed && _hoveredResizeCorner != ResizeCorner.None)
-                {
-                    BeginResize(_hoveredResizeCorner);
-                }
-                else if (!_closePressed && GetHeaderScreenRectangle().Contains(mousePosition))
-                {
-                    BeginDrag(mousePosition);
-                }
-            }
-
-            if (_isResizing && leftPressed)
-            {
-                UpdateResize(mousePosition);
-            }
-            else if (_isDragging && leftPressed)
-            {
-                UpdateDrag(mousePosition);
-            }
-
-            if (leftJustReleased)
-            {
-                bool closeRequested = _closePressed && _closeHovered;
-                _closePressed = false;
-                _isDragging = false;
-                _isResizing = false;
-                _resizeCorner = ResizeCorner.None;
-
-                if (closeRequested)
-                {
-                    Hide();
-                    return;
-                }
-            }
-
             Rectangle mapRectangle = GetMapScreenRectangle();
 
             int scrollDelta = MuGame.Instance.UiMouseState.ScrollWheelValue -
                               MuGame.Instance.PrevUiMouseState.ScrollWheelValue;
-            if (!_isDragging && !_isResizing && scrollDelta != 0 && mapRectangle.Contains(mousePosition))
+            if (scrollDelta != 0 && mapRectangle.Contains(mousePosition))
             {
                 _zoom = MathHelper.Clamp(_zoom + Math.Sign(scrollDelta) * ZoomStep, MinZoom, MaxZoom);
             }
 
             UpdateTooltip(mousePosition, mapRectangle);
-        }
-
-        private void BeginDrag(Point mousePosition)
-        {
-            Rectangle rectangle = DisplayRectangle;
-            SwitchToManualPosition(rectangle.Location);
-            _isDragging = true;
-            _dragOffset = new Point(mousePosition.X - rectangle.X, mousePosition.Y - rectangle.Y);
-            BringToFront();
-        }
-
-        private void UpdateDrag(Point mousePosition)
-        {
-            SetManualScreenPosition(
-                mousePosition.X - _dragOffset.X,
-                mousePosition.Y - _dragOffset.Y);
-        }
-
-        private void BeginResize(ResizeCorner corner)
-        {
-            Rectangle rectangle = DisplayRectangle;
-            _resizeCorner = corner;
-            _resizeAnchor = corner switch
-            {
-                ResizeCorner.TopLeft => new Point(rectangle.Right, rectangle.Bottom),
-                ResizeCorner.TopRight => new Point(rectangle.Left, rectangle.Bottom),
-                ResizeCorner.BottomLeft => new Point(rectangle.Right, rectangle.Top),
-                _ => new Point(rectangle.Left, rectangle.Top)
-            };
-
-            SwitchToManualPosition(rectangle.Location);
-            _isResizing = true;
-            BringToFront();
-        }
-
-        private void UpdateResize(Point mousePosition)
-        {
-            float desiredWidth = _resizeCorner is ResizeCorner.TopLeft or ResizeCorner.BottomLeft
-                ? _resizeAnchor.X - mousePosition.X
-                : mousePosition.X - _resizeAnchor.X;
-            float desiredHeight = _resizeCorner is ResizeCorner.TopLeft or ResizeCorner.TopRight
-                ? _resizeAnchor.Y - mousePosition.Y
-                : mousePosition.Y - _resizeAnchor.Y;
-
-            float projectedScale =
-                (desiredWidth * WindowWidth + desiredHeight * WindowHeight) /
-                (WindowWidth * WindowWidth + WindowHeight * WindowHeight);
-            float screenScaleLimit = MathF.Min(
-                UiScaler.VirtualSize.X / (float)WindowWidth,
-                UiScaler.VirtualSize.Y / (float)WindowHeight);
-            float maximumScale = MathF.Max(MinWindowScale, MathF.Min(MaxWindowScale, screenScaleLimit));
-            Scale = MathHelper.Clamp(projectedScale, MinWindowScale, maximumScale);
-
-            Point size = DisplaySize;
-            int x = _resizeCorner is ResizeCorner.TopLeft or ResizeCorner.BottomLeft
-                ? _resizeAnchor.X - size.X
-                : _resizeAnchor.X;
-            int y = _resizeCorner is ResizeCorner.TopLeft or ResizeCorner.TopRight
-                ? _resizeAnchor.Y - size.Y
-                : _resizeAnchor.Y;
-            SetManualScreenPosition(x, y);
-        }
-
-        private void SwitchToManualPosition(Point screenPosition)
-        {
-            Align = ControlAlign.None;
-            Margin = default;
-            Offset = Point.Zero;
-            SetManualScreenPosition(screenPosition.X, screenPosition.Y);
-        }
-
-        private void SetManualScreenPosition(int screenX, int screenY)
-        {
-            Point parentPosition = Parent?.DisplayRectangle.Location ?? Point.Zero;
-            int maxX = Math.Max(0, UiScaler.VirtualSize.X - DisplaySize.X);
-            int maxY = Math.Max(0, UiScaler.VirtualSize.Y - DisplaySize.Y);
-            X = Math.Clamp(screenX, 0, maxX) - parentPosition.X;
-            Y = Math.Clamp(screenY, 0, maxY) - parentPosition.Y;
         }
 
         private void UpdateTooltip(Point mousePosition, Rectangle mapRectangle)
@@ -514,8 +625,8 @@ namespace Client.Main.Controls.UI.Game
                 return;
             }
 
-            EnsureStaticSurface();
-            RenderMapSurface();
+            EnsureTerrainTexture();
+            RenderMapSurface(gameTime);
 
             SpriteBatch spriteBatch = GraphicsManager.Instance.Sprite;
             SpriteBatchScope? scope = null;
@@ -531,14 +642,8 @@ namespace Client.Main.Controls.UI.Game
 
             try
             {
-                if (_staticSurface != null && !_staticSurface.IsDisposed)
-                {
-                    spriteBatch.Draw(_staticSurface, DisplayRectangle, Color.White * Alpha);
-                }
-
                 DrawMapSurface(spriteBatch);
-                DrawCloseButton(spriteBatch);
-                DrawResizeHandles(spriteBatch);
+                DrawOverlayCaption(spriteBatch);
                 DrawTooltip(spriteBatch);
             }
             finally
@@ -547,96 +652,90 @@ namespace Client.Main.Controls.UI.Game
             }
         }
 
-        private void EnsureStaticSurface()
+        private void EnsureTerrainTexture()
         {
-            if (!_staticSurfaceDirty && _staticSurface != null && !_staticSurface.IsDisposed)
-            {
-                return;
-            }
-
-            var graphicsDevice = GraphicsManager.Instance.GraphicsDevice;
+            GraphicsDevice graphicsDevice = GraphicsManager.Instance.GraphicsDevice;
             if (graphicsDevice == null)
             {
                 return;
             }
 
-            Client.Main.Graphics.UiRenderTargetPool.Return(_staticSurface);
-            _staticSurface = Client.Main.Graphics.UiRenderTargetPool.Rent(graphicsDevice, WindowWidth, WindowHeight);
-
-            var previousTargets = graphicsDevice.GetRenderTargets();
-            graphicsDevice.SetRenderTarget(_staticSurface);
-            graphicsDevice.Clear(Color.Transparent);
-
-            SpriteBatch spriteBatch = GraphicsManager.Instance.Sprite;
-            using (new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp))
+            if (_edgeMaskTexture == null || _edgeMaskTexture.IsDisposed)
             {
-                DrawStaticElements(spriteBatch);
+                _edgeMaskTexture = CreateEdgeMaskTexture(graphicsDevice);
             }
 
-            graphicsDevice.SetRenderTargets(previousTargets);
-            _staticSurfaceDirty = false;
-        }
-
-        private void DrawStaticElements(SpriteBatch spriteBatch)
-        {
-            Texture2D pixel = GraphicsManager.Instance.Pixel;
-            if (pixel == null)
+            if (!_terrainTextureDirty)
             {
                 return;
             }
 
-            Rectangle window = new(0, 0, WindowWidth, WindowHeight);
-            spriteBatch.Draw(pixel, window, ModernHudTheme.BorderOuter);
-            UiDrawHelper.DrawVerticalGradient(
-                spriteBatch,
-                new Rectangle(2, 2, WindowWidth - 4, WindowHeight - 4),
-                ModernHudTheme.BgDark,
-                ModernHudTheme.BgDarkest);
+            _terrainTextureDirty = false;
+            _terrainMapTexture?.Dispose();
+            _terrainMapTexture = null;
+            _terrainReliefTexture?.Dispose();
+            _terrainReliefTexture = null;
 
-            Rectangle header = new(10, 8, WindowWidth - 20, HeaderHeight - 8);
-            UiDrawHelper.DrawPanel(
-                spriteBatch,
-                header,
-                ModernHudTheme.BgMid,
-                ModernHudTheme.BorderInner,
-                ModernHudTheme.BorderOuter,
-                ModernHudTheme.BorderHighlight * 0.3f,
-                true,
-                ModernHudTheme.Accent * 0.12f);
-            spriteBatch.Draw(pixel, new Rectangle(20, 10, WindowWidth - 40, 2), ModernHudTheme.Accent * 0.8f);
-            spriteBatch.Draw(pixel, new Rectangle(28, HeaderHeight - 2, WindowWidth - 56, 1), ModernHudTheme.AccentDim * 0.7f);
-            UiDrawHelper.DrawCornerAccents(spriteBatch, window, ModernHudTheme.Accent * 0.45f, 9, 1);
-
-            if (_font != null)
+            if (_terrainMapPixels == null)
             {
-                DrawTextWithShadow(spriteBatch, "MINIMAP", new Vector2(22f, 14f), ModernHudTheme.TextWhite, 0.42f);
+                return;
+            }
 
-                if (!string.IsNullOrWhiteSpace(_worldName))
+            _terrainMapTexture = new Texture2D(
+                graphicsDevice,
+                TerrainTextureSize,
+                TerrainTextureSize,
+                false,
+                SurfaceFormat.Color);
+            _terrainMapTexture.SetData(_terrainMapPixels);
+
+            if (_terrainReliefPixels != null)
+            {
+                _terrainReliefTexture = new Texture2D(
+                    graphicsDevice,
+                    TerrainTextureSize,
+                    TerrainTextureSize,
+                    false,
+                    SurfaceFormat.Color);
+                _terrainReliefTexture.SetData(_terrainReliefPixels);
+            }
+        }
+
+        private static Texture2D CreateEdgeMaskTexture(GraphicsDevice graphicsDevice)
+        {
+            var texture = new Texture2D(
+                graphicsDevice,
+                EdgeMaskSize,
+                EdgeMaskSize,
+                false,
+                SurfaceFormat.Color);
+            var pixels = new Color[EdgeMaskSize * EdgeMaskSize];
+            float center = EdgeMaskSize * 0.5f;
+
+            for (int y = 0; y < EdgeMaskSize; y++)
+            {
+                for (int x = 0; x < EdgeMaskSize; x++)
                 {
-                    Vector2 worldNameSize = _font.MeasureString(_worldName) * 0.32f;
-                    DrawTextWithShadow(
-                        spriteBatch,
-                        _worldName,
-                        new Vector2(WindowWidth - 22f - worldNameSize.X, 15f),
-                        ModernHudTheme.TextGold,
-                        0.32f);
+                    float normalizedX = (x + 0.5f - center) / center;
+                    float normalizedY = (y + 0.5f - center) / center;
+                    float angle = MathF.Atan2(normalizedY, normalizedX);
+                    float organicOffset = MathF.Sin(angle * 5f) * 0.012f + MathF.Cos(angle * 3f) * 0.008f;
+                    float radius = MathF.Sqrt(normalizedX * normalizedX + normalizedY * normalizedY) + organicOffset;
+                    float fade = MathHelper.Clamp((radius - 0.64f) / 0.34f, 0f, 1f);
+                    fade = fade * fade * (3f - 2f * fade);
+                    int alpha = (int)MathF.Round((1f - fade) * 255f);
+                    pixels[y * EdgeMaskSize + x] = Color.FromNonPremultiplied(255, 255, 255, alpha);
                 }
             }
 
-            Rectangle mapPanel = new(MapLeft - MapPadding, MapTop - MapPadding, MapSize + MapPadding * 2, MapSize + MapPadding * 2);
-            UiDrawHelper.DrawPanel(
-                spriteBatch,
-                mapPanel,
-                ModernHudTheme.SlotBg,
-                ModernHudTheme.BorderInner,
-                ModernHudTheme.BorderOuter,
-                ModernHudTheme.BorderHighlight * 0.25f);
+            texture.SetData(pixels);
+            return texture;
         }
 
-        private void RenderMapSurface()
+        private void RenderMapSurface(GameTime gameTime)
         {
             _hoverTargets.Clear();
-            if (_mapTexture == null)
+            if (_terrainMapTexture == null)
             {
                 return;
             }
@@ -657,40 +756,49 @@ namespace Client.Main.Controls.UI.Game
             try
             {
                 graphicsDevice.SetRenderTarget(_mapSurface);
-                graphicsDevice.Clear(ModernHudTheme.BgDarkest);
+                graphicsDevice.Clear(Color.Transparent);
 
                 SpriteBatch spriteBatch = GraphicsManager.Instance.Sprite;
                 using (new SpriteBatchScope(spriteBatch, SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp))
                 {
                     if (!TryGetPlayer(out PlayerObject player))
                     {
-                        spriteBatch.Draw(_mapTexture, new Rectangle(0, 0, MapSize, MapSize), Color.White);
-                        return;
+                        spriteBatch.Draw(
+                            _terrainMapTexture,
+                            new Rectangle(0, 0, MapSize, MapSize),
+                            OverlayTheme.MapTint * 0.55f);
                     }
+                    else
+                    {
+                        Rectangle source = GetMapSourceRectangle(player);
+                        Vector2 drawScale = new(
+                            MapSize * MapCoverageScale / source.Width,
+                            MapSize * MapCoverageScale / source.Height);
+                        Vector2 center = new(MapSize / 2f, MapSize / 2f);
 
-                    Rectangle source = GetMapSourceRectangle(player);
-                    Vector2 drawScale = new(
-                        MapSize * MapCoverageScale / source.Width,
-                        MapSize * MapCoverageScale / source.Height);
-                    Vector2 center = new(MapSize / 2f, MapSize / 2f);
+                        DrawIsometricMapLayer(spriteBatch, source, drawScale, center);
 
+                        DrawStaticMarkers(spriteBatch, source, drawScale, center);
+                        DrawWorldMarkers(spriteBatch, player, source, drawScale, center);
+                        TryGetLocalMapPosition(GetPlayerTilePosition(player), source, drawScale, center, out Vector2 playerMapPosition);
+                        playerMapPosition.X = MathHelper.Clamp(playerMapPosition.X, 8f, MapSize - 8f);
+                        playerMapPosition.Y = MathHelper.Clamp(playerMapPosition.Y, 8f, MapSize - 8f);
+                        float pulse = 0.5f + MathF.Sin((float)gameTime.TotalGameTime.TotalSeconds * 4f) * 0.5f;
+                        DrawLocalPlayerMarker(spriteBatch, playerMapPosition, pulse);
+                    }
+                }
+
+                if (_edgeMaskTexture != null && !_edgeMaskTexture.IsDisposed)
+                {
+                    using var maskScope = new SpriteBatchScope(
+                        spriteBatch,
+                        SpriteSortMode.Deferred,
+                        _edgeMaskBlendState,
+                        SamplerState.LinearClamp);
                     spriteBatch.Draw(
-                        _mapTexture,
-                        center,
-                        source,
-                        Color.White,
-                        MapRotation,
-                        new Vector2(source.Width / 2f, source.Height / 2f),
-                        drawScale,
-                        SpriteEffects.None,
-                        0f);
-
-                    DrawStaticMarkers(spriteBatch, source, drawScale, center);
-                    DrawWorldMarkers(spriteBatch, player, source, drawScale, center);
-                    TryGetLocalMapPosition(GetPlayerTilePosition(player), source, drawScale, center, out Vector2 playerMapPosition);
-                    playerMapPosition.X = MathHelper.Clamp(playerMapPosition.X, 8f, MapSize - 8f);
-                    playerMapPosition.Y = MathHelper.Clamp(playerMapPosition.Y, 8f, MapSize - 8f);
-                    DrawLocalPlayerMarker(spriteBatch, playerMapPosition);
+                        _edgeMaskTexture,
+                        new Rectangle(0, 0, MapSize, MapSize),
+                        Color.White);
                 }
             }
             finally
@@ -702,30 +810,79 @@ namespace Client.Main.Controls.UI.Game
         private void DrawMapSurface(SpriteBatch spriteBatch)
         {
             Rectangle destination = GetMapScreenRectangle();
-            if (_mapSurface != null && !_mapSurface.IsDisposed && _mapTexture != null)
+            if (_mapSurface != null && !_mapSurface.IsDisposed && _terrainMapTexture != null)
             {
-                spriteBatch.Draw(_mapSurface, destination, Color.White * Alpha);
+                spriteBatch.Draw(_mapSurface, destination, Color.White * (Alpha * 0.86f));
                 return;
             }
 
-            Texture2D pixel = GraphicsManager.Instance.Pixel;
-            if (pixel != null)
+            DrawCenteredText(spriteBatch, "Map unavailable", destination, OverlayTheme.Caption * 0.55f, 0.35f);
+        }
+
+        private void DrawIsometricMapLayer(
+            SpriteBatch spriteBatch,
+            Rectangle source,
+            Vector2 drawScale,
+            Vector2 center)
+        {
+            Vector2 origin = new(source.Width / 2f, source.Height / 2f);
+
+            if (_terrainReliefTexture != null && !_terrainReliefTexture.IsDisposed)
             {
-                spriteBatch.Draw(pixel, destination, ModernHudTheme.BgDarkest * Alpha);
+                for (int layer = ReliefLayerCount; layer >= 1; layer--)
+                {
+                    spriteBatch.Draw(
+                        _terrainReliefTexture,
+                        center + new Vector2(0f, layer * ReliefLayerOffset),
+                        source,
+                        Color.White * 0.3f,
+                        MapRotation,
+                        origin,
+                        drawScale,
+                        SpriteEffects.None,
+                        0f);
+                }
             }
-            DrawCenteredText(spriteBatch, "Map unavailable", destination, ModernHudTheme.TextDark, 0.35f);
+
+            spriteBatch.Draw(
+                _terrainMapTexture,
+                center,
+                source,
+                OverlayTheme.MapTint * 0.98f,
+                MapRotation,
+                origin,
+                drawScale,
+                SpriteEffects.None,
+                0f);
+        }
+
+        private void DrawOverlayCaption(SpriteBatch spriteBatch)
+        {
+            if (_font == null || string.IsNullOrWhiteSpace(_worldName))
+            {
+                return;
+            }
+
+            const float scale = 0.36f;
+            string caption = _worldName.ToUpperInvariant();
+            Vector2 size = _font.MeasureString(caption) * scale;
+            Rectangle mapRectangle = GetMapScreenRectangle();
+            Vector2 position = new(
+                mapRectangle.Center.X - size.X * 0.5f,
+                mapRectangle.Y + 8f * Scale);
+            DrawTextWithShadow(spriteBatch, caption, position, OverlayTheme.Caption * 0.78f, scale);
         }
 
         private Rectangle GetMapSourceRectangle(PlayerObject player)
         {
             Vector2 tilePosition = GetPlayerTilePosition(player);
-            float centerX = tilePosition.Y / MapWorldSize * _mapTexture.Width;
-            float centerY = tilePosition.X / MapWorldSize * _mapTexture.Height;
-            float width = Math.Clamp(MapSize * MapCoverageScale / _zoom * _mapTexture.Width, 1f, _mapTexture.Width);
-            float height = Math.Clamp(MapSize * MapCoverageScale / _zoom * _mapTexture.Height, 1f, _mapTexture.Height);
+            float centerX = TerrainTexturePadding + tilePosition.Y;
+            float centerY = TerrainTexturePadding + tilePosition.X;
+            float width = Math.Clamp(MapSize * MapCoverageScale / _zoom * TerrainSize, 1f, TerrainSize);
+            float height = Math.Clamp(MapSize * MapCoverageScale / _zoom * TerrainSize, 1f, TerrainSize);
 
-            centerX = MathHelper.Clamp(centerX, width / 2f, _mapTexture.Width - width / 2f);
-            centerY = MathHelper.Clamp(centerY, height / 2f, _mapTexture.Height - height / 2f);
+            centerX = MathHelper.Clamp(centerX, width / 2f, _terrainMapTexture.Width - width / 2f);
+            centerY = MathHelper.Clamp(centerY, height / 2f, _terrainMapTexture.Height - height / 2f);
 
             return new Rectangle(
                 (int)MathF.Round(centerX - width / 2f),
@@ -812,14 +969,16 @@ namespace Client.Main.Controls.UI.Game
             out Vector2 localPosition)
         {
             Vector2 texturePosition = new(
-                tilePosition.Y / MapWorldSize * _mapTexture.Width,
-                tilePosition.X / MapWorldSize * _mapTexture.Height);
+                TerrainTexturePadding + tilePosition.Y,
+                TerrainTexturePadding + tilePosition.X);
             Vector2 sourceCenter = new(
                 source.X + source.Width * 0.5f,
                 source.Y + source.Height * 0.5f);
             Vector2 relative = (texturePosition - sourceCenter) * drawScale;
             localPosition = center + Vector2.Transform(relative, MapRotationMatrix);
-            return new Rectangle(0, 0, MapSize, MapSize).Contains(localPosition.ToPoint());
+            float markerRadius = MapSize * 0.48f;
+            return new Rectangle(0, 0, MapSize, MapSize).Contains(localPosition.ToPoint()) &&
+                   Vector2.DistanceSquared(localPosition, center) <= markerRadius * markerRadius;
         }
 
         private void AddHoverTarget(Vector2 localPosition, string text)
@@ -844,30 +1003,30 @@ namespace Client.Main.Controls.UI.Game
             {
                 case ProceduralMarkerKind.Npc:
                     DrawOutlinedSquare(spriteBatch, pixel, position, 9, Color.Black * 0.8f);
-                    DrawOutlinedSquare(spriteBatch, pixel, position, 7, ModernHudTheme.SecondaryBright);
-                    spriteBatch.Draw(pixel, CenteredRectangle(position, 3, 3), ModernHudTheme.SecondaryBright);
+                    DrawOutlinedSquare(spriteBatch, pixel, position, 7, OverlayTheme.Npc);
+                    spriteBatch.Draw(pixel, CenteredRectangle(position, 3, 3), OverlayTheme.Npc);
                     break;
 
                 case ProceduralMarkerKind.Monster:
                     DrawDiamond(spriteBatch, pixel, position, 6, Color.Black * 0.8f);
-                    DrawDiamond(spriteBatch, pixel, position, 4, ModernHudTheme.Danger);
+                    DrawDiamond(spriteBatch, pixel, position, 4, OverlayTheme.Monster);
                     break;
 
                 case ProceduralMarkerKind.Player:
                     DrawDiamond(spriteBatch, pixel, position, 6, Color.Black * 0.8f);
-                    DrawDiamond(spriteBatch, pixel, position, 4, ModernHudTheme.Success);
-                    spriteBatch.Draw(pixel, CenteredRectangle(position, 2, 2), ModernHudTheme.TextWhite);
+                    DrawDiamond(spriteBatch, pixel, position, 4, OverlayTheme.Player);
+                    spriteBatch.Draw(pixel, CenteredRectangle(position, 2, 2), OverlayTheme.Text);
                     break;
 
                 case ProceduralMarkerKind.Portal:
                     DrawDiamond(spriteBatch, pixel, position, 7, Color.Black * 0.8f);
                     DrawDiamond(spriteBatch, pixel, position, 5, PortalMarkerColor);
-                    DrawDiamond(spriteBatch, pixel, position, 2, ModernHudTheme.BgDarkest);
+                    DrawDiamond(spriteBatch, pixel, position, 2, OverlayTheme.Dark);
                     break;
             }
         }
 
-        private static void DrawLocalPlayerMarker(SpriteBatch spriteBatch, Vector2 position)
+        private static void DrawLocalPlayerMarker(SpriteBatch spriteBatch, Vector2 position, float pulse)
         {
             Texture2D pixel = GraphicsManager.Instance.Pixel;
             if (pixel == null)
@@ -878,12 +1037,13 @@ namespace Client.Main.Controls.UI.Game
             Vector2 tip = position + new Vector2(0f, -8f);
             Vector2 left = position + new Vector2(-6f, 6f);
             Vector2 right = position + new Vector2(6f, 6f);
+            DrawDiamond(spriteBatch, pixel, position, 11, OverlayTheme.Hero * (0.06f + pulse * 0.09f));
             DrawLine(spriteBatch, pixel, tip, left, Color.Black * 0.9f, 4f);
             DrawLine(spriteBatch, pixel, tip, right, Color.Black * 0.9f, 4f);
             DrawLine(spriteBatch, pixel, left, right, Color.Black * 0.9f, 4f);
-            DrawLine(spriteBatch, pixel, tip, left, ModernHudTheme.AccentBright, 2f);
-            DrawLine(spriteBatch, pixel, tip, right, ModernHudTheme.AccentBright, 2f);
-            DrawLine(spriteBatch, pixel, left, right, ModernHudTheme.AccentBright, 2f);
+            DrawLine(spriteBatch, pixel, tip, left, OverlayTheme.Hero, 2f);
+            DrawLine(spriteBatch, pixel, tip, right, OverlayTheme.Hero, 2f);
+            DrawLine(spriteBatch, pixel, left, right, OverlayTheme.Hero, 2f);
         }
 
         private static void DrawDiamond(SpriteBatch spriteBatch, Texture2D pixel, Vector2 center, int radius, Color color)
@@ -942,20 +1102,6 @@ namespace Client.Main.Controls.UI.Game
                 0f);
         }
 
-        private void DrawCloseButton(SpriteBatch spriteBatch)
-        {
-            Rectangle rectangle = GetCloseButtonRectangle();
-            Texture2D pixel = GraphicsManager.Instance.Pixel;
-            if (pixel == null)
-            {
-                return;
-            }
-
-            spriteBatch.Draw(pixel, rectangle, _closeHovered ? ModernHudTheme.Danger : ModernHudTheme.BgLight);
-            UiDrawHelper.DrawBorder(spriteBatch, rectangle, _closeHovered ? ModernHudTheme.Danger : ModernHudTheme.BorderInner);
-            DrawCenteredText(spriteBatch, "X", rectangle, ModernHudTheme.TextWhite, 0.38f * Scale);
-        }
-
         private void DrawTooltip(SpriteBatch spriteBatch)
         {
             if (string.IsNullOrWhiteSpace(_tooltipText) || _font == null)
@@ -968,20 +1114,17 @@ namespace Client.Main.Controls.UI.Game
             Rectangle rectangle = new(
                 (int)_tooltipPosition.X,
                 (int)_tooltipPosition.Y,
-                (int)MathF.Ceiling(textSize.X) + 14,
-                (int)MathF.Ceiling(textSize.Y) + 8);
+                (int)MathF.Ceiling(textSize.X),
+                (int)MathF.Ceiling(textSize.Y));
 
             rectangle.X = Math.Clamp(rectangle.X, 4, UiScaler.VirtualSize.X - rectangle.Width - 4);
             rectangle.Y = Math.Clamp(rectangle.Y, 4, UiScaler.VirtualSize.Y - rectangle.Height - 4);
-
-            Texture2D pixel = GraphicsManager.Instance.Pixel;
-            if (pixel != null)
-            {
-                spriteBatch.Draw(pixel, new Rectangle(rectangle.X + 3, rectangle.Y + 3, rectangle.Width, rectangle.Height), Color.Black * 0.55f);
-            }
-            UiDrawHelper.DrawVerticalGradient(spriteBatch, rectangle, ModernHudTheme.BgLight, ModernHudTheme.BgDarkest);
-            UiDrawHelper.DrawBorder(spriteBatch, rectangle, ModernHudTheme.AccentDim);
-            DrawTextWithShadow(spriteBatch, _tooltipText, new Vector2(rectangle.X + 7, rectangle.Y + 4), ModernHudTheme.TextWhite, scale);
+            DrawTextWithShadow(
+                spriteBatch,
+                _tooltipText,
+                new Vector2(rectangle.X, rectangle.Y),
+                OverlayTheme.Text,
+                scale);
         }
 
         private Rectangle GetMapScreenRectangle()
@@ -991,92 +1134,7 @@ namespace Client.Main.Controls.UI.Game
                 control.X + (int)MathF.Round(MapLeft * Scale),
                 control.Y + (int)MathF.Round(MapTop * Scale),
                 Math.Max(1, (int)MathF.Round(MapSize * Scale)),
-                Math.Max(1, (int)MathF.Round(MapSize * Scale)));
-        }
-
-        private Rectangle GetHeaderScreenRectangle()
-        {
-            Rectangle control = DisplayRectangle;
-            return new Rectangle(
-                control.X,
-                control.Y,
-                control.Width,
-                Math.Max(1, (int)MathF.Round(HeaderHeight * Scale)));
-        }
-
-        private ResizeCorner GetResizeCorner(Point mousePosition)
-        {
-            Rectangle rectangle = DisplayRectangle;
-            if (new Rectangle(rectangle.Left, rectangle.Top, ResizeHandleSize, ResizeHandleSize).Contains(mousePosition))
-            {
-                return ResizeCorner.TopLeft;
-            }
-            if (new Rectangle(rectangle.Right - ResizeHandleSize, rectangle.Top, ResizeHandleSize, ResizeHandleSize).Contains(mousePosition))
-            {
-                return ResizeCorner.TopRight;
-            }
-            if (new Rectangle(rectangle.Left, rectangle.Bottom - ResizeHandleSize, ResizeHandleSize, ResizeHandleSize).Contains(mousePosition))
-            {
-                return ResizeCorner.BottomLeft;
-            }
-            if (new Rectangle(rectangle.Right - ResizeHandleSize, rectangle.Bottom - ResizeHandleSize, ResizeHandleSize, ResizeHandleSize).Contains(mousePosition))
-            {
-                return ResizeCorner.BottomRight;
-            }
-
-            return ResizeCorner.None;
-        }
-
-        private void DrawResizeHandles(SpriteBatch spriteBatch)
-        {
-            Texture2D pixel = GraphicsManager.Instance.Pixel;
-            if (pixel == null)
-            {
-                return;
-            }
-
-            DrawResizeHandle(spriteBatch, pixel, ResizeCorner.TopLeft);
-            DrawResizeHandle(spriteBatch, pixel, ResizeCorner.TopRight);
-            DrawResizeHandle(spriteBatch, pixel, ResizeCorner.BottomLeft);
-            DrawResizeHandle(spriteBatch, pixel, ResizeCorner.BottomRight);
-        }
-
-        private void DrawResizeHandle(SpriteBatch spriteBatch, Texture2D pixel, ResizeCorner corner)
-        {
-            Rectangle rectangle = DisplayRectangle;
-            bool highlighted = (_isResizing && _resizeCorner == corner) || _hoveredResizeCorner == corner;
-            Color color = (highlighted ? ModernHudTheme.AccentBright : ModernHudTheme.AccentDim * 0.75f) * Alpha;
-            const int length = 10;
-            const int thickness = 2;
-
-            switch (corner)
-            {
-                case ResizeCorner.TopLeft:
-                    spriteBatch.Draw(pixel, new Rectangle(rectangle.Left, rectangle.Top, length, thickness), color);
-                    spriteBatch.Draw(pixel, new Rectangle(rectangle.Left, rectangle.Top, thickness, length), color);
-                    break;
-                case ResizeCorner.TopRight:
-                    spriteBatch.Draw(pixel, new Rectangle(rectangle.Right - length, rectangle.Top, length, thickness), color);
-                    spriteBatch.Draw(pixel, new Rectangle(rectangle.Right - thickness, rectangle.Top, thickness, length), color);
-                    break;
-                case ResizeCorner.BottomLeft:
-                    spriteBatch.Draw(pixel, new Rectangle(rectangle.Left, rectangle.Bottom - thickness, length, thickness), color);
-                    spriteBatch.Draw(pixel, new Rectangle(rectangle.Left, rectangle.Bottom - length, thickness, length), color);
-                    break;
-                case ResizeCorner.BottomRight:
-                    spriteBatch.Draw(pixel, new Rectangle(rectangle.Right - length, rectangle.Bottom - thickness, length, thickness), color);
-                    spriteBatch.Draw(pixel, new Rectangle(rectangle.Right - thickness, rectangle.Bottom - length, thickness, length), color);
-                    break;
-            }
-        }
-
-        private Rectangle GetCloseButtonRectangle()
-        {
-            Rectangle control = DisplayRectangle;
-            int size = Math.Max(14, (int)MathF.Round(20f * Scale));
-            int rightInset = Math.Max(8, (int)MathF.Round(14f * Scale));
-            int topInset = Math.Max(6, (int)MathF.Round(9f * Scale));
-            return new Rectangle(control.Right - size - rightInset, control.Y + topInset, size, size);
+                Math.Max(1, (int)MathF.Round(MapDisplayHeight * Scale)));
         }
 
         private bool TryGetPlayer(out PlayerObject player)
@@ -1118,23 +1176,16 @@ namespace Client.Main.Controls.UI.Game
             spriteBatch.DrawString(_font, text, position, color * Alpha, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
         }
 
-        private void InvalidateStaticSurface() => _staticSurfaceDirty = true;
-
-        protected override void OnScreenSizeChanged()
-        {
-            base.OnScreenSizeChanged();
-            if (Align == ControlAlign.None)
-            {
-                SetManualScreenPosition(DisplayRectangle.X, DisplayRectangle.Y);
-            }
-            InvalidateStaticSurface();
-        }
-
         public override void Dispose()
         {
             base.Dispose();
-            Client.Main.Graphics.UiRenderTargetPool.Return(_staticSurface);
-            _staticSurface = null;
+            _terrainMapTexture?.Dispose();
+            _terrainMapTexture = null;
+            _terrainReliefTexture?.Dispose();
+            _terrainReliefTexture = null;
+            _edgeMaskTexture?.Dispose();
+            _edgeMaskTexture = null;
+            _edgeMaskBlendState.Dispose();
             Client.Main.Graphics.UiRenderTargetPool.Return(_mapSurface);
             _mapSurface = null;
         }
