@@ -139,6 +139,7 @@ namespace Client.Main.Controls
         private readonly List<WorldObject> _visibleObjects = [];
         private readonly Dictionary<WorldObject, RenderFaultState> _renderFaults = [];
         private long _renderFailureSequence;
+        private CameraState? _deferredCameraState;
 
         // Snapshot of objects that survived this frame's visibility/culling pass.
         // Overlay/UI passes (nameplates, bbox, hover) should iterate this rather than the
@@ -225,6 +226,12 @@ namespace Client.Main.Controls
         public int LastCullVisibleCount { get; private set; }
         public float LastCullRebuildMs { get; private set; }
         public bool LastCullWasRebuild { get; private set; }
+
+        /// <summary>
+        /// Menu worlds can be initialized while the previous scene is still visible. Such
+        /// worlds must not mutate the process-wide camera until their scene becomes active.
+        /// </summary>
+        protected virtual bool DeferCameraActivation => false;
 
         public Type[] MapTileObjects { get; } = new Type[Constants.TERRAIN_SIZE];
 
@@ -318,22 +325,40 @@ namespace Client.Main.Controls
             await base.Load();
 
             CreateMapTileObjects();
-            Camera.Instance.AspectRatio = GraphicsDevice.Viewport.AspectRatio;
+
+            float viewportAspectRatio = GraphicsDevice.Viewport.AspectRatio;
+            if (!DeferCameraActivation)
+                Camera.Instance.AspectRatio = viewportAspectRatio;
 
             var worldFolder = $"World{WorldIndex}";
             var dataPath = Constants.DataPath;
             var tasks = new List<Task>();
 
-            // Load camera settings
+            // Build the complete camera state locally. Deferred menu worlds must retain their
+            // original hard-coded camera adjustments even when the CAP file is missing, without
+            // mutating the camera of the scene which is still being presented.
+            CameraState cameraState = Camera.Instance.CaptureState().With(
+                aspectRatio: viewportAspectRatio);
+            bool cameraFileLoaded = false;
+
             var capPath = Path.Combine(dataPath, worldFolder, "Camera_Angle_Position.bmd");
             if (File.Exists(capPath))
             {
                 var capReader = new CAPReader();
                 var data = await capReader.Load(capPath);
-                Camera.Instance.FOV = data.CameraFOV * Constants.FOV_SCALE;
-                Camera.Instance.Position = data.CameraPosition;
-                Camera.Instance.Target = data.HeroPosition;
+                cameraState = cameraState.With(
+                    fieldOfView: data.CameraFOV * Constants.FOV_SCALE,
+                    position: data.CameraPosition,
+                    target: data.HeroPosition);
+                cameraFileLoaded = true;
             }
+
+            ConfigureCameraState(ref cameraState);
+
+            if (DeferCameraActivation)
+                _deferredCameraState = cameraState;
+            else if (cameraFileLoaded)
+                Camera.Instance.ApplyState(cameraState);
 
             // Load terrain OBJ
             var objPath = Path.Combine(dataPath, worldFolder, $"EncTerrain{WorldIndex}.obj");
@@ -367,6 +392,29 @@ namespace Client.Main.Controls
         public override void AfterLoad()
         {
             base.AfterLoad();
+        }
+
+        /// <summary>
+        /// Allows a world to adjust the camera loaded from Camera_Angle_Position.bmd without
+        /// touching the global camera during off-screen scene initialization.
+        /// </summary>
+        protected virtual void ConfigureCameraState(ref CameraState cameraState)
+        {
+        }
+
+        /// <summary>
+        /// Applies a camera which was intentionally deferred until the owning scene is active.
+        /// Returns true when a deferred state was applied.
+        /// </summary>
+        public bool ActivateDeferredCamera()
+        {
+            if (!_deferredCameraState.HasValue)
+                return false;
+
+            Camera.Instance.ApplyState(_deferredCameraState.Value);
+            _dirtyVisibleObjects = true;
+            PrepareInitialVisibilitySnapshot();
+            return true;
         }
 
         public override void Update(GameTime time)

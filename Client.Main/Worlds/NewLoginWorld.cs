@@ -16,7 +16,18 @@ namespace Client.Main.Worlds
         {
             EnableShadows = false;
             Terrain.PreferIndexBatching = true;
-            Camera.Instance.ViewFar = 50000f;
+        }
+
+        protected override bool DeferCameraActivation => true;
+
+        protected override void ConfigureCameraState(ref CameraState cameraState)
+        {
+            // Preserve the exact framing used before deferred camera activation was introduced.
+            // The legacy LoginScene lifecycle invoked NewLoginWorld.AfterLoad twice, so its
+            // historical +650 Z adjustment was effectively applied twice (+1300 total).
+            cameraState = cameraState.With(
+                viewFar: 50000f,
+                target: cameraState.Target + new Vector3(0f, 0f, 1300f));
         }
 
         protected override void CreateMapTileObjects()
@@ -48,8 +59,6 @@ namespace Client.Main.Worlds
             Terrain.DistortionFrequency = 1.0f;      // Example: lower frequency for distortion
             Terrain.WaterFlowDirection = Vector2.UnitY;
 
-            // TODO: We need fix CameraAnglePosition load
-            Camera.Instance.Target += new Vector3(0, 0, 650);
         }
 
         public override void Update(GameTime time)

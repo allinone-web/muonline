@@ -104,7 +104,7 @@ namespace Client.Main.Objects.Effects.Particles
                 using var scope = new SpriteBatchScope(
                     spriteBatch,
                     SpriteSortMode.Deferred,
-                    BlendState.Additive,
+                    this.BlendState ?? Microsoft.Xna.Framework.Graphics.BlendState.Additive,
                     SamplerState.LinearClamp,
                     DepthStencilState.DepthRead,
                     RasterizerState.CullNone);
@@ -149,7 +149,7 @@ namespace Client.Main.Objects.Effects.Particles
         protected float RandomRange(float min, float max) =>
             min + (float)MuGame.Random.NextDouble() * (max - min);
 
-        private void UpdateParticles(float dt)
+        protected void UpdateParticles(float dt)
         {
             int i = 0;
             while (i < ActiveCount)

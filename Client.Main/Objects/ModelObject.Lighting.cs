@@ -56,6 +56,7 @@ namespace Client.Main.Objects
                 ShadowNormalBias = effect.Parameters["ShadowNormalBias"];
                 UseProceduralTerrainUv = effect.Parameters["UseProceduralTerrainUV"];
                 IsWaterTexture = effect.Parameters["IsWaterTexture"];
+                TextureCoordinateOffset = effect.Parameters["TextureCoordinateOffset"];
             }
 
             public EffectParameter BoneMatrices { get; }
@@ -95,6 +96,7 @@ namespace Client.Main.Objects
             public EffectParameter ShadowNormalBias { get; }
             public EffectParameter UseProceduralTerrainUv { get; }
             public EffectParameter IsWaterTexture { get; }
+            public EffectParameter TextureCoordinateOffset { get; }
 
             // Tracks the palette currently resident in this shared Effect instance.
             // Rendering another object invalidates the owner, while consecutive meshes of
@@ -249,6 +251,10 @@ namespace Client.Main.Objects
             bindings.ShadowStrength?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
 
             bindings.Alpha?.SetValue(TotalAlpha);
+            // DynamicLightingEffect is shared across every object and terrain pass.
+            // Keep its default neutral; the selected mesh applies its offset immediately
+            // before drawing and resets it afterward.
+            bindings.TextureCoordinateOffset?.SetValue(Vector2.Zero);
             bindings.TerrainDynamicIntensityScale?.SetValue(1.5f);
             bindings.AmbientLight?.SetValue(_ambientLightVector * SunCycleManager.AmbientMultiplier);
             bindings.DebugLightingAreas?.SetValue(Constants.DEBUG_LIGHTING_AREAS ? 1.0f : 0.0f);

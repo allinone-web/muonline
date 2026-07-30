@@ -20,6 +20,29 @@ namespace Client.Main.Scenes
     {
         public new WorldControl World { get; protected set; }
 
+        /// <summary>
+        /// Indicates that the scene owns a complete loading presentation and can be made active
+        /// before its full initialization finishes. Scenes which return false stay off-screen
+        /// until they are ready, so the previous scene remains visible during the transition.
+        /// </summary>
+        public virtual bool CanRenderWhileInitializing => false;
+
+        /// <summary>
+        /// Prepares the minimum resources required for the first frame shown during initialization.
+        /// The default implementation has no special presentation requirements.
+        /// </summary>
+        public virtual Task PrepareForFirstPresentedFrameAsync() => Task.CompletedTask;
+
+        /// <summary>
+        /// Called immediately after this scene becomes the globally active scene and before the
+        /// previous scene is disposed. Menu worlds use it to atomically publish their deferred
+        /// camera, preventing camera settings from leaking into the scene still being displayed.
+        /// </summary>
+        public virtual void OnActivated()
+        {
+            World?.ActivateDeferredCamera();
+        }
+
         public CursorControl Cursor { get; }
         public GameControl MouseControl { get; set; }
         public GameControl MouseHoverControl { get; set; }
@@ -33,6 +56,7 @@ namespace Client.Main.Scenes
         public bool IsKeyboardEscapeConsumedThisFrame { get; private set; }
 
         private ILogger _logger = MuGame.AppLoggerFactory?.CreateLogger<BaseScene>();
+        private bool _progressiveInitializationReserved;
         private bool _leftMouseCapturedByUi;
         private bool _rightMouseCapturedByUi;
 
@@ -70,16 +94,39 @@ namespace Client.Main.Scenes
             DebugPanel.Dispose();
         }
 
+
+        internal void ReserveProgressiveInitialization()
+        {
+            // If already fully initialized (e.g., pre-initialized by a loading scene
+            // with its own progress UI), there is nothing to reserve — GameControl.Update
+            // will not auto-init a Ready scene, and the subsequent
+            // InitializeWithProgressReporting call will see it is already done.
+            if (Status == GameControlStatus.Ready)
+                return;
+
+            if (Status != GameControlStatus.NonInitialized)
+                throw new InvalidOperationException($"Cannot reserve initialization for {GetType().Name} in state {Status}.");
+
+            _progressiveInitializationReserved = true;
+            Status = GameControlStatus.Initializing;
+        }
+
         public virtual async Task InitializeWithProgressReporting(Action<string, float> progressCallback)
         {
-            if (Status != GameControlStatus.NonInitialized)
+            bool usesReservedInitialization =
+                _progressiveInitializationReserved && Status == GameControlStatus.Initializing;
+            if (!usesReservedInitialization && Status != GameControlStatus.NonInitialized)
                 return;
+
+            _progressiveInitializationReserved = false;
 
             void Report(string message, float progress) => progressCallback?.Invoke(message, progress);
 
             try
             {
-                Status = GameControlStatus.Initializing;
+                if (!usesReservedInitialization)
+                    Status = GameControlStatus.Initializing;
+
                 Report($"Initializing {GetType().Name}...", 0.05f);
 
                 var controlsToInitialize = Controls

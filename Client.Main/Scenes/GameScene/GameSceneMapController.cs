@@ -43,7 +43,8 @@ namespace Client.Main.Scenes
             DebugPanel debugPanel,
             CursorControl cursor,
             GameSceneScopeImportController scopeImportController,
-            ILogger logger)
+            ILogger logger,
+            LoadingScreenControl loadingScreen = null)
         {
             _scene = scene;
             _hud = hud;
@@ -55,6 +56,7 @@ namespace Client.Main.Scenes
             _cursor = cursor;
             _scopeImportController = scopeImportController;
             _logger = logger;
+            _loadingScreen = loadingScreen;
         }
 
         public bool IsChangingWorld => _isChangingWorld;
@@ -72,6 +74,7 @@ namespace Client.Main.Scenes
             {
                 _loadingScreen.Visible = true;
                 _loadingScreen.Message = message;
+                _loadingScreen.BringToFront();
             }
         }
 

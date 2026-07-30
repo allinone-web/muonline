@@ -1,4 +1,4 @@
-﻿using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 
 namespace Client.Main.Graphics
@@ -12,6 +12,16 @@ namespace Client.Main.Graphics
         public static readonly BlendState Opaque = BlendState.Opaque;
 
         // Custom Blend States
+        public static readonly BlendState OneOneAdditive = new()
+        {
+            ColorBlendFunction = BlendFunction.Add,
+            ColorSourceBlend = Blend.One,
+            ColorDestinationBlend = Blend.One,
+            AlphaBlendFunction = BlendFunction.Add,
+            AlphaSourceBlend = Blend.One,
+            AlphaDestinationBlend = Blend.One
+        };
+
         public static readonly BlendState Negative = new()
         {
             ColorSourceBlend = Blend.Zero,

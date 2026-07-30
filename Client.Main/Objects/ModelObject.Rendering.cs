@@ -1661,6 +1661,14 @@ namespace Client.Main.Objects
                     if (useGpuSkinning)
                         RegisterGpuSkinnedMeshDraw();
 
+                    // Texture scrolling is mesh-local. Setting the shared shader parameter
+                    // for the complete object made every waterspout mesh scroll and leaked
+                    // the value into unrelated objects rendered by another technique.
+                    Vector2 meshTextureOffset = mesh == TextureCoordinateOffsetMeshIndex
+                        ? TextureCoordinateOffset
+                        : Vector2.Zero;
+                    bindings.TextureCoordinateOffset?.SetValue(meshTextureOffset);
+
                     // Set texture
                     bindings.DiffuseTexture?.SetValue(texture);
 
@@ -1680,6 +1688,8 @@ namespace Client.Main.Objects
                 }
                 finally
                 {
+                    // Never leave a per-mesh UV offset resident in the shared effect.
+                    bindings.TextureCoordinateOffset?.SetValue(Vector2.Zero);
                     if (depthStateChanged)
                         gd.DepthStencilState = prevDepthState;
                 }
@@ -1724,6 +1734,7 @@ namespace Client.Main.Objects
                         bindings.Projection?.SetValue(Camera.Instance.Projection);
                         bindings.WorldViewProjection?.SetValue(
                             highlightMatrix * Camera.Instance.View * Camera.Instance.Projection);
+                        bindings.TextureCoordinateOffset?.SetValue(Vector2.Zero);
                         bindings.DiffuseTexture?.SetValue(state.Texture);
                         bindings.HighlightColor?.SetValue(highlightColor);
                         bindings.Alpha?.SetValue(1f);

@@ -27,7 +27,16 @@ namespace Client.Main.Worlds
             EnableShadows = false;
             Terrain.PreferIndexBatching = true;
             _logger = MuGame.AppLoggerFactory?.CreateLogger<SelectWorld>() ?? throw new System.InvalidOperationException("LoggerFactory not initialized in MuGame");
-            Camera.Instance.ViewFar = 5500f;
+        }
+
+        protected override bool DeferCameraActivation => true;
+
+        protected override void ConfigureCameraState(ref CameraState cameraState)
+        {
+            cameraState = cameraState.With(
+                viewFar: 5500f,
+                fieldOfView: 29f * Constants.FOV_SCALE,
+                target: new Vector3(14229.295898f, 12340.358398f, 380f));
         }
 
         public void SetController(CharacterSelectionController controller)
@@ -63,8 +72,6 @@ namespace Client.Main.Worlds
             Terrain.DistortionAmplitude = 0.2f;
             Terrain.DistortionFrequency = 1.0f;
 
-            Camera.Instance.Target = new Vector3(14229.295898f, 12340.358398f, 380);
-            Camera.Instance.FOV = 29 * Constants.FOV_SCALE;
         }
 
         public override void Update(GameTime time)

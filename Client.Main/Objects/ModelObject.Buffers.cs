@@ -303,12 +303,11 @@ namespace Client.Main.Objects
                 return !SupportsGpuSkinnedShadowCaster();
             }
 
-            // Player and NPC actors must retain a real projected-mesh fallback whenever
-            // they were omitted from the bounded shadow-map caster list. This includes
-            // linked armor and bone-attached weapons, otherwise the actor loses its shadow
-            // or casts only the one child which happened to own CPU buffers.
+            // The terrain-conformed projected-shadow path owns a compact persistent shadow
+            // vertex buffer and reads animation bones directly. Do not keep a second complete
+            // CPU-skinned model copy solely for this pass when GPU skinning is active.
             if (actorMeshShadow)
-                return true;
+                return !CanUseCachedTerrainConformedShadowPath();
 
             // A ready map can still omit this actor because of caster limits or a stale
             // selection. Other walkers use one root blob shadow and do not need duplicate
@@ -519,6 +518,19 @@ namespace Client.Main.Objects
                 return false;
 
             var ms = _meshes[meshIndex];
+
+            Texture2D overrideTexture = ms.TextureOverride;
+            if (overrideTexture != null && !overrideTexture.IsDisposed)
+            {
+                if (!ReferenceEquals(ms.Texture, overrideTexture))
+                {
+                    ms.Texture = overrideTexture;
+                    InvalidateMeshRenderPlan();
+                }
+
+                return true;
+            }
+
             string texturePath = ms.TexturePath;
 
             if (string.IsNullOrEmpty(texturePath))

@@ -17,6 +17,34 @@ namespace Client.Main.Controls.Terrain
     {
         private const float SpecialHeight = 1200f;
         private const int BlockSize = 4;
+        private const short AtlansWorldIndex = 8;
+        private const byte AtlansCausticsLayer = 5;
+        private const int WaterCausticsFrameCount = 32;
+        private const int MaxWaterCausticsVertices =
+            Constants.TERRAIN_SIZE * Constants.TERRAIN_SIZE * 6;
+        private const double WaterCausticsFrameDurationSeconds = 1.0 / 25.0;
+
+        private static readonly BlendState WaterCausticsBlendState = new()
+        {
+            ColorBlendFunction = BlendFunction.Add,
+            ColorSourceBlend = Blend.One,
+            ColorDestinationBlend = Blend.One,
+            AlphaBlendFunction = BlendFunction.Add,
+            AlphaSourceBlend = Blend.One,
+            AlphaDestinationBlend = Blend.One
+        };
+
+        private static readonly DepthStencilState WaterCausticsDepthState = new()
+        {
+            DepthBufferEnable = true,
+            DepthBufferWriteEnable = false,
+            DepthBufferFunction = CompareFunction.LessEqual
+        };
+
+        private static readonly RasterizerState WaterCausticsRasterizerState = new()
+        {
+            CullMode = CullMode.None
+        };
         // Static terrain vertices with per-texture index batches avoid uploading the complete
         // visible vertex stream every frame. LOD transition/edge tiles still use the explicit-UV
         // streaming path, so enabling this remains visually safe for validated static scenes.
@@ -66,6 +94,13 @@ namespace Client.Main.Controls.Terrain
         private readonly Color[] _tempTerrainLights = new Color[4];
         private readonly Color[] _tempTerrainLightsBase = new Color[4];
         private VertexPositionColorTexture[] _fallbackTileBuffer = new VertexPositionColorTexture[InitialTileBatchVerts];
+        private VertexPositionColorTexture[] _waterCausticsVertices = new VertexPositionColorTexture[InitialTileBatchVerts];
+        private int _waterCausticsVertexCount;
+        private DynamicVertexBuffer _waterCausticsStreamBuffer;
+        private BasicEffect _waterCausticsEffect;
+        private double _waterCausticsAccumulator;
+        private int _waterCausticsFrame;
+        private Texture2D _activeWaterCausticsTexture;
 
         // Cached per-vertex data (built once per terrain) to avoid per-tile CPU work each frame.
         private bool _vertexCacheBuilt;
@@ -201,7 +236,19 @@ namespace Client.Main.Controls.Terrain
 
         public void Update(GameTime time)
         {
-            _waterTotal += (float)time.ElapsedGameTime.TotalSeconds * WaterSpeed;
+            double elapsedSeconds = time.ElapsedGameTime.TotalSeconds;
+            _waterTotal += (float)elapsedSeconds * WaterSpeed;
+
+            if (WorldIndex != AtlansWorldIndex || _data.WaterCausticsTextures == null)
+                return;
+
+            _waterCausticsAccumulator += elapsedSeconds;
+            if (_waterCausticsAccumulator < WaterCausticsFrameDurationSeconds)
+                return;
+
+            int elapsedFrames = (int)(_waterCausticsAccumulator / WaterCausticsFrameDurationSeconds);
+            _waterCausticsAccumulator -= elapsedFrames * WaterCausticsFrameDurationSeconds;
+            _waterCausticsFrame = (_waterCausticsFrame + elapsedFrames) % WaterCausticsFrameCount;
         }
 
         private void EnsureVertexCache()
@@ -314,6 +361,7 @@ namespace Client.Main.Controls.Terrain
             EnsureVertexCache();
             EnsureLightCache();
             _hasLodTransitions = BuildVisibleLodGrid();
+            PrepareWaterCausticsRenderResources();
 
             if (ShouldPrepareIndexBatching())
             {
@@ -344,6 +392,7 @@ namespace Client.Main.Controls.Terrain
                 $"{phaseName}.Visibility",
                 MainThreadDispatcher.WorkPriority.High);
             _hasLodTransitions = BuildVisibleLodGrid();
+            PrepareWaterCausticsRenderResources();
 
             if (ShouldPrepareIndexBatching())
             {
@@ -445,6 +494,8 @@ namespace Client.Main.Controls.Terrain
                 _graphicsDevice.SamplerStates[0] = SamplerState.LinearWrap;
                 _lastBlendState = BlendState.Opaque;
 
+                _activeWaterCausticsTexture = ResolveWaterCausticsTexture();
+
                 foreach (var block in _visibility.VisibleBlocks)
                 {
                     if (block?.IsVisible == true)
@@ -469,7 +520,13 @@ namespace Client.Main.Controls.Terrain
                 }
 
                 if (!after)
-                    _grassRenderer.Draw();
+                {
+                    FlushWaterCaustics();
+
+                    // The original Atlans terrain pass does not render standard grass.
+                    if (WorldIndex != AtlansWorldIndex)
+                        _grassRenderer.Draw();
+                }
             }
             finally
             {
@@ -496,6 +553,8 @@ namespace Client.Main.Controls.Terrain
             UploadedVertices = 0;
             UsedIndexBatching = false;
             LastUploadedDynamicLights = 0;
+            _waterCausticsVertexCount = 0;
+            _activeWaterCausticsTexture = null;
 
             // Reset state tracking for new frame
             _lastBoundTexture = null;
@@ -672,6 +731,7 @@ namespace Client.Main.Controls.Terrain
             shadowEffect.Parameters["ShadowBias"]?.SetValue(Constants.SHADOW_BIAS);
             shadowEffect.Parameters["ShadowNormalBias"]?.SetValue(Constants.SHADOW_NORMAL_BIAS);
             shadowEffect.Parameters["Alpha"]?.SetValue(1f);
+            shadowEffect.Parameters["TextureCoordinateOffset"]?.SetValue(Vector2.Zero);
 
             // Optional fast path for terrain: static VB + per-texture index batching (requires shader support).
             _hasLodTransitions = BuildVisibleLodGrid();
@@ -758,6 +818,7 @@ namespace Client.Main.Controls.Terrain
             effect.Parameters["DistortionFrequency"]?.SetValue(DistortionFrequency);
             effect.Parameters["TerrainDynamicIntensityScale"]?.SetValue(1.0f);
             effect.Parameters["Alpha"]?.SetValue(1f);
+            effect.Parameters["TextureCoordinateOffset"]?.SetValue(Vector2.Zero);
             effect.Parameters["DebugLightingAreas"]?.SetValue(Constants.DEBUG_LIGHTING_AREAS ? 1.0f : 0.0f);
 
             // Ambient and sun are ignored when using baked vertex lighting, but keep sane defaults.
@@ -956,7 +1017,26 @@ namespace Client.Main.Controls.Terrain
                 UsedIndexBatching = true;
                 IndexedCells++;
 
-                if (isOpaqueIndex)
+                if (IsAtlansCausticsTile(i1, hasAlphaIndex))
+                {
+                    // Atlans layer 2 index 5 is not a regular terrain texture. The original
+                    // client keeps layer 1 as the seabed and redraws the same geometry with
+                    // an additive wt00-wt31 caustics frame.
+                    RenderTextureIndexed(_data.Mapping.Layer1[i1], u1, u2, u3, u4, alphaLayer: false);
+                    AddWaterCausticsTile(
+                        xi,
+                        yi,
+                        lodFactor,
+                        _cachedVertexPositions[i1],
+                        _cachedVertexPositions[i2],
+                        _cachedVertexPositions[i3],
+                        _cachedVertexPositions[i4],
+                        a1i,
+                        a2i,
+                        a3i,
+                        a4i);
+                }
+                else if (isOpaqueIndex)
                 {
                     RenderTextureIndexed(_data.Mapping.Layer2[i1], u1, u2, u3, u4, alphaLayer: false);
                 }
@@ -991,21 +1071,33 @@ namespace Client.Main.Controls.Terrain
 
             bool isOpaque = (a1 & a2 & a3 & a4) == 255;
             bool hasAlpha = (a1 | a2 | a3 | a4) != 0;
-            int baseTextureIndex = isOpaque ? _data.Mapping.Layer2[i1] : _data.Mapping.Layer1[i1];
+            bool isAtlansCausticsTile = IsAtlansCausticsTile(i1, hasAlpha);
+            int baseTextureIndex = isAtlansCausticsTile || !isOpaque
+                ? _data.Mapping.Layer1[i1]
+                : _data.Mapping.Layer2[i1];
             int alphaTextureIndex = _data.Mapping.Layer2[i1];
 
-            if (isOpaque)
+            RenderTexture(baseTextureIndex, xi, yi, lodFactor, useBatch: true, alphaLayer: false);
+
+            if (isAtlansCausticsTile)
             {
-                RenderTexture(baseTextureIndex, xi, yi, lodFactor, useBatch: true, alphaLayer: false);
+                AddWaterCausticsTile(
+                    xi,
+                    yi,
+                    lodFactor,
+                    _tempTerrainVertex[0],
+                    _tempTerrainVertex[1],
+                    _tempTerrainVertex[2],
+                    _tempTerrainVertex[3],
+                    a1,
+                    a2,
+                    a3,
+                    a4);
             }
-            else
+            else if (!isOpaque && hasAlpha)
             {
-                RenderTexture(baseTextureIndex, xi, yi, lodFactor, useBatch: true, alphaLayer: false);
-                if (hasAlpha)
-                {
-                    ApplyAlphaToLights(a1, a2, a3, a4);
-                    RenderTexture(alphaTextureIndex, xi, yi, lodFactor, useBatch: true, alphaLayer: true);
-                }
+                ApplyAlphaToLights(a1, a2, a3, a4);
+                RenderTexture(alphaTextureIndex, xi, yi, lodFactor, useBatch: true, alphaLayer: true);
             }
 
             if (renderSkirts)
@@ -1016,13 +1108,218 @@ namespace Client.Main.Controls.Terrain
                 _tempTerrainLights[3] = _tempTerrainLightsBase[3];
 
                 RenderTileSkirts(xi, yi, lodFactor, edgeMask, baseTextureIndex, alphaLayer: false);
-                if (!isOpaque && hasAlpha)
+                if (!isAtlansCausticsTile && !isOpaque && hasAlpha)
                 {
                     ApplyAlphaToLights(a1, a2, a3, a4);
                     RenderTileSkirts(xi, yi, lodFactor, edgeMask, alphaTextureIndex, alphaLayer: true);
                 }
             }
 
+        }
+
+        private void PrepareWaterCausticsRenderResources()
+        {
+            if (WorldIndex != AtlansWorldIndex || ResolveWaterCausticsTexture() == null)
+                return;
+
+            EnsureWaterCausticsEffect();
+            EnsureWaterCausticsStreamBuffer(InitialTileBatchVerts);
+        }
+
+        private bool IsAtlansCausticsTile(int terrainIndex, bool hasMappingAlpha)
+        {
+            return WorldIndex == AtlansWorldIndex &&
+                   hasMappingAlpha &&
+                   _activeWaterCausticsTexture != null &&
+                   _data.Mapping.Layer2 != null &&
+                   (uint)terrainIndex < (uint)_data.Mapping.Layer2.Length &&
+                   _data.Mapping.Layer2[terrainIndex] == AtlansCausticsLayer;
+        }
+
+        private Texture2D ResolveWaterCausticsTexture()
+        {
+            if (WorldIndex != AtlansWorldIndex)
+                return null;
+
+            Texture2D[] frames = _data.WaterCausticsTextures;
+            if (frames == null || frames.Length == 0)
+                return null;
+
+            int frameCount = Math.Min(frames.Length, WaterCausticsFrameCount);
+            int startFrame = _waterCausticsFrame % frameCount;
+            for (int offset = 0; offset < frameCount; offset++)
+            {
+                Texture2D texture = frames[(startFrame + offset) % frameCount];
+                if (texture != null && !texture.IsDisposed)
+                    return texture;
+            }
+
+            return null;
+        }
+
+        private void AddWaterCausticsTile(
+            float tileX,
+            float tileY,
+            float lodScale,
+            Vector3 vertex0,
+            Vector3 vertex1,
+            Vector3 vertex2,
+            Vector3 vertex3,
+            byte alpha0,
+            byte alpha1,
+            byte alpha2,
+            byte alpha3)
+        {
+            Texture2D texture = _activeWaterCausticsTexture;
+            if (texture == null || texture.IsDisposed)
+                return;
+
+            int requiredVertexCount = _waterCausticsVertexCount + 6;
+            EnsureWaterCausticsVertexCapacity(requiredVertexCount);
+
+            // SourceMain uses FaceTexture(..., water: false, scale: true):
+            // one terrain tile covers 16 source-image pixels and UVs remain world-anchored.
+            float tileWidth = 16f / texture.Width;
+            float tileHeight = 16f / texture.Height;
+            float u0 = tileX * tileWidth;
+            float v0 = tileY * tileHeight;
+            float u1 = u0 + tileWidth * lodScale;
+            float v1 = v0 + tileHeight * lodScale;
+
+            Vector2 uv0 = new(u0, v0);
+            Vector2 uv1 = new(u1, v0);
+            Vector2 uv2 = new(u1, v1);
+            Vector2 uv3 = new(u0, v1);
+
+            // Mapping alpha is an RGB intensity multiplier in the original additive pass.
+            Color color0 = new(alpha0, alpha0, alpha0, byte.MaxValue);
+            Color color1 = new(alpha1, alpha1, alpha1, byte.MaxValue);
+            Color color2 = new(alpha2, alpha2, alpha2, byte.MaxValue);
+            Color color3 = new(alpha3, alpha3, alpha3, byte.MaxValue);
+
+            int destination = _waterCausticsVertexCount;
+            _waterCausticsVertices[destination + 0] = new VertexPositionColorTexture(vertex0, color0, uv0);
+            _waterCausticsVertices[destination + 1] = new VertexPositionColorTexture(vertex1, color1, uv1);
+            _waterCausticsVertices[destination + 2] = new VertexPositionColorTexture(vertex2, color2, uv2);
+            _waterCausticsVertices[destination + 3] = new VertexPositionColorTexture(vertex2, color2, uv2);
+            _waterCausticsVertices[destination + 4] = new VertexPositionColorTexture(vertex3, color3, uv3);
+            _waterCausticsVertices[destination + 5] = new VertexPositionColorTexture(vertex0, color0, uv0);
+            _waterCausticsVertexCount = requiredVertexCount;
+        }
+
+        private void EnsureWaterCausticsVertexCapacity(int requiredVertexCount)
+        {
+            if (_waterCausticsVertices.Length >= requiredVertexCount)
+                return;
+
+            int capacity = GetExpandedCapacity(
+                requiredVertexCount,
+                InitialTileBatchVerts,
+                MaxWaterCausticsVertices);
+            Array.Resize(ref _waterCausticsVertices, capacity);
+        }
+
+        private DynamicVertexBuffer EnsureWaterCausticsStreamBuffer(int requiredVertexCount)
+        {
+            if (_waterCausticsStreamBuffer == null ||
+                _waterCausticsStreamBuffer.IsDisposed ||
+                _waterCausticsStreamBuffer.VertexCount < requiredVertexCount)
+            {
+                _waterCausticsStreamBuffer?.Dispose();
+                int capacity = GetExpandedCapacity(
+                    requiredVertexCount,
+                    InitialTileBatchVerts,
+                    MaxWaterCausticsVertices);
+                _waterCausticsStreamBuffer = new DynamicVertexBuffer(
+                    _graphicsDevice,
+                    VertexPositionColorTexture.VertexDeclaration,
+                    capacity,
+                    BufferUsage.WriteOnly);
+            }
+
+            return _waterCausticsStreamBuffer;
+        }
+
+        private BasicEffect EnsureWaterCausticsEffect()
+        {
+            if (_waterCausticsEffect == null || _waterCausticsEffect.IsDisposed)
+            {
+                _waterCausticsEffect = new BasicEffect(_graphicsDevice)
+                {
+                    TextureEnabled = true,
+                    VertexColorEnabled = true,
+                    LightingEnabled = false,
+                    FogEnabled = false,
+                    Alpha = 1f
+                };
+            }
+
+            return _waterCausticsEffect;
+        }
+
+        private void FlushWaterCaustics()
+        {
+            int vertexCount = _waterCausticsVertexCount;
+            Texture2D texture = _activeWaterCausticsTexture;
+            if (vertexCount == 0 || texture == null || texture.IsDisposed)
+                return;
+
+            BlendState previousBlend = _graphicsDevice.BlendState;
+            DepthStencilState previousDepth = _graphicsDevice.DepthStencilState;
+            RasterizerState previousRasterizer = _graphicsDevice.RasterizerState;
+            SamplerState previousSampler = _graphicsDevice.SamplerStates[0];
+
+            try
+            {
+                BasicEffect effect = EnsureWaterCausticsEffect();
+                effect.World = Matrix.Identity;
+                effect.View = Camera.Instance.View;
+                effect.Projection = Camera.Instance.Projection;
+                effect.Texture = texture;
+
+                _graphicsDevice.BlendState = WaterCausticsBlendState;
+                _graphicsDevice.DepthStencilState = WaterCausticsDepthState;
+                _graphicsDevice.RasterizerState = WaterCausticsRasterizerState;
+                _graphicsDevice.SamplerStates[0] = SamplerState.LinearWrap;
+                _graphicsDevice.Indices = null;
+
+                DynamicVertexBuffer vertexBuffer = EnsureWaterCausticsStreamBuffer(vertexCount);
+                vertexBuffer.SetData(
+                    _waterCausticsVertices,
+                    0,
+                    vertexCount,
+                    SetDataOptions.Discard);
+                VertexUploads++;
+                UploadedVertices += vertexCount;
+                _graphicsDevice.SetVertexBuffer(vertexBuffer);
+
+                int triangleCount = vertexCount / 3;
+                foreach (EffectPass pass in effect.CurrentTechnique.Passes)
+                {
+                    pass.Apply();
+                    _graphicsDevice.DrawPrimitives(
+                        PrimitiveType.TriangleList,
+                        0,
+                        triangleCount);
+                }
+
+                DrawCalls++;
+                DrawnTriangles += triangleCount;
+            }
+            finally
+            {
+                _graphicsDevice.SetVertexBuffer(null);
+                _graphicsDevice.Indices = null;
+                _graphicsDevice.BlendState = previousBlend;
+                _graphicsDevice.DepthStencilState = previousDepth;
+                _graphicsDevice.RasterizerState = previousRasterizer;
+                _graphicsDevice.SamplerStates[0] = previousSampler;
+                _waterCausticsVertexCount = 0;
+
+                // The caustics pass binds a texture outside the regular terrain batching state.
+                _lastBoundTexture = null;
+                _lastBlendState = null;
+            }
         }
 
         private void RenderTileSkirts(int xi, int yi, float lodFactor, byte edgeMask, int textureIndex, bool alphaLayer)
@@ -1943,6 +2240,11 @@ namespace Client.Main.Controls.Terrain
             _terrainVertexBufferBase = null;
             _terrainVertexBufferAlpha?.Dispose();
             _terrainVertexBufferAlpha = null;
+            _waterCausticsStreamBuffer?.Dispose();
+            _waterCausticsStreamBuffer = null;
+            _waterCausticsEffect?.Dispose();
+            _waterCausticsEffect = null;
+            _activeWaterCausticsTexture = null;
         }
 
     }

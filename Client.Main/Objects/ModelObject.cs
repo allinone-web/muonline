@@ -281,6 +281,8 @@ namespace Client.Main.Objects
 
         public float ShadowOpacity { get; set; } = 1f;
         public Color Color { get; set; } = Color.White;
+        public Vector2 TextureCoordinateOffset { get; protected set; } = Vector2.Zero;
+        public int TextureCoordinateOffsetMeshIndex { get; protected set; } = -1;
         public ItemDefinition ItemDefinition { get; set; }
         protected Matrix[] BoneTransform { get; set; }
         // Shared animation palettes are immutable render snapshots. They are kept
@@ -377,8 +379,13 @@ namespace Client.Main.Objects
             get => _blendMeshLight;
             set
             {
+                if (MathF.Abs(_blendMeshLight - value) < 0.0001f)
+                    return;
+
                 _blendMeshLight = value;
-                InvalidateBuffers(MeshDirtyFlags.Material);
+                // BlendMeshLight is baked into CPU vertex colors. Material-only invalidation
+                // left the cached light untouched, so animated blend brightness did not update.
+                InvalidateBuffers(MeshDirtyFlags.Lighting | MeshDirtyFlags.Material);
             }
         }
 
@@ -672,12 +679,51 @@ namespace Client.Main.Objects
             }
         }
 
+        /// <summary>
+        /// Replaces a mesh texture at runtime without modifying the shared BMD definition.
+        /// The override remains active across buffer refreshes until explicitly replaced or cleared.
+        /// </summary>
+        protected bool SetMeshTextureOverride(int meshIndex, Texture2D texture)
+        {
+            if (_meshes == null || (uint)meshIndex >= (uint)_meshes.Length)
+                return false;
+
+            MeshRuntimeState meshState = _meshes[meshIndex];
+            if (ReferenceEquals(meshState.TextureOverride, texture) &&
+                ReferenceEquals(meshState.Texture, texture))
+            {
+                return false;
+            }
+
+            meshState.TextureOverride = texture;
+            meshState.Texture = texture;
+            InvalidateMeshRenderPlan();
+            return true;
+        }
+
+        protected bool ClearMeshTextureOverride(int meshIndex)
+        {
+            if (_meshes == null || (uint)meshIndex >= (uint)_meshes.Length)
+                return false;
+
+            MeshRuntimeState meshState = _meshes[meshIndex];
+            if (meshState.TextureOverride == null)
+                return false;
+
+            meshState.TextureOverride = null;
+            meshState.Texture = null;
+            InvalidateBuffers(MeshDirtyFlags.Texture);
+            InvalidateMeshRenderPlan();
+            return true;
+        }
+
         public override void Dispose()
         {
             base.Dispose();
             if (IsLoadInProgress)
                 return;
 
+            ReleaseTerrainShadowResources();
             Model = null;
             BoneTransform = null;
             _sharedAnimationRenderBones = null;

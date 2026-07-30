@@ -5,6 +5,49 @@ using System.Threading;
 
 namespace Client.Main.Graphics
 {
+    public readonly struct CameraState
+    {
+        public CameraState(
+            float aspectRatio,
+            float fieldOfView,
+            float viewNear,
+            float viewFar,
+            Vector3 position,
+            Vector3 target)
+        {
+            AspectRatio = aspectRatio;
+            FieldOfView = fieldOfView;
+            ViewNear = viewNear;
+            ViewFar = viewFar;
+            Position = position;
+            Target = target;
+        }
+
+        public float AspectRatio { get; }
+        public float FieldOfView { get; }
+        public float ViewNear { get; }
+        public float ViewFar { get; }
+        public Vector3 Position { get; }
+        public Vector3 Target { get; }
+
+        public CameraState With(
+            float? aspectRatio = null,
+            float? fieldOfView = null,
+            float? viewNear = null,
+            float? viewFar = null,
+            Vector3? position = null,
+            Vector3? target = null)
+        {
+            return new CameraState(
+                aspectRatio ?? AspectRatio,
+                fieldOfView ?? FieldOfView,
+                viewNear ?? ViewNear,
+                viewFar ?? ViewFar,
+                position ?? Position,
+                target ?? Target);
+        }
+    }
+
     public class Camera
     {
         // Static Properties
@@ -92,6 +135,30 @@ namespace Client.Main.Graphics
         // Public Methods
         public void ForceUpdate()
         {
+            UpdateView(updateCulling: true);
+            UpdateProjection();
+        }
+
+        public CameraState CaptureState()
+        {
+            return new CameraState(
+                _aspectRatio,
+                _fov,
+                _viewNear,
+                _viewFar,
+                _position,
+                _target);
+        }
+
+        public void ApplyState(in CameraState state)
+        {
+            _aspectRatio = state.AspectRatio;
+            _fov = state.FieldOfView;
+            _viewNear = state.ViewNear;
+            _viewFar = state.ViewFar;
+            _position = state.Position;
+            _target = state.Target;
+
             UpdateView(updateCulling: true);
             UpdateProjection();
         }

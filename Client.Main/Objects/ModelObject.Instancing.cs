@@ -1049,6 +1049,7 @@ namespace Client.Main.Objects
             bindings.WorldViewProjection?.SetValue(camera.View * camera.Projection);
             bindings.EyePosition?.SetValue(camera.Position);
             bindings.Alpha?.SetValue(1f);
+            bindings.TextureCoordinateOffset?.SetValue(Vector2.Zero);
             bindings.TerrainDynamicIntensityScale?.SetValue(1.5f);
             bindings.DebugLightingAreas?.SetValue(Constants.DEBUG_LIGHTING_AREAS ? 1.0f : 0.0f);
 

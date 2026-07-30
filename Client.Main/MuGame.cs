@@ -1103,13 +1103,58 @@ namespace Client.Main
                 _telemetryPublisher?.PublishEvent("scene", $"Loading {sceneName}", TelemetrySeverity.Info);
 
                 // Returning to the dispatcher before transition work prevents the event
-                // handler which requested the scene from owning the complete transition
-                // cost (previously HandleEnteredGame could block for more than 150 ms).
+                // handler which requested the scene from owning the complete transition cost.
                 await YieldToNextFrameAsync(
                     $"SceneChange.{sceneName}.Prepare",
                     MainThreadDispatcher.WorkPriority.Critical);
 
-                ushort? sourceMapId = ActiveScene?.World?.MapId;
+                BaseScene previousScene = ActiveScene;
+                bool activateBeforeInitialization =
+                    previousScene == null || newScene.CanRenderWhileInitializing;
+                if (activateBeforeInitialization)
+                {
+                    try
+                    {
+                        // GameScene builds its loading shell while the previous scene is still
+                        // visible. Its first active frame therefore already contains the
+                        // background and progress UI instead of a cleared black target.
+                        await newScene.PrepareForFirstPresentedFrameAsync();
+                    }
+                    catch (Exception preparationException)
+                    {
+                        try
+                        {
+                            newScene.Dispose();
+                        }
+                        catch (Exception disposeException)
+                        {
+                            _logger?.LogDebug(disposeException, "Failed disposing scene after presentation preparation error.");
+                        }
+
+                        _logger?.LogError(
+                            preparationException,
+                            "Scene presentation preparation failed for {SceneType}.",
+                            sceneName);
+                        _telemetryPublisher?.PublishEvent(
+                            "scene",
+                            $"Failed to prepare {sceneName}: {preparationException.Message}",
+                            TelemetrySeverity.Error);
+                        return;
+                    }
+
+                    if (requestGeneration != Volatile.Read(ref _sceneChangeGeneration))
+                    {
+                        newScene.Dispose();
+                        return;
+                    }
+                }
+
+                // Reserve the progressive path before the scene becomes active. Otherwise
+                // GameControl.Update can start the generic Initialize() method on the first
+                // transition frame and race the explicit scene-loading workflow.
+                newScene.ReserveProgressiveInitialization();
+
+                ushort? sourceMapId = previousScene?.World?.MapId;
                 bool preserveCurrentMapScope =
                     newScene is GameScene &&
                     sourceMapId.HasValue &&
@@ -1117,35 +1162,26 @@ namespace Client.Main
                 _scopeManager?.BeginWorldTransition(sourceMapId, preserveCurrentMapScope);
                 ModelObject.ResetWorldScopedInstancingState();
 
-                BaseScene previousScene = ActiveScene;
-                ActiveScene = null;
-
-                await YieldToNextFrameAsync(
-                    $"SceneChange.{sceneName}.DisposePrevious",
-                    MainThreadDispatcher.WorkPriority.Critical);
-
-                if (previousScene != null)
+                if (activateBeforeInitialization)
                 {
-                    try
-                    {
-                        previousScene.Dispose();
-                    }
-                    catch (Exception disposeException)
-                    {
-                        _logger?.LogError(
-                            disposeException,
-                            "Failed disposing previous scene {SceneType}.",
-                            previousScene.GetType().Name);
-                    }
+                    // Never publish a null ActiveScene. Scenes with a complete loading shell are
+                    // activated first, so rendering continues seamlessly while initialization runs.
+                    ActiveScene = newScene;
+                    newScene.OnActivated();
+                    _frameProfiler.ResetRollingWindow();
+
+                    await YieldToNextFrameAsync(
+                        $"SceneChange.{sceneName}.DisposePrevious",
+                        MainThreadDispatcher.WorkPriority.Critical);
+
+                    DisposePreviousScene(previousScene);
+
+                    await YieldToNextFrameAsync(
+                        $"SceneChange.{sceneName}.ReleasePreviewCache",
+                        MainThreadDispatcher.WorkPriority.High);
+
+                    BmdPreviewRenderer.ClearCache(releaseGpuResources: true);
                 }
-
-                await YieldToNextFrameAsync(
-                    $"SceneChange.{sceneName}.ReleasePreviewCache",
-                    MainThreadDispatcher.WorkPriority.High);
-
-                BmdPreviewRenderer.ClearCache(releaseGpuResources: true);
-                ActiveScene = newScene;
-                _frameProfiler.ResetRollingWindow();
 
                 try
                 {
@@ -1153,6 +1189,13 @@ namespace Client.Main
                         $"SceneChange.{sceneName}.Initialize",
                         MainThreadDispatcher.WorkPriority.Critical);
                     await newScene.InitializeWithProgressReporting(null);
+
+                    // A scene which was activated before initialization did not have its world
+                    // yet when OnActivated was first called. Re-run the activation hook now so
+                    // a newly created deferred menu-world camera is published before the next
+                    // presented frame.
+                    if (activateBeforeInitialization && ReferenceEquals(ActiveScene, newScene))
+                        newScene.OnActivated();
 
                     // Scene initialization may complete from a dispatcher continuation. Force
                     // the parent transition to unwind before its final phase is queued.
@@ -1181,6 +1224,32 @@ namespace Client.Main
                     return;
                 }
 
+                if (!activateBeforeInitialization)
+                {
+                    // Scenes without their own initialization renderer remain off-screen until
+                    // fully ready. The previous scene stays visible, then the swap happens
+                    // atomically without an intermediate black frame.
+                    await YieldToNextFrameAsync(
+                        $"SceneChange.{sceneName}.Activate",
+                        MainThreadDispatcher.WorkPriority.Critical);
+
+                    ActiveScene = newScene;
+                    newScene.OnActivated();
+                    _frameProfiler.ResetRollingWindow();
+
+                    await YieldToNextFrameAsync(
+                        $"SceneChange.{sceneName}.DisposePrevious",
+                        MainThreadDispatcher.WorkPriority.Critical);
+
+                    DisposePreviousScene(previousScene);
+
+                    await YieldToNextFrameAsync(
+                        $"SceneChange.{sceneName}.ReleasePreviewCache",
+                        MainThreadDispatcher.WorkPriority.High);
+
+                    BmdPreviewRenderer.ClearCache(releaseGpuResources: true);
+                }
+
                 await YieldToNextFrameAsync(
                     $"SceneChange.{sceneName}.Finalize",
                     MainThreadDispatcher.WorkPriority.Critical);
@@ -1193,6 +1262,24 @@ namespace Client.Main
             finally
             {
                 _sceneChangeLock.Release();
+            }
+        }
+
+        private void DisposePreviousScene(BaseScene previousScene)
+        {
+            if (previousScene == null)
+                return;
+
+            try
+            {
+                previousScene.Dispose();
+            }
+            catch (Exception disposeException)
+            {
+                _logger?.LogError(
+                    disposeException,
+                    "Failed disposing previous scene {SceneType}.",
+                    previousScene.GetType().Name);
             }
         }
 

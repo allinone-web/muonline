@@ -44,6 +44,20 @@ namespace Client.Main.Controls
         public int LastFrameVisibleDynamicLights => _lightManager?.LastFrameVisibleCount ?? 0;
         public int LastUploadedDynamicLights => _renderer?.LastUploadedDynamicLights ?? 0;
         public Texture2D HeightMapTexture => _data?.HeightMapTexture;
+
+        public Texture2D GetWaterAnimationFrame(int frame)
+        {
+            Texture2D[] frames = _data?.WaterCausticsTextures;
+            if (frames == null || frames.Length == 0)
+                return null;
+
+            int normalizedFrame = frame % frames.Length;
+            if (normalizedFrame < 0)
+                normalizedFrame += frames.Length;
+
+            Texture2D texture = frames[normalizedFrame];
+            return texture != null && !texture.IsDisposed ? texture : null;
+        }
         private Dictionary<int, string> _pendingTextureMap = new();
         private bool _replaceTextureMapping;
         private bool _preferIndexBatching;

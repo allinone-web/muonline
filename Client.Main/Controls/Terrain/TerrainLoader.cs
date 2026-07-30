@@ -4,6 +4,7 @@ using Client.Data.OBJS;
 using Client.Data.OZB;
 using Client.Main.Content;
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -20,29 +21,33 @@ namespace Client.Main.Controls.Terrain
     public class TerrainLoader
     {
         private const int MaxTextureUploadsPerDispatch = 1;
+        private const int WaterCausticsFrameCount = 32;
 
         private readonly short _worldIndex;
         private readonly TerrainData _terrainData;
         private bool _replaceTextureMapping;
 
-        private readonly record struct TextureUploadEntry(int TextureIndex, string Path);
+        private readonly record struct TextureUploadEntry(Texture2D[] Target, int TextureIndex, string Path);
 
         private sealed class TerrainTextureUploadState
         {
             private readonly TerrainLoader _owner;
             private readonly TextureUploadEntry[] _entries;
             private readonly TaskCompletionSource<bool> _completion;
+            private readonly string _label;
             private int _nextEntry;
             private int _loadedCount;
 
             public TerrainTextureUploadState(
                 TerrainLoader owner,
                 TextureUploadEntry[] entries,
-                TaskCompletionSource<bool> completion)
+                TaskCompletionSource<bool> completion,
+                string label)
             {
                 _owner = owner;
                 _entries = entries;
                 _completion = completion;
+                _label = label;
             }
 
             public void ProcessNextBatch()
@@ -58,7 +63,7 @@ namespace Client.Main.Controls.Terrain
                             var texture = TextureLoader.Instance.GetTexture2D(entry.Path);
                             if (texture != null && !texture.IsDisposed)
                             {
-                                _owner._terrainData.Textures[entry.TextureIndex] = texture;
+                                entry.Target[entry.TextureIndex] = texture;
                                 _loadedCount++;
                             }
                         }
@@ -82,7 +87,7 @@ namespace Client.Main.Controls.Terrain
                         return;
                     }
 
-                    Console.WriteLine($"[TerrainLoader] Uploaded {_loadedCount}/{_entries.Length} terrain textures for World{_owner._worldIndex}.");
+                    Console.WriteLine($"[TerrainLoader] Uploaded {_loadedCount}/{_entries.Length} {_label} textures for World{_owner._worldIndex}.");
                     _completion.TrySetResult(true);
                 }
                 catch (Exception ex)
@@ -161,7 +166,21 @@ namespace Client.Main.Controls.Terrain
             }
 
             _terrainData.TexturePaths = textureMapFiles;
-            _terrainData.Textures = new Microsoft.Xna.Framework.Graphics.Texture2D[textureMapFiles.Length];
+            _terrainData.Textures = new Texture2D[textureMapFiles.Length];
+
+            if (_worldIndex == 8)
+            {
+                _terrainData.WaterCausticsTexturePaths = new string[WaterCausticsFrameCount];
+                _terrainData.WaterCausticsTextures = new Texture2D[WaterCausticsFrameCount];
+
+                for (int frame = 0; frame < WaterCausticsFrameCount; frame++)
+                {
+                    string path = $"Object8/wt{frame:00}.jpg";
+                    _terrainData.WaterCausticsTexturePaths[frame] = path;
+                    tasks.Add(TextureLoader.Instance.Prepare(path));
+                }
+            }
+
             for (int t = 0; t < textureMapFiles.Length; t++)
             {
                 var path = textureMapFiles[t];
@@ -187,14 +206,29 @@ namespace Client.Main.Controls.Terrain
             }
 
             await Task.WhenAll(tasks).ConfigureAwait(false);
-            await UploadTerrainTexturesOnGraphicsThreadAsync(textureMapFiles).ConfigureAwait(false);
+            await UploadTexturesOnGraphicsThreadAsync(
+                textureMapFiles,
+                _terrainData.Textures,
+                "terrain").ConfigureAwait(false);
+
+            if (_terrainData.WaterCausticsTexturePaths != null &&
+                _terrainData.WaterCausticsTextures != null)
+            {
+                await UploadTexturesOnGraphicsThreadAsync(
+                    _terrainData.WaterCausticsTexturePaths,
+                    _terrainData.WaterCausticsTextures,
+                    "Atlans caustics").ConfigureAwait(false);
+            }
 
             _terrainData.GrassWind = new float[Constants.TERRAIN_SIZE * Constants.TERRAIN_SIZE];
 
             return _terrainData;
         }
 
-        private Task UploadTerrainTexturesOnGraphicsThreadAsync(string[] texturePaths)
+        private Task UploadTexturesOnGraphicsThreadAsync(
+            string[] texturePaths,
+            Texture2D[] target,
+            string label)
         {
             var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             var entries = new List<TextureUploadEntry>();
@@ -202,8 +236,8 @@ namespace Client.Main.Controls.Terrain
             for (int textureIndex = 0; textureIndex < texturePaths.Length; textureIndex++)
             {
                 string path = texturePaths[textureIndex];
-                if (!string.IsNullOrEmpty(path) && File.Exists(path))
-                    entries.Add(new TextureUploadEntry(textureIndex, path));
+                if (!string.IsNullOrEmpty(path))
+                    entries.Add(new TextureUploadEntry(target, textureIndex, path));
             }
 
             if (entries.Count == 0)
@@ -212,7 +246,7 @@ namespace Client.Main.Controls.Terrain
                 return completion.Task;
             }
 
-            var state = new TerrainTextureUploadState(this, entries.ToArray(), completion);
+            var state = new TerrainTextureUploadState(this, entries.ToArray(), completion, label);
             if (MuGame.IsMainThread)
             {
                 state.ProcessNextBatch();

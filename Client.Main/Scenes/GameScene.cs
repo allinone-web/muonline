@@ -75,6 +75,8 @@ namespace Client.Main.Scenes
         private GameSceneUiPreloadController _uiPreloadController;
         private GameSceneWindowCloseController _windowCloseController;
         private Task _sceneShellInitializationTask;
+        private Task _firstPresentedFramePreparationTask;
+        private LoadingScreenControl _initialLoadingScreen;
         private bool _sceneShellInitialized;
         private Action _pendingWorldActivation;
         private TaskCompletionSource<bool> _pendingWorldActivationCompletion;
@@ -82,6 +84,7 @@ namespace Client.Main.Scenes
         private bool _pendingWorldActivationCleansLoadingUi;
         private string _pendingWorldActivationName;
         private bool _initialWorldActivationCooldown;
+        private bool _initialWorldLoadInProgress = true;
 
         // Performance optimization fields - track object IDs for O(1) lookups
         // ───────────────────────── Properties ─────────────────────────
@@ -90,6 +93,8 @@ namespace Client.Main.Scenes
         public InventoryControl InventoryControl => _inventoryControl;
         public TradeControl TradeControl => TradeControl.Instance;
         public PauseMenuControl PauseMenu => _pauseMenu;
+
+        public override bool CanRenderWhileInitializing => true;
 
         public static readonly IReadOnlyDictionary<byte, Type> MapWorldRegistry = DiscoverWorlds();
 
@@ -129,19 +134,91 @@ namespace Client.Main.Scenes
             _hero = new HeroObject(new AppearanceData(characterInfo.Appearance));
         }
 
+        public override Task PrepareForFirstPresentedFrameAsync()
+        {
+            _firstPresentedFramePreparationTask ??= PrepareFirstPresentedFrameCoreAsync();
+            return _firstPresentedFramePreparationTask;
+        }
+
+        private async Task PrepareFirstPresentedFrameCoreAsync()
+        {
+            // Build only scene-owned loading resources here. Shared/singleton game controls are
+            // attached after the previous GameScene has been disposed, so a GameScene-to-GameScene
+            // fallback cannot detach or reset controls which already belong to the new scene.
+            if (_backgroundTexture == null)
+            {
+                try
+                {
+                    _backgroundTexture = MuGame.Instance.Content.Load<Texture2D>("Background");
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogDebug("[GameScene] Background load failed: {Message}", ex.Message);
+                }
+            }
+
+            if (_progressBar == null)
+            {
+                _progressBar = new ProgressBarControl
+                {
+                    Progress = 0.01f,
+                    StatusText = "Preparing game interface...",
+                    Visible = true
+                };
+                Controls.Add(_progressBar);
+            }
+
+            if (_initialLoadingScreen == null)
+            {
+                _initialLoadingScreen = new LoadingScreenControl
+                {
+                    Visible = true,
+                    Message = "Preparing game interface...",
+                    Progress = 0.01f
+                };
+                Controls.Add(_initialLoadingScreen);
+            }
+
+            if (_progressBar.Status == GameControlStatus.NonInitialized)
+                await _progressBar.Initialize();
+
+            if (_initialLoadingScreen.Status == GameControlStatus.NonInitialized)
+                await _initialLoadingScreen.Initialize();
+        }
+
         public override async Task InitializeWithProgressReporting(Action<string, float> progressCallback)
         {
-            _sceneShellInitializationTask ??= InitializeSceneShellAsync(progressCallback);
+            await PrepareForFirstPresentedFrameAsync();
+
+            Action<string, float> effectiveProgressCallback = progressCallback ?? UpdateLoadProgress;
+            _sceneShellInitializationTask ??= InitializeSceneShellAsync(effectiveProgressCallback);
             await _sceneShellInitializationTask;
+
             await MuGame.YieldToNextFrameAsync(
                 "GameScene.InitializeControls",
                 MainThreadDispatcher.WorkPriority.High);
-            await base.InitializeWithProgressReporting(progressCallback);
+            await base.InitializeWithProgressReporting(effectiveProgressCallback);
         }
 
         private async Task InitializeSceneShellAsync(Action<string, float> progressCallback)
         {
-            void Report(string message, float progress) => progressCallback?.Invoke(message, progress);
+            void Report(string message, float progress)
+            {
+                progressCallback?.Invoke(message, progress);
+
+                var loading = _initialLoadingScreen ?? _mapController?.LoadingScreen;
+                if (loading != null)
+                {
+                    loading.Message = message;
+                    loading.Progress = progress;
+                }
+
+                if (_progressBar != null)
+                {
+                    _progressBar.StatusText = message;
+                    _progressBar.Progress = progress;
+                }
+            }
 
             Report("Preparing game interface...", 0.01f);
 
@@ -280,19 +357,9 @@ namespace Client.Main.Scenes
                 "GameScene.BuildShell.LoadingInfrastructure",
                 MainThreadDispatcher.WorkPriority.High);
 
-            // Phase 5: assets and loading infrastructure. Content.Load is kept in its own
-            // frame because the first content-manager lookup may synchronously touch disk.
-            try
-            {
-                _backgroundTexture = MuGame.Instance.Content.Load<Texture2D>("Background");
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogDebug("[GameScene] Background load failed: {Message}", ex.Message);
-            }
-
-            _progressBar = new ProgressBarControl();
-            Controls.Add(_progressBar);
+            // Phase 5: complete the loading infrastructure prepared before scene activation.
+            // The background and progress controls already exist, so no active frame can expose
+            // only the cleared render target while this heavier shell is being assembled.
             _mapController = new GameSceneMapController(
                 this,
                 _modernHud,
@@ -303,7 +370,9 @@ namespace Client.Main.Scenes
                 DebugPanel,
                 Cursor,
                 _scopeImportController,
-                _logger);
+                _logger,
+                _initialLoadingScreen);
+            _initialLoadingScreen = null;
             _mapController.EnsureLoadingScreen();
             _chatController = new GameSceneChatController(_mapController, _duelController, _chatLog, _logger);
             _chatInput.MessageSendRequested += _chatController.OnChatMessageSendRequested;
@@ -540,6 +609,7 @@ namespace Client.Main.Scenes
                 // activation, so release the loading UI immediately.
                 if (_pendingWorldActivation == null)
                 {
+                    _initialWorldLoadInProgress = false;
                     _mapController?.DisposeLoadingScreen();
                     if (_progressBar != null)
                         _progressBar.Visible = false;
@@ -612,9 +682,13 @@ namespace Client.Main.Scenes
                 return;
             }
 
-            if (_mapController?.IsChangingWorld == true ||
+            if (_initialWorldLoadInProgress ||
+                _mapController?.IsChangingWorld == true ||
                 _pendingWorldActivation != null ||
-                _initialWorldActivationCooldown)
+                _initialWorldActivationCooldown ||
+                World == null ||
+                !World.Visible ||
+                World.Status != GameControlStatus.Ready)
             {
                 _mapController?.UpdateLoading(gameTime);
                 return;
@@ -806,14 +880,23 @@ namespace Client.Main.Scenes
         // ─────────────────────────── Draw Loop ───────────────────────────
         public override void Draw(GameTime gameTime)
         {
-            if (!_sceneShellInitialized || _progressBar == null)
+            if (!_sceneShellInitialized)
             {
                 GraphicsDevice.Clear(new Color(12, 12, 20));
                 DrawBackground();
+
+                var initialLoading = _initialLoadingScreen ?? _mapController?.LoadingScreen;
+                if (_progressBar != null)
+                {
+                    _progressBar.Progress = initialLoading?.Progress ?? _progressBar.Progress;
+                    _progressBar.StatusText = initialLoading?.Message ?? "Preparing game interface...";
+                    _progressBar.Visible = true;
+                    _progressBar.Draw(gameTime);
+                }
                 return;
             }
 
-            if (_mapController?.IsChangingWorld == true || _pendingWorldActivation != null || _initialWorldActivationCooldown || World == null || World.Status != GameControlStatus.Ready)
+            if (_initialWorldLoadInProgress || _mapController?.IsChangingWorld == true || _pendingWorldActivation != null || _initialWorldActivationCooldown || World == null || !World.Visible || World.Status != GameControlStatus.Ready)
             {
                 GraphicsDevice.Clear(new Color(12, 12, 20));
                 DrawBackground();
@@ -826,6 +909,7 @@ namespace Client.Main.Scenes
                 if (_initialWorldActivationCooldown && _pendingWorldActivation == null)
                 {
                     _initialWorldActivationCooldown = false;
+                    _initialWorldLoadInProgress = false;
                     _mapController?.DisposeLoadingScreen();
                     _progressBar.Visible = false;
                 }

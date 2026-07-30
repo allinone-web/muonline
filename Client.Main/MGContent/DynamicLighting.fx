@@ -1,4 +1,4 @@
-﻿// DynamicLighting.fx - Dynamic lighting shader
+// DynamicLighting.fx - Dynamic lighting shader
 
 #if OPENGL
     #define VS_SHADERMODEL vs_3_0
@@ -39,6 +39,7 @@ sampler2D SamplerState0 = sampler_state
 // Lighting parameters  
 float3 AmbientLight = float3(0.8, 0.8, 0.8);
 float Alpha = 1.0;
+float2 TextureCoordinateOffset = float2(0.0, 0.0);
 float3 HighlightColor = float3(1.0, 0.0, 0.0);
 float3 SunDirection = float3(1.0, 0.0, -0.6);
 float3 SunColor = float3(1.0, 0.95, 0.85);
@@ -310,7 +311,7 @@ PixelInput VS_Objects(VertexInput input)
     output.WorldPos = worldPos.xyz;
     output.Position = mul(float4(input.Position, 1.0), WorldViewProjection);
     output.Normal = normalize(mul(input.Normal, (float3x3)World));
-    output.TexCoord = input.TexCoord;
+    output.TexCoord = input.TexCoord + TextureCoordinateOffset;
     output.Color = input.Color;
     output.DynamicLight = float3(0, 0, 0); 
     return output;
@@ -330,7 +331,7 @@ PixelInput VS_ObjectsSkinned(VertexInputSkinned input)
     // but saves 2 matrix multiplications per vertex!
     output.Position = mul(localPos, WorldViewProjection);
     output.Normal = normalize(mul(localNormal, (float3x3)World));
-    output.TexCoord = input.TexCoord;
+    output.TexCoord = input.TexCoord + TextureCoordinateOffset;
     output.Color = input.Color;
     output.DynamicLight = float3(0, 0, 0);
     return output;
@@ -352,7 +353,7 @@ PixelInput VS_ObjectsSkinnedInstanced(VertexInputSkinnedInstanced input)
     
     float3 localNormal = mul(input.Normal, (float3x3)BoneMatrices[normalBoneIndex]);
     output.Normal = normalize(mul(localNormal, (float3x3)instanceWorld));
-    output.TexCoord = input.TexCoord;
+    output.TexCoord = input.TexCoord + TextureCoordinateOffset;
     output.Color = input.Color * input.InstanceColor;
     output.DynamicLight = float3(0, 0, 0);
     return output;
@@ -394,7 +395,7 @@ PixelInput VS_ObjectsSkinnedMultiPoseInstanced(VertexInputSkinnedMultiPoseInstan
     output.Position = mul(worldPos, View);
     output.Position = mul(output.Position, Projection);
     output.Normal = normalize(mul(localNormal, (float3x3)instanceWorld));
-    output.TexCoord = input.TexCoord;
+    output.TexCoord = input.TexCoord + TextureCoordinateOffset;
     output.Color = input.Color * input.InstanceColor;
     output.DynamicLight = float3(0, 0, 0);
     return output;
@@ -592,7 +593,7 @@ ShadowVertexOutput ShadowVS(VertexInput input)
     ShadowVertexOutput output;
     float4 worldPos = mul(float4(input.Position, 1.0), World);
     output.Position = mul(worldPos, LightViewProjection);
-    output.TexCoord = CalculateProceduralUV(worldPos.xyz, input.TexCoord);
+    output.TexCoord = CalculateProceduralUV(worldPos.xyz, input.TexCoord) + TextureCoordinateOffset;
     output.Depth = output.Position.zw; 
     return output;
 }
@@ -605,7 +606,7 @@ ShadowVertexOutput ShadowVS_Skinned(VertexInputSkinned input)
     float4 localPos = mul(float4(input.Position, 1.0), BoneMatrices[boneIndex]);
     float4 worldPos = mul(localPos, World);
     output.Position = mul(worldPos, LightViewProjection);
-    output.TexCoord = CalculateProceduralUV(worldPos.xyz, input.TexCoord);
+    output.TexCoord = CalculateProceduralUV(worldPos.xyz, input.TexCoord) + TextureCoordinateOffset;
     output.Depth = output.Position.zw;
     return output;
 }

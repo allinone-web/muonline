@@ -1,164 +1,151 @@
-﻿using Client.Main.Content;
+using Client.Main.Content;
+using Client.Main.Graphics;
+using Client.Main.Models;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
-using Client.Data.BMD;
 
 namespace Client.Main.Objects.Worlds.Atlans
 {
-    public class WaterPortalObject : ModelObject
+    /// <summary>
+    /// Visible Atlans water portal (map object type 23 / Object24.bmd).
+    /// The effect uses the model's looping animation, additive water material,
+    /// pulsating brightness and the shared wt00..wt31 water flipbook.
+    /// </summary>
+    public sealed class WaterPortalObject : ModelObject
     {
-        private const float TEXTURE_SCROLL_SPEED = 0.1f; // Reduced scroll speed for smoother dynamics
-        private const float WAVE_FREQUENCY = 1.5f;
-        private const float WAVE_AMPLITUDE = 0.2f; // Reduced amplitude for less dynamic offset
-        private const float VERTEX_WAVE_HEIGHT = 0.4f;
-        private const float SPATIAL_FREQUENCY = 0.8f;
+        private const int WaterFrameCount = 32;
+        private const float WaterFramesPerSecond = 25f;
 
-        private float _currentOffset = 0f;
-        private float _waveTime = 0f;
-        // Removed fixed time step accumulation for texture offset
-        private BMDTexCoord[] _originalTexCoords;
-        private BMDTextureVertex[] _originalVertices;
-        private System.Numerics.Vector3[] _vertexOffsets;
-        protected override bool UsesMutableMeshData => true;
+        // The original velocity is 0.05 animation frame per 25 Hz legacy tick.
+        private const float PortalAnimationFramesPerSecond = 0.05f * 25f;
+
+        private readonly Texture2D[] _waterFrames = new Texture2D[WaterFrameCount];
+        private int[] _waterMeshIndices = Array.Empty<int>();
+        private int _currentWaterFrame = -1;
+
+        protected override bool AllowDynamicLightingShader => false;
+        protected override bool AllowMapObjectInstancing => false;
+        protected override bool RequiresPerFrameAnimation => true;
+        protected override bool PreserveBlendMeshesInLowQuality => true;
 
         public override async Task Load()
         {
-            BlendState = BlendState.NonPremultiplied;
+            // Object24 is the actual water portal model used by this client.
+            Model = await BMDLoader.Instance.Prepare("Object8/Object24.bmd");
+            ResolveWaterMeshes();
+
+            // Keep possible structural meshes in the opaque pass. The water material is
+            // routed independently to DrawAfter with exact MU-style One + One blending.
+            BlendState = BlendState.Opaque;
+            BlendMesh = -1;
+            BlendMeshState = Blendings.OneOneAdditive;
+            BlendMeshLight = 0.5f;
             LightEnabled = true;
-            IsTransparent = true;
-            BlendMeshState = BlendState.Additive;
-            Alpha = 0.5f;
-            Model = await BMDLoader.Instance.Prepare($"Object8/Object24.bmd");
+            IsTransparent = false;
+            RenderShadow = false;
+            Color = Color.White;
+
+            CurrentAction = 0;
+            AnimationSpeed = PortalAnimationFramesPerSecond;
+            ContinuousAnimation = true;
 
             await base.Load();
 
-            if (Model?.Meshes != null && Model.Meshes.Length > 0)
-            {
-                var mesh = Model.Meshes[0];
-                _originalTexCoords = new BMDTexCoord[mesh.TexCoords.Length];
-                Array.Copy(mesh.TexCoords, _originalTexCoords, mesh.TexCoords.Length);
-
-                _originalVertices = new BMDTextureVertex[mesh.Vertices.Length];
-                Array.Copy(mesh.Vertices, _originalVertices, mesh.Vertices.Length);
-
-                _vertexOffsets = new System.Numerics.Vector3[mesh.Vertices.Length];
-            }
-
-            // Set a slight blue tint for the texture
-            this.Color = new Color(200, 220, 255);
+            CacheWaterFramesFromTerrain();
+            ApplyWaterFrame(0);
         }
 
-        private float CalculateWaveOffset(float x, float z, float time)
+        protected override bool IsBlendMesh(int mesh)
         {
-            float wave1 = (float)Math.Sin(time * WAVE_FREQUENCY + (x + z) * SPATIAL_FREQUENCY);
-            float wave2 = (float)Math.Sin(time * WAVE_FREQUENCY * 0.5f + (x - z) * SPATIAL_FREQUENCY * 1.3f) * 0.5f;
-            float wave3 = (float)Math.Cos(time * WAVE_FREQUENCY * 0.7f + z * SPATIAL_FREQUENCY * 0.8f) * 0.3f;
-            return (wave1 + wave2 + wave3) * 0.33f;
+            for (int i = 0; i < _waterMeshIndices.Length; i++)
+            {
+                if (_waterMeshIndices[i] == mesh)
+                    return true;
+            }
+
+            return base.IsBlendMesh(mesh);
         }
 
         public override void Update(GameTime gameTime)
         {
+            if (Status == GameControlStatus.Ready)
+            {
+                float worldTimeMilliseconds = (float)gameTime.TotalGameTime.TotalMilliseconds;
+                BlendMeshLight = MathF.Sin(worldTimeMilliseconds * 0.004f) * 0.3f + 0.5f;
+
+                int frame = (int)(gameTime.TotalGameTime.TotalSeconds * WaterFramesPerSecond)
+                    % WaterFrameCount;
+                ApplyWaterFrame(frame);
+            }
+
             base.Update(gameTime);
-
-            if (Model?.Meshes == null || Model.Meshes.Length == 0 || _originalTexCoords == null)
-                return;
-
-            // Update wave time uniformly
-            float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
-            _waveTime += dt * 0.5f;
-
-            // Update texture scrolling offset uniformly based on delta time
-            _currentOffset = (_currentOffset + TEXTURE_SCROLL_SPEED * dt) % 1.0f;
-
-            var mesh = Model.Meshes[0];
-
-            // Update vertex offsets based on wave effect
-            for (int i = 0; i < mesh.Vertices.Length; i++)
-            {
-                var originalVertex = _originalVertices[i];
-                float waveOffset = CalculateWaveOffset(
-                    originalVertex.Position.X,
-                    originalVertex.Position.Z,
-                    _waveTime
-                );
-                _vertexOffsets[i] = new System.Numerics.Vector3(0, waveOffset * VERTEX_WAVE_HEIGHT, 0);
-            }
-
-            // Smooth out vertex offsets for each triangle
-            foreach (var triangle in mesh.Triangles)
-            {
-                for (int i = 0; i < triangle.VertexIndex.Length; i++)
-                {
-                    if (triangle.VertexIndex[i] < 0)
-                        continue;
-
-                    System.Numerics.Vector3 avgOffset = System.Numerics.Vector3.Zero;
-                    int validNeighbors = 0;
-                    for (int j = 0; j < triangle.VertexIndex.Length; j++)
-                    {
-                        if (triangle.VertexIndex[j] >= 0)
-                        {
-                            avgOffset += _vertexOffsets[triangle.VertexIndex[j]];
-                            validNeighbors++;
-                        }
-                    }
-                    if (validNeighbors > 0)
-                    {
-                        avgOffset /= validNeighbors;
-                        int vertexIdx = triangle.VertexIndex[i];
-                        _vertexOffsets[vertexIdx] = System.Numerics.Vector3.Lerp(_vertexOffsets[vertexIdx], avgOffset, 0.5f);
-                    }
-                }
-            }
-
-            // Update vertex positions using the calculated offsets
-            for (int i = 0; i < mesh.Vertices.Length; i++)
-            {
-                var originalVertex = _originalVertices[i];
-                var vertex = originalVertex;
-                vertex.Position = originalVertex.Position + _vertexOffsets[i];
-                mesh.Vertices[i] = vertex;
-            }
-
-            // Update texture coordinates – apply scrolling and wave offset only to V coordinate (upward movement)
-            foreach (var triangle in mesh.Triangles)
-            {
-                for (int i = 0; i < triangle.TexCoordIndex.Length; i++)
-                {
-                    if (triangle.TexCoordIndex[i] < 0)
-                        continue;
-
-                    int texCoordIdx = triangle.TexCoordIndex[i];
-                    int vertexIdx = triangle.VertexIndex[i];
-
-                    if (texCoordIdx >= 0 && texCoordIdx < mesh.TexCoords.Length &&
-                        vertexIdx >= 0 && vertexIdx < mesh.Vertices.Length)
-                    {
-                        var originalTexCoord = _originalTexCoords[texCoordIdx];
-                        var texCoord = originalTexCoord;
-
-                        // Calculate a positive UV offset (only upward motion) with reduced amplitude
-                        float uvOffset = Math.Abs(_vertexOffsets[vertexIdx].Y / VERTEX_WAVE_HEIGHT) * WAVE_AMPLITUDE;
-                        texCoord.U = originalTexCoord.U; // U remains unchanged
-                        texCoord.V = originalTexCoord.V + _currentOffset + uvOffset;
-                        mesh.TexCoords[texCoordIdx] = texCoord;
-                    }
-                }
-            }
-
-            InvalidateBuffers();
         }
 
-        public override void Draw(GameTime gameTime)
+        public override void DrawAfter(GameTime gameTime)
         {
-            // Set the sampler state to LinearWrap to ensure the texture loops correctly
-            GraphicsDevice.SamplerStates[0] = SamplerState.LinearWrap;
+            SamplerState previousSampler = GraphicsDevice.SamplerStates[0];
+            try
+            {
+                GraphicsDevice.SamplerStates[0] = SamplerState.LinearWrap;
+                base.DrawAfter(gameTime);
+            }
+            finally
+            {
+                GraphicsDevice.SamplerStates[0] = previousSampler;
+            }
+        }
 
-            // Adjust alpha based on wave time for additional water effect
-            Alpha = 0.4f + (float)Math.Abs(Math.Sin(_waveTime * WAVE_FREQUENCY * 0.3f)) * 0.2f;
-            base.Draw(gameTime);
+        private void ResolveWaterMeshes()
+        {
+            if (Model?.Meshes == null || Model.Meshes.Length == 0)
+            {
+                _waterMeshIndices = Array.Empty<int>();
+                return;
+            }
+
+            var indices = new List<int>(Model.Meshes.Length);
+            for (int mesh = 0; mesh < Model.Meshes.Length; mesh++)
+            {
+                if (Model.Meshes[mesh].Texture == 0)
+                    indices.Add(mesh);
+            }
+
+            // The previous implementation modified mesh 0 directly, so retain that layout
+            // as a fallback for Object24 files whose importer does not preserve slot numbers.
+            if (indices.Count == 0)
+                indices.Add(0);
+
+            _waterMeshIndices = indices.ToArray();
+        }
+
+        private void CacheWaterFramesFromTerrain()
+        {
+            for (int frame = 0; frame < WaterFrameCount; frame++)
+                _waterFrames[frame] = World?.Terrain?.GetWaterAnimationFrame(frame);
+        }
+
+        private void ApplyWaterFrame(int frame)
+        {
+            if (frame == _currentWaterFrame || (uint)frame >= WaterFrameCount)
+                return;
+
+            Texture2D texture = _waterFrames[frame];
+            if (texture == null || texture.IsDisposed)
+            {
+                texture = World?.Terrain?.GetWaterAnimationFrame(frame);
+                _waterFrames[frame] = texture;
+            }
+
+            if (texture == null || texture.IsDisposed)
+                return;
+
+            for (int i = 0; i < _waterMeshIndices.Length; i++)
+                SetMeshTextureOverride(_waterMeshIndices[i], texture);
+
+            _currentWaterFrame = frame;
         }
     }
 }

@@ -1,4 +1,4 @@
-﻿using Client.Data.Texture;
+using Client.Data.Texture;
 using Client.Main.Content;
 using Microsoft.Xna.Framework.Graphics;
 
@@ -30,6 +30,7 @@ namespace Client.Main.Objects
             public int LastGpuCacheTouchFrame;
 
             public Texture2D Texture;
+            public Texture2D TextureOverride;
             public TextureScript Script;
             public TextureData Data;
             public string TexturePath;

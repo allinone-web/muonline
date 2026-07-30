@@ -96,6 +96,7 @@ namespace Client.Main.Scenes
         private CharacterCreationDialog _characterCreationDialog;
         private string _currentlySelectedCharacterName = null;
         private bool _isIntentionalLogout = false;
+        private bool _returnToLoginRequested;
         private readonly SemaphoreSlim _characterRefreshLock = new(1, 1);
         private CancellationTokenSource _characterRefreshCancellation;
 
@@ -876,10 +877,7 @@ namespace Client.Main.Scenes
                 _logger.LogError("SelectCharacterScene received NetworkError: {Error}", errorMessage);
                 MessageWindow.Show($"Network Error: {errorMessage}");
                 EnableInteractionAfterSelection();
-                if (MuGame.Instance.ActiveScene == this)
-                {
-                    MuGame.Instance.ChangeScene<LoginScene>();
-                }
+                RequestReturnToLogin();
             });
         }
 
@@ -900,12 +898,18 @@ namespace Client.Main.Scenes
                         MessageWindow.Show("Connection lost.");
                     }
 
-                    if (MuGame.Instance.ActiveScene == this)
-                    {
-                        MuGame.Instance.ChangeScene<LoginScene>();
-                    }
+                    RequestReturnToLogin();
                 }
             });
+        }
+
+        private void RequestReturnToLogin()
+        {
+            if (_returnToLoginRequested || MuGame.Instance.ActiveScene != this)
+                return;
+
+            _returnToLoginRequested = true;
+            MuGame.Instance.ChangeScene<LoginScene>();
         }
 
         private void DisableInteractionDuringSelection(string characterName)
@@ -1433,8 +1437,29 @@ namespace Client.Main.Scenes
 
         private void OnExitButtonClick(object sender, EventArgs e)
         {
+            if (_isIntentionalLogout)
+                return;
+
             _logger.LogInformation("Exit button clicked - returning to login.");
             _isIntentionalLogout = true;
+            _isSelectionInProgress = true;
+
+            if (_selectWorld != null)
+                _selectWorld.Interactive = false;
+
+            if (_loadingScreen == null)
+            {
+                _loadingScreen = new LoadingScreenControl { Visible = true };
+                Controls.Add(_loadingScreen);
+            }
+
+            _loadingScreen.Message = "Returning to login...";
+            _loadingScreen.Progress = 0f;
+            _loadingScreen.Visible = true;
+            _loadingScreen.BringToFront();
+            Cursor?.BringToFront();
+            UpdateNavigationButtonState();
+
             _ = _networkManager.GetCharacterService().SendLogoutRequestAsync(LogOutType.BackToServerSelection);
         }
     }
