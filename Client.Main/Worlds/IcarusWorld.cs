@@ -11,9 +11,8 @@ namespace Client.Main.Worlds
     public class IcarusWorld : WalkableWorldControl
     {
         private static readonly Color CLEAR_COLOR = new Color(3f / 256f, 25f / 256f, 44f / 256f, 1f);
-        // private CloudLightEffect _cloudLight;
-        // private JointThunderEffect _jointThunder;
-        private SkyCloudSystem _skyCloudSystem;
+        private IcarusCloudLayer _cloudLayer;
+        private IcarusStormSystem _stormSystem;
 
         public IcarusWorld() : base(worldIndex: 11)
         {
@@ -30,13 +29,14 @@ namespace Client.Main.Worlds
 
         public override async Task Load()
         {
-            // Objects.Add(_cloudLight = new CloudLightEffect());
-            // Objects.Add(_jointThunder = new JointThunderEffect());
-            
-            // Create sky-wide cloud system instead of individual objects
-            _skyCloudSystem = new SkyCloudSystem();
-            Objects.Add(_skyCloudSystem);
-            
+            // One fixed, batched cloud shell replaces the previous 2000-4000 particle
+            // implementation. It stays visible independently from lightning flashes.
+            _cloudLayer = new IcarusCloudLayer();
+            Objects.Add(_cloudLayer);
+
+            _stormSystem = new IcarusStormSystem();
+            Objects.Add(_stormSystem);
+
             await base.Load();
         }
 
@@ -68,19 +68,9 @@ namespace Client.Main.Worlds
         {
             base.CreateMapTileObjects();
 
-            // Remove cloud objects from tiles - now handled by sky system
+            // Keep Object01-Object06 on the normal map-object path. They remain useful
+            // as stable anchors for local lightning, but no longer carry the base sky.
             MapTileObjects[10] = typeof(WallObject);
-        }
-
-        public override void Update(GameTime time)
-        {
-            base.Update(time);
-
-            if (World is WalkableWorldControl walkableWorld)
-            {
-                // _cloudLight.Position = walkableWorld.Walker.Position;
-                // _jointThunder.Position = walkableWorld.Walker.Position;
-            }
         }
 
         public override void Draw(GameTime time)
