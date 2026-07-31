@@ -1,4 +1,4 @@
-﻿using Client.Main.Content;
+using Client.Main.Content;
 using Client.Main.Controls;
 using Client.Main.Data;
 using Client.Main.Models;
@@ -1502,6 +1502,21 @@ namespace Client.Main.Objects.Player
 
         public PlayerAction GetSkillAction(ushort skillId, bool isInSafeZone)
         {
+            // Fire Burst uses the Dark Lord strike family rather than the generic magic cast.
+            // Strength and Mastery share the same visual/animation path in the original client.
+            if (skillId is 61 or 508 or 514)
+            {
+                if (_isRiding && !isInSafeZone)
+                {
+                    if (IsFenrirVehicle(_currentVehicleIndex))
+                        return PlayerAction.PlayerFenrirAttackDarklordStrike;
+
+                    return PlayerAction.PlayerAttackRideStrike;
+                }
+
+                return PlayerAction.PlayerAttackStrike;
+            }
+
             int animationId = SkillDatabase.GetSkillAnimation(skillId);
             if (animationId > 0 && (Model?.Actions == null || animationId < Model.Actions.Length))
                 return (PlayerAction)animationId;
