@@ -21,7 +21,9 @@ namespace Client.Main.Objects.Effects
         private const string CircleBaseName = "Circle";
         private const string StoneBaseName = "Stone";
         private const string SoundHellFire = "Sound/sHellFire.wav";
-        private const float ImpactZOffset = 70f;
+        // Original client places the circle at ground level (o->Position, no offset).
+        // Circle01.bmd already has +29.5 baked into its mesh, so 0 keeps it sitting on the ground.
+        private const float ImpactZOffset = 0f;
 
         private const float CircleLifeFrames = 45f;
         private const float CircleLightLifeFrames = 40f;
