@@ -1431,7 +1431,10 @@ namespace Client.Main.Objects.Player
             UpdateEquipmentAnimationStride();
 
             if (World is not WalkableWorldControl world)
+            {
+                EquippedWings?.UpdateCapePhysics(gameTime);
                 return;
+            }
 
             if (IsMainWalker)
                 UpdateLocalPlayer(world, gameTime);
@@ -1439,6 +1442,7 @@ namespace Client.Main.Objects.Player
                 UpdateRemotePlayer(world, gameTime);
 
             UpdateWingAnimationSpeed();
+            EquippedWings?.UpdateCapePhysics(gameTime);
         }
 
         public override void Draw(GameTime gameTime)
@@ -1480,15 +1484,24 @@ namespace Client.Main.Objects.Player
             bool isFlyingAction = CurrentAction == PlayerAction.PlayerFly ||
                                   CurrentAction == PlayerAction.PlayerFlyCrossbow;
 
-            float desiredSpeed = 7f;
-
-            if (wingIndex == WingOfRuinIndex)
+            float desiredSpeed;
+            if (EquippedWings.IsCapeLike)
             {
-                desiredSpeed *= 1.15f;
+                // SourceMain advances rigid cape ornaments at 0.25 frame/tick,
+                // or 1.0 frame/tick while flying, on the 25 Hz reference clock.
+                desiredSpeed = isFlyingAction ? 25f : 6.25f;
             }
-            else if (isFlyingAction)
+            else
             {
-                desiredSpeed *= wingIndex == WingOfStormIndex ? 1.5f : 2.5f;
+                desiredSpeed = 7f;
+                if (wingIndex == WingOfRuinIndex)
+                {
+                    desiredSpeed *= 1.15f;
+                }
+                else if (isFlyingAction)
+                {
+                    desiredSpeed *= wingIndex == WingOfStormIndex ? 1.5f : 2.5f;
+                }
             }
 
             if (Math.Abs(desiredSpeed - _lastWingAnimationSpeed) > 0.0001f)

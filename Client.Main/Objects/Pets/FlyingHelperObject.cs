@@ -69,8 +69,10 @@ namespace Client.Main.Objects.Pets
         private float _legacyAccumulator;
         private int _impShoulderBoneIndex = UnresolvedBoneIndex;
 
-        private const float ImpShoulderOutwardOffset = -15f;
-        private const float ImpShoulderHeightOffset = 10f;
+        // Offsets applied in world space: horizontal X/Y pushes the helper outward from the
+        // body axis onto the shoulder, and world Z (height) lifts it onto the shoulder line.
+        private const float ImpShoulderOutwardOffset = 15f;
+        private const float ImpShoulderHeightOffset = 12f;
 
         private BasicEffect? _billboardEffect;
         private Texture2D? _sparkTexture;
@@ -619,15 +621,14 @@ namespace Client.Main.Objects.Pets
                 anchor = ownerCenter + new Vector3(0f, 0f, shoulderHeight);
             }
 
-            // The clavicle pivot lies close to the neck. Move the helper farther along the
-            // horizontal direction from the character center to the selected shoulder. This is
-            // independent of the skeleton's left/right sign convention and keeps Imp outside the
-            // neck on different Player.bmd variants. Fall back to the owner's local right axis
-            // when the selected bone is almost centered.
+            // The clavicle pivot sits on the shoulder line, close to the neck. Push the helper
+            // outward along the horizontal (world X/Y) direction from the body center to the
+            // selected shoulder, then lift it slightly (world Z is height). Working in world axes
+            // keeps the helper on the shoulder regardless of the player skeleton variant.
             Vector2 outward = new(anchor.X - ownerCenter.X, anchor.Y - ownerCenter.Y);
-            if (outward.LengthSquared() < 4f)
+            if (outward.LengthSquared() < 1f)
             {
-                outward = new Vector2(MathF.Cos(owner.Angle.Z), MathF.Sin(owner.Angle.Z));
+                outward = GetLocalRightDirection(owner);
             }
             else
             {
@@ -638,6 +639,19 @@ namespace Client.Main.Objects.Pets
             anchor.Y += outward.Y * ImpShoulderOutwardOffset;
             anchor.Z += ImpShoulderHeightOffset;
             return anchor;
+        }
+
+        /// <summary>
+        /// World-space horizontal direction of the character's right side. Used only when the
+        /// resolved shoulder bone sits on the body axis. Mirrors the cape cloth's convention
+        /// where the owner's local +Y is the backward axis, so local -Z is the right side.
+        /// </summary>
+        private static Vector2 GetLocalRightDirection(PlayerObject owner)
+        {
+            Matrix ownerRotation = Matrix.CreateFromQuaternion(
+                Client.Main.Core.Utilities.MathUtils.AngleQuaternion(owner.Angle));
+            Vector3 right = Vector3.TransformNormal(-Vector3.UnitZ, ownerRotation);
+            return new Vector2(right.X, right.Y);
         }
 
         private int ResolveImpShoulderBoneIndex(PlayerObject owner)
