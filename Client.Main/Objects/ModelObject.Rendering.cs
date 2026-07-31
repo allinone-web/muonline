@@ -926,6 +926,23 @@ namespace Client.Main.Objects
             return effect;
         }
 
+        private void ApplyItemMaterialUpgradeBindings(ModelEffectBindings bindings)
+        {
+            if (bindings == null)
+                return;
+
+            GraphicsManager graphics = GraphicsManager.Instance;
+            Texture2D fallback = graphics.BlackPixel ?? graphics.Pixel;
+
+            bindings.Chrome02Texture?.SetValue(graphics.ItemChrome02Texture ?? fallback);
+            bindings.Shiny01Texture?.SetValue(graphics.ItemShiny01Texture ?? fallback);
+            bindings.Chrome01Texture?.SetValue(graphics.ItemChrome01Texture ?? fallback);
+            bindings.ItemMaterialGroup?.SetValue(MaterialItemGroup);
+            bindings.ItemMaterialIndex?.SetValue(MaterialItemIndex);
+            bindings.HighLevelTexturesAvailable?.SetValue(
+                graphics.HasItemUpgradeTextures ? 1f : 0f);
+        }
+
         private Effect PrepareItemMaterialGpuBatch(Texture2D texture, int boneCount)
         {
             Effect effect = GraphicsManager.Instance.ItemMaterialEffect;
@@ -957,6 +974,7 @@ namespace Client.Main.Objects
             bindings.LightDirection?.SetValue(sunDir);
             bindings.ShadowStrength?.SetValue(sunEnabled ? SunCycleManager.GetEffectiveShadowStrength() : 0f);
             bindings.DiffuseTexture?.SetValue(texture);
+            ApplyItemMaterialUpgradeBindings(bindings);
 
             int itemOptions = ItemLevel & 0x0F;
             if (IsExcellentItem)
@@ -1423,6 +1441,7 @@ namespace Client.Main.Objects
 
                     // Set texture
                     bindings.DiffuseTexture?.SetValue(texture);
+                    ApplyItemMaterialUpgradeBindings(bindings);
 
                     // Set item properties
                     int itemOptions = ItemLevel & 0x0F;

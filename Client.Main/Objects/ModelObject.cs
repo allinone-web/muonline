@@ -423,6 +423,8 @@ namespace Client.Main.Objects
         protected ILogger _logger;
 
         public int ItemLevel { get; set; } = 0;
+        public int MaterialItemGroup { get; set; } = -1;
+        public int MaterialItemIndex { get; set; } = -1;
         public bool IsExcellentItem { get; set; } = false;
         public bool IsAncientItem { get; set; } = false;
 

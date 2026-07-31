@@ -71,16 +71,37 @@ namespace Client.Main.Core.Utilities
         {
             ArgumentNullException.ThrowIfNull(work);
 
-            await _workerGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            // Cancellation is an expected result when a newer movement request supersedes
+            // the current one. Avoid propagating a canceled Task/OperationCanceledException,
+            // because debuggers treat the cooperative cancellation as an unhandled user-code
+            // exception even though callers catch it later.
+            bool enteredGate = false;
             try
             {
-                return await Task.Run(
-                    () => work(cancellationToken),
-                    cancellationToken).ConfigureAwait(false);
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    if (await _workerGate.WaitAsync(16).ConfigureAwait(false))
+                    {
+                        enteredGate = true;
+                        break;
+                    }
+                }
+
+                if (!enteredGate || cancellationToken.IsCancellationRequested)
+                    return default;
+
+                // Do not pass the token to Task.Run. The worker observes it cooperatively and
+                // returns default instead of creating a canceled Task that throws on await.
+                return await Task.Run(() => work(cancellationToken)).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return default;
             }
             finally
             {
-                _workerGate.Release();
+                if (enteredGate)
+                    _workerGate.Release();
             }
         }
 
@@ -91,7 +112,8 @@ namespace Client.Main.Core.Utilities
             CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(world);
-            cancellationToken.ThrowIfCancellationRequested();
+            if (cancellationToken.IsCancellationRequested)
+                return null;
 
             var ctx = _ctx.Value;
             ctx.Clear();
@@ -108,8 +130,8 @@ namespace Client.Main.Core.Utilities
 
                 while (ctx.OpenSet.Count > 0)
                 {
-                    if ((expandedNodes++ & 63) == 0)
-                        cancellationToken.ThrowIfCancellationRequested();
+                    if ((expandedNodes++ & 63) == 0 && cancellationToken.IsCancellationRequested)
+                        return null;
 
                     PathNode currentNode = ctx.OpenSet.Dequeue();
 

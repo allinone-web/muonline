@@ -37,6 +37,39 @@ sampler2D DiffuseSampler = sampler_state
     AddressV = Wrap;
 };
 
+texture Chrome02Texture;
+sampler2D Chrome02Sampler = sampler_state
+{
+    Texture = <Chrome02Texture>;
+    MinFilter = Point;
+    MagFilter = Point;
+    MipFilter = Point;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+texture Shiny01Texture;
+sampler2D Shiny01Sampler = sampler_state
+{
+    Texture = <Shiny01Texture>;
+    MinFilter = Linear;
+    MagFilter = Linear;
+    MipFilter = Point;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+texture Chrome01Texture;
+sampler2D Chrome01Sampler = sampler_state
+{
+    Texture = <Chrome01Texture>;
+    MinFilter = Linear;
+    MagFilter = Linear;
+    MipFilter = Point;
+    AddressU = Wrap;
+    AddressV = Wrap;
+};
+
 texture ShadowMap;
 sampler2D ShadowSampler = sampler_state
 {
@@ -49,7 +82,11 @@ sampler2D ShadowSampler = sampler_state
 };
 
 int ItemOptions = 0;
+int ItemMaterialGroup = -1;
+int ItemMaterialIndex = -1;
+float HighLevelTexturesAvailable = 0.0;
 float Time = 0;
+float Alpha = 1.0;
 float3 GlowColor = float3(0.6, 0.5, 0.0);
 bool IsAncient = false;
 bool IsExcellent = false;
@@ -214,6 +251,107 @@ VertexShaderOutput MainVS_Skinned(in VertexShaderInputSkinned input)
 }
 #endif
 
+
+bool IsWarmUpgradeSet(int setIndex)
+{
+    return setIndex == 4 ||
+           setIndex == 14 ||
+           setIndex == 15 ||
+           setIndex == 17 ||
+           (setIndex >= 39 && setIndex <= 42);
+}
+
+float3 GetUpgradePrimaryColor(int setIndex, float3 bodyLight)
+{
+    if (IsWarmUpgradeSet(setIndex))
+        return float3(bodyLight.r, bodyLight.g * 0.5, 0.0);
+
+    if (setIndex == 18 || setIndex == 43)
+        return float3(0.0, bodyLight.g * 0.5, bodyLight.b);
+
+    if (setIndex == 21 || setIndex == 44)
+        return float3(1.0, 1.0, 1.0);
+
+    return bodyLight;
+}
+
+float3 GetUpgradeReflectionColor(int setIndex, float3 bodyLight)
+{
+    if (IsWarmUpgradeSet(setIndex))
+        return float3(1.0, 0.5, 0.0);
+
+    if (setIndex == 18 || setIndex == 43)
+        return float3(0.0, 0.5, 1.0);
+
+    if (setIndex == 21 || setIndex == 44)
+        return float3(1.0, 1.0, 1.0);
+
+    // The complete legacy palette contains set-specific entries that are not
+    // available in the asset description. Keep unknown sets neutral instead
+    // of assigning an invented hue.
+    return lerp(float3(0.72, 0.78, 0.90), bodyLight, 0.35);
+}
+
+float4 RenderHighLevelArmor(
+    VertexShaderOutput input,
+    float4 diffuseSample,
+    float3 normal,
+    float itemLevel)
+{
+    float ndotl = saturate(dot(normal, -LightDirection));
+    float3 bodyLight = lerp(float3(0.28, 0.30, 0.34), float3(1.0, 1.0, 1.0), ndotl);
+
+    float shadowTerm = SampleShadow(input.WorldPosition, normal);
+    float shadowMix = lerp(1.0 - ShadowStrength, 1.0, shadowTerm);
+
+    // SourceMain renders the base armor at 90% of the character light, then
+    // adds the three reflective layers without rewriting depth.
+    float3 result = diffuseSample.rgb * bodyLight * 0.9 * shadowMix;
+
+    float wave = frac(Time * 0.1);
+    float wave2 = frac(Time * 0.2) * 1.2 - 0.4;
+
+    float2 primaryUv;
+    if (itemLevel >= 13.0)
+    {
+        float3 animatedLight = float3(cos(Time), sin(Time * 2.0), 1.0);
+        float normalLight = dot(normal, animatedLight);
+        primaryUv.x = normalLight + normal.y * 0.5 + animatedLight.y * 3.0;
+        primaryUv.y = 1.0 - normalLight - normal.z * 0.5 - wave * 3.0;
+    }
+    else
+    {
+        primaryUv.x = (normal.z + normal.x) * 0.8 + wave2 * 2.0;
+        primaryUv.y = (normal.y + normal.x) + wave2 * 3.0;
+    }
+
+    float2 metalUv = float2(
+        normal.z * 0.5 + 0.2,
+        normal.y * 0.5 + 0.5);
+
+    float2 chromeUv = float2(
+        normal.z * 0.5 + wave,
+        normal.y * 0.5 + wave * 2.0);
+
+    float3 primaryColor = GetUpgradePrimaryColor(ItemMaterialIndex, bodyLight);
+    float3 reflectionColor = GetUpgradeReflectionColor(ItemMaterialIndex, bodyLight);
+
+    float3 primaryLayer = tex2D(Chrome02Sampler, primaryUv).rgb;
+    float3 metalLayer = tex2D(Shiny01Sampler, metalUv).rgb;
+    float3 chromeLayer = tex2D(Chrome01Sampler, chromeUv).rgb;
+
+    // Levels 11-12 use the regular CHROME2 movement. Levels 13-15 use
+    // CHROME4 and receive a slightly stronger main reflection.
+    float levelStrength = saturate((itemLevel - 11.0) * 0.08 + 0.76);
+    float primaryStrength = itemLevel >= 13.0 ? 0.82 : 0.72;
+
+    result += primaryLayer * primaryColor * primaryStrength * levelStrength;
+    result += metalLayer * reflectionColor * 0.30;
+    result += chromeLayer * reflectionColor * 0.20;
+
+    return float4(result, diffuseSample.a * Alpha);
+}
+
 float4 MainPS(VertexShaderOutput input) : COLOR
 {
     float4 color = tex2D(DiffuseSampler, input.TextureCoordinate);
@@ -226,8 +364,30 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     bool isExcellent = itemOptions >= 16.0;
     
     float3 normal = normalize(input.Normal);
-    float lightIntensity = max(0.1, dot(normal, -LightDirection));
-    color.rgb *= lightIntensity;
+
+    bool isArmorPart = ItemMaterialGroup >= 7 && ItemMaterialGroup <= 11;
+    bool useHighLevelArmor =
+        HighLevelTexturesAvailable > 0.5 &&
+        isArmorPart &&
+        itemLevel >= 11.0;
+
+    if (useHighLevelArmor)
+    {
+        // Build the +11/+13 chrome material first, then continue through the
+        // existing ancient/excellent glow section below. The previous early
+        // return skipped that entire section and removed the legacy glow.
+        color = RenderHighLevelArmor(input, color, normal, itemLevel);
+
+        // Ordinary +11/+13 armor needs no legacy ghost samples. Continue only
+        // for special items whose ancient/excellent glow must be layered on top.
+        if (!IsAncient && !IsExcellent)
+            return color;
+    }
+    else
+    {
+        float lightIntensity = max(0.1, dot(normal, -LightDirection));
+        color.rgb *= lightIntensity;
+    }
     
     float waveBase = frac(Time * 0.001) * 10000.0 * 0.0001;
     float3 view = normalize(input.ViewDirection) + normal + float3(10000.5, 10000.5, 10000.5);
@@ -287,7 +447,11 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     float4 ghost2 = 0.0;
     float4 ghost3 = 0.0;
     float4 ghost4 = 0.0;
-    if (itemLevel >= 7.0)
+    // High-level ancient armor still needs the regular level-dependent glow.
+    // Ordinary +11/+13 armor keeps the dedicated Chrome material only, while
+    // excellent items keep their existing excellent-specific glow path.
+    bool applyAncientLevelGlow = useHighLevelArmor && IsAncient && !IsExcellent;
+    if ((!useHighLevelArmor || applyAncientLevelGlow) && itemLevel >= 7.0)
     {
         ghost1 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset1);
         ghost2 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset2);
@@ -321,33 +485,50 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     
     float levelMask = step(7.0, itemLevel);
     
-    // Apply effects based on level
-    if (itemLevel >= 7)
+    if (!useHighLevelArmor)
     {
-        float3 metallic = effectColor * 0.8;
-        color.rgb = color.rgb * metallic * brightness * subtlePulse;
-        color.rgb += ghost1.rgb * (0.8 * ghostIntensity) * shimmer * GlowIntensityScale;
-        color.rgb += ghost2.rgb * (0.6 * ghostIntensity) * shimmer * GlowIntensityScale;
-        color.rgb += ghost3.rgb * (0.5 * ghostIntensity) * shimmer * GlowIntensityScale;
-        color.rgb += ghost4.rgb * (0.4 * ghostIntensity) * shimmer * GlowIntensityScale;
+        // Legacy material path for lower-level items and non-armor equipment.
+        if (itemLevel >= 7)
+        {
+            float3 metallic = effectColor * 0.8;
+            color.rgb = color.rgb * metallic * brightness * subtlePulse;
+            color.rgb += ghost1.rgb * (0.8 * ghostIntensity) * shimmer * GlowIntensityScale;
+            color.rgb += ghost2.rgb * (0.6 * ghostIntensity) * shimmer * GlowIntensityScale;
+            color.rgb += ghost3.rgb * (0.5 * ghostIntensity) * shimmer * GlowIntensityScale;
+            color.rgb += ghost4.rgb * (0.4 * ghostIntensity) * shimmer * GlowIntensityScale;
+        }
+        else
+        {
+            color.rgb = color.rgb * brightness;
+        }
+
+        float level10Mask = step(10.0, itemLevel);
+        float extraGlow = (itemLevel - 9.0) * 0.1;
+        float glowEffect = (1.0 + sin(Time * 1.0)) * 0.03 + 0.2;
+        color.rgb += effectColor * glowEffect * extraGlow * level10Mask;
     }
-    else
+    else if (applyAncientLevelGlow)
     {
-        color.rgb = color.rgb * brightness;
+        // Preserve the +11/+13 Chrome material and add only the old upgrade-level
+        // glow on top. Do not recolor or multiply the base material again.
+        float levelGlowScale = 0.72 + saturate((itemLevel - 7.0) / 8.0) * 0.48;
+        color.rgb += ghost1.rgb * (0.8 * ghostIntensity) * shimmer * GlowIntensityScale * levelGlowScale;
+        color.rgb += ghost2.rgb * (0.6 * ghostIntensity) * shimmer * GlowIntensityScale * levelGlowScale;
+        color.rgb += ghost3.rgb * (0.5 * ghostIntensity) * shimmer * GlowIntensityScale * levelGlowScale;
+        color.rgb += ghost4.rgb * (0.4 * ghostIntensity) * shimmer * GlowIntensityScale * levelGlowScale;
+
+        float level10Mask = step(10.0, itemLevel);
+        float extraGlow = max(0.0, itemLevel - 9.0) * 0.1;
+        float glowEffect = (1.0 + sin(Time * 1.0)) * 0.03 + 0.2;
+        color.rgb += effectColor * glowEffect * extraGlow * level10Mask * levelGlowScale;
     }
-    
-    // Additional brightness boost for higher levels
-    float level10Mask = step(10.0, itemLevel);
-    float extraGlow = (itemLevel - 9.0) * 0.1;
-    float glowEffect = (1.0 + sin(Time * 1.0)) * 0.03 + 0.2;
-    color.rgb += effectColor * glowEffect * extraGlow * level10Mask;
     
     // Ancient item effect - fast blue sweep with pause
     float ancientEnabled = IsAncient ? 1.0 : 0.0;
     float3 ancientColor = float3(0.3, 0.5, 1.0); // More blue color
 
     // Cycle with pause: sweep takes 12% of cycle, pause is 88%
-    float cycleSpeed = 0.1; 
+    float cycleSpeed = 0.1;
     float cycleDuration = 1.0 / cycleSpeed;
     float sweepPortion = 0.15; // Sweep happens in first 12% of cycle, very long pause after
 
@@ -380,7 +561,7 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     float baseGlow = sin(Time * 0.8) * 0.08 + 0.15;
     float baseGlowIntensity = (itemLevel >= 9) ? 0.5 : 0.25;
     color.rgb += color.rgb * ancientColor * baseGlow * baseGlowIntensity * ancientEnabled;
-    
+
     // ==================== EXCELLENT SWEEP PULSE EFFECT ====================
     // Similar to Ancient sweep but with semi-transparent violet color (only for +7+)
     float excellentSweepEnabled = (IsExcellent && itemLevel >= 7) ? 1.0 : 0.0;
@@ -501,9 +682,12 @@ float4 MainPS(VertexShaderOutput input) : COLOR
         // Brightness boost for excellent items
         color.rgb *= lerp(1.0, 1.4, excellentEnabled);
 
-        float shadowTerm = SampleShadow(input.WorldPosition, normal);
-        float shadowMix = lerp(1.0 - ShadowStrength, 1.0, shadowTerm);
-        color.rgb *= shadowMix;
+        if (!useHighLevelArmor)
+        {
+            float shadowTerm = SampleShadow(input.WorldPosition, normal);
+            float shadowMix = lerp(1.0 - ShadowStrength, 1.0, shadowTerm);
+            color.rgb *= shadowMix;
+        }
 
         return color;
 }

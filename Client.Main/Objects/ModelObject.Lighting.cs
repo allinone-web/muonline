@@ -39,7 +39,13 @@ namespace Client.Main.Objects
                 DebugLightingAreas = effect.Parameters["DebugLightingAreas"];
                 TerrainLight = effect.Parameters["TerrainLight"];
                 DiffuseTexture = effect.Parameters["DiffuseTexture"];
+                Chrome02Texture = effect.Parameters["Chrome02Texture"];
+                Shiny01Texture = effect.Parameters["Shiny01Texture"];
+                Chrome01Texture = effect.Parameters["Chrome01Texture"];
                 ItemOptions = effect.Parameters["ItemOptions"];
+                ItemMaterialGroup = effect.Parameters["ItemMaterialGroup"];
+                ItemMaterialIndex = effect.Parameters["ItemMaterialIndex"];
+                HighLevelTexturesAvailable = effect.Parameters["HighLevelTexturesAvailable"];
                 Time = effect.Parameters["Time"];
                 IsAncient = effect.Parameters["IsAncient"];
                 IsExcellent = effect.Parameters["IsExcellent"];
@@ -79,7 +85,13 @@ namespace Client.Main.Objects
             public EffectParameter DebugLightingAreas { get; }
             public EffectParameter TerrainLight { get; }
             public EffectParameter DiffuseTexture { get; }
+            public EffectParameter Chrome02Texture { get; }
+            public EffectParameter Shiny01Texture { get; }
+            public EffectParameter Chrome01Texture { get; }
             public EffectParameter ItemOptions { get; }
+            public EffectParameter ItemMaterialGroup { get; }
+            public EffectParameter ItemMaterialIndex { get; }
+            public EffectParameter HighLevelTexturesAvailable { get; }
             public EffectParameter Time { get; }
             public EffectParameter IsAncient { get; }
             public EffectParameter IsExcellent { get; }

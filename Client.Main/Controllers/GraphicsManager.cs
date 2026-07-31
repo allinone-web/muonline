@@ -22,6 +22,14 @@ namespace Client.Main.Controllers
         public SpriteFont Font { get; private set; }
         public SpriteFont SmallFont { get; private set; }
         public Texture2D Pixel { get; private set; }
+        public Texture2D BlackPixel { get; private set; }
+        public Texture2D ItemChrome02Texture { get; private set; }
+        public Texture2D ItemShiny01Texture { get; private set; }
+        public Texture2D ItemChrome01Texture { get; private set; }
+        public bool HasItemUpgradeTextures =>
+            ItemChrome02Texture != null &&
+            ItemShiny01Texture != null &&
+            ItemChrome01Texture != null;
         public AlphaTestEffect AlphaTestEffectUI { get; private set; }
         public AlphaTestEffect AlphaTestEffect3D { get; private set; }
         public BasicEffect BasicEffect3D { get; private set; }
@@ -66,6 +74,11 @@ namespace Client.Main.Controllers
 
             Pixel = new Texture2D(_graphicsDevice, 1, 1);
             Pixel.SetData(new[] { Color.White });
+
+            BlackPixel = new Texture2D(_graphicsDevice, 1, 1);
+            BlackPixel.SetData(new[] { Color.Transparent });
+
+            InitializeItemUpgradeTextures();
 
             // Full-screen render targets are allocated lazily only when resolution
             // scaling, MSAA or post-processing actually needs them.
@@ -318,6 +331,27 @@ namespace Client.Main.Controllers
             }
         }
 
+        private void InitializeItemUpgradeTextures()
+        {
+            ItemChrome02Texture = LoadRuntimeTexture("Effect/Chrome02.jpg");
+            ItemShiny01Texture = LoadRuntimeTexture("Effect/Shiny01.jpg");
+            ItemChrome01Texture = LoadRuntimeTexture("Effect/Chrome01.jpg");
+        }
+
+        private static Texture2D LoadRuntimeTexture(string path)
+        {
+            try
+            {
+                TextureLoader.Instance.Prepare(path).GetAwaiter().GetResult();
+                return TextureLoader.Instance.GetTexture2D(path);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Item material texture {path} could not be loaded: {ex.Message}");
+                return null;
+            }
+        }
+
         public void SwapTargets(ref RenderTarget2D source, ref RenderTarget2D destination)
         {
             source = destination;
@@ -328,6 +362,7 @@ namespace Client.Main.Controllers
         {
             DisposeRenderTargets();
             Pixel?.Dispose();
+            BlackPixel?.Dispose();
             ShadowMapRenderer?.Dispose();
 
             AlphaRGBEffect?.Dispose();

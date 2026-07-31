@@ -22,6 +22,7 @@ using Client.Main.Controllers;
 using Client.Main.Graphics;
 using Client.Main.Helpers;
 using Client.Main.Objects.Vehicle;
+using Client.Main.Objects.Effects;
 using Client.Main.Controls.UI.Game.Inventory;
 using Client.Main.Scenes;
 using GameDirection = Client.Main.Models.Direction;
@@ -54,6 +55,7 @@ namespace Client.Main.Objects.Player
         public WingObject EquippedWings { get; private set; }
 
         public VehicleObject Vehicle { get; private set; }
+        public FullSetAuraEffect FullSetAura { get; private set; }
 
         internal const int LeftHandBoneIndex = 33;
         internal const int RightHandBoneIndex = 42;
@@ -199,6 +201,8 @@ namespace Client.Main.Objects.Player
             EquippedWings = new WingObject { LinkParentAnimation = true, Hidden = true };
             Vehicle = new VehicleObject { Hidden = true };
 
+            FullSetAura = new FullSetAuraEffect();
+
             Children.Add(HelmMask);
             Children.Add(Helm);
             Children.Add(Armor);
@@ -209,6 +213,7 @@ namespace Client.Main.Objects.Player
             Children.Add(Weapon2);
             Children.Add(EquippedWings);
             Children.Add(Vehicle);
+            Children.Add(FullSetAura);
 
             // Enable mouse hover interactions so the name is shown
             Interactive = true;
@@ -754,6 +759,8 @@ namespace Client.Main.Objects.Player
 
                 // Apply item properties for shader effects
                 Helm.ItemLevel = Appearance.HelmItemLevel;
+                Helm.MaterialItemGroup = 7;
+                Helm.MaterialItemIndex = Appearance.HelmItemIndex;
                 Helm.IsExcellentItem = Appearance.HelmExcellent;
                 Helm.IsAncientItem = Appearance.HelmAncient;
                 _helmItemEquipped = true;
@@ -773,6 +780,8 @@ namespace Client.Main.Objects.Player
 
                 // Apply item properties for shader effects
                 Armor.ItemLevel = Appearance.ArmorItemLevel;
+                Armor.MaterialItemGroup = 8;
+                Armor.MaterialItemIndex = Appearance.ArmorItemIndex;
                 Armor.IsExcellentItem = Appearance.ArmorExcellent;
                 Armor.IsAncientItem = Appearance.ArmorAncient;
             }
@@ -788,6 +797,8 @@ namespace Client.Main.Objects.Player
 
                 // Apply item properties for shader effects
                 Pants.ItemLevel = Appearance.PantsItemLevel;
+                Pants.MaterialItemGroup = 9;
+                Pants.MaterialItemIndex = Appearance.PantsItemIndex;
                 Pants.IsExcellentItem = Appearance.PantsExcellent;
                 Pants.IsAncientItem = Appearance.PantsAncient;
             }
@@ -809,6 +820,8 @@ namespace Client.Main.Objects.Player
 
                 // Apply item properties for shader effects
                 Gloves.ItemLevel = Appearance.GlovesItemLevel;
+                Gloves.MaterialItemGroup = 10;
+                Gloves.MaterialItemIndex = Appearance.GlovesItemIndex;
                 Gloves.IsExcellentItem = Appearance.GlovesExcellent;
                 Gloves.IsAncientItem = Appearance.GlovesAncient;
             }
@@ -830,6 +843,8 @@ namespace Client.Main.Objects.Player
 
                 // Apply item properties for shader effects
                 Boots.ItemLevel = Appearance.BootsItemLevel;
+                Boots.MaterialItemGroup = 11;
+                Boots.MaterialItemIndex = Appearance.BootsItemIndex;
                 Boots.IsExcellentItem = Appearance.BootsExcellent;
                 Boots.IsAncientItem = Appearance.BootsAncient;
             }
@@ -933,6 +948,8 @@ namespace Client.Main.Objects.Player
 
                 // Apply item properties for shader effects
                 Helm.ItemLevel = appearanceConfig.HelmItemLevel;
+                Helm.MaterialItemGroup = 7;
+                Helm.MaterialItemIndex = appearanceConfig.HelmItemIndex;
                 Helm.IsExcellentItem = appearanceConfig.HelmExcellent;
                 Helm.IsAncientItem = appearanceConfig.HelmAncient;
                 _helmItemEquipped = true;
@@ -958,6 +975,8 @@ namespace Client.Main.Objects.Player
 
                 // Apply item properties for shader effects
                 Armor.ItemLevel = appearanceConfig.ArmorItemLevel;
+                Armor.MaterialItemGroup = 8;
+                Armor.MaterialItemIndex = appearanceConfig.ArmorItemIndex;
                 Armor.IsExcellentItem = appearanceConfig.ArmorExcellent;
                 Armor.IsAncientItem = appearanceConfig.ArmorAncient;
             }
@@ -979,6 +998,8 @@ namespace Client.Main.Objects.Player
 
                 // Apply item properties for shader effects
                 Pants.ItemLevel = appearanceConfig.PantsItemLevel;
+                Pants.MaterialItemGroup = 9;
+                Pants.MaterialItemIndex = appearanceConfig.PantsItemIndex;
                 Pants.IsExcellentItem = appearanceConfig.PantsExcellent;
                 Pants.IsAncientItem = appearanceConfig.PantsAncient;
             }
@@ -1005,6 +1026,8 @@ namespace Client.Main.Objects.Player
 
                 // Apply item properties for shader effects
                 Gloves.ItemLevel = appearanceConfig.GlovesItemLevel;
+                Gloves.MaterialItemGroup = 10;
+                Gloves.MaterialItemIndex = appearanceConfig.GlovesItemIndex;
                 Gloves.IsExcellentItem = appearanceConfig.GlovesExcellent;
                 Gloves.IsAncientItem = appearanceConfig.GlovesAncient;
             }
@@ -1031,6 +1054,8 @@ namespace Client.Main.Objects.Player
 
                 // Apply item properties for shader effects
                 Boots.ItemLevel = appearanceConfig.BootsItemLevel;
+                Boots.MaterialItemGroup = 11;
+                Boots.MaterialItemIndex = appearanceConfig.BootsItemIndex;
                 Boots.IsExcellentItem = appearanceConfig.BootsExcellent;
                 Boots.IsAncientItem = appearanceConfig.BootsAncient;
             }
@@ -3095,7 +3120,9 @@ namespace Client.Main.Objects.Player
                     ct => BuildNpcApproachPath(start, npcTile, world, ct),
                     token).ConfigureAwait(false);
 
-                token.ThrowIfCancellationRequested();
+                if (token.IsCancellationRequested)
+                    return;
+
                 MuGame.ScheduleOnMainThread(() =>
                 {
                     if (!token.IsCancellationRequested &&
@@ -3190,7 +3217,9 @@ namespace Client.Main.Objects.Player
             WalkableWorldControl world,
             CancellationToken cancellationToken)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            if (cancellationToken.IsCancellationRequested)
+                return null;
+
             var directPath = Pathfinding.FindPath(start, npcTile, world, cancellationToken);
             if (directPath != null && directPath.Count > 0)
             {
@@ -3223,7 +3252,8 @@ namespace Client.Main.Objects.Player
         {
             for (int radius = 1; radius <= NpcApproachSearchRadius; radius++)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                if (cancellationToken.IsCancellationRequested)
+                    return null;
                 // Top/bottom edges of the square ring
                 for (int dx = -radius; dx <= radius; dx++)
                 {
@@ -3253,8 +3283,9 @@ namespace Client.Main.Objects.Player
             CancellationToken cancellationToken,
             out List<Vector2> path)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             path = null;
+            if (cancellationToken.IsCancellationRequested)
+                return false;
 
             if (!IsWithinMapBounds(candidate))
                 return false;
@@ -3946,6 +3977,16 @@ namespace Client.Main.Objects.Player
 
             var itemDetails = ItemDatabase.ParseItemDetails(itemData);
             part.ItemLevel = itemDetails.Level;
+            if (ItemDatabase.TryGetItemGroupAndNumber(itemData, out byte itemGroup, out short itemNumber))
+            {
+                part.MaterialItemGroup = itemGroup;
+                part.MaterialItemIndex = itemNumber;
+            }
+            else
+            {
+                part.MaterialItemGroup = -1;
+                part.MaterialItemIndex = -1;
+            }
             part.IsExcellentItem = itemDetails.IsExcellent;
             part.IsAncientItem = itemDetails.IsAncient;
         }
@@ -4157,6 +4198,8 @@ namespace Client.Main.Objects.Player
         private void SetItemPropertiesFromEquipmentData(ModelObject part, EquipmentSlotData equipmentData)
         {
             part.ItemLevel = equipmentData.ItemLevel;
+            part.MaterialItemGroup = equipmentData.ItemGroup;
+            part.MaterialItemIndex = equipmentData.ItemNumber;
             part.IsExcellentItem = equipmentData.ExcellentFlags > 0;
             part.IsAncientItem = equipmentData.AncientDiscriminator > 0;
         }
@@ -4164,6 +4207,8 @@ namespace Client.Main.Objects.Player
         private void ClearItemProperties(ModelObject part)
         {
             part.ItemLevel = 0;
+            part.MaterialItemGroup = -1;
+            part.MaterialItemIndex = -1;
             part.IsExcellentItem = false;
             part.IsAncientItem = false;
 

@@ -393,7 +393,8 @@ namespace Client.Main.Objects
                     expectedWorld,
                     token).ConfigureAwait(false);
 
-                token.ThrowIfCancellationRequested();
+                if (token.IsCancellationRequested)
+                    return;
 
                 if ((path == null || path.Count == 0) && !sendToServer)
                     path = Pathfinding.BuildDirectPath(startPos, targetLocation);

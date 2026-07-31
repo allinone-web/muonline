@@ -20,18 +20,27 @@ namespace Client.Main.Controls.UI.Game.Inventory
     {
         private readonly struct ItemRenderProperties
         {
-            public static ItemRenderProperties Default => new(0, false, false);
+            public static ItemRenderProperties Default => new(0, false, false, -1, -1);
 
-            public ItemRenderProperties(int level, bool isExcellent, bool isAncient)
+            public ItemRenderProperties(
+                int level,
+                bool isExcellent,
+                bool isAncient,
+                int itemGroup,
+                int itemIndex)
             {
                 Level = Math.Clamp(level, 0, 15);
                 IsExcellent = isExcellent;
                 IsAncient = isAncient;
+                ItemGroup = itemGroup;
+                ItemIndex = itemIndex;
             }
 
             public int Level { get; }
             public bool IsExcellent { get; }
             public bool IsAncient { get; }
+            public int ItemGroup { get; }
+            public int ItemIndex { get; }
 
             public bool RequiresDistinctKey => Level != 0 || IsExcellent || IsAncient;
             public bool ShouldUseItemMaterial => Level >= 7 || IsExcellent || IsAncient;
@@ -173,7 +182,13 @@ namespace Client.Main.Controls.UI.Game.Inventory
             public EffectParameter WorldViewProjection;
             public EffectParameter EyePosition;
             public EffectParameter DiffuseTexture;
+            public EffectParameter Chrome02Texture;
+            public EffectParameter Shiny01Texture;
+            public EffectParameter Chrome01Texture;
             public EffectParameter ItemOptions;
+            public EffectParameter ItemMaterialGroup;
+            public EffectParameter ItemMaterialIndex;
+            public EffectParameter HighLevelTexturesAvailable;
             public EffectParameter IsExcellent;
             public EffectParameter IsAncient;
             public EffectParameter Time;
@@ -256,7 +271,14 @@ namespace Client.Main.Controls.UI.Game.Inventory
             bool isExcellent = details.IsExcellent;
             bool isAncient = details.IsAncient;
 
-            return new ItemRenderProperties(level, isExcellent, isAncient);
+            int itemGroup = item.Definition?.Group ?? -1;
+            int itemIndex = item.Definition?.Id ?? -1;
+            return new ItemRenderProperties(
+                level,
+                isExcellent,
+                isAncient,
+                itemGroup,
+                itemIndex);
         }
 
         private static string BuildCacheKey(
@@ -283,7 +305,11 @@ namespace Client.Main.Controls.UI.Game.Inventory
             }
 
             if (props.RequiresDistinctKey)
+            {
                 key = $"{key}:lvl{props.Level:X2}:ex{(props.IsExcellent ? 1 : 0)}:an{(props.IsAncient ? 1 : 0)}";
+                if (props.ItemGroup >= 0 && props.ItemIndex >= 0)
+                    key = $"{key}:g{props.ItemGroup}:i{props.ItemIndex}";
+            }
 
             return key;
         }
@@ -546,7 +572,13 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 WorldViewProjection = effect.Parameters["WorldViewProjection"],
                 EyePosition = effect.Parameters["EyePosition"],
                 DiffuseTexture = effect.Parameters["DiffuseTexture"],
+                Chrome02Texture = effect.Parameters["Chrome02Texture"],
+                Shiny01Texture = effect.Parameters["Shiny01Texture"],
+                Chrome01Texture = effect.Parameters["Chrome01Texture"],
                 ItemOptions = effect.Parameters["ItemOptions"],
+                ItemMaterialGroup = effect.Parameters["ItemMaterialGroup"],
+                ItemMaterialIndex = effect.Parameters["ItemMaterialIndex"],
+                HighLevelTexturesAvailable = effect.Parameters["HighLevelTexturesAvailable"],
                 IsExcellent = effect.Parameters["IsExcellent"],
                 IsAncient = effect.Parameters["IsAncient"],
                 Time = effect.Parameters["Time"],
@@ -1354,7 +1386,17 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 bindings.WorldViewProjection?.SetValue(worldViewProjection);
                 bindings.EyePosition?.SetValue(eyePosition);
                 bindings.DiffuseTexture?.SetValue(texture);
+
+                GraphicsManager graphics = GraphicsManager.Instance;
+                Texture2D fallback = graphics.BlackPixel ?? graphics.Pixel;
+                bindings.Chrome02Texture?.SetValue(graphics.ItemChrome02Texture ?? fallback);
+                bindings.Shiny01Texture?.SetValue(graphics.ItemShiny01Texture ?? fallback);
+                bindings.Chrome01Texture?.SetValue(graphics.ItemChrome01Texture ?? fallback);
                 bindings.ItemOptions?.SetValue(props.ItemOptions);
+                bindings.ItemMaterialGroup?.SetValue(props.ItemGroup);
+                bindings.ItemMaterialIndex?.SetValue(props.ItemIndex);
+                bindings.HighLevelTexturesAvailable?.SetValue(
+                    graphics.HasItemUpgradeTextures ? 1f : 0f);
                 bindings.IsExcellent?.SetValue(props.IsExcellent);
                 bindings.IsAncient?.SetValue(props.IsAncient);
                 bindings.Time?.SetValue(shaderTime);
