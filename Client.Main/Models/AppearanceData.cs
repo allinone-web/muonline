@@ -767,22 +767,44 @@ namespace Client.Main.Models
         }
 
         /// <summary>
-        /// Gets the pet/helper item index.
+        /// Tries to decode the equipped helper. Item group 13, number 0 is Guardian Angel
+        /// and number 1 is Imp. In the legacy 18-byte format 0x3F is the empty marker,
+        /// so item number 0 must never be treated as an empty slot.
         /// </summary>
-        public byte PetItemIndex
+        public bool TryGetHelperItem(out byte itemGroup, out short itemNumber)
         {
-            get
+            itemGroup = 0xFF;
+            itemNumber = -1;
+
+            if (IsExtendedFormat)
             {
-                if (IsExtendedFormat)
-                {
-                    // Extended: Helper at offset 23-24
-                    var helper = ParseExtendedHelper(RawData, 23);
-                    return helper.ItemNumber < 0 ? (byte)0 : unchecked((byte)helper.ItemNumber);
-                }
-                // 18-byte: Byte 16, bits 2-7
-                return RawData.Length > 16 ? (byte)((RawData[16] >> 2) & 0x3F) : (byte)0;
+                var helper = ParseExtendedHelper(RawData, 23);
+                if (helper.Group != HelperItemGroup || helper.ItemNumber < 0)
+                    return false;
+
+                itemGroup = helper.Group;
+                itemNumber = helper.ItemNumber;
+                return true;
             }
+
+            if (RawData.Length <= 16)
+                return false;
+
+            byte legacyItemNumber = (byte)((RawData[16] >> 2) & 0x3F);
+            if (legacyItemNumber == 0x3F)
+                return false;
+
+            itemGroup = HelperItemGroup;
+            itemNumber = legacyItemNumber;
+            return true;
         }
+
+        /// <summary>
+        /// Gets the pet/helper item index, or 0xFF when no helper is equipped.
+        /// </summary>
+        public byte PetItemIndex => TryGetHelperItem(out _, out short itemNumber)
+            ? unchecked((byte)itemNumber)
+            : (byte)0xFF;
 
         public byte SmallWingItemIndex => !IsExtendedFormat && RawData.Length > 17 ? (byte)((RawData[17] >> 4) & 0xF) : (byte)0;
 

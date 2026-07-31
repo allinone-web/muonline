@@ -441,6 +441,17 @@ namespace Client.Main.Objects
         protected virtual bool AllowAnimationUpdates => true;
         protected virtual bool AllowLightingUpdates => true;
         protected virtual bool AllowDynamicLightingShader => true;
+        /// <summary>
+        /// Allows legacy models with unsupported or unusual skin data to opt out of the
+        /// GPU-skinned path and use the same CPU geometry path as the inventory preview.
+        /// </summary>
+        protected virtual bool AllowGpuSkinning => true;
+        /// <summary>
+        /// Forces all meshes to render two-sided. Some legacy effect/helper BMDs were authored
+        /// for an OpenGL render path with culling disabled and otherwise disappear completely
+        /// after the coordinate-system conversion used by the world renderer.
+        /// </summary>
+        protected virtual bool ForceTwoSidedMeshes => false;
         protected virtual bool AllowMapObjectInstancing => true;
         protected virtual bool UsesMutableMeshData => false;
         protected virtual bool PreserveBlendMeshesInLowQuality => false;

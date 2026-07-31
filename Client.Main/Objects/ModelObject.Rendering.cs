@@ -278,6 +278,9 @@ namespace Client.Main.Objects
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool IsMeshTwoSided(int mesh, bool isBlendMesh)
         {
+            if (ForceTwoSidedMeshes)
+                return true;
+
             if (_meshes == null || mesh < 0 || mesh >= _meshes.Length)
                 return false;
 
@@ -376,6 +379,7 @@ namespace Client.Main.Objects
         {
             return SupportsGpuDynamicSkinning &&
                    Constants.ENABLE_GPU_SKINNING &&
+                   AllowGpuSkinning &&
                    !UsesMutableMeshData &&
                    GetVertexDeformer() == null;
         }

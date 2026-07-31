@@ -5,6 +5,7 @@ using Client.Main.Models;
 
 using Client.Main.Objects;
 using Client.Main.Objects.Wings;
+using Client.Main.Objects.Pets;
 using Microsoft.Extensions.Logging;
 using Microsoft.Xna.Framework;
 using MUnique.OpenMU.Network.Packets; // CharacterClassNumber enum
@@ -53,6 +54,7 @@ namespace Client.Main.Objects.Player
         public WeaponObject Weapon1 { get; private set; }
         public WeaponObject Weapon2 { get; private set; }
         public WingObject EquippedWings { get; private set; }
+        public FlyingHelperObject EquippedHelper { get; private set; }
 
         public VehicleObject Vehicle { get; private set; }
         public FullSetAuraEffect FullSetAura { get; private set; }
@@ -199,6 +201,7 @@ namespace Client.Main.Objects.Player
             Weapon1 = new WeaponObject { };
             Weapon2 = new WeaponObject { };
             EquippedWings = new WingObject { LinkParentAnimation = true, Hidden = true };
+            EquippedHelper = new FlyingHelperObject();
             Vehicle = new VehicleObject { Hidden = true };
 
             FullSetAura = new FullSetAuraEffect();
@@ -212,6 +215,7 @@ namespace Client.Main.Objects.Player
             Children.Add(Weapon1);
             Children.Add(Weapon2);
             Children.Add(EquippedWings);
+            Children.Add(EquippedHelper);
             Children.Add(Vehicle);
             Children.Add(FullSetAura);
 
@@ -704,6 +708,8 @@ namespace Client.Main.Objects.Player
                 }
             }
 
+            await UpdateHelperFromInventoryAsync(inventory);
+
             // Left Hand
             var leftHandDef = GetItemDef(InventoryConstants.LeftHandSlot);
             if (leftHandDef != null)
@@ -866,6 +872,9 @@ namespace Client.Main.Objects.Player
             {
                 HideEquippedWings();
             }
+
+            await UpdateHelperFromAppearanceAsync();
+
             // Weapons
             // This requires more sophisticated logic to determine the exact weapon model
             // based on item group, index, and potentially other flags.
@@ -4059,9 +4068,8 @@ namespace Client.Main.Objects.Player
                         await UpdateWingsSlotAsync(equipmentData);
                         break;
 
-                    case InventoryConstants.PetSlot: // 8 - Pet
-                        // Pet handling would go here
-                        _logger?.LogDebug("Pet slot update not implemented yet for slot {Slot}", itemSlot);
+                    case InventoryConstants.PetSlot: // 8 - Helper
+                        await UpdateHelperSlotAsync(equipmentData);
                         break;
 
                     default:
@@ -4122,6 +4130,10 @@ namespace Client.Main.Objects.Player
 
                 case InventoryConstants.WingsSlot:
                     HideEquippedWings();
+                    break;
+
+                case InventoryConstants.PetSlot:
+                    await EquippedHelper.SetKindAsync(FlyingHelperKind.None);
                     break;
 
                 default:
@@ -4208,6 +4220,65 @@ namespace Client.Main.Objects.Player
             }
 
             return Task.CompletedTask;
+        }
+
+        internal async Task RestoreEquippedHelperAfterWorldChangeAsync()
+        {
+            FlyingHelperKind helperKind = FlyingHelperKind.None;
+            var characterState = MuGame.Network?.GetCharacterState();
+            var inventory = characterState?.GetInventoryItems();
+
+            if (inventory != null &&
+                inventory.TryGetValue(InventoryConstants.PetSlot, out byte[] itemData) &&
+                ItemDatabase.TryGetItemGroupAndNumber(itemData, out byte itemGroup, out short itemNumber))
+            {
+                helperKind = MapFlyingHelper(itemGroup, itemNumber);
+            }
+            else if (Appearance.TryGetHelperItem(out byte appearanceGroup, out short appearanceNumber))
+            {
+                helperKind = MapFlyingHelper(appearanceGroup, appearanceNumber);
+            }
+
+            await EquippedHelper.RestoreAfterWorldChangeAsync(helperKind);
+        }
+
+        private async Task UpdateHelperFromInventoryAsync(IReadOnlyDictionary<byte, byte[]> inventory)
+        {
+            if (!inventory.TryGetValue(InventoryConstants.PetSlot, out byte[] itemData) ||
+                !ItemDatabase.TryGetItemGroupAndNumber(itemData, out byte itemGroup, out short itemNumber))
+            {
+                await EquippedHelper.SetKindAsync(FlyingHelperKind.None);
+                return;
+            }
+
+            await EquippedHelper.SetKindAsync(MapFlyingHelper(itemGroup, itemNumber));
+        }
+
+        private Task UpdateHelperFromAppearanceAsync()
+        {
+            if (!Appearance.TryGetHelperItem(out byte itemGroup, out short itemNumber))
+                return EquippedHelper.SetKindAsync(FlyingHelperKind.None);
+
+            return EquippedHelper.SetKindAsync(MapFlyingHelper(itemGroup, itemNumber));
+        }
+
+        private Task UpdateHelperSlotAsync(EquipmentSlotData equipmentData)
+        {
+            return EquippedHelper.SetKindAsync(
+                MapFlyingHelper(equipmentData.ItemGroup, (short)equipmentData.ItemNumber));
+        }
+
+        private static FlyingHelperKind MapFlyingHelper(byte itemGroup, short itemNumber)
+        {
+            if (itemGroup != 13)
+                return FlyingHelperKind.None;
+
+            return itemNumber switch
+            {
+                0 => FlyingHelperKind.GuardianAngel,
+                1 => FlyingHelperKind.Imp,
+                _ => FlyingHelperKind.None
+            };
         }
 
         private void SetItemPropertiesFromEquipmentData(ModelObject part, EquipmentSlotData equipmentData)

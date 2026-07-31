@@ -183,6 +183,11 @@ namespace Client.Main.Scenes
                     nextWorld.Objects.Add(_scene.Hero);
                 _scene.SetWorldInternal(nextWorld);
 
+                // The local PlayerObject survives map changes, therefore the server does not have
+                // to resend slot 8. Explicitly restore the helper from the current equipment state
+                // and reset its world-local spawn/interpolation state for the destination map.
+                await _scene.Hero.RestoreEquippedHelperAfterWorldChangeAsync();
+
                 if (nextWorld.Status == GameControlStatus.Ready)
                 {
                     _loadingScreen.Progress = 0.45f;
