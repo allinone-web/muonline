@@ -134,6 +134,13 @@ namespace Client.Data.BMD
             { 269, SkillType.Target }, // Charge
             { 270, SkillType.Target }, // Phoenix Shot
 
+            // Ice Storm master variants (Ice Up I-V)
+            { 302, SkillType.Area },   // Ice Up
+            { 303, SkillType.Area },   // Ice Up II
+            { 304, SkillType.Area },   // Ice Up III
+            { 305, SkillType.Area },   // Ice Up IV
+            { 306, SkillType.Area },   // Ice Up V
+
             // ID 495: Earth Prison
             { 495, SkillType.Area },   // Earth Prison
 
