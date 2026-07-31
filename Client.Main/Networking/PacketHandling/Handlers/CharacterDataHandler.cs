@@ -10,6 +10,7 @@ using Client.Main.Controls;
 using Client.Main.Models;
 using Client.Main.Objects;
 using Client.Main.Objects.Effects;
+using Client.Main.Objects.Player;
 using Client.Main.Scenes;
 using Client.Main;
 using Microsoft.Xna.Framework;
@@ -1266,7 +1267,9 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     {
                         activeScene.NotifyLocalSkillAnimation(skillId);
 
-                        int animationId = Core.Utilities.SkillDatabase.GetSkillAnimation(skillId);
+                        int animationId = ArrowProjectileSpawner.IsArrowSkill(skillId)
+                            ? (int)activeScene.Hero.GetArrowSkillAnimation(skillId)
+                            : Core.Utilities.SkillDatabase.GetSkillAnimation(skillId);
                         string soundPath = Client.Data.BMD.SkillDefinitions.GetSkillSound(skillId);
 
                         // Play skill sound if available
@@ -1343,7 +1346,12 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     }
                     else
                     {
-                        // TODO: Handle other players' skill animations when scope system supports it
+                        if (ArrowProjectileSpawner.IsArrowSkill(skillId) &&
+                            activeScene.World is WalkableWorldControl remoteWorld)
+                        {
+                            SpawnRemoteArrowSkill(remoteWorld, playerId, targetId, skillId, targetPosition: null);
+                        }
+
                         _logger.LogDebug("Other player {PlayerId} used targeted skill {SkillId} on {TargetId}",
                             playerId, skillId, targetId);
                     }
@@ -1382,7 +1390,9 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                         activeScene.NotifyLocalSkillAnimation(skillId);
 
                         // Get animation from SkillDatabase
-                        int animationId = Core.Utilities.SkillDatabase.GetSkillAnimation(skillId);
+                        int animationId = ArrowProjectileSpawner.IsArrowSkill(skillId)
+                            ? (int)activeScene.Hero.GetArrowSkillAnimation(skillId)
+                            : Core.Utilities.SkillDatabase.GetSkillAnimation(skillId);
                         string soundPath = Client.Data.BMD.SkillDefinitions.GetSkillSound(skillId);
 
                         // Play skill sound if available
@@ -1441,7 +1451,20 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     }
                     else
                     {
-                        // TODO: Handle other players' skill animations when scope system supports it
+                        if (ArrowProjectileSpawner.IsArrowSkill(skillId) &&
+                            activeScene.World is WalkableWorldControl remoteWorld)
+                        {
+                            float worldX = (targetX + 0.5f) * Constants.TERRAIN_SCALE;
+                            float worldY = (targetY + 0.5f) * Constants.TERRAIN_SCALE;
+                            float worldZ = remoteWorld.Terrain.RequestTerrainHeight(worldX, worldY);
+                            SpawnRemoteArrowSkill(
+                                remoteWorld,
+                                playerId,
+                                0,
+                                skillId,
+                                new Vector3(worldX, worldY, worldZ));
+                        }
+
                         _logger.LogDebug("Other player {PlayerId} used skill {SkillId}", playerId, skillId);
                     }
                 });
@@ -1452,6 +1475,47 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             }
 
             return Task.CompletedTask;
+        }
+
+
+        private void SpawnRemoteArrowSkill(
+            WalkableWorldControl world,
+            ushort rawPlayerId,
+            ushort rawTargetId,
+            ushort skillId,
+            Vector3? targetPosition)
+        {
+            ushort playerId = (ushort)(rawPlayerId & 0x7FFF);
+            ushort targetId = (ushort)(rawTargetId & 0x7FFF);
+            if (!world.TryGetWalkerById(playerId, out WalkerObject caster) || caster is not PlayerObject remotePlayer)
+                return;
+
+            int animationId = (int)remotePlayer.GetArrowSkillAnimation(skillId);
+            if (animationId > 0)
+                remotePlayer.PlayAction((ushort)animationId, fromServer: true);
+
+            var context = new Objects.Effects.Skills.SkillEffectContext
+            {
+                Caster = remotePlayer,
+                TargetId = targetId,
+                SkillId = skillId,
+                TargetPosition = targetPosition,
+                World = world
+            };
+
+            if (!Objects.Effects.Skills.SkillVisualEffectRegistry.TrySpawn(skillId, context, out WorldObject? effect) || effect == null)
+                return;
+
+            if (effect.World == null)
+                world.Objects.Add(effect);
+
+            if (effect.Status == GameControlStatus.NonInitialized)
+            {
+                MuGame.TaskScheduler?.QueueTask(
+                    async () => await effect.Load(),
+                    Controllers.TaskScheduler.Priority.High,
+                    $"RemoteArrowSkill.Load.{effect.GetType().Name}");
+            }
         }
 
         private void HandleElfBuffVisual(byte effectId, ushort playerId, bool isActive) =>

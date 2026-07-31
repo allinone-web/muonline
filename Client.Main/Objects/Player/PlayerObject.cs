@@ -3022,6 +3022,9 @@ namespace Client.Main.Objects.Player
             var attackAction = GetAttackAnimation();
             PlayAction((ushort)attackAction);
 
+            // Bow/crossbow attacks create a real, independent BMD projectile.
+            ArrowProjectileSpawner.SpawnNormal(this, target.NetworkId);
+
             // Play weapon swing sound based on equipped weapon type
             PlayWeaponSwingSound();
 
@@ -3063,6 +3066,7 @@ namespace Client.Main.Objects.Player
 
             var attackAction = GetAttackAnimation();
             PlayAction((ushort)attackAction);
+            ArrowProjectileSpawner.SpawnNormal(this, target.NetworkId);
             PlayWeaponSwingSound();
 
             byte clientDir = (byte)Direction;
@@ -3072,6 +3076,27 @@ namespace Client.Main.Objects.Player
                 target.NetworkId,
                 (byte)attackAction,
                 serverDir);
+        }
+
+        public PlayerAction GetArrowSkillAnimation(ushort skillId)
+        {
+            if (skillId is not (46 or 235))
+                return GetAttackAnimation(false);
+
+            bool useCrossbow = ArrowProjectileEffect.UsesCrossbow(this);
+            bool isFlying = World is WalkableWorldControl world &&
+                            GetCurrentMovementMode(world) == MovementMode.Fly;
+
+            if (useCrossbow)
+            {
+                return isFlying
+                    ? PlayerAction.PlayerSkillMultishotCrossbowFlying
+                    : PlayerAction.PlayerSkillMultishotCrossbowStand;
+            }
+
+            return isFlying
+                ? PlayerAction.PlayerSkillMultishotBowFlying
+                : PlayerAction.PlayerSkillMultishotBowStand;
         }
 
         public float GetAttackRangeTiles() => GetAttackRangeForAction(GetAttackAnimation(false));

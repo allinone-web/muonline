@@ -2442,6 +2442,14 @@ namespace Client.Main.Networking.PacketHandling.Handlers
 
                     walker.PlayAction((ushort)clientActionToPlay, fromServer: true);
 
+                    // Remote bow/crossbow attacks need their own projectile object; the animation
+                    // packet contains the target id and is the authoritative visual trigger.
+                    if (walker is PlayerObject remoteArcher &&
+                        ArrowProjectileEffect.IsBowAttackAction(clientActionToPlay))
+                    {
+                        ArrowProjectileSpawner.SpawnNormal(remoteArcher, targetId);
+                    }
+
                     if (walker is MonsterObject monster && monsterAction.HasValue &&
                         (monsterAction == MonsterActionType.Attack1 || monsterAction == MonsterActionType.Attack2))
                     {

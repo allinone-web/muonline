@@ -61,7 +61,7 @@ namespace Client.Data.BMD
             { 43, SkillType.Target },  // Death Stab
             { 44, SkillType.Target },  // Crescent Moon Slash
             { 45, SkillType.Target },  // Lance
-            { 46, SkillType.Area },    // Starfall
+            { 46, SkillType.Target },  // Deep Impact
             { 47, SkillType.Target },  // Impale
             { 48, SkillType.Self },    // Swell Life
             { 49, SkillType.Target },  // Fire Breath
@@ -236,7 +236,7 @@ namespace Client.Data.BMD
 
             // ELF SKILLS
             Add(234, 246);  // Recovery → PlayerRecoverSkill
-            Add(46, 178);   // Starfall → PlayerSkillMultishotBowStand
+            Add(46, 178);   // Deep Impact → PlayerSkillMultishotBowStand
             Add(235, 178);  // Multi-Shot → PlayerSkillMultishotBowStand
 
             // RAGE FIGHTER SKILLS
