@@ -1,5 +1,6 @@
 using Client.Main.Content;
 using Client.Main.Models;
+using Client.Main.Objects.Effects;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System.Threading;
@@ -26,6 +27,9 @@ public class VehicleObject : ModelObject
         31, // Rippen Ride
     };
 
+    // Icarus internal world index (original WD_10HEAVEN) — flight map with its own gallop effect.
+    private const int IcarusWorldIndex = 11;
+
     private short itemIndex = -1;
     public short ItemIndex
     {
@@ -38,6 +42,16 @@ public class VehicleObject : ModelObject
             _ = OnChangeIndex(itemIndex, changeVersion);
         }
     }
+
+    // Dark Horse (vehicle index 0) hoof-dust emitter — see DarkHorseHoofDustEffect.
+    private readonly DarkHorseHoofDustEffect _hoofDust;
+
+    // Icarus-specific Dark Horse gallop emitter (shock-wave rings + smoke) — see DarkHorseIcarusGallopEffect.
+    private readonly DarkHorseIcarusGallopEffect _icarGallop;
+    private bool _isMoving;
+
+    /// <summary>The run animation index used by this vehicle.</summary>
+    public int RunActionIndex => runActionIndex;
 
     /// <summary>
     /// The vertical offset to apply to the rider when mounted on this vehicle.
@@ -70,6 +84,12 @@ public class VehicleObject : ModelObject
         Alpha = 1f;
         LinkParentAnimation = false;
         AnimationSpeed = 25f;
+
+        _hoofDust = new DarkHorseHoofDustEffect();
+        Children.Add(_hoofDust);
+
+        _icarGallop = new DarkHorseIcarusGallopEffect(this);
+        Children.Add(_icarGallop);
     }
 
     private bool IsCurrentChangeVersion(int changeVersion)
@@ -247,6 +267,19 @@ public class VehicleObject : ModelObject
     public override void Update(GameTime gameTime)
     {
         base.Update(gameTime);
+
+        // Dark Horse (vehicle index 0): on Icarus (worldIndex 11, the original WD_10HEAVEN)
+        // the gallop produces ground shock-wave rings + smoke instead of hoof dust
+        // (GOBoid.cpp MODEL_DARK_HORSE / PLAYER_RUN_RIDE_HORSE). Toggled every frame so it
+        // also stops when the mount is hidden/dismounted even if SetRiderAnimation is
+        // no longer invoked.
+        bool isDarkHorseRunning = !Hidden && Model != null && ItemIndex == 0 && _isMoving;
+        bool onIcarus = World?.WorldIndex == IcarusWorldIndex;
+
+        if (_hoofDust != null)
+            _hoofDust.Emitting = isDarkHorseRunning && !onIcarus;
+        if (_icarGallop != null)
+            _icarGallop.Emitting = isDarkHorseRunning && onIcarus;
     }
 
     /// <summary>
@@ -254,6 +287,8 @@ public class VehicleObject : ModelObject
     /// </summary>
     public void SetRiderAnimation(bool isMoving, bool isUsingSkill = false)
     {
+        _isMoving = isMoving;
+
         if (Model == null || Hidden)
             return;
 
