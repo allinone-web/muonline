@@ -103,10 +103,10 @@ namespace Client.Main.Objects.Wings
 
                 CapeClothKind.CapeOfEmperor => new CapeClothProfile(
                     kind, 180f, 180f, new Vector3(0f, 8f, 10f), true, 25f, 27f,
-                    Array.Empty<string>(),
+                    new[] { "Item/dl_redwings02.tga" },
                     new CapeRigidAttachment(
-                        true,
-                        new Vector3(-47f, -7f, 15f),
+                        false,
+                        new Vector3(-47f, -7f, 0f),
                         new Vector3(0f, MathHelper.ToRadians(90f), 0f))),
 
                 CapeClothKind.CapeOfFighter => new CapeClothProfile(
