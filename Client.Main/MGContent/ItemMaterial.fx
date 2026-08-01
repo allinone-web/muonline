@@ -371,7 +371,7 @@ float4 MainPS(VertexShaderOutput input) : COLOR
         isArmorPart &&
         itemLevel >= 11.0;
 
-    if (useHighLevelArmor)
+    if (useHighLevelArmor == true)
     {
         // Build the +11/+13 chrome material first, then continue through the
         // existing ancient/excellent glow section below. The previous early
@@ -380,7 +380,7 @@ float4 MainPS(VertexShaderOutput input) : COLOR
 
         // Ordinary +11/+13 armor needs no legacy ghost samples. Continue only
         // for special items whose ancient/excellent glow must be layered on top.
-        if (!IsAncient && !IsExcellent)
+        if (IsAncient == false && IsExcellent == false)
             return color;
     }
     else
@@ -451,7 +451,7 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     // Ordinary +11/+13 armor keeps the dedicated Chrome material only, while
     // excellent items keep their existing excellent-specific glow path.
     bool applyAncientLevelGlow = useHighLevelArmor && IsAncient && !IsExcellent;
-    if ((!useHighLevelArmor || applyAncientLevelGlow) && itemLevel >= 7.0)
+    if ((useHighLevelArmor == false || applyAncientLevelGlow == true) && itemLevel >= 7.0)
     {
         ghost1 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset1);
         ghost2 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset2);
@@ -461,7 +461,7 @@ float4 MainPS(VertexShaderOutput input) : COLOR
 
     float4 ancientGhost1 = 0.0;
     float4 ancientGhost2 = 0.0;
-    if (IsAncient)
+    if (IsAncient == true)
     {
         ancientGhost1 = tex2D(DiffuseSampler, input.TextureCoordinate + ancientOffset1);
         ancientGhost2 = tex2D(DiffuseSampler, input.TextureCoordinate + ancientOffset2);
@@ -473,7 +473,7 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     float4 excellentGhost4 = 0.0;
     float4 excellentGhost5 = 0.0;
     float4 excellentGhost6 = 0.0;
-    if (IsExcellent)
+    if (IsExcellent == true)
     {
         excellentGhost1 = tex2D(DiffuseSampler, input.TextureCoordinate + excellentOffset1);
         excellentGhost2 = tex2D(DiffuseSampler, input.TextureCoordinate + excellentOffset2);
@@ -485,7 +485,7 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     
     float levelMask = step(7.0, itemLevel);
     
-    if (!useHighLevelArmor)
+    if (useHighLevelArmor == false)
     {
         // Legacy material path for lower-level items and non-armor equipment.
         if (itemLevel >= 7)
@@ -507,7 +507,7 @@ float4 MainPS(VertexShaderOutput input) : COLOR
         float glowEffect = (1.0 + sin(Time * 1.0)) * 0.03 + 0.2;
         color.rgb += effectColor * glowEffect * extraGlow * level10Mask;
     }
-    else if (applyAncientLevelGlow)
+    else if (applyAncientLevelGlow == true)
     {
         // Preserve the +11/+13 Chrome material and add only the old upgrade-level
         // glow on top. Do not recolor or multiply the base material again.
@@ -682,7 +682,7 @@ float4 MainPS(VertexShaderOutput input) : COLOR
         // Brightness boost for excellent items
         color.rgb *= lerp(1.0, 1.4, excellentEnabled);
 
-        if (!useHighLevelArmor)
+        if (useHighLevelArmor == false)
         {
             float shadowTerm = SampleShadow(input.WorldPosition, normal);
             float shadowMix = lerp(1.0 - ShadowStrength, 1.0, shadowTerm);

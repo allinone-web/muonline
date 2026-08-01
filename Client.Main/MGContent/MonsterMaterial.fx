@@ -188,11 +188,11 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     float3 originalColor = color.rgb;
     float3 effectiveGlowColor = GlowColor * GlowIntensityScale;
 
-    if (SimpleColorMode)
+    if (SimpleColorMode == true)
     {
         color.rgb = originalColor * effectiveGlowColor * GlowIntensity;
     }
-    else if (EnableGlow && GlowIntensity > 0.0)
+    else if (EnableGlow == true && GlowIntensity > 0.0)
     {
         // EnableGlow is uniform for the draw call. Keeping the ghost samples inside
         // this branch removes four texture fetches from ordinary monsters.
