@@ -16,6 +16,8 @@ namespace Client.Main.Objects.Player
             set { _playerClass = value; } // Only set the field, no async logic here
         }
 
+        internal string ModelPath { get; set; }
+
         // New async setter for correct model loading
         public async Task SetPlayerClassAsync(PlayerClass playerClass)
         {
@@ -38,7 +40,7 @@ namespace Client.Main.Objects.Player
         /// </summary>
         protected override bool ShouldApplyItemMaterial(int meshIndex)
         {
-            int shellMesh = HelmModelRules.GetHelmetShellMeshIndex(Model?.Name ?? string.Empty);
+            int shellMesh = HelmModelRules.GetHelmetShellMeshIndex(ModelPath, Model);
             return meshIndex == shellMesh;
         }
 

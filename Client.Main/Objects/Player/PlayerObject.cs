@@ -3569,7 +3569,7 @@ namespace Client.Main.Objects.Player
                 return;
             }
 
-            bool helmNeedsBaseHead = HelmModelRules.RequiresBaseHead(_helmModelPath, Helm?.Model) || !HelmetModelHasFace(Helm);
+            bool helmNeedsBaseHead = HelmModelRules.RequiresBaseHead(_helmModelPath, Helm?.Model);
 
             if (helmNeedsBaseHead)
             {
@@ -3580,35 +3580,6 @@ namespace Client.Main.Objects.Player
             {
                 HideHelmMask();
             }
-        }
-
-        private static readonly HashSet<string> HelmModelsRequiringBaseHead = new(StringComparer.OrdinalIgnoreCase)
-        {
-            "HelmMale01",
-            "HelmMale03",
-            "HelmElf01",
-            "HelmElf02",
-            "HelmElf03",
-            "HelmElf04"
-        };
-
-        private static bool HelmetModelHasFace(ModelObject helmObject)
-        {
-            var model = helmObject?.Model;
-            if (model?.Meshes == null)
-                return false;
-
-            if (model.Meshes.Length < 2)
-                return false;
-
-            for (int i = 1; i < model.Meshes.Length; i++)
-            {
-                var mesh = model.Meshes[i];
-                if ((mesh?.Vertices?.Length ?? 0) > 0 && (mesh?.Triangles?.Length ?? 0) > 0)
-                    return true;
-            }
-
-            return false;
         }
 
         private void HideHelmMask()
@@ -4021,11 +3992,31 @@ namespace Client.Main.Objects.Player
         {
             if (part != null && !string.IsNullOrEmpty(modelPath))
             {
+                string originalModelPath = modelPath;
+                if (part == Helm && IsDarkLordClass(CharacterClass))
+                {
+                    modelPath = HelmModelRules.GetDarkLordMaskModelPath(modelPath) ?? modelPath;
+                }
+
                 if (part == Helm)
                 {
                     _helmModelPath = modelPath;
+                    Helm.ModelPath = modelPath;
+                }
+                else if (part == HelmMask)
+                {
+                    HelmMask.ModelPath = modelPath;
                 }
                 part.Model = await BMDLoader.Instance.Prepare(modelPath);
+                if (part == Helm && part.Model == null &&
+                    !string.Equals(modelPath, originalModelPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    modelPath = originalModelPath;
+                    _helmModelPath = modelPath;
+                    Helm.ModelPath = modelPath;
+                    part.Model = await BMDLoader.Instance.Prepare(modelPath);
+                }
+
                 if (part.Model == null)
                 {
                     _logger?.LogWarning("[PlayerObject] Failed to load model {Path} for {Part}", modelPath, part.GetType().Name);
