@@ -32,8 +32,8 @@ namespace Client.Main.Objects.Worlds.Lorencia
                 Color = new Vector3(1f, 0.9f, 0.7f), // Warm white light
                 // GPU dynamic lighting uses full 3D attenuation from the lamp head,
                 // so the radius needs to account for lamp height as well.
-                Radius = Constants.TERRAIN_SCALE * 5.5f,
-                Intensity = 1.5f,
+                Radius = Constants.TERRAIN_SCALE * 2.5f,
+                Intensity = 1f,
                 Position = Vector3.Zero
             };
 
