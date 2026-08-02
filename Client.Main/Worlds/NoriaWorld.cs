@@ -84,6 +84,15 @@ namespace Client.Main.Worlds
 
             MapTileObjects[39] = typeof(ChaosMachineObject);
 
+            MapTileObjects[1] = typeof(NoriaObject);
+            MapTileObjects[9] = typeof(NoriaObject);
+            MapTileObjects[17] = typeof(NoriaObject);
+            MapTileObjects[19] = typeof(NoriaObject);
+            MapTileObjects[35] = typeof(NoriaObject);
+            MapTileObjects[41] = typeof(NoriaObject);
+            MapTileObjects[42] = typeof(NoriaObject);
+            MapTileObjects[43] = typeof(NoriaObject);
+
             MapTileObjects[38] = typeof(RestPlaceObject);
 
             MapTileObjects[8] = typeof(SitPlaceObject);

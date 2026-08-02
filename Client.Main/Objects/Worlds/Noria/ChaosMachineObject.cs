@@ -1,44 +1,55 @@
-﻿using Client.Main.Content;
 using Microsoft.Xna.Framework;
+using System;
 using System.Threading.Tasks;
 using Client.Main.Controllers;
+using Client.Main.Controls;
 
 namespace Client.Main.Objects.Worlds.Noria
 {
 
-    public class ChaosMachineObject : ModelObject
+    public class ChaosMachineObject : NoriaObject
     {
-        public ChaosMachineObject()
+        internal override int ResolveEffectBoneIndex(int sourceBoneIndex)
         {
-            var startX = 0;
-            var startY = 0;
-            var startZ = 140;
-            var position = new Vector3(startX, startY, startZ);
+            int mergedModelBoneIndex = sourceBoneIndex switch
+            {
+                57 => 107,
+                58 => 108,
+                61 => 113,
+                62 => 114,
+                63 => 115,
+                64 => 116,
+                65 => 117,
+                _ => sourceBoneIndex
+            };
 
-            //Children.Add(new Warp01NPCObject() { Angle = new Vector3(0, 0, 10), Position = position });
-            //Children.Add(new Warp02NPCObject() { Angle = new Vector3(0, 0, 10), Position = position });
-            //Children.Add(new Warp03NPCObject() { Angle = new Vector3(0, 0, 10), Position = position });
+            string expectedName = sourceBoneIndex switch
+            {
+                57 => "light01",
+                58 => "light07",
+                61 => "light06",
+                62 => "light04",
+                63 => "light03",
+                64 => "light05",
+                65 => "light02",
+                _ => string.Empty
+            };
 
-            // Children.Add(
-            //    ParticleSystem.Create()
-            //       .SetMaxParticles(10)
-            //       .SetRegeneration(0.01f, 0.05f)
-            //       .Register<Spark03Effect>()
-            //           .SetPosition(position, position)
-            //           .UseEffect(GravityEffect.Create(new Vector3(0, 0, 0), new Vector3(0, 0, 2), 0))
-            //           .UseEffect(DurationEffect.Create(50, 66))
-            //           // .UseEffect(BrightEffect.Create())
-            //           .EnableRotation()
-            //           .SetScale(4f, 5f)
-            //           .EnableRotation()
-            //       .System
-            //);
+            if (Model?.Bones != null &&
+                (uint)mergedModelBoneIndex < (uint)Model.Bones.Length &&
+                string.Equals(
+                    Model.Bones[mergedModelBoneIndex].Name,
+                    expectedName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return mergedModelBoneIndex;
+            }
+
+            return sourceBoneIndex;
         }
 
         public override async Task Load()
         {
-            Model = await BMDLoader.Instance.Prepare($"Object4/Object40.bmd");
-            BlendMesh = 1;
             Position = new Vector3(Position.X, Position.Y, Position.Z - 40f);
             await base.Load();
         }
@@ -47,10 +58,10 @@ namespace Client.Main.Objects.Worlds.Noria
         {
             base.Update(gameTime);
 
-            if (!Visible)
+            if (!Visible || World is not WalkableWorldControl walkableWorld)
                 return;
 
-            Vector3 listenerPosition = ((Controls.WalkableWorldControl)World).Walker.Position;
+            Vector3 listenerPosition = walkableWorld.Walker.Position;
             SoundController.Instance.PlayBufferWithAttenuation("Sound/nMix.wav", Position, listenerPosition, maxDistance: 1000f, loop: true);
         }
     }
