@@ -1,73 +1,51 @@
-﻿using Client.Data;
+using Client.Data;
 using Client.Main.Content;
 using Client.Main.Controls;
-using Client.Main.Controls.Terrain;
 using Microsoft.Xna.Framework;
-using Microsoft.Xna.Framework.Graphics;
-using System.Linq;
 using System.Threading.Tasks;
 
 namespace Client.Main.Objects.Worlds.Lorencia
 {
-    public class StreetLightObject : ModelObject
+    public sealed class StreetLightObject : ModelObject
     {
-        private DynamicLight _dynamicLight;
-        private bool _lightAdded = false;
+        private const double LegacyStepSeconds = 1.0 / 25.0;
+        private readonly DynamicLight _dynamicLight = new DynamicLight
+        {
+            Radius = Constants.TERRAIN_SCALE * 3f,
+            Intensity = 1f,
+        };
+        private double _legacyAccumulator;
 
         public StreetLightObject()
         {
             LightEnabled = true;
             BlendMesh = 1;
-            BlendMeshState = BlendState.Additive;
+            _dynamicLight.Owner = this;
         }
 
         public override async Task Load()
         {
-            Model = await BMDLoader.Instance.Prepare($"Object1/StreetLight01.bmd");
-
-            // Create dynamic light for street lamp
-            _dynamicLight = new DynamicLight
-            {
-                Owner = this,
-                Color = new Vector3(1f, 0.9f, 0.7f), // Warm white light
-                // GPU dynamic lighting uses full 3D attenuation from the lamp head,
-                // so the radius needs to account for lamp height as well.
-                Radius = Constants.TERRAIN_SCALE * 2.5f,
-                Intensity = 1f,
-                Position = Vector3.Zero
-            };
-
+            Model = await BMDLoader.Instance.Prepare("Object1/StreetLight01.bmd");
             await base.Load();
+
+            World?.Terrain.AddDynamicLight(_dynamicLight);
         }
 
         public override void Update(GameTime gameTime)
         {
             base.Update(gameTime);
 
-            // Update light position to match object position
-            if (_dynamicLight != null && World?.Terrain != null)
+            _dynamicLight.Position = WorldPosition.Translation;
+            _legacyAccumulator += gameTime.ElapsedGameTime.TotalSeconds;
+            while (_legacyAccumulator >= LegacyStepSeconds)
             {
-                // Position light slightly above the lamp (adjust Y offset as needed)
-                // Raise light above ground along Z (height) axis
-                _dynamicLight.Position = WorldPosition.Translation + new Vector3(0f, 0f, 200f);
-
-                // Add to terrain lighting system once
-                if (!_lightAdded)
-                {
-                    World.Terrain.AddDynamicLight(_dynamicLight);
-                    _lightAdded = true;
-                }
+                float luminosity = (MuGame.Random.Next(2) + 6) * 0.1f;
+                _dynamicLight.Color = new Vector3(
+                    luminosity,
+                    luminosity * 0.8f,
+                    luminosity * 0.6f);
+                _legacyAccumulator -= LegacyStepSeconds;
             }
-        }
-
-        public override void Dispose()
-        {
-            if (_dynamicLight != null && World?.Terrain != null)
-            {
-                World.Terrain.RemoveDynamicLight(_dynamicLight);
-                _dynamicLight = null;
-            }
-            base.Dispose();
         }
     }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Client.Main.Content;
 using Client.Main.Controllers;
 using Client.Main.Graphics;
 using Client.Main.Models;
@@ -25,7 +26,8 @@ namespace Client.Main.Objects.Effects
         private readonly BreathParticle[] _particles = new BreathParticle[MaxParticles];
         private int _activeCount;
 
-        // --- procedural smoke texture ---
+        private const string SmokeTexturePath = "Effect/smoke01.jpg";
+
         private Texture2D _texture;
         private Vector2 _texCenter;
 
@@ -40,20 +42,17 @@ namespace Client.Main.Objects.Effects
         public int SourceBone { get; set; } = -1;
 
         /// <summary>How many particles per second during active trigger windows.</summary>
-        public float EmissionRate { get; set; } = 14f;
+        public float EmissionRate { get; set; } = 12.5f;
 
         /// <summary>Base color of the smoke particles.</summary>
-        public Color BreathColor { get; set; } = new Color(200, 190, 170);
+        public Color BreathColor { get; set; } = Color.White;
 
         /// <summary>How long each particle lives (seconds).</summary>
-        public float ParticleLifetime { get; set; } = 1.8f;
-
-        /// <summary>Rise speed of particles (world units/sec).</summary>
-        public float RiseSpeed { get; set; } = 15f;
+        public float ParticleLifetime { get; set; } = 16f / 25f;
 
         /// <summary>Particle scale range.</summary>
-        public float MinScale { get; set; } = 1.5f;
-        public float MaxScale { get; set; } = 3.0f;
+        public float MinScale { get; set; } = 0.48f;
+        public float MaxScale { get; set; } = 0.79f;
 
         /// <summary>Max camera distance before culling.</summary>
         public float MaxDistance { get; set; } = 2000f;
@@ -82,6 +81,13 @@ namespace Client.Main.Objects.Effects
             BlendState = BlendState.Additive;
             DepthState = DepthStencilState.DepthRead;
             BoundingBoxLocal = new BoundingBox(Vector3.Zero, Vector3.Zero);
+        }
+
+        public override async Task LoadContent()
+        {
+            _texture = await TextureLoader.Instance.PrepareAndGetTexture(SmokeTexturePath);
+            if (_texture != null)
+                _texCenter = new Vector2(_texture.Width * 0.5f, _texture.Height * 0.5f);
         }
 
         // ========================================================================
@@ -125,8 +131,10 @@ namespace Client.Main.Objects.Effects
                 }
                 else
                 {
-                    p.Position += p.Velocity * dt;
-                    p.Rotation += dt * 0.3f;
+                    float frameFactor = dt * 25f;
+                    p.Gravity += 0.2f * frameFactor;
+                    p.Position.Z += p.Gravity * frameFactor;
+                    p.Scale += 0.05f * frameFactor;
                 }
             }
 
@@ -162,8 +170,6 @@ namespace Client.Main.Objects.Effects
                 return;
             }
 
-            EnsureTexture();
-
             var gd = GraphicsManager.Instance.GraphicsDevice;
             var spriteBatch = GraphicsManager.Instance.Sprite;
             var camera = Camera.Instance;
@@ -179,7 +185,7 @@ namespace Client.Main.Objects.Effects
 
             spriteBatch.Begin(
                 SpriteSortMode.Deferred,
-                BlendState.Additive,
+                this.BlendState ?? Microsoft.Xna.Framework.Graphics.BlendState.AlphaBlend,
                 SamplerState.LinearClamp,
                 DepthStencilState.DepthRead,
                 RasterizerState.CullNone);
@@ -207,15 +213,16 @@ namespace Client.Main.Objects.Effects
                 if (depth < 0f || depth > 1f) continue;
 
                 float lifeRatio = MathHelper.Clamp(p.Life / p.MaxLife, 0f, 1f);
-                float alpha = lifeRatio * lifeRatio * 0.7f;
+                float luminosity = MathHelper.Clamp(p.Life * 25f / 8f, 0f, 1f);
                 float distScale = MathHelper.Clamp(ReferenceDistance / clip.W, MinDistanceScale, 2.5f);
                 float scale = p.Scale * distScale * Constants.RENDER_SCALE;
+                Vector3 colorVector = BreathColor.ToVector3() * luminosity;
 
                 var color = new Color(
-                    (byte)(BreathColor.R * alpha),
-                    (byte)(BreathColor.G * alpha),
-                    (byte)(BreathColor.B * alpha),
-                    (byte)(255 * alpha));
+                    colorVector.X,
+                    colorVector.Y,
+                    colorVector.Z,
+                    1f);
 
                 spriteBatch.Draw(_texture, new Vector2(sx, sy), null, color,
                     p.Rotation, _texCenter, scale, SpriteEffects.None, depth);
@@ -254,7 +261,10 @@ namespace Client.Main.Objects.Effects
             if (bones == null || SourceBone < 0 || SourceBone >= bones.Length)
                 return parentModel.WorldPosition.Translation;
 
-            return Vector3.Transform(bones[SourceBone].Translation, parentModel.WorldPosition);
+            Vector3 bonePosition = Vector3.Transform(
+                new Vector3(0f, -4f, 0f),
+                bones[SourceBone]);
+            return Vector3.Transform(bonePosition, parentModel.WorldPosition);
         }
 
         private void SpawnParticle(Vector3 origin)
@@ -263,53 +273,20 @@ namespace Client.Main.Objects.Effects
                 return;
 
             ref var p = ref _particles[_activeCount++];
-            p.Position = origin + new Vector3(
-                RandomRange(-4f, 4f),
-                RandomRange(-3f, 3f),
-                RandomRange(-2f, 4f));
-            p.Velocity = new Vector3(
-                RandomRange(-4f, 4f),
-                RandomRange(-4f, 4f),
-                RiseSpeed + RandomRange(-4f, 6f));
-            p.MaxLife = ParticleLifetime + RandomRange(-0.3f, 0.5f);
+            p.Position = origin;
+            p.Velocity = Vector3.Zero;
+            p.Gravity = RandomRange(2f, 2.9f);
+            p.MaxLife = ParticleLifetime;
             p.Life = p.MaxLife;
             p.Scale = RandomRange(MinScale, MaxScale);
-            p.Rotation = RandomRange(0f, MathHelper.TwoPi);
+            p.Rotation = 0f;
         }
 
         private float RandomRange(float min, float max) =>
-            min + (float)Random.Shared.NextDouble() * (max - min);
-
-        private void EnsureTexture()
-        {
-            if (_texture != null) return;
-
-            const int size = 32;
-            var gd = GraphicsManager.Instance.GraphicsDevice;
-            _texture = new Texture2D(gd, size, size);
-            var pixels = new Color[size * size];
-            float center = size * 0.5f;
-            float maxR = center;
-
-            for (int y = 0; y < size; y++)
-            {
-                for (int x = 0; x < size; x++)
-                {
-                    float dx = x - center + 0.5f;
-                    float dy = y - center + 0.5f;
-                    float dist = MathF.Sqrt(dx * dx + dy * dy);
-                    float t = MathHelper.Clamp(1f - dist / maxR, 0f, 1f);
-                    float alpha = t * t * (3f - 2f * t);
-                    pixels[y * size + x] = new Color((byte)255, (byte)255, (byte)255, (byte)(alpha * 255f));
-                }
-            }
-            _texture.SetData(pixels);
-            _texCenter = new Vector2(size * 0.5f, size * 0.5f);
-        }
+            min + (float)MuGame.Random.NextDouble() * (max - min);
 
         public override void Dispose()
         {
-            _texture?.Dispose();
             _texture = null;
             base.Dispose();
         }
@@ -326,6 +303,7 @@ namespace Client.Main.Objects.Effects
             public float MaxLife;
             public float Scale;
             public float Rotation;
+            public float Gravity;
         }
     }
 

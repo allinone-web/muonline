@@ -1739,6 +1739,8 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                         if (MuGame.Instance.ActiveScene?.World is WorldControl world
                           && world.TryGetWalkerById(maskedId, out var walker) && walker is MonsterObject monster)
                         {
+                            if (totalDmg > 0)
+                                monster.SpawnHitEffect();
                             monster.OnReceiveDamage();
                             monster.PlayAction((byte)MonsterActionType.Shock);
                             _logger.LogDebug("Triggering hit animation for {Type} {Id:X4}", walker.GetType().Name, maskedId);
@@ -2347,6 +2349,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                         else if (walker is MonsterObject monster)
                         {
                             monster.PlayAction((byte)MonsterActionType.Die);
+                            monster.OnDeathAnimationStart();
                             monster.StartDeathFade();
                             _logger.LogDebug("💀 Monster {Id:X4} death animation started", killed);
                         }

@@ -17,6 +17,9 @@ namespace Client.Main.Objects.Monsters
         {
             // Override scale if needed, base constructor sets it to 0.85f
             Scale = 1.1f; // Set according to C++ Setting_Monster
+            HiddenMesh = 1; // SourceMain5.2: c->Object.HiddenMesh = 1
+            Children.Remove(base._defaultWeapon);
+            base._defaultWeapon.Dispose();
             _rightHandWeapon = new WeaponObject
             {
                 LinkParentAnimation = false,

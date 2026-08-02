@@ -13,6 +13,7 @@ namespace Client.Main.Objects.Monsters
         {
             Scale = 0.4f;
             RenderShadow = true;
+            MoveSpeed = 250f; // SourceMain5.2: default monster MoveSpeed (10 * 25 FPS)
         }
 
         public override async Task Load()
@@ -20,14 +21,14 @@ namespace Client.Main.Objects.Monsters
             Model = await BMDLoader.Instance.Prepare($"Monster/Monster10.bmd");
             await base.Load();
 
-            if (Model != null && Model.Actions != null)
-            {
-                const int MONSTER_ACTION_WALK = (int)MonsterActionType.Walk; // 2
-                if (MONSTER_ACTION_WALK < Model.Actions.Length && Model.Actions[MONSTER_ACTION_WALK] != null)
-                {
-                    Model.Actions[MONSTER_ACTION_WALK].PlaySpeed = 1.2f;
-                }
-            }
+            // SourceMain5.2 ZzzOpenData.cpp: base monster speeds with Spider walk override.
+            SetActionSpeed(MonsterActionType.Stop1, 0.25f);
+            SetActionSpeed(MonsterActionType.Stop2, 0.20f);
+            SetActionSpeed(MonsterActionType.Walk, 1.2f);
+            SetActionSpeed(MonsterActionType.Attack1, 0.33f);
+            SetActionSpeed(MonsterActionType.Attack2, 0.33f);
+            SetActionSpeed(MonsterActionType.Shock, 0.50f);
+            SetActionSpeed(MonsterActionType.Die, 0.55f);
         }
 
         private void PlaySpiderSound()

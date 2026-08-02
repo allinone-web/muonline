@@ -1,9 +1,10 @@
+using Client.Main.Content;
 using Client.Main.Controllers;
-using Client.Main.Graphics;
 using Client.Main.Models;
 using Client.Main.Objects.Effects.Particles;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using System;
 using System.Threading.Tasks;
 
 namespace Client.Main.Objects.Effects
@@ -16,6 +17,8 @@ namespace Client.Main.Objects.Effects
     public class BudgeDragonFireAttackEffect : SourceParticleSystem
     {
         private const int MaxParticles = 32;
+        private const float LegacyFramesPerSecond = 25f;
+        private const string FireTexturePath = "Effect/Fire01.jpg";
         private Texture2D _texture;
         private Vector2 _textureCenter;
 
@@ -38,28 +41,23 @@ namespace Client.Main.Objects.Effects
             BlendState = BlendState.Additive;
             MaxDistance = 2500f;
             ReferenceDistance = 800f;
-            ScaleGrowth = 0.6f;
+            ScaleGrowth = 0f;
         }
 
-        public override Task LoadContent()
+        public override async Task LoadContent()
         {
-            GenerateProceduralTexture();
-            return Task.CompletedTask;
+            _texture = await TextureLoader.Instance.PrepareAndGetTexture(FireTexturePath);
+            if (_texture != null)
+                _textureCenter = new Vector2(_texture.Width * 0.125f, _texture.Height * 0.5f);
         }
 
         protected override void OnBeforeParticlesUpdated(float dt)
         {
-            if (_texture == null)
-                GenerateProceduralTexture();
-
             if (EmitThisFrame && ActiveCount < MaxParticles)
             {
                 CreateParticle(
                     type: 0,
-                    position: new Vector3(
-                        SpawnWorldPosition.X + RandomRange(-8f, 8f),
-                        SpawnWorldPosition.Y + RandomRange(-8f, 8f),
-                        SpawnWorldPosition.Z + RandomRange(-4f, 4f)),
+                    position: SpawnWorldPosition,
                     angle: Vector3.Zero,
                     light: Vector3.One);
             }
@@ -69,66 +67,41 @@ namespace Client.Main.Objects.Effects
 
         protected override void OnParticleCreated(ref SourceParticle particle)
         {
-            float lifetime = RandomRange(0.15f, 0.35f);
+            particle.LifeTime = 24f / LegacyFramesPerSecond;
+            particle.MaxLifeTime = particle.LifeTime;
             particle.Velocity = new Vector3(
-                RandomRange(-20f, 20f),
-                RandomRange(0f, 32f),
-                RandomRange(10f, 30f));
-            particle.LifeTime = lifetime;
-            particle.MaxLifeTime = lifetime;
-            particle.Scale = RandomRange(0.5f, 1.0f);
-            particle.Rotation = RandomRange(0f, MathHelper.TwoPi);
-            particle.Gravity = -15f;
+                0f,
+                -(32 + MuGame.Random.Next(16)) * 0.1f,
+                0f);
+            particle.Scale = (10 + MuGame.Random.Next(4)) * 0.01f;
+            particle.Rotation = MathHelper.ToRadians(MuGame.Random.Next(360));
+            particle.Gravity = 0f;
         }
 
         protected override void UpdateLiveParticle(ref SourceParticle particle, float dt)
         {
-            particle.Position += particle.Velocity * dt;
-            particle.Velocity.Z += particle.Gravity * dt;
-            particle.Rotation += dt * 3f;
+            float legacyDelta = dt * LegacyFramesPerSecond;
+            particle.Gravity += 0.004f * legacyDelta;
+            particle.Scale += particle.Gravity * legacyDelta;
+            particle.Velocity *= MathF.Pow(0.98f, legacyDelta);
+            particle.Position.Z += particle.Gravity * 10f * legacyDelta;
+
+            float lifeInFrames = particle.LifeTime * LegacyFramesPerSecond;
+            particle.Frame = MathHelper.Clamp((int)((23f - lifeInFrames) / 6f), 0, 3);
         }
 
         protected override Color GetParticleColor(in SourceParticle particle, float lifeRatio)
         {
-            // Red-orange fire, fading to dark red at end of life
-            float r = 1f;
-            float g = 0.25f + lifeRatio * 0.35f;
-            float b = 0f;
-            float alpha = lifeRatio * 0.9f;
-            return new Color(r, g, b, alpha);
+            return new Color(particle.Light.X, particle.Light.Y, particle.Light.Z, lifeRatio);
         }
 
-        public override void Dispose()
+        protected override Rectangle? GetParticleSourceRectangle(Texture2D texture, in SourceParticle particle)
         {
-            _texture?.Dispose();
-            _texture = null;
-            base.Dispose();
-        }
-
-        private void GenerateProceduralTexture()
-        {
-            const int size = 32;
-            var device = GraphicsManager.Instance.GraphicsDevice;
-            _texture = new Texture2D(device, size, size);
-            var pixels = new Color[size * size];
-            float center = size * 0.5f;
-            float maxRadius = center;
-
-            for (int y = 0; y < size; y++)
-            {
-                for (int x = 0; x < size; x++)
-                {
-                    float dx = x - center + 0.5f;
-                    float dy = y - center + 0.5f;
-                    float dist = MathF.Sqrt(dx * dx + dy * dy);
-                    float t = MathHelper.Clamp(1f - dist / maxRadius, 0f, 1f);
-                    float alpha = t * t;
-                    pixels[y * size + x] = new Color((byte)255, (byte)255, (byte)255, (byte)(alpha * 255f));
-                }
-            }
-
-            _texture.SetData(pixels);
-            _textureCenter = new Vector2(size * 0.5f, size * 0.5f);
+            return new Rectangle(
+                particle.Frame * (texture.Width / 4),
+                0,
+                texture.Width / 4,
+                texture.Height);
         }
     }
 }

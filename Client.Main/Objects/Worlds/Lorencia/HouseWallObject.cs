@@ -52,7 +52,7 @@ namespace Client.Main.Objects.Worlds.Lorencia
                 // Enable flicker for mesh 4
                 _flickerEnabled = true;
                 _flickerStart = 1f;
-                _flickerTarget = 0.85f + (float)_rand.NextDouble() * 0.15f;  // 0.85–1.0
+                _flickerTarget = 0.4f + (float)_rand.NextDouble() * 0.3f;  // Source: .4–.7
                 _flickerDur = 0.1f + (float)_rand.NextDouble() * 0.1f;       // 0.10–0.20s
                 _flickerElapsed = 0f;
 
@@ -85,7 +85,7 @@ namespace Client.Main.Objects.Worlds.Lorencia
                 if (_flickerElapsed >= _flickerDur)
                 {
                     _flickerStart = _flickerTarget;
-                    _flickerTarget = 0.85f + (float)_rand.NextDouble() * 0.15f;
+                    _flickerTarget = 0.4f + (float)_rand.NextDouble() * 0.3f;
                     _flickerDur = 0.1f + (float)_rand.NextDouble() * 0.1f;
                     _flickerElapsed = 0f;
                 }

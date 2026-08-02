@@ -14,18 +14,14 @@ namespace Client.Main.Objects.Monsters
     public class EliteBullFighter : MonsterObject
     {
         private WeaponObject _rightHandWeapon;
-        private GlowingEyesEffect _eyeGlow;
+        private SourceMonsterEyeEffect _eyeGlow;
         private MonsterBreathEffect _breath;
 
         public EliteBullFighter()
         {
             RenderShadow = true;
             Scale = 1.15f;
-
-            EnableCustomShader = true;
-            SimpleColorMode = true;
-            GlowColor = new Vector3(0.25f, 0.15f, 0f);
-            GlowIntensity = 7.0f;
+            MoveSpeed = 250f; // SourceMain5.2: default monster MoveSpeed (10 * 25 FPS)
 
             _rightHandWeapon = new WeaponObject
             {
@@ -35,19 +31,27 @@ namespace Client.Main.Objects.Monsters
             };
             Children.Add(_rightHandWeapon);
 
-            // Eyes: bones 22 (L), 23 (R) — original RenderEye(o, 22, 23)
-            _eyeGlow = new GlowingEyesEffect { LeftEyeBone = 22, RightEyeBone = 23, GlowColor = new Color(80, 180, 255) };
+            // SourceMain5.2 RenderEye(o, 22, 23): eye01.jpg, white pulse, +/-5 local X.
+            _eyeGlow = new SourceMonsterEyeEffect
+            {
+                LeftEyeBone = 22,
+                RightEyeBone = 23,
+                LeftEyeOffset = new Vector3(5f, 0f, 0f),
+                RightEyeOffset = new Vector3(-5f, 0f, 0f)
+            };
             Children.Add(_eyeGlow);
 
             // Breath smoke from mouth (bone 24) during idle/walk
             _breath = new MonsterBreathEffect
             {
                 SourceBone = 24,
-                EmissionRate = 20f,
+                EmissionRate = 12.5f,
                 Triggers = new()
                 {
                     new() { ActionIndex = (byte)MonsterActionType.Stop1, FrameStart = 15, FrameEnd = 20 },
                     new() { ActionIndex = (byte)MonsterActionType.Stop2, FrameStart = 20, FrameEnd = 25 },
+                    new() { ActionIndex = (byte)MonsterActionType.Walk, FrameStart = 2, FrameEnd = 3 },
+                    new() { ActionIndex = (byte)MonsterActionType.Walk, FrameStart = 5, FrameEnd = 6 },
                 }
             };
             Children.Add(_breath);
@@ -60,6 +64,15 @@ namespace Client.Main.Objects.Monsters
             var item = ItemDatabase.GetItemDefinition(3, 7); // Berdysh
             _rightHandWeapon.Model = await BMDLoader.Instance.Prepare(item.TexturePath);
             await base.Load();
+
+            // SourceMain5.2 ZzzOpenData.cpp: base monster action speeds.
+            SetActionSpeed(MonsterActionType.Stop1, 0.25f);
+            SetActionSpeed(MonsterActionType.Stop2, 0.20f);
+            SetActionSpeed(MonsterActionType.Walk, 0.34f);
+            SetActionSpeed(MonsterActionType.Attack1, 0.33f);
+            SetActionSpeed(MonsterActionType.Attack2, 0.33f);
+            SetActionSpeed(MonsterActionType.Shock, 0.50f);
+            SetActionSpeed(MonsterActionType.Die, 0.55f);
         }
 
         // Sound mapping based on C++ SetMonsterSound(MODEL_MONSTER01 + Type, 0, 1, 2, 3, 4);

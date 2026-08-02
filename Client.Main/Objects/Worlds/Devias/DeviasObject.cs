@@ -3,6 +3,7 @@ using System;
 using System.Threading.Tasks;
 using Client.Main.Content;
 using Client.Main.Controllers;
+using Client.Main.Core.Utilities;
 using Client.Main.Graphics;
 using Client.Main.Helpers;
 using Client.Main.Models;
@@ -50,18 +51,16 @@ namespace Client.Main.Objects.Worlds.Devias
 
     internal sealed class DeviasObjectEffect : EffectObject
     {
-        private const float ReferenceFps = 25f;
         private const int MaxParticles = 48;
 
         private readonly DeviasObject _owner;
         private readonly Particle[] _particles = new Particle[MaxParticles];
 
-        private Texture2D?[] _fireTextures = Array.Empty<Texture2D?>();
+        private Texture2D? _fireTexture;
         private Texture2D? _trueFireTexture;
         private Texture2D? _smokeTexture;
         private Texture2D? _lightningTexture;
         private SpriteBatch? _spriteBatch;
-        private float _tickAccumulator;
         private int _particleCount;
 
         private enum ParticleKind
@@ -75,11 +74,13 @@ namespace Client.Main.Objects.Worlds.Devias
         {
             public ParticleKind Kind;
             public Vector3 Position;
+            public Vector3 Angle;
             public Vector3 Velocity;
             public float Gravity;
             public float Life;
             public float Scale;
             public float Rotation;
+            public int Frame;
             public Vector3 Light;
         }
 
@@ -99,13 +100,7 @@ namespace Client.Main.Objects.Worlds.Devias
         {
             await base.LoadContent();
 
-            _fireTextures = new Texture2D?[]
-            {
-                await TextureLoader.Instance.PrepareAndGetTexture("Effect/Fire01.jpg"),
-                await TextureLoader.Instance.PrepareAndGetTexture("Effect/Fire02.jpg"),
-                await TextureLoader.Instance.PrepareAndGetTexture("Effect/Fire03.jpg"),
-                await TextureLoader.Instance.PrepareAndGetTexture("Effect/Fire05.jpg")
-            };
+            _fireTexture = await TextureLoader.Instance.PrepareAndGetTexture("Effect/Fire01.jpg");
             _trueFireTexture = await TextureLoader.Instance.PrepareAndGetTexture("Effect/fantaF.jpg");
             _smokeTexture = await TextureLoader.Instance.PrepareAndGetTexture("Effect/smoke01.jpg");
             _lightningTexture = await TextureLoader.Instance.PrepareAndGetTexture("Effect/lightning2.jpg");
@@ -122,14 +117,9 @@ namespace Client.Main.Objects.Worlds.Devias
                 return;
             }
 
-            float frameFactor = (float)gameTime.ElapsedGameTime.TotalSeconds * ReferenceFps;
-            _tickAccumulator += MathF.Max(0f, frameFactor);
-            while (_tickAccumulator >= 1f)
-            {
-                _tickAccumulator -= 1f;
-                UpdateParticles();
-                EmitSourceParticles();
-            }
+            float frameFactor = FPSCounter.Instance.FPS_ANIMATION_FACTOR;
+            UpdateParticles(frameFactor);
+            EmitSourceParticles();
         }
 
         public override void Draw(GameTime gameTime)
@@ -208,17 +198,26 @@ namespace Client.Main.Objects.Worlds.Devias
                 {
                     ParticleKind.TrueFire => _trueFireTexture,
                     ParticleKind.Smoke => _smokeTexture,
-                    _ => GetFireTexture(particle.Rotation)
+                    _ => _fireTexture
                 };
                 if (texture == null)
                     continue;
+
+                Rectangle? sourceRectangle = null;
+                float rotationDegrees = particle.Rotation;
+                if (particle.Kind == ParticleKind.Fire)
+                {
+                    sourceRectangle = GetFireSourceRectangle(texture, particle.Frame);
+                    rotationDegrees = MathHelper.ToDegrees(particle.Angle.X);
+                }
 
                 DrawWorldSprite(
                     texture,
                     particle.Position,
                     particle.Light,
-                    particle.Rotation,
-                    particle.Scale);
+                    rotationDegrees,
+                    particle.Scale,
+                    sourceRectangle);
             }
         }
 
@@ -247,51 +246,72 @@ namespace Client.Main.Objects.Worlds.Devias
             if (_owner.Type == 30)
             {
                 Vector3 position = _owner.Position + new Vector3(0f, 0f, 160f);
-                SpawnTrueFire(position, _owner.Scale);
-                SpawnSmoke(position, 0.5f + MuGame.Random.Next(9) * 0.1f);
+                if (FPSCounter.Instance.RandFPSCheck(1))
+                    SpawnTrueFire(position, _owner.Scale);
+                if (FPSCounter.Instance.RandFPSCheck(1))
+                    SpawnSmoke(position, 0.5f + MuGame.Random.Next(9) * 0.1f);
             }
-            else if (_owner.Type == 66 && MuGame.Random.Next(2) == 0)
+            else if (_owner.Type == 66)
             {
-                Vector3 position = _owner.Position + new Vector3(
-                    MuGame.Random.Next(-8, 9),
-                    MuGame.Random.Next(-8, 9),
-                    50f + MuGame.Random.Next(-8, 9));
-                SpawnFire(position);
+                Matrix rotation = Matrix.CreateFromQuaternion(MathUtils.AngleQuaternion(_owner.Angle));
+                Vector3 position = _owner.Position +
+                    Vector3.TransformNormal(new Vector3(0f, 0f, 50f), rotation) +
+                    new Vector3(
+                        MuGame.Random.Next(-8, 8),
+                        MuGame.Random.Next(-8, 8),
+                        MuGame.Random.Next(-8, 8));
+                float luminosity = MuGame.Random.Next(6, 12) * 0.1f;
+
+                if (FPSCounter.Instance.RandFPSCheck(2))
+                {
+                    SpawnFire(
+                        position,
+                        new Vector3(luminosity, luminosity * 0.6f, luminosity * 0.4f));
+                }
             }
         }
 
-        private void UpdateParticles()
+        private void UpdateParticles(float frameFactor)
         {
             int writeIndex = 0;
             for (int i = 0; i < _particleCount; i++)
             {
                 Particle particle = _particles[i];
-                particle.Life -= 1f;
+                particle.Life -= frameFactor;
                 if (particle.Life <= 0f || particle.Scale <= 0f)
                     continue;
 
                 switch (particle.Kind)
                 {
                     case ParticleKind.Fire:
-                        particle.Position += particle.Velocity;
-                        particle.Gravity += 0.004f;
-                        particle.Position.Z += particle.Gravity * 10f;
-                        particle.Scale -= 0.04f;
-                        particle.Light = new Vector3(particle.Life / 24f);
+                        Matrix fireRotation = Matrix.CreateFromQuaternion(
+                            MathUtils.AngleQuaternion(particle.Angle));
+                        particle.Position += Vector3.TransformNormal(
+                            particle.Velocity,
+                            fireRotation) * frameFactor;
+                        particle.Gravity += 0.004f * frameFactor;
+                        particle.Position.Z += particle.Gravity * 10f * frameFactor;
+                        particle.Scale -= 0.04f * frameFactor;
+                        particle.Frame = (int)((23f - particle.Life) / 6f);
                         break;
                     case ParticleKind.TrueFire:
-                        particle.Position += particle.Velocity;
-                        particle.Velocity.X *= 0.95f;
-                        particle.Velocity.Y *= 0.95f;
-                        particle.Position.Z += 1f;
-                        particle.Scale -= 0.02f;
+                        Matrix trueFireRotation = Matrix.CreateFromQuaternion(
+                            MathUtils.AngleQuaternion(particle.Angle));
+                        particle.Position += Vector3.TransformNormal(
+                            particle.Velocity,
+                            trueFireRotation) * frameFactor;
+                        float damping = MathF.Pow(0.95f, frameFactor);
+                        particle.Velocity.X *= damping;
+                        particle.Velocity.Y *= damping;
+                        particle.Position.Z += frameFactor;
+                        particle.Scale -= 0.02f * frameFactor;
                         particle.Light = new Vector3(particle.Life / 25f);
                         break;
                     case ParticleKind.Smoke:
-                        particle.Gravity -= 0.1f;
-                        particle.Position.X -= particle.Gravity * 0.2f;
-                        particle.Position.Z += particle.Gravity;
-                        particle.Scale -= 0.01f;
+                        particle.Gravity -= 0.1f * frameFactor;
+                        particle.Position.X -= particle.Gravity * 0.2f * frameFactor;
+                        particle.Position.Z += particle.Gravity * frameFactor;
+                        particle.Scale -= 0.01f * frameFactor;
                         particle.Light = new Vector3(particle.Life / 50f);
                         break;
                 }
@@ -303,18 +323,28 @@ namespace Client.Main.Objects.Worlds.Devias
             _particleCount = writeIndex;
         }
 
-        private void SpawnFire(Vector3 position)
+        private void SpawnFire(Vector3 position, Vector3 light)
         {
             if (!TryAddParticle(out Particle particle))
                 return;
 
+            int subType = MuGame.Random.Next(4);
             particle.Kind = ParticleKind.Fire;
             particle.Position = position;
-            particle.Velocity = new Vector3(0f, -((MuGame.Random.Next(16) + 32) * 0.1f), 0f);
+            particle.Angle = _owner.Angle;
+            particle.Velocity = subType is 0 or 1
+                ? new Vector3(0f, -MuGame.Random.Next(32, 48) * 0.1f, 0f)
+                : new Vector3(0f, -(MuGame.Random.Next(32) - 16) * 0.1f, 0f);
             particle.Life = 24f;
-            particle.Scale = (MuGame.Random.Next(64) + 128) * 0.01f;
+            particle.Scale = subType switch
+            {
+                0 => MuGame.Random.Next(128, 192) * 0.01f,
+                1 => MuGame.Random.Next(10, 14) * 0.01f,
+                _ => 1f,
+            };
             particle.Rotation = MuGame.Random.Next(360);
-            particle.Light = Vector3.One;
+            particle.Frame = 0;
+            particle.Light = light;
             AddParticle(particle);
         }
 
@@ -325,6 +355,7 @@ namespace Client.Main.Objects.Worlds.Devias
 
             particle.Kind = ParticleKind.TrueFire;
             particle.Position = position;
+            particle.Angle = _owner.Angle;
             particle.Velocity = new Vector3(
                 (MuGame.Random.Next(10) - 5) * 0.4f,
                 0f,
@@ -342,6 +373,7 @@ namespace Client.Main.Objects.Worlds.Devias
 
             particle.Kind = ParticleKind.Smoke;
             particle.Position = position;
+            particle.Angle = _owner.Angle;
             particle.Life = 80f;
             particle.Scale = scale * (MuGame.Random.Next(64) + 64) * 0.005f;
             particle.Gravity = (MuGame.Random.Next(32) + 60) * 0.1f;
@@ -361,13 +393,14 @@ namespace Client.Main.Objects.Worlds.Devias
             _particles[_particleCount++] = particle;
         }
 
-        private Texture2D? GetFireTexture(float rotation)
+        private static Rectangle GetFireSourceRectangle(Texture2D texture, int frame)
         {
-            if (_fireTextures.Length == 0)
-                return null;
-
-            int index = Math.Abs((int)rotation) % _fireTextures.Length;
-            return _fireTextures[index];
+            int frameWidth = texture.Width / 4;
+            return new Rectangle(
+                Math.Clamp(frame, 0, 3) * frameWidth,
+                0,
+                frameWidth,
+                texture.Height);
         }
 
         private void DrawWorldSprite(
@@ -375,7 +408,8 @@ namespace Client.Main.Objects.Worlds.Devias
             Vector3 position,
             Vector3 light,
             float rotationDegrees,
-            float scale)
+            float scale,
+            Rectangle? sourceRectangle = null)
         {
             Vector3 projected = GraphicsDevice.Viewport.Project(
                 position,
@@ -409,13 +443,19 @@ namespace Client.Main.Objects.Worlds.Devias
                 spriteScale.X <= 0f || spriteScale.Y <= 0f)
                 return;
 
+            Vector2 origin = sourceRectangle.HasValue
+                ? new Vector2(
+                    sourceRectangle.Value.Width * 0.5f,
+                    sourceRectangle.Value.Height * 0.5f)
+                : new Vector2(texture.Width * 0.5f, texture.Height * 0.5f);
+
             _spriteBatch!.Draw(
                 texture,
                 new Vector2(projected.X, projected.Y),
-                null,
+                sourceRectangle,
                 new Color(light),
                 -MathHelper.ToRadians(rotationDegrees),
-                new Vector2(texture.Width * 0.5f, texture.Height * 0.5f),
+                origin,
                 spriteScale,
                 SpriteEffects.None,
                 MathHelper.Clamp(projected.Z, 0f, 1f));

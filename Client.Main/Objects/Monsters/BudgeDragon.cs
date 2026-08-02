@@ -16,6 +16,7 @@ namespace Client.Main.Objects.Monsters
 
         // Flight bob — matches original (-abs(sin(timer))*70+70)*FPS_ANIMATION_FACTOR
         private float _bobTimer;
+        private float _fireLegacyAccumulator;
 
         // Ground dust/smoke emitter — matches original BITMAP_SMOKE+1 from fall-through case
         private BudgeDragonDustEffect _dustEffect;
@@ -27,6 +28,7 @@ namespace Client.Main.Objects.Monsters
         {
             RenderShadow = true;
             Scale = 0.5f;
+            MoveSpeed = 250f; // SourceMain5.2: default monster MoveSpeed (10 * 25 FPS)
 
             _dustEffect = new BudgeDragonDustEffect();
             Children.Add(_dustEffect);
@@ -38,9 +40,14 @@ namespace Client.Main.Objects.Monsters
         public override async Task Load()
         {
             Model = await BMDLoader.Instance.Prepare($"Monster/Monster03.bmd");
-            Position = new Vector3(Position.X, Position.Y, Position.Z - 40f);
             await base.Load();
+            SetActionSpeed(MonsterActionType.Stop1, 0.25f);
+            SetActionSpeed(MonsterActionType.Stop2, 0.20f);
             SetActionSpeed(MonsterActionType.Walk, 0.7f);
+            SetActionSpeed(MonsterActionType.Attack1, 0.33f);
+            SetActionSpeed(MonsterActionType.Attack2, 0.33f);
+            SetActionSpeed(MonsterActionType.Shock, 0.50f);
+            SetActionSpeed(MonsterActionType.Die, 0.55f);
         }
 
         public override void Update(GameTime gameTime)
@@ -59,7 +66,7 @@ namespace Client.Main.Objects.Monsters
             if (!isDead && isMoving)
             {
                 _bobTimer += 3.75f * dt;
-                ExtraHeight = (-MathF.Abs(MathF.Sin(_bobTimer)) * 70f + 70f) / 1.5f;
+                ExtraHeight = -MathF.Abs(MathF.Sin(_bobTimer)) * 70f + 70f;
             }
             else
             {
@@ -75,14 +82,20 @@ namespace Client.Main.Objects.Monsters
                 && BoneTransform != null
                 && BoneTransform.Length > 7)
             {
-                // Transform offset through bone matrix so fire comes from mouth direction
-                Vector3 boneOffset = new Vector3(0, 30f + Random.Shared.Next(32), 0);
-                Vector3 boneLocal = Vector3.Transform(boneOffset, BoneTransform[7]);
-                Vector3 boneWorld = Vector3.Transform(boneLocal, WorldPosition);
-
-                _fireAttackEffect.SpawnWorldPosition = boneWorld;
-                _fireAttackEffect.EmitThisFrame = true;
+                _fireLegacyAccumulator += dt * 25f;
+                int legacyTicks = (int)_fireLegacyAccumulator;
+                _fireLegacyAccumulator -= legacyTicks;
+                if (legacyTicks > 0)
+                {
+                    // Source rand_fps_check(1): emit once per reference frame.
+                    Vector3 boneOffset = new Vector3(0f, 32f + MuGame.Random.Next(32), 0f);
+                    Vector3 boneLocal = Vector3.Transform(boneOffset, BoneTransform[7]);
+                    _fireAttackEffect.SpawnWorldPosition = Vector3.Transform(boneLocal, WorldPosition);
+                    _fireAttackEffect.EmitThisFrame = true;
+                }
             }
+            else
+                _fireLegacyAccumulator = 0f;
         }
 
         protected override void OnIdle()

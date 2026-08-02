@@ -11,6 +11,7 @@ namespace Client.Main.Objects.Worlds.Lorencia
         public CarriageObject()
         {
             LightEnabled = true;
+            BlendMesh = 2;
         }
 
         public override async Task Load()
@@ -20,35 +21,5 @@ namespace Client.Main.Objects.Worlds.Lorencia
             await base.Load();
         }
 
-        public override void DrawMesh(int mesh)
-        {
-            if (mesh == 2)
-                BlendState = Blendings.InverseDestinationBlend;
-
-            if (Type == 101 && mesh == 1)
-            {
-                BlendState = new BlendState
-                {
-                    ColorSourceBlend = Blend.One,
-                    ColorDestinationBlend = Blend.Zero,
-                    AlphaSourceBlend = Blend.One,
-                    AlphaDestinationBlend = Blend.Zero,
-                    ColorBlendFunction = BlendFunction.Add,
-                    AlphaBlendFunction = BlendFunction.Add
-                };
-                
-                GraphicsDevice.DepthStencilState = new DepthStencilState
-                {
-                    DepthBufferEnable = true,
-                    DepthBufferWriteEnable = true,
-                    DepthBufferFunction = CompareFunction.LessEqual
-                };
-            }
-
-            base.DrawMesh(mesh);
-
-            BlendState = Blendings.Alpha;
-            GraphicsDevice.DepthStencilState = DepthStencilState.Default;
-        }
     }
 }

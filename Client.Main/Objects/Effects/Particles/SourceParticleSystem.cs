@@ -146,6 +146,8 @@ namespace Client.Main.Objects.Effects.Particles
 
         protected virtual float GetParticleRotation(in SourceParticle particle) => particle.Rotation;
 
+        protected virtual Rectangle? GetParticleSourceRectangle(Texture2D texture, in SourceParticle particle) => null;
+
         protected float RandomRange(float min, float max) =>
             min + (float)MuGame.Random.NextDouble() * (max - min);
 
@@ -210,7 +212,7 @@ namespace Client.Main.Objects.Effects.Particles
                 GraphicsManager.Instance.Sprite.Draw(
                     texture,
                     new Vector2(screenX, screenY),
-                    null,
+                    GetParticleSourceRectangle(texture, particle),
                     GetParticleColor(particle, lifeRatio),
                     GetParticleRotation(particle),
                     ParticleTextureCenter,

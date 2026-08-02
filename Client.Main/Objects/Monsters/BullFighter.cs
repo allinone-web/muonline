@@ -31,11 +31,13 @@ namespace Client.Main.Objects.Monsters
             _breath = new MonsterBreathEffect
             {
                 SourceBone = 24,
-                EmissionRate = 20f,
+                EmissionRate = 12.5f,
                 Triggers = new()
                 {
                     new() { ActionIndex = (byte)MonsterActionType.Stop1, FrameStart = 15, FrameEnd = 20 },
                     new() { ActionIndex = (byte)MonsterActionType.Stop2, FrameStart = 20, FrameEnd = 25 },
+                    new() { ActionIndex = (byte)MonsterActionType.Walk, FrameStart = 2, FrameEnd = 3 },
+                    new() { ActionIndex = (byte)MonsterActionType.Walk, FrameStart = 5, FrameEnd = 6 },
                 }
             };
             Children.Add(_breath);

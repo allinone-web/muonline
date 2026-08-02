@@ -238,6 +238,19 @@ namespace Client.Main.Objects
         }
 
         /// <summary>
+        /// Spawns the standard blood burst used by the original client when this monster is hit.
+        /// </summary>
+        public void SpawnHitEffect()
+        {
+            if (World == null || Status != GameControlStatus.Ready)
+                return;
+
+            var effect = new Effects.MonsterHitEffect(Position, Angle);
+            World.Objects.Add(effect);
+            _ = effect.Load();
+        }
+
+        /// <summary>
         /// Minimal health/shield update shim to accept server-provided fractions.
         /// Triggers damage reactions and death fade when health reaches zero.
         /// </summary>
