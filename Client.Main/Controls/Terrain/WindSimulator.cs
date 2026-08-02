@@ -10,13 +10,14 @@ namespace Client.Main.Controls.Terrain
     /// </summary>
     public class WindSimulator
     {
-        private const float WindScale = 15f;
         private const int UpdateIntervalMs = 32;
 
         private readonly TerrainData _data;
         private readonly WindCache _windCache = new();
         private float _lastWindSpeed = float.MinValue;
         private double _lastUpdateTime;
+
+        public short WorldIndex { get; set; }
 
         public WindSimulator(TerrainData data)
         {
@@ -42,7 +43,19 @@ namespace Client.Main.Controls.Terrain
             int startY = Math.Max(0, cy - 32);
             int endX = Math.Min(Constants.TERRAIN_SIZE - 1, cx + 32);
             int endY = Math.Min(Constants.TERRAIN_SIZE - 1, cy + 32);
-            const float Step = 5f;
+            float windScale = 10f;
+            float step = 5f;
+            if (WorldIndex == 8 || WorldIndex == 57 || WorldIndex == 58)
+                step = 50f;
+            if (WorldIndex == 57 || WorldIndex == 58)
+                windScale = 60f;
+            if (WorldIndex == 80 || WorldIndex == 81)
+            {
+                windSpeed = (float)(nowMs % 36_000 * 0.008);
+                windScale = 15f;
+                step = 50f;
+            }
+
             int terrainSize = Constants.TERRAIN_SIZE;
 
             for (int y = startY; y <= endY; y++)
@@ -51,7 +64,7 @@ namespace Client.Main.Controls.Terrain
                 for (int x = startX; x <= endX; x++)
                 {
                     _data.GrassWind[baseIdx + x] =
-                        _windCache.FastSin(windSpeed + x * Step) * WindScale;
+                        _windCache.FastSin(windSpeed + x * step) * windScale;
                 }
             }
         }

@@ -101,6 +101,7 @@ namespace Client.Main.Objects.Effects
         private static int _batchDrawCallsThisFrame;
         private static int _batchQuadsThisFrame;
         private static readonly Dictionary<long, int> DensityTileCounts = new(128);
+        private static readonly List<FieryAuraEffect> LateWorldDrawQueue = new(64);
         private static long _densityUpdateTicks = -1;
         private static int _densityFullThisTick;
         private static int _densityReducedThisTick;
@@ -324,11 +325,34 @@ namespace Client.Main.Objects.Effects
         public override void Draw(GameTime gameTime)
         {
             base.Draw(gameTime);
+        }
+
+        public override void DrawAfter(GameTime gameTime)
+        {
+            base.DrawAfter(gameTime);
 
             if (!CanDrawAuraGeometry())
                 return;
 
-            DrawAura();
+            if (!LateWorldDrawQueue.Contains(this))
+                LateWorldDrawQueue.Add(this);
+        }
+
+        public static void FlushLateWorldDraws(WorldControl world)
+        {
+            try
+            {
+                for (int i = 0; i < LateWorldDrawQueue.Count; i++)
+                {
+                    FieryAuraEffect aura = LateWorldDrawQueue[i];
+                    if (ReferenceEquals(aura.World, world) && aura.CanDrawAuraGeometry())
+                        aura.DrawAura();
+                }
+            }
+            finally
+            {
+                LateWorldDrawQueue.Clear();
+            }
         }
 
         public static bool HasPendingBatches =>

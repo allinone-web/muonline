@@ -56,8 +56,7 @@ namespace Client.Main.Worlds
             Terrain.DistortionAmplitude = 0.2f;
             Terrain.DistortionFrequency = 1.0f;
 
-            // Configure grass settings for Lorencia - normal brightness
-            Terrain.ConfigureGrass(brightness: 2.0f, textureIndices: new byte[] { 0 });
+            Terrain.ConfigureGrass();
 
             SoundController.Instance.PreloadBackgroundMusic(pubMusicPath);
 

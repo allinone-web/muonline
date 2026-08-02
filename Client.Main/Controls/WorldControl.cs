@@ -1161,6 +1161,28 @@ namespace Client.Main.Controls
             DrawAfterPass(_solidBehind, DepthStateDefault, time);
             DrawAfterPass(_transparentObjects, DepthStateDepthRead, time);
 
+            // SourceMain5.2 renders effects after every world-object pass. Keep additive
+            // effects depth-tested, but defer them until map meshes (including their
+            // transparent DrawAfter meshes) have finished, so geometry behind an effect
+            // cannot paint over it later in the frame.
+            try
+            {
+                FieryAuraEffect.FlushLateWorldDraws(this);
+            }
+            catch (Exception ex)
+            {
+                RecordRenderFailure(null, "Draw.LateFieryAura", ex);
+            }
+
+            try
+            {
+                ScrollOfFlameEffect.FlushLateWorldDraws(this);
+            }
+            catch (Exception ex)
+            {
+                RecordRenderFailure(null, "Draw.LateScrollOfFlame", ex);
+            }
+
             try
             {
                 OverheadNameplateRenderer.FlushQueuedNameplates(GraphicsManager.Instance.Sprite);

@@ -70,8 +70,7 @@ namespace Client.Main.Worlds
             Terrain.DistortionAmplitude = 0.1f;      // Example: stronger distortion
             Terrain.DistortionFrequency = 2.0f;      // Example: lower frequency for distortion
 
-            // Configure grass settings for Noria - brighter grass for desert-like environment
-            Terrain.ConfigureGrass(brightness: 1.0f, textureIndices: new byte[] { 0, 2 });
+            Terrain.ConfigureGrass();
 
             // Initialize butterfly system for outdoor areas
             _butterflyManager = new ButterflyManager(this);

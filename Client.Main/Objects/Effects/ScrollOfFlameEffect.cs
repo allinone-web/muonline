@@ -60,6 +60,7 @@ namespace Client.Main.Objects.Effects
         private readonly DynamicLight _flameLight;
         private TerrainControl? _lightTerrain;
         private bool _lightsAdded;
+        private static readonly List<ScrollOfFlameEffect> LateWorldDrawQueue = new(32);
 
         private Texture2D? _flameTexture;
         private readonly FlameParticle[] _particles = new FlameParticle[MaxFlameParticles];
@@ -174,11 +175,34 @@ namespace Client.Main.Objects.Effects
         public override void Draw(GameTime gameTime)
         {
             base.Draw(gameTime);
+        }
+
+        public override void DrawAfter(GameTime gameTime)
+        {
+            base.DrawAfter(gameTime);
 
             if (!Visible || _flameTexture == null)
                 return;
 
-            DrawEffect();
+            if (!LateWorldDrawQueue.Contains(this))
+                LateWorldDrawQueue.Add(this);
+        }
+
+        public static void FlushLateWorldDraws(WorldControl world)
+        {
+            try
+            {
+                for (int i = 0; i < LateWorldDrawQueue.Count; i++)
+                {
+                    ScrollOfFlameEffect effect = LateWorldDrawQueue[i];
+                    if (ReferenceEquals(effect.World, world) && effect.Visible)
+                        effect.DrawEffect();
+                }
+            }
+            finally
+            {
+                LateWorldDrawQueue.Clear();
+            }
         }
 
         private void EmitSourceParticles(float dt)
@@ -436,8 +460,10 @@ namespace Client.Main.Objects.Effects
         {
             float x = u - 0.5f;
             float y = v - 0.5f;
-            float cos = MathF.Cos(_rotation);
-            float sin = MathF.Sin(_rotation);
+            // Source RenderTerrainAlphaBitmap receives -o->Angle[2].
+            float sourceRotation = -_rotation;
+            float cos = MathF.Cos(sourceRotation);
+            float sin = MathF.Sin(sourceRotation);
             return new Vector2(
                 (x * cos - y * sin) + 0.5f,
                 (x * sin + y * cos) + 0.5f);

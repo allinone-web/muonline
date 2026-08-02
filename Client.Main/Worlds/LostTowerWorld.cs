@@ -42,7 +42,20 @@ namespace Client.Main.Worlds
         protected override void CreateMapTileObjects()
         {
             base.CreateMapTileObjects();
-            MapTileObjects[18] = typeof(LightBeamObject);
+
+            // SourceMain5.2 uses these Lost Tower object types for animated
+            // blend meshes, moving UVs, hidden meshes and object effects.
+            MapTileObjects[3] = typeof(LostTowerObject);  // source type 3 -> Object04.bmd
+            MapTileObjects[4] = typeof(LostTowerObject);  // source type 4 -> Object05.bmd
+            MapTileObjects[18] = typeof(LightBeamObject); // source type 18 -> Object19.bmd
+            MapTileObjects[19] = typeof(LostTowerObject); // source type 19 -> Object20.bmd
+            MapTileObjects[20] = typeof(LostTowerObject); // source type 20 -> Object21.bmd
+            MapTileObjects[23] = typeof(LostTowerObject); // source type 23 -> Object24.bmd
+            MapTileObjects[24] = typeof(LostTowerObject); // source type 24 -> Object25.bmd
+            MapTileObjects[25] = typeof(LostTowerObject); // source type 25 -> Object26.bmd
+            MapTileObjects[38] = typeof(LostTowerObject); // source type 38 -> Object39.bmd
+            MapTileObjects[39] = typeof(LostTowerObject); // source type 39 -> Object40.bmd
+            MapTileObjects[40] = typeof(LostTowerObject); // source type 40 -> Object41.bmd
         }
     }
 }

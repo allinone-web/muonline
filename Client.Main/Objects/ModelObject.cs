@@ -714,6 +714,14 @@ namespace Client.Main.Objects
             return true;
         }
 
+        protected Texture2D GetMeshTexture(int meshIndex)
+        {
+            if (_meshes == null || (uint)meshIndex >= (uint)_meshes.Length)
+                return null;
+
+            return _meshes[meshIndex].Texture;
+        }
+
         protected bool ClearMeshTextureOverride(int meshIndex)
         {
             if (_meshes == null || (uint)meshIndex >= (uint)_meshes.Length)
