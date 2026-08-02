@@ -11,13 +11,17 @@ using System.Threading.Tasks;
 namespace Client.Main.Objects.Effects
 {
     /// <summary>
-    /// Original-client character entrance effect: a short ground magic circle
-    /// while the character fades in from alpha zero.
+    /// Original-client character entrance effect: a short magic circle and ground glow
+    /// around the character.
     /// </summary>
     public sealed class CharacterSpawnEffect : EffectObject
     {
+        private const string CircleTexturePath = "Effect/Magic_Circle1.jpg";
+        private const string GroundTexturePath = "Effect/Magic_Ground2.jpg";
         private const float SourceFrameRate = 25f;
-        private const float LifetimeFrames = 20f;
+        private const float LifetimeFrames = 30f;
+        private const float GroundGrowthFrames = 20f;
+        private const float FadeOutFrames = 8f;
         private const float Lifetime = LifetimeFrames / SourceFrameRate;
 
         private static readonly ConditionalWeakTable<PlayerObject, CharacterSpawnEffect> ActiveEffects =
@@ -50,17 +54,23 @@ namespace Client.Main.Objects.Effects
 
             var effect = new CharacterSpawnEffect(player);
             ActiveEffects.Add(player, effect);
-            player.Alpha = 0f;
             player.World.Objects.Add(effect);
+        }
+
+        public static async Task PreloadAsync()
+        {
+            await Task.WhenAll(
+                TextureLoader.Instance.PrepareAndGetTexture(CircleTexturePath),
+                TextureLoader.Instance.PrepareAndGetTexture(GroundTexturePath));
         }
 
         public override async Task LoadContent()
         {
             await base.LoadContent();
             _circleTexture = await TextureLoader.Instance.PrepareAndGetTexture(
-                "Effect/Magic_Circle1.jpg");
+                CircleTexturePath);
             _groundTexture = await TextureLoader.Instance.PrepareAndGetTexture(
-                "Effect/Magic_Ground2.jpg");
+                GroundTexturePath);
         }
 
         public override void Update(GameTime gameTime)
@@ -76,7 +86,6 @@ namespace Client.Main.Objects.Effects
 
             Position = _player.Position;
             _elapsed += (float)gameTime.ElapsedGameTime.TotalSeconds;
-            _player.Alpha += (1f - _player.Alpha) * 0.1f;
 
             if (_elapsed >= Lifetime)
                 Finish();
@@ -112,7 +121,7 @@ namespace Client.Main.Objects.Effects
                     LifetimeFrames - _elapsed * SourceFrameRate,
                     0f,
                     LifetimeFrames);
-                float luminosity = life < 5f ? life / 5f : 1f;
+                float fadeAlpha = life < FadeOutFrames ? life / FadeOutFrames : 1f;
                 float rotationDegrees =
                     (float)(gameTime.TotalGameTime.TotalMilliseconds % 3600.0) / 10f;
 
@@ -124,7 +133,7 @@ namespace Client.Main.Objects.Effects
                     130f,
                     200f,
                     rotationDegrees,
-                    1f);
+                    fadeAlpha);
                 DrawCircle(
                     graphicsDevice,
                     effect,
@@ -133,16 +142,17 @@ namespace Client.Main.Objects.Effects
                     130f,
                     200f,
                     -rotationDegrees,
-                    1f);
+                    fadeAlpha);
 
-                float groundScale = (LifetimeFrames - life) * 0.15f;
+                float groundScale = MathF.Min(LifetimeFrames - life, GroundGrowthFrames) * 0.15f;
                 DrawGround(
                     graphicsDevice,
                     effect,
                     Position + new Vector3(0f, 0f, 5f),
                     groundScale,
                     -_player.Angle.Z,
-                    new Vector3(luminosity, luminosity * 0.4f, luminosity * 0.2f));
+                    new Vector3(1f, 0.4f, 0.2f),
+                    fadeAlpha);
             }
             finally
             {
@@ -237,7 +247,8 @@ namespace Client.Main.Objects.Effects
             Vector3 position,
             float scale,
             float rotation,
-            Vector3 tint)
+            Vector3 tint,
+            float alpha)
         {
             float size = scale * Constants.TERRAIN_SCALE;
             effect.World = Matrix.CreateScale(size)
@@ -249,7 +260,7 @@ namespace Client.Main.Objects.Effects
             effect.Texture = _groundTexture;
             effect.VertexColorEnabled = false;
             effect.DiffuseColor = tint;
-            effect.Alpha = 1f;
+            effect.Alpha = alpha;
 
             foreach (var pass in effect.CurrentTechnique.Passes)
             {
@@ -297,7 +308,6 @@ namespace Client.Main.Objects.Effects
 
         private void Finish()
         {
-            _player.Alpha = 1f;
             ActiveEffects.Remove(_player);
             World?.RemoveObject(this);
             Dispose();

@@ -539,6 +539,7 @@ namespace Client.Main.Scenes
                 _hero.SnapToTerrainHeight(updateCamera: false);
                 await _hero.PrepareGpuTexturesForFirstFrameAsync();
                 _hero.PrepareRenderResourcesForFirstFrame();
+                await CharacterSpawnEffect.PreloadAsync();
 
                 await MuGame.YieldToNextFrameAsync(
                     "GameScene.Load.PublishHero",
