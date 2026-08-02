@@ -27,6 +27,7 @@ namespace Client.Main.Core.Client
 
         private long _worldGeneration = 1;
         private int _worldTransitionActive;
+        private int _acceptCurrentMapScopeUpdates;
         private ushort _transitionSourceMapId = ushort.MaxValue;
 
         public long CurrentWorldGeneration => Volatile.Read(ref _worldGeneration);
@@ -49,9 +50,15 @@ namespace Client.Main.Core.Client
         /// until asynchronous disposal has completed. Updates received while CharacterState
         /// still points at the source map are treated as delayed packets from the old world.
         /// </summary>
-        public void BeginWorldTransition(ushort? sourceMapId = null, bool preserveCurrentMapEntries = false)
+        public void BeginWorldTransition(
+            ushort? sourceMapId = null,
+            bool preserveCurrentMapEntries = false,
+            bool acceptCurrentMapScopeUpdates = false)
         {
             _transitionSourceMapId = sourceMapId ?? _characterState.MapId;
+            Volatile.Write(
+                ref _acceptCurrentMapScopeUpdates,
+                acceptCurrentMapScopeUpdates ? 1 : 0);
             long generation = Interlocked.Increment(ref _worldGeneration);
             Volatile.Write(ref _worldTransitionActive, 1);
 
@@ -87,6 +94,7 @@ namespace Client.Main.Core.Client
             ushort currentMapId = _characterState.MapId;
             int removed = RemoveEntriesFromOtherMaps(currentMapId, recycleRemovedObjects: false);
             Volatile.Write(ref _worldTransitionActive, 0);
+            Volatile.Write(ref _acceptCurrentMapScopeUpdates, 0);
 
             _logger.LogInformation(
                 "Scope world transition completed. CurrentMap={CurrentMap}, removed stale entries={Removed}, Generation={Generation}.",
@@ -97,7 +105,9 @@ namespace Client.Main.Core.Client
 
         private bool ShouldIgnoreRemoteUpdateDuringTransition()
         {
-            return IsWorldTransitionActive && _characterState.MapId == _transitionSourceMapId;
+            return IsWorldTransitionActive &&
+                   Volatile.Read(ref _acceptCurrentMapScopeUpdates) == 0 &&
+                   _characterState.MapId == _transitionSourceMapId;
         }
 
         private void StampCurrentWorld(ScopeObject scopeObject)

@@ -16,7 +16,7 @@ namespace Client.Main.Objects.Effects
     {
         private const float BaseSize = 40f;
         private const float LifeTotal = 3.5f;
-        public const float GroundOffset = 70f;
+        public const float GroundOffset = 0f;
         private const float DepthBias = -0.00002f;
 
         private static readonly short[] QuadIndices = { 0, 1, 2, 2, 1, 3 };

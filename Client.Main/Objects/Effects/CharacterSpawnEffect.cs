@@ -1,4 +1,5 @@
 using Client.Main.Content;
+using Client.Main.Controls;
 using Client.Main.Controllers;
 using Client.Main.Graphics;
 using Client.Main.Objects.Player;
@@ -49,12 +50,52 @@ namespace Client.Main.Objects.Effects
             if (player?.World == null)
                 return;
 
+            if (!MuGame.IsMainThread)
+            {
+                MuGame.ScheduleOnMainThread(
+                    () => Start(player),
+                    MainThreadDispatcher.WorkPriority.High,
+                    $"CharacterSpawnEffect.Start.{player.NetworkId:X4}");
+                return;
+            }
+
             if (ActiveEffects.TryGetValue(player, out _))
                 return;
 
+            var world = player.World;
             var effect = new CharacterSpawnEffect(player);
             ActiveEffects.Add(player, effect);
-            player.World.Objects.Add(effect);
+            effect.World = world;
+            _ = effect.LoadAndPublishAsync(world);
+        }
+
+        private async Task LoadAndPublishAsync(WorldControl world)
+        {
+            await Load().ConfigureAwait(false);
+
+            if (Status != Models.GameControlStatus.Ready)
+            {
+                Dispose();
+                return;
+            }
+
+            MuGame.ScheduleOnMainThread(
+                () =>
+                {
+                    if (Status != Models.GameControlStatus.Ready ||
+                        world.Status != Models.GameControlStatus.Ready ||
+                        !ReferenceEquals(World, world) ||
+                        !ReferenceEquals(_player.World, world) ||
+                        _player.Status == Models.GameControlStatus.Disposed)
+                    {
+                        Dispose();
+                        return;
+                    }
+
+                    world.Objects.Add(this);
+                },
+                MainThreadDispatcher.WorkPriority.High,
+                $"CharacterSpawnEffect.Publish.{_player.NetworkId:X4}");
         }
 
         public static async Task PreloadAsync()

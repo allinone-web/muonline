@@ -1155,11 +1155,16 @@ namespace Client.Main
                 newScene.ReserveProgressiveInitialization();
 
                 ushort? sourceMapId = previousScene?.World?.MapId;
+                bool enteringGameFromCharacterSelection =
+                    newScene is GameScene && previousScene is SelectCharacterScene;
                 bool preserveCurrentMapScope =
                     newScene is GameScene &&
-                    sourceMapId.HasValue &&
-                    sourceMapId.Value != _characterState.MapId;
-                _scopeManager?.BeginWorldTransition(sourceMapId, preserveCurrentMapScope);
+                    (enteringGameFromCharacterSelection ||
+                     (sourceMapId.HasValue && sourceMapId.Value != _characterState.MapId));
+                _scopeManager?.BeginWorldTransition(
+                    sourceMapId,
+                    preserveCurrentMapScope,
+                    acceptCurrentMapScopeUpdates: enteringGameFromCharacterSelection);
                 ModelObject.ResetWorldScopedInstancingState();
 
                 if (activateBeforeInitialization)
