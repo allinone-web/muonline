@@ -1,6 +1,7 @@
 using Client.Main.Configuration;
 using Client.Main.Controls;
 using Client.Main.Core.Utilities;
+using Client.Main.Objects;
 using Client.Main.Objects.Worlds.Devias;
 using Microsoft.Xna.Framework;
 using System.Threading.Tasks;
@@ -71,8 +72,17 @@ namespace Client.Main.Worlds
             MapTileObjects[19] = typeof(AuroraObject);
             MapTileObjects[20] = typeof(SteelDoorObject);
 
+            MapTileObjects[30] = typeof(DeviasObject);
+            MapTileObjects[66] = typeof(DeviasObject);
+            MapTileObjects[54] = typeof(DeviasObject);
+            MapTileObjects[56] = typeof(DeviasObject);
+            MapTileObjects[92] = typeof(DeviasObject);
+            MapTileObjects[93] = typeof(DeviasObject);
+            MapTileObjects[100] = typeof(DeviasObject);
+
             MapTileObjects[65] = typeof(SteelDoorObject);
-            MapTileObjects[67] = typeof(SteelDoorObject);
+            MapTileObjects[67] = typeof(MapTileObject);
+            MapTileObjects[68] = typeof(MapTileObject);
 
             MapTileObjects[86] = typeof(SteelDoorObject); // Sliding doors
 

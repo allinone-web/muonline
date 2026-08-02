@@ -16,19 +16,9 @@ namespace Client.Main.Objects.Worlds.Devias
         private const float Y_PROXIMITY_THRESHOLD = 100f;
         private const float ScaleLocation = 100f; // Conversion factor for player position
 
-        // Flicker effect settings for mesh 3 when Type == 78
-        private static readonly Random _rand = new Random();
-
         // State fields
         private float _alpha = 1f;
         private bool _isTransparent = false;
-
-        private bool _flickerEnabled = false;
-        private float _flickerAlpha = 1f;
-        private float _flickerStart = 1f;
-        private float _flickerTarget = 1f;
-        private float _flickerDur = 0f;
-        private float _flickerElapsed = 0f;
 
         public override bool IsTransparent => _isTransparent || (Alpha < 0.99f);
 
@@ -42,13 +32,8 @@ namespace Client.Main.Objects.Worlds.Devias
 
             if (Type == 78)
             {
-                // Enable flicker effect for mesh 3
-                _flickerEnabled = true;
-                _flickerStart = 1f;
-                _flickerTarget = 0.85f + (float)_rand.NextDouble() * 0.15f;  // Range 0.85–1.0
-                _flickerDur = 0.1f + (float)_rand.NextDouble() * 0.1f;      // Range 0.10–0.20 seconds
-                _flickerElapsed = 0f;
-
+                // SourceMain5.2 changes only BlendMeshLight every frame;
+                // it does not animate the mesh alpha.
                 BlendMesh = 3;
                 BlendMeshState = BlendState.Additive;
             }
@@ -65,23 +50,8 @@ namespace Client.Main.Objects.Worlds.Devias
             if (World is not WalkableWorldControl walkableWorld)
                 return;
 
-            if (_flickerEnabled)
-            {
-                float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
-                _flickerElapsed += dt;
-
-                if (_flickerElapsed >= _flickerDur)
-                {
-                    _flickerStart = _flickerTarget;
-                    _flickerTarget = 0.85f + (float)_rand.NextDouble() * 0.15f;
-                    _flickerDur = 0.1f + (float)_rand.NextDouble() * 0.1f;
-                    _flickerElapsed = 0f;
-                }
-
-                float t = MathHelper.Clamp(_flickerElapsed / _flickerDur, 0f, 1f);
-                float smoothStep = t * t * (3f - 2f * t); // Smooth interpolation
-                _flickerAlpha = MathHelper.Lerp(_flickerStart, _flickerTarget, smoothStep);
-            }
+            if (Type == 78)
+                BlendMeshLight = (MuGame.Random.Next(4) + 4) * 0.1f;
 
             Vector2 playerPos = walkableWorld.Walker.Location * ScaleLocation;
 
@@ -114,35 +84,5 @@ namespace Client.Main.Objects.Worlds.Devias
             base.Draw(gameTime);
         }
 
-        public override void DrawMesh(int mesh)
-        {
-            if (_flickerEnabled && mesh == BlendMesh)
-            {
-                float originalAlpha = Alpha;
-                var device = GraphicsDevice;
-                var originalBlendState = device.BlendState;
-
-                if (_isTransparent)
-                {
-                    device.BlendState = BlendState.AlphaBlend;
-                    // Apply minimum alpha with flicker when transparent
-                    Alpha = Math.Max(TARGET_ALPHA, originalAlpha) * _flickerAlpha;
-                }
-                else
-                {
-                    // Normal flicker when opaque
-                    Alpha = originalAlpha * _flickerAlpha;
-                }
-
-                base.DrawMesh(mesh);
-
-                Alpha = originalAlpha;
-                device.BlendState = originalBlendState;
-            }
-            else
-            {
-                base.DrawMesh(mesh);
-            }
-        }
     }
 }
