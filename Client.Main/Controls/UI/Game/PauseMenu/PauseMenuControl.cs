@@ -404,14 +404,6 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             var rect = DisplayRectangle;
             UiDrawHelper.DrawVerticalGradient(sprite, rect, new Color(6, 8, 13, 205), new Color(0, 0, 0, 238), 20);
 
-            if (_panel?.Visible == true)
-            {
-                var panelRect = _panel.DisplayRectangle;
-                var glowRect = new Rectangle(panelRect.X - 92, panelRect.Y - 50, panelRect.Width + 184, panelRect.Height + 100);
-                UiDrawHelper.DrawHorizontalGradient(sprite, glowRect, Color.Transparent, new Color(93, 114, 150, 24), 20);
-                UiDrawHelper.DrawHorizontalGradient(sprite, new Rectangle(glowRect.Center.X, glowRect.Y, Math.Max(1, glowRect.Right - glowRect.Center.X), glowRect.Height), new Color(93, 114, 150, 24), Color.Transparent, 20);
-            }
-
             base.Draw(gameTime);
         }
 

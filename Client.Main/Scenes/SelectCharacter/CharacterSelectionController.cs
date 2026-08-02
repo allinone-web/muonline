@@ -103,6 +103,7 @@ namespace Client.Main.Scenes.SelectCharacter
                     // this scene-owned character load.
                     await player.Load();
                     cancellationToken.ThrowIfCancellationRequested();
+                    SwapPreviewWeaponHands(player);
                     if (player.Status != GameControlStatus.Ready)
                     {
                         throw new InvalidOperationException(
@@ -133,6 +134,12 @@ namespace Client.Main.Scenes.SelectCharacter
             world.PrepareInitialVisibilitySnapshot();
 
             _logger.LogInformation("Finished creating and loading character objects and labels.");
+        }
+
+        private static void SwapPreviewWeaponHands(PlayerObject player)
+        {
+            player.Weapon1.ParentBoneLink = PlayerObject.RightHandBoneIndex;
+            player.Weapon2.ParentBoneLink = PlayerObject.LeftHandBoneIndex;
         }
 
         // Overload for TestAnimationScene compatibility (uses PlayerClass and AppearanceConfig)
