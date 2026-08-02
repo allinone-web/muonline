@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Client.Main.Content;
 using Client.Main.Controllers;
@@ -14,185 +15,126 @@ using Microsoft.Xna.Framework.Graphics;
 namespace Client.Main.Objects.Effects
 {
     /// <summary>
-    /// Flame (Scroll of Flame) effect - cylindrical fire wall with volumetric flames.
-    /// Combines cylinder structure with organic rising fire particles.
+    /// SourceMain5.2 BITMAP_FLAME effect (skill 5 / Scroll of Flame).
+    ///
+    /// The original is a 2x2 terrain bitmap plus BITMAP_FLAME particles. It is
+    /// not a cylindrical wall, and it does not use sparks, flares or a second
+    /// particle texture.
     /// </summary>
     public sealed class ScrollOfFlameEffect : EffectObject
     {
         private const ushort FlameSkillId = 5;
-
         private const string FlameTexturePath = "Effect/Flame01.jpg";
-        private const string FlameFallbackTexturePath = "Effect/firehik01.jpg";
-        private const string SparkTexturePath = "Effect/Spark03.jpg";
-        private const string GlowTexturePath = "Effect/flare.jpg";
 
-        // Timing
-        private const float AreaDurationSeconds = 2.2f;
-        private const float TargetedDurationSeconds = 1.4f;
-        private const float FadeOutSeconds = 0.5f;
+        private const float ReferenceFps = 25f;
+        private const float ParticleLifetime = 20f / ReferenceFps;
+        private const float AreaEffectLifetime = 40f / ReferenceFps;
+        private const float TargetedEffectLifetime = 20f / ReferenceFps;
+        private const float TargetedParticleScale = 0.9f;
+        private const float TerrainBitmapSize = 2f;
+        private const float TerrainHeightOffset = 5f;
 
-        // Cylinder parameters - compact fire pillar
-        private const float CylinderRadius = 35f;
-        private const float CylinderHeight = 450f;
-        private const float CylinderThickness = 10f; // very tight spawn area
-
-        // Damage (matches original client behavior: hits in radius ~150 every ~20 frames @ 25fps)
+        private const int AreaParticlesPerFrame = 6;
+        private const int TargetedParticlesPerFrame = 1;
+        private const int MaxFlameParticles = 256;
+        private const int TerrainTileRadius = 3;
+        private const int MaxTerrainQuads = (TerrainTileRadius * 2 + 1) * (TerrainTileRadius * 2 + 1);
         private const float DamageRadius = 150f;
-        private const float DamageTickSeconds = 20f / 25f;
+        private const float DamageTickSeconds = 20f / ReferenceFps;
         private const int MaxHitTargets = 5;
         private const double LastCastMatchWindowMs = 1500;
 
-        // Flame particles - dense fire column
-        private const int MaxFlameParticles = 350;
-        private const float FlameSpawnRate = 280f; // per second - very dense
-        private const float FlameLifetimeMin = 0.55f;
-        private const float FlameLifetimeMax = 0.95f;
-        private const float FlameRiseSpeedMin = 420f;
-        private const float FlameRiseSpeedMax = 620f;
-        private const float FlameSizeMin = 28f;
-        private const float FlameSizeMax = 55f;
-        private const float FlameAcceleration = 280f;
-
-        // Ground flames
-        private const int GroundFlameCount = 10;
-        private const float GroundFlameSize = 50f;
-
-        // Sparks
-        private const int MaxSparks = 48;
-        private const float SparkSpawnRate = 35f;
-        private const float SparkLifetimeMin = 0.35f;
-        private const float SparkLifetimeMax = 0.75f;
-        private const float SparkRiseSpeed = 320f;
-        private const float SparkSizeMin = 16f;
-        private const float SparkSizeMax = 36f;
-
         private readonly Vector3 _center;
+        private readonly float _rotation;
         private readonly bool _isTargeted;
         private readonly bool _dealsDamage;
-        private readonly float _totalDuration;
+        private readonly float _effectLifetime;
         private float _time;
 
         private readonly byte _targetTileX;
         private readonly byte _targetTileY;
         private byte _animationCounter;
         private byte _hitCounter;
-        private readonly System.Collections.Generic.Dictionary<ushort, float> _nextHitTimeByTarget = new();
+        private readonly Dictionary<ushort, float> _nextHitTimeByTarget = new();
         private readonly ILogger? _logger = MuGame.AppLoggerFactory?.CreateLogger<ScrollOfFlameEffect>();
-
-        private Texture2D _flameTexture = null!;
-        private Texture2D _sparkTexture = null!;
-        private Texture2D _glowTexture = null!;
-
-        // Particles
-        private readonly FlameParticle[] _flames = new FlameParticle[MaxFlameParticles];
-        private int _flameCount;
-        private float _flameSpawnTimer;
-
-        private readonly FlameParticle[] _sparks = new FlameParticle[MaxSparks];
-        private int _sparkCount;
-        private float _sparkSpawnTimer;
-
-        // Ground flames (stationary, arranged in circle)
-        private readonly GroundFlame[] _groundFlames = new GroundFlame[GroundFlameCount];
-
-        // Vertex buffers
-        private const int MaxQuads = MaxFlameParticles + MaxSparks + GroundFlameCount + 1; // +1 for central glow
-        private readonly VertexPositionColorTexture[] _vertices = new VertexPositionColorTexture[MaxQuads * 4];
-        private readonly short[] _indices = new short[MaxQuads * 6];
-
         private readonly DynamicLight _flameLight;
-        private readonly DynamicLight _topLight;
+        private TerrainControl? _lightTerrain;
         private bool _lightsAdded;
+
+        private Texture2D? _flameTexture;
+        private readonly FlameParticle[] _particles = new FlameParticle[MaxFlameParticles];
+        private int _particleCount;
+
+        private readonly VertexPositionColorTexture[] _terrainVertices =
+            new VertexPositionColorTexture[MaxTerrainQuads * 4];
+        private readonly short[] _terrainIndices = new short[MaxTerrainQuads * 6];
+        private int _terrainQuadCount;
+        private int _terrainVertexCount;
+        private bool _terrainMeshBuilt;
+
+        private readonly VertexPositionColorTexture[] _particleVertices =
+            new VertexPositionColorTexture[MaxFlameParticles * 4];
+        private readonly short[] _particleIndices = new short[MaxFlameParticles * 6];
 
         private struct FlameParticle
         {
             public Vector3 Position;
             public Vector3 Velocity;
-            public float Age;
-            public float Lifetime;
-            public float Size;
-            public float Rotation;
-            public float RotationSpeed;
-            public float HeightScale; // for elongated flames
+            public float Gravity;
+            public float LifeTime;
+            public float Scale;
         }
 
-        private struct GroundFlame
-        {
-            public Vector3 Position;
-            public float Angle;
-            public float Phase; // for animation offset
-        }
-
-        public ScrollOfFlameEffect(Vector3 center, bool isTargeted = false, bool dealsDamage = false)
+        public ScrollOfFlameEffect(
+            Vector3 center,
+            bool isTargeted = false,
+            bool dealsDamage = false,
+            float rotation = 0f)
         {
             _center = center;
+            _rotation = rotation;
             _isTargeted = isTargeted;
             _dealsDamage = dealsDamage;
-            _totalDuration = isTargeted ? TargetedDurationSeconds : AreaDurationSeconds;
+            _effectLifetime = isTargeted ? TargetedEffectLifetime : AreaEffectLifetime;
 
             IsTransparent = true;
             AffectedByTransparency = true;
             BlendState = BlendState.Additive;
+            DepthState = DepthStencilState.DepthRead;
 
-            _targetTileX = (byte)Math.Clamp((int)(_center.X / Constants.TERRAIN_SCALE), 0, Constants.TERRAIN_SIZE - 1);
-            _targetTileY = (byte)Math.Clamp((int)(_center.Y / Constants.TERRAIN_SCALE), 0, Constants.TERRAIN_SIZE - 1);
+            _targetTileX = (byte)Math.Clamp(
+                (int)(_center.X / Constants.TERRAIN_SCALE), 0, Constants.TERRAIN_SIZE - 1);
+            _targetTileY = (byte)Math.Clamp(
+                (int)(_center.Y / Constants.TERRAIN_SCALE), 0, Constants.TERRAIN_SIZE - 1);
 
-            float boundSize = CylinderRadius + 120f;
             BoundingBoxLocal = new BoundingBox(
-                new Vector3(-boundSize, -boundSize, -20f),
-                new Vector3(boundSize, boundSize, CylinderHeight + 200f));
+                new Vector3(-350f, -350f, -20f),
+                new Vector3(350f, 350f, 1250f));
 
+            Position = center;
             _flameLight = new DynamicLight
             {
                 Owner = this,
-                Position = _center + new Vector3(0f, 0f, CylinderHeight * 0.25f),
-                Color = new Vector3(1f, 0.35f, 0.08f), // red light
-                Radius = 280f,
-                Intensity = 2.0f
+                Position = center,
+                Color = new Vector3(1f, 0.4f, 0f),
+                Radius = Constants.TERRAIN_SCALE * 3f,
+                Intensity = 1f
             };
-
-            _topLight = new DynamicLight
-            {
-                Owner = this,
-                Position = _center + new Vector3(0f, 0f, CylinderHeight * 0.7f),
-                Color = new Vector3(1f, 0.4f, 0.1f), // red light
-                Radius = 180f,
-                Intensity = 1.2f
-            };
-
-            Position = _center;
-
-            InitializeIndices();
-            InitializeGroundFlames();
+            InitializeParticleIndices();
         }
 
-        private void InitializeIndices()
+        private void InitializeParticleIndices()
         {
-            for (int i = 0; i < MaxQuads; i++)
+            for (int i = 0; i < MaxFlameParticles; i++)
             {
-                int vi = i * 4;
-                int ii = i * 6;
-                _indices[ii] = (short)vi;
-                _indices[ii + 1] = (short)(vi + 1);
-                _indices[ii + 2] = (short)(vi + 2);
-                _indices[ii + 3] = (short)vi;
-                _indices[ii + 4] = (short)(vi + 2);
-                _indices[ii + 5] = (short)(vi + 3);
-            }
-        }
-
-        private void InitializeGroundFlames()
-        {
-            for (int i = 0; i < GroundFlameCount; i++)
-            {
-                float angle = (i / (float)GroundFlameCount) * MathHelper.TwoPi;
-                float radius = CylinderRadius * RandomRange(0.85f, 1.05f);
-                _groundFlames[i] = new GroundFlame
-                {
-                    Position = _center + new Vector3(MathF.Cos(angle) * radius, MathF.Sin(angle) * radius, 8f),
-                    Angle = angle,
-                    Phase = RandomRange(0f, MathHelper.TwoPi)
-                };
+                int vertex = i * 4;
+                int index = i * 6;
+                _particleIndices[index] = (short)vertex;
+                _particleIndices[index + 1] = (short)(vertex + 1);
+                _particleIndices[index + 2] = (short)(vertex + 2);
+                _particleIndices[index + 3] = (short)vertex;
+                _particleIndices[index + 4] = (short)(vertex + 2);
+                _particleIndices[index + 5] = (short)(vertex + 3);
             }
         }
 
@@ -201,55 +143,32 @@ namespace Client.Main.Objects.Effects
             await base.LoadContent();
 
             _ = await TextureLoader.Instance.Prepare(FlameTexturePath);
-            _ = await TextureLoader.Instance.Prepare(FlameFallbackTexturePath);
-            _ = await TextureLoader.Instance.Prepare(SparkTexturePath);
-            _ = await TextureLoader.Instance.Prepare(GlowTexturePath);
-
             _flameTexture = TextureLoader.Instance.GetTexture2D(FlameTexturePath)
-                ?? TextureLoader.Instance.GetTexture2D(FlameFallbackTexturePath)
                 ?? GraphicsManager.Instance.Pixel;
-            _sparkTexture = TextureLoader.Instance.GetTexture2D(SparkTexturePath) ?? GraphicsManager.Instance.Pixel;
-            _glowTexture = TextureLoader.Instance.GetTexture2D(GlowTexturePath) ?? GraphicsManager.Instance.Pixel;
-
-            if (World?.Terrain != null && !_lightsAdded)
-            {
-                World.Terrain.AddDynamicLight(_flameLight);
-                World.Terrain.AddDynamicLight(_topLight);
-                _lightsAdded = true;
-            }
         }
 
         public override void Update(GameTime gameTime)
         {
             base.Update(gameTime);
 
-            if (Status == GameControlStatus.NonInitialized)
-                _ = Load();
-
             if (Status != GameControlStatus.Ready)
                 return;
 
             float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
+            if (dt <= 0f)
+                return;
+
+            if (_time < _effectLifetime)
+                EmitSourceParticles(dt);
+
             _time += dt;
+            UpdateParticles(dt);
+            UpdateDamage();
+            UpdateDynamicLight();
 
-            UpdateDamage(dt);
-
-            bool isEmitting = _time < _totalDuration - FadeOutSeconds;
-
-            if (isEmitting)
-            {
-                SpawnFlames(dt);
-                SpawnSparks(dt);
-            }
-
-            UpdateFlames(dt);
-            UpdateSparks(dt);
-            UpdateDynamicLights();
-
-            if (_time >= _totalDuration && _flameCount == 0 && _sparkCount == 0)
-            {
+            // Source particles outlive the effect object by 20 reference frames.
+            if (_time >= _effectLifetime && _particleCount == 0)
                 RemoveSelf();
-            }
         }
 
         public override void Draw(GameTime gameTime)
@@ -262,432 +181,381 @@ namespace Client.Main.Objects.Effects
             DrawEffect();
         }
 
+        private void EmitSourceParticles(float dt)
+        {
+            // CreateParticleFpsChecked(...): at 25 FPS this is one attempt per
+            // frame; at higher FPS the source probabilistically scales the call.
+            float chance = MathHelper.Clamp(dt * ReferenceFps, 0f, 1f);
+            int attempts = _isTargeted ? TargetedParticlesPerFrame : AreaParticlesPerFrame;
+
+            for (int i = 0; i < attempts; i++)
+            {
+                if (chance < 1f && MuGame.Random.NextDouble() > chance)
+                    continue;
+
+                SpawnParticle(_isTargeted ? TargetedParticleScale : 1f);
+            }
+        }
+
+        private void SpawnParticle(float scaleMultiplier)
+        {
+            if (_particleCount >= MaxFlameParticles)
+                return;
+
+            _particles[_particleCount++] = new FlameParticle
+            {
+                Position = _center + new Vector3(
+                    MuGame.Random.Next(50) - 25,
+                    MuGame.Random.Next(50) - 25,
+                    0f),
+                Velocity = new Vector3(
+                    0f,
+                    0f,
+                    (MuGame.Random.Next(128) + 128) * 0.15f),
+                Gravity = 0f,
+                LifeTime = ParticleLifetime,
+                Scale = scaleMultiplier * (MuGame.Random.Next(64) + 64) * 0.01f
+            };
+        }
+
+        private void UpdateParticles(float dt)
+        {
+            float frameFactor = MathF.Min(1f, dt * ReferenceFps);
+
+            for (int i = 0; i < _particleCount;)
+            {
+                ref FlameParticle particle = ref _particles[i];
+                particle.LifeTime -= dt;
+
+                if (particle.LifeTime <= 0f)
+                {
+                    _particles[i] = _particles[--_particleCount];
+                    continue;
+                }
+
+                // MoveParticles() for BITMAP_FLAME subtype 0. The order matches
+                // SourceMain5.2: move, add gravity, grow, accelerate, then add
+                // the gravity contribution to the vertical position.
+                particle.Position += particle.Velocity * frameFactor;
+                particle.Gravity += 0.02f * frameFactor;
+                particle.Scale += particle.Gravity * frameFactor;
+                particle.Velocity *= MathF.Pow(1.05f, frameFactor);
+                particle.Position.Z += particle.Gravity * 20f * frameFactor;
+                i++;
+            }
+        }
+
         private void DrawEffect()
         {
-            var gd = GraphicsManager.Instance.GraphicsDevice;
-            var effect = GraphicsManager.Instance.BasicEffect3D;
+            var graphics = GraphicsManager.Instance;
+            var device = graphics.GraphicsDevice;
+            var effect = graphics.BasicEffect3D;
             var camera = Camera.Instance;
-            if (camera == null || effect == null)
+            if (device == null || effect == null || camera == null)
                 return;
 
-            // Save state
-            var prevBlend = gd.BlendState;
-            var prevDepth = gd.DepthStencilState;
-            var prevRaster = gd.RasterizerState;
-            var prevSampler = gd.SamplerStates[0];
+            if (!_terrainMeshBuilt && World?.Terrain != null)
+                BuildTerrainMesh();
 
-            bool prevTexEnabled = effect.TextureEnabled;
-            bool prevVCEnabled = effect.VertexColorEnabled;
-            bool prevLightEnabled = effect.LightingEnabled;
-            var prevTex = effect.Texture;
-            Matrix prevWorld = effect.World;
-            Matrix prevView = effect.View;
-            Matrix prevProj = effect.Projection;
-
-            gd.BlendState = BlendState.Additive;
-            gd.DepthStencilState = DepthState;
-            gd.RasterizerState = RasterizerState.CullNone;
-            gd.SamplerStates[0] = SamplerState.LinearClamp;
-
-            effect.TextureEnabled = true;
-            effect.VertexColorEnabled = true;
-            effect.LightingEnabled = false;
-            effect.World = Matrix.Identity;
-            effect.View = camera.View;
-            effect.Projection = camera.Projection;
-
-            float effectAlpha = GetEffectAlpha();
-            int quadIndex = 0;
-
-            // Build all flame billboards (ground flames + rising flames)
-            BuildGroundFlames(camera, effectAlpha, ref quadIndex);
-            BuildFlameParticles(camera, effectAlpha, ref quadIndex);
-            int flameQuadCount = quadIndex;
-
-            // Draw flames
-            if (flameQuadCount > 0)
+            int terrainQuads = 0;
+            if (_time < _effectLifetime)
             {
+                float luminosity = (MuGame.Random.Next(4) + 8) * 0.1f;
+                Color terrainColor = new Color(luminosity, luminosity, luminosity, 1f);
+
+                if (_terrainMeshBuilt)
+                {
+                    SetTerrainColor(terrainColor);
+                    terrainQuads = _terrainQuadCount;
+                }
+                else
+                {
+                    terrainQuads = BuildFallbackTerrainMesh(terrainColor);
+                }
+            }
+
+            int particleQuads = BuildParticleVertices(camera);
+
+            BlendState previousBlend = device.BlendState;
+            DepthStencilState previousDepth = device.DepthStencilState;
+            RasterizerState previousRasterizer = device.RasterizerState;
+            SamplerState previousSampler = device.SamplerStates[0];
+
+            bool previousTextureEnabled = effect.TextureEnabled;
+            bool previousVertexColorEnabled = effect.VertexColorEnabled;
+            bool previousLightingEnabled = effect.LightingEnabled;
+            Texture2D? previousTexture = effect.Texture;
+            Matrix previousWorld = effect.World;
+            Matrix previousView = effect.View;
+            Matrix previousProjection = effect.Projection;
+
+            try
+            {
+                device.BlendState = BlendState.Additive;
+                device.DepthStencilState = DepthState;
+                device.RasterizerState = RasterizerState.CullNone;
+                device.SamplerStates[0] = SamplerState.LinearClamp;
+
+                effect.TextureEnabled = true;
+                effect.VertexColorEnabled = true;
+                effect.LightingEnabled = false;
                 effect.Texture = _flameTexture;
-                foreach (var pass in effect.CurrentTechnique.Passes)
-                {
-                    pass.Apply();
-                    gd.DrawUserIndexedPrimitives(
-                        PrimitiveType.TriangleList,
-                        _vertices, 0, flameQuadCount * 4,
-                        _indices, 0, flameQuadCount * 2);
-                }
+                effect.World = Matrix.Identity;
+                effect.View = camera.View;
+                effect.Projection = camera.Projection;
+
+                DrawQuads(device, effect, _terrainVertices, terrainQuads * 4,
+                    _terrainIndices, terrainQuads * 6);
+                DrawQuads(device, effect, _particleVertices, particleQuads * 4,
+                    _particleIndices, particleQuads * 6);
             }
-
-            // Build and draw sparks
-            int sparkStartQuad = quadIndex;
-            BuildSparks(camera, effectAlpha, ref quadIndex);
-            int sparkQuadCount = quadIndex - sparkStartQuad;
-
-            // Build and draw central glow
-            int glowStartQuad = quadIndex;
-            BuildCentralGlow(camera, effectAlpha, ref quadIndex);
-            int glowQuadCount = quadIndex - glowStartQuad;
-
-            int totalQuads = quadIndex;
-
-            if (sparkQuadCount > 0)
+            finally
             {
-                effect.Texture = _sparkTexture;
-                foreach (var pass in effect.CurrentTechnique.Passes)
-                {
-                    pass.Apply();
-                    gd.DrawUserIndexedPrimitives(
-                        PrimitiveType.TriangleList,
-                        _vertices, 0, totalQuads * 4,
-                        _indices, sparkStartQuad * 6, sparkQuadCount * 2);
-                }
-            }
+                effect.TextureEnabled = previousTextureEnabled;
+                effect.VertexColorEnabled = previousVertexColorEnabled;
+                effect.LightingEnabled = previousLightingEnabled;
+                effect.Texture = previousTexture;
+                effect.World = previousWorld;
+                effect.View = previousView;
+                effect.Projection = previousProjection;
 
-            if (glowQuadCount > 0)
-            {
-                effect.Texture = _glowTexture;
-                foreach (var pass in effect.CurrentTechnique.Passes)
-                {
-                    pass.Apply();
-                    gd.DrawUserIndexedPrimitives(
-                        PrimitiveType.TriangleList,
-                        _vertices, 0, totalQuads * 4,
-                        _indices, glowStartQuad * 6, glowQuadCount * 2);
-                }
-            }
-
-            // Restore state
-            effect.TextureEnabled = prevTexEnabled;
-            effect.VertexColorEnabled = prevVCEnabled;
-            effect.LightingEnabled = prevLightEnabled;
-            effect.Texture = prevTex;
-            effect.World = prevWorld;
-            effect.View = prevView;
-            effect.Projection = prevProj;
-
-            gd.BlendState = prevBlend;
-            gd.DepthStencilState = prevDepth;
-            gd.RasterizerState = prevRaster;
-            gd.SamplerStates[0] = prevSampler;
-        }
-
-        private void SpawnFlames(float dt)
-        {
-            _flameSpawnTimer += dt;
-            float spawnInterval = 1f / FlameSpawnRate;
-
-            while (_flameSpawnTimer >= spawnInterval && _flameCount < MaxFlameParticles)
-            {
-                _flameSpawnTimer -= spawnInterval;
-                SpawnFlameParticle();
+                device.BlendState = previousBlend;
+                device.DepthStencilState = previousDepth;
+                device.RasterizerState = previousRasterizer;
+                device.SamplerStates[0] = previousSampler;
             }
         }
 
-        private void SpawnFlameParticle()
+        private void UpdateDynamicLight()
         {
-            if (_flameCount >= MaxFlameParticles)
+            EnsureDynamicLightAttached();
+            _flameLight.Position = _center;
+            _flameLight.Radius = Constants.TERRAIN_SCALE * 3f;
+
+            if (_time >= _effectLifetime)
+            {
+                _flameLight.Intensity = 0f;
+                return;
+            }
+
+            float luminosity = (MuGame.Random.Next(4) + 8) * 0.1f;
+            _flameLight.Color = new Vector3(luminosity, luminosity * 0.4f, 0f);
+            _flameLight.Intensity = 1f;
+        }
+
+        private void EnsureDynamicLightAttached()
+        {
+            if (_lightsAdded || Status != GameControlStatus.Ready)
                 return;
 
-            // Spawn in cylinder wall area (ring with thickness)
-            float angle = RandomRange(0f, MathHelper.TwoPi);
-            float radiusOffset = RandomRange(-CylinderThickness * 0.5f, CylinderThickness * 0.5f);
-            float radius = CylinderRadius + radiusOffset;
-
-            // Start near ground
-            float startHeight = RandomRange(0f, 25f);
-
-            Vector3 pos = _center + new Vector3(
-                MathF.Cos(angle) * radius,
-                MathF.Sin(angle) * radius,
-                startHeight);
-
-            // Velocity: mostly upward, almost no drift for very tight formation
-            float riseSpeed = RandomRange(FlameRiseSpeedMin, FlameRiseSpeedMax);
-            float drift = RandomRange(-3f, 3f); // minimal drift
-            Vector3 outward = new Vector3(MathF.Cos(angle), MathF.Sin(angle), 0f);
-
-            _flames[_flameCount++] = new FlameParticle
-            {
-                Position = pos,
-                Velocity = new Vector3(outward.X * drift, outward.Y * drift, riseSpeed),
-                Age = 0f,
-                Lifetime = RandomRange(FlameLifetimeMin, FlameLifetimeMax),
-                Size = RandomRange(FlameSizeMin, FlameSizeMax),
-                Rotation = RandomRange(0f, MathHelper.TwoPi),
-                RotationSpeed = RandomRange(-2f, 2f),
-                HeightScale = RandomRange(1.5f, 2.5f) // flames are taller than wide
-            };
-        }
-
-        private void UpdateFlames(float dt)
-        {
-            int i = 0;
-            while (i < _flameCount)
-            {
-                ref var flame = ref _flames[i];
-                flame.Age += dt;
-
-                if (flame.Age >= flame.Lifetime)
-                {
-                    _flames[i] = _flames[--_flameCount];
-                    continue;
-                }
-
-                // Rise with acceleration
-                flame.Velocity.Z += FlameAcceleration * dt;
-                flame.Position += flame.Velocity * dt;
-
-                // Slow horizontal drift
-                flame.Velocity.X *= 0.985f;
-                flame.Velocity.Y *= 0.985f;
-
-                // Rotate
-                flame.Rotation += flame.RotationSpeed * dt;
-
-                // Grow slightly as rising
-                float lifeProgress = flame.Age / flame.Lifetime;
-                if (lifeProgress > 0.5f)
-                {
-                    flame.Size *= 1f + dt * 0.3f; // expand near end
-                }
-
-                i++;
-            }
-        }
-
-        private void SpawnSparks(float dt)
-        {
-            _sparkSpawnTimer += dt;
-            float spawnInterval = 1f / SparkSpawnRate;
-
-            while (_sparkSpawnTimer >= spawnInterval && _sparkCount < MaxSparks)
-            {
-                _sparkSpawnTimer -= spawnInterval;
-                SpawnSparkParticle();
-            }
-        }
-
-        private void SpawnSparkParticle()
-        {
-            if (_sparkCount >= MaxSparks)
+            TerrainControl? terrain = World?.Terrain;
+            if (terrain == null)
                 return;
 
-            float angle = RandomRange(0f, MathHelper.TwoPi);
-            float radius = CylinderRadius * RandomRange(0.8f, 1.1f);
-            float height = RandomRange(CylinderHeight * 0.15f, CylinderHeight * 0.6f);
-
-            Vector3 pos = _center + new Vector3(
-                MathF.Cos(angle) * radius,
-                MathF.Sin(angle) * radius,
-                height);
-
-            Vector3 outward = new Vector3(MathF.Cos(angle), MathF.Sin(angle), 0f);
-            float outSpeed = RandomRange(20f, 50f); // less outward spread
-
-            _sparks[_sparkCount++] = new FlameParticle
-            {
-                Position = pos,
-                Velocity = new Vector3(
-                    outward.X * outSpeed,
-                    outward.Y * outSpeed,
-                    SparkRiseSpeed * RandomRange(0.8f, 1.2f)),
-                Age = 0f,
-                Lifetime = RandomRange(SparkLifetimeMin, SparkLifetimeMax),
-                Size = RandomRange(SparkSizeMin, SparkSizeMax),
-                Rotation = RandomRange(0f, MathHelper.TwoPi),
-                RotationSpeed = RandomRange(3f, 8f),
-                HeightScale = 1f
-            };
+            _lightTerrain = terrain;
+            terrain.AddDynamicLight(_flameLight);
+            _lightsAdded = true;
         }
 
-        private void UpdateSparks(float dt)
+        private void DetachDynamicLight()
         {
-            int i = 0;
-            while (i < _sparkCount)
-            {
-                ref var spark = ref _sparks[i];
-                spark.Age += dt;
-
-                if (spark.Age >= spark.Lifetime)
-                {
-                    _sparks[i] = _sparks[--_sparkCount];
-                    continue;
-                }
-
-                spark.Position += spark.Velocity * dt;
-                spark.Velocity.Z += 80f * dt; // upward acceleration
-                spark.Velocity.X *= 0.97f;
-                spark.Velocity.Y *= 0.97f;
-                spark.Rotation += spark.RotationSpeed * dt;
-
-                i++;
-            }
+            TerrainControl? terrain = _lightTerrain ?? World?.Terrain;
+            terrain?.RemoveDynamicLight(_flameLight);
+            terrain?.RemoveDynamicLightsByOwner(this);
+            _lightTerrain = null;
+            _lightsAdded = false;
         }
 
-        private void BuildGroundFlames(Camera camera, float effectAlpha, ref int quadIndex)
+        private void BuildTerrainMesh()
         {
-            Vector3 camPos = camera.Position;
-
-            for (int i = 0; i < GroundFlameCount; i++)
-            {
-                ref var gf = ref _groundFlames[i];
-
-                // Animated size and intensity
-                float pulse = 0.7f + 0.3f * MathF.Sin(_time * 8f + gf.Phase);
-                float size = GroundFlameSize * pulse;
-
-                // Color with flicker - more red/orange
-                float flicker = 0.85f + 0.15f * MathF.Sin(_time * 15f + gf.Phase * 2f);
-                float alpha = effectAlpha * flicker;
-                var color = new Color(alpha, alpha * 0.4f, alpha * 0.08f, alpha);
-
-                // Billboard facing camera
-                BuildBillboard(gf.Position, camPos, size, size * 2.2f, color, _time * 1.5f + gf.Phase, ref quadIndex);
-            }
-        }
-
-        private void BuildFlameParticles(Camera camera, float effectAlpha, ref int quadIndex)
-        {
-            Vector3 camPos = camera.Position;
-
-            for (int i = 0; i < _flameCount; i++)
-            {
-                ref var flame = ref _flames[i];
-
-                float life = 1f - (flame.Age / flame.Lifetime);
-                if (life <= 0.01f)
-                    continue;
-
-                // Fade in quickly, fade out slowly
-                float fadeIn = MathHelper.Clamp(flame.Age / 0.1f, 0f, 1f);
-                float fadeOut = life;
-                float alpha = fadeIn * fadeOut * effectAlpha;
-
-                // Color shifts from orange at base to deep red at top - more red overall
-                float heightRatio = MathHelper.Clamp((flame.Position.Z - _center.Z) / CylinderHeight, 0f, 1f);
-                float r = 1f;
-                float g = MathHelper.Lerp(0.45f, 0.15f, heightRatio); // less green = more red
-                float b = MathHelper.Lerp(0.12f, 0.02f, heightRatio); // minimal blue
-
-                var color = new Color(r * alpha, g * alpha, b * alpha, alpha);
-
-                float width = flame.Size * (0.8f + 0.2f * life);
-                float height = width * flame.HeightScale;
-
-                BuildBillboard(flame.Position, camPos, width, height, color, flame.Rotation, ref quadIndex);
-            }
-        }
-
-        private void BuildSparks(Camera camera, float effectAlpha, ref int quadIndex)
-        {
-            Vector3 camPos = camera.Position;
-
-            for (int i = 0; i < _sparkCount; i++)
-            {
-                ref var spark = ref _sparks[i];
-
-                float life = 1f - (spark.Age / spark.Lifetime);
-                if (life <= 0.01f)
-                    continue;
-
-                float alpha = life * effectAlpha;
-                var color = new Color(alpha, alpha * 0.5f, alpha * 0.1f, alpha); // more red sparks
-
-                float size = spark.Size * (0.6f + 0.4f * life);
-                BuildBillboard(spark.Position, camPos, size, size, color, spark.Rotation, ref quadIndex);
-            }
-        }
-
-        private void BuildCentralGlow(Camera camera, float effectAlpha, ref int quadIndex)
-        {
-            float pulse = 0.6f + 0.4f * MathF.Sin(_time * 6f);
-            float alpha = effectAlpha * pulse * 0.55f;
-            var color = new Color(alpha, alpha * 0.35f, alpha * 0.08f, alpha); // more red glow
-
-            Vector3 glowPos = _center + new Vector3(0f, 0f, CylinderHeight * 0.3f);
-            float glowSize = CylinderRadius * 2.5f; // adjusted for smaller radius
-
-            BuildBillboard(glowPos, camera.Position, glowSize, glowSize, color, _time * 0.5f, ref quadIndex);
-        }
-
-        private void BuildBillboard(Vector3 position, Vector3 camPos, float width, float height, Color color, float rotation, ref int quadIndex)
-        {
-            if (quadIndex >= MaxQuads)
+            var terrain = World?.Terrain;
+            if (terrain == null)
                 return;
 
-            Vector3 toCamera = camPos - position;
-            if (toCamera.LengthSquared() < 0.001f)
-                toCamera = Vector3.UnitY;
-            toCamera.Normalize();
+            float mxf = _center.X / Constants.TERRAIN_SCALE;
+            float myf = _center.Y / Constants.TERRAIN_SCALE;
+            int mxi = (int)mxf;
+            int myi = (int)myf;
+            float texU = (mxi - mxf) + 0.5f * TerrainBitmapSize;
+            float texV = (myi - myf) + 0.5f * TerrainBitmapSize;
+            float texScale = 1f / TerrainBitmapSize;
+            int quad = 0;
 
-            Vector3 right = Vector3.Cross(Vector3.UnitZ, toCamera);
-            if (right.LengthSquared() < 0.001f)
+            for (int y = -TerrainTileRadius; y <= TerrainTileRadius; y++)
+            {
+                for (int x = -TerrainTileRadius; x <= TerrainTileRadius; x++)
+                {
+                    int tileX = mxi + x;
+                    int tileY = myi + y;
+                    if (tileX < 0 || tileY < 0 ||
+                        tileX >= Constants.TERRAIN_SIZE - 1 ||
+                        tileY >= Constants.TERRAIN_SIZE - 1)
+                    {
+                        continue;
+                    }
+
+                    int vertex = quad * 4;
+                    float worldX = tileX * Constants.TERRAIN_SCALE;
+                    float worldY = tileY * Constants.TERRAIN_SCALE;
+                    Vector2 uv00 = TransformTerrainUv((texU + x) * texScale, (texV + y) * texScale);
+                    Vector2 uv10 = TransformTerrainUv((texU + x + 1f) * texScale, (texV + y) * texScale);
+                    Vector2 uv11 = TransformTerrainUv((texU + x + 1f) * texScale, (texV + y + 1f) * texScale);
+                    Vector2 uv01 = TransformTerrainUv((texU + x) * texScale, (texV + y + 1f) * texScale);
+
+                    _terrainVertices[vertex] = new VertexPositionColorTexture(
+                        TerrainVertex(terrain, worldX, worldY), Color.White, uv00);
+                    _terrainVertices[vertex + 1] = new VertexPositionColorTexture(
+                        TerrainVertex(terrain, worldX + Constants.TERRAIN_SCALE, worldY), Color.White, uv10);
+                    _terrainVertices[vertex + 2] = new VertexPositionColorTexture(
+                        TerrainVertex(terrain, worldX + Constants.TERRAIN_SCALE, worldY + Constants.TERRAIN_SCALE), Color.White, uv11);
+                    _terrainVertices[vertex + 3] = new VertexPositionColorTexture(
+                        TerrainVertex(terrain, worldX, worldY + Constants.TERRAIN_SCALE), Color.White, uv01);
+
+                    int index = quad * 6;
+                    _terrainIndices[index] = (short)vertex;
+                    _terrainIndices[index + 1] = (short)(vertex + 1);
+                    _terrainIndices[index + 2] = (short)(vertex + 2);
+                    _terrainIndices[index + 3] = (short)vertex;
+                    _terrainIndices[index + 4] = (short)(vertex + 2);
+                    _terrainIndices[index + 5] = (short)(vertex + 3);
+                    quad++;
+                }
+            }
+
+            _terrainQuadCount = quad;
+            _terrainVertexCount = quad * 4;
+            _terrainMeshBuilt = true;
+        }
+
+        private Vector3 TerrainVertex(TerrainControl terrain, float x, float y)
+        {
+            return new Vector3(x, y, terrain.RequestTerrainHeight(x, y) + TerrainHeightOffset);
+        }
+
+        private Vector2 TransformTerrainUv(float u, float v)
+        {
+            float x = u - 0.5f;
+            float y = v - 0.5f;
+            float cos = MathF.Cos(_rotation);
+            float sin = MathF.Sin(_rotation);
+            return new Vector2(
+                (x * cos - y * sin) + 0.5f,
+                (x * sin + y * cos) + 0.5f);
+        }
+
+        private int BuildFallbackTerrainMesh(Color color)
+        {
+            const float halfSize = Constants.TERRAIN_SCALE;
+            float z = _center.Z + TerrainHeightOffset;
+            _terrainVertices[0] = new VertexPositionColorTexture(
+                new Vector3(_center.X - halfSize, _center.Y - halfSize, z), color, new Vector2(0f, 0f));
+            _terrainVertices[1] = new VertexPositionColorTexture(
+                new Vector3(_center.X + halfSize, _center.Y - halfSize, z), color, new Vector2(1f, 0f));
+            _terrainVertices[2] = new VertexPositionColorTexture(
+                new Vector3(_center.X + halfSize, _center.Y + halfSize, z), color, new Vector2(1f, 1f));
+            _terrainVertices[3] = new VertexPositionColorTexture(
+                new Vector3(_center.X - halfSize, _center.Y + halfSize, z), color, new Vector2(0f, 1f));
+            _terrainIndices[0] = 0;
+            _terrainIndices[1] = 1;
+            _terrainIndices[2] = 2;
+            _terrainIndices[3] = 0;
+            _terrainIndices[4] = 2;
+            _terrainIndices[5] = 3;
+            return 1;
+        }
+
+        private void SetTerrainColor(Color color)
+        {
+            for (int i = 0; i < _terrainVertexCount; i++)
+            {
+                VertexPositionColorTexture vertex = _terrainVertices[i];
+                _terrainVertices[i] = new VertexPositionColorTexture(
+                    vertex.Position, color, vertex.TextureCoordinate);
+            }
+        }
+
+        private int BuildParticleVertices(Camera camera)
+        {
+            if (_flameTexture == null)
+                return 0;
+
+            Vector3 direction = camera.Target - camera.Position;
+            if (direction.LengthSquared() < 0.0001f)
+                direction = Vector3.UnitY;
+            else
+                direction.Normalize();
+
+            Vector3 right = Vector3.Cross(direction, Vector3.UnitZ);
+            if (right.LengthSquared() < 0.0001f)
                 right = Vector3.UnitX;
-            right.Normalize();
+            else
+                right.Normalize();
 
-            Vector3 up = Vector3.Cross(toCamera, right);
-            up.Normalize();
+            Vector3 up = Vector3.Cross(right, direction);
+            int quad = 0;
 
-            // Apply rotation
-            float cos = MathF.Cos(rotation);
-            float sin = MathF.Sin(rotation);
-            Vector3 rotRight = right * cos + up * sin;
-            Vector3 rotUp = up * cos - right * sin;
+            for (int i = 0; i < _particleCount && quad < MaxFlameParticles; i++)
+            {
+                ref FlameParticle particle = ref _particles[i];
+                float width = _flameTexture.Width * particle.Scale;
+                float height = _flameTexture.Height * particle.Scale;
+                Vector3 halfRight = right * (width * 0.5f);
+                Vector3 halfUp = up * (height * 0.5f);
+                int vertex = quad * 4;
 
-            Vector3 r = rotRight * (width * 0.5f);
-            Vector3 u = rotUp * (height * 0.5f);
+                _particleVertices[vertex] = new VertexPositionColorTexture(
+                    particle.Position - halfRight - halfUp, Color.White, new Vector2(0f, 1f));
+                _particleVertices[vertex + 1] = new VertexPositionColorTexture(
+                    particle.Position + halfRight - halfUp, Color.White, new Vector2(1f, 1f));
+                _particleVertices[vertex + 2] = new VertexPositionColorTexture(
+                    particle.Position + halfRight + halfUp, Color.White, new Vector2(1f, 0f));
+                _particleVertices[vertex + 3] = new VertexPositionColorTexture(
+                    particle.Position - halfRight + halfUp, Color.White, new Vector2(0f, 0f));
 
-            int vi = quadIndex * 4;
-            _vertices[vi] = new VertexPositionColorTexture(position - r - u, color, new Vector2(0f, 1f));
-            _vertices[vi + 1] = new VertexPositionColorTexture(position + r - u, color, new Vector2(1f, 1f));
-            _vertices[vi + 2] = new VertexPositionColorTexture(position + r + u, color, new Vector2(1f, 0f));
-            _vertices[vi + 3] = new VertexPositionColorTexture(position - r + u, color, new Vector2(0f, 0f));
+                int index = quad * 6;
+                _particleIndices[index] = (short)vertex;
+                _particleIndices[index + 1] = (short)(vertex + 1);
+                _particleIndices[index + 2] = (short)(vertex + 2);
+                _particleIndices[index + 3] = (short)vertex;
+                _particleIndices[index + 4] = (short)(vertex + 2);
+                _particleIndices[index + 5] = (short)(vertex + 3);
+                quad++;
+            }
 
-            quadIndex++;
+            return quad;
         }
 
-        private void UpdateDynamicLights()
+        private static void DrawQuads(
+            GraphicsDevice device,
+            BasicEffect effect,
+            VertexPositionColorTexture[] vertices,
+            int vertexCount,
+            short[] indices,
+            int indexCount)
         {
-            float alpha = GetEffectAlpha();
-            float flicker = 0.8f + 0.2f * MathF.Sin(_time * 22f);
+            if (vertexCount == 0 || indexCount == 0)
+                return;
 
-            _flameLight.Position = _center + new Vector3(0f, 0f, CylinderHeight * 0.25f);
-            _flameLight.Intensity = 1.8f * alpha * flicker;
-            _flameLight.Radius = 240f + 30f * MathF.Sin(_time * 7f);
-
-            _topLight.Position = _center + new Vector3(0f, 0f, CylinderHeight * 0.7f);
-            _topLight.Intensity = 1.0f * alpha * flicker;
-            _topLight.Radius = 160f;
+            foreach (EffectPass pass in effect.CurrentTechnique.Passes)
+            {
+                pass.Apply();
+                device.DrawUserIndexedPrimitives(
+                    PrimitiveType.TriangleList,
+                    vertices,
+                    0,
+                    vertexCount,
+                    indices,
+                    0,
+                    indexCount / 3);
+            }
         }
 
-        private float GetEffectAlpha()
-        {
-            if (_time >= _totalDuration)
-                return 0f;
-
-            // Fast fade in
-            if (_time < 0.12f)
-                return _time / 0.12f;
-
-            // Fade out
-            float fadeStart = _totalDuration - FadeOutSeconds;
-            if (_time > fadeStart)
-                return 1f - ((_time - fadeStart) / FadeOutSeconds);
-
-            return 1f;
-        }
-
-        private static float RandomRange(float min, float max)
-        {
-            return (float)(MuGame.Random.NextDouble() * (max - min) + min);
-        }
-
-        private void UpdateDamage(float dt)
+        private void UpdateDamage()
         {
             if (!_dealsDamage || _isTargeted)
                 return;
 
-            if (_time >= _totalDuration)
+            if (_time >= _effectLifetime)
                 return;
 
             if (World is not WalkableWorldControl { Walker: PlayerObject hero })
@@ -699,8 +567,6 @@ namespace Client.Main.Objects.Effects
             if (MuGame.Network == null || !MuGame.Network.IsConnected)
                 return;
 
-            // Capture animation counter early (before any targets enter range), otherwise we may miss
-            // the matching window and end up sending hits with AnimationCounter=0.
             EnsureAnimationCounterInitialized();
 
             Span<ushort> targetBuffer = stackalloc ushort[MaxHitTargets];
@@ -736,10 +602,7 @@ namespace Client.Main.Objects.Effects
                 return;
 
             var characterState = MuGame.Network?.GetCharacterState();
-            if (characterState == null)
-                return;
-
-            if (characterState.LastAreaSkillId != FlameSkillId)
+            if (characterState == null || characterState.LastAreaSkillId != FlameSkillId)
                 return;
 
             double nowMs = MuGame.Instance?.GameTime?.TotalGameTime.TotalMilliseconds ?? Environment.TickCount64;
@@ -747,8 +610,11 @@ namespace Client.Main.Objects.Effects
             if (elapsedMs < 0 || elapsedMs > LastCastMatchWindowMs)
                 return;
 
-            if (characterState.LastAreaSkillTargetX != _targetTileX || characterState.LastAreaSkillTargetY != _targetTileY)
+            if (characterState.LastAreaSkillTargetX != _targetTileX ||
+                characterState.LastAreaSkillTargetY != _targetTileY)
+            {
                 return;
+            }
 
             _animationCounter = characterState.LastAreaSkillAnimationCounter;
         }
@@ -760,8 +626,8 @@ namespace Client.Main.Objects.Effects
 
             float rangeSq = DamageRadius * DamageRadius;
             int count = 0;
-
             var monsters = World.Monsters;
+
             for (int i = 0; i < monsters.Count && count < targetBuffer.Length; i++)
             {
                 var monster = monsters[i];
@@ -770,13 +636,15 @@ namespace Client.Main.Objects.Effects
 
                 float dx = monster.Position.X - _center.X;
                 float dy = monster.Position.Y - _center.Y;
-                float distSq = dx * dx + dy * dy;
-                if (distSq > rangeSq)
+                if (dx * dx + dy * dy > rangeSq)
                     continue;
 
                 ushort targetId = monster.NetworkId;
-                if (_nextHitTimeByTarget.TryGetValue(targetId, out float nextHitTime) && _time < nextHitTime)
+                if (_nextHitTimeByTarget.TryGetValue(targetId, out float nextHitTime) &&
+                    _time < nextHitTime)
+                {
                     continue;
+                }
 
                 _nextHitTimeByTarget[targetId] = _time + DamageTickSeconds;
                 targetBuffer[count++] = targetId;
@@ -787,6 +655,8 @@ namespace Client.Main.Objects.Effects
 
         private void RemoveSelf()
         {
+            DetachDynamicLight();
+
             if (Parent != null)
                 Parent.Children.Remove(this);
             else
@@ -797,13 +667,7 @@ namespace Client.Main.Objects.Effects
 
         public override void Dispose()
         {
-            if (_lightsAdded && World?.Terrain != null)
-            {
-                World.Terrain.RemoveDynamicLight(_flameLight);
-                World.Terrain.RemoveDynamicLight(_topLight);
-                _lightsAdded = false;
-            }
-
+            DetachDynamicLight();
             base.Dispose();
         }
     }
