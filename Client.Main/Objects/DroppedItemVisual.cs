@@ -23,7 +23,7 @@ internal sealed class DroppedItemVisual
         if (_shineEffect != null)
             return;
 
-        _shineEffect = new DroppedItemShineEffect();
+        _shineEffect = new DroppedItemShineEffect(owner);
         owner.Children.Add(_shineEffect);
         _ = _shineEffect.Load();
     }

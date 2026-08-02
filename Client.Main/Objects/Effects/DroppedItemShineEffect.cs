@@ -1,114 +1,215 @@
-using System;
+using Client.Main.Controllers;
+using Client.Main.Content;
+using Client.Main.Core.Utilities;
+using Client.Main.Graphics;
+using Client.Main.Helpers;
 using Client.Main.Models;
+using Client.Main.Objects;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using System.Threading.Tasks;
 
 namespace Client.Main.Objects.Effects
 {
     /// <summary>
-    /// Periodic flash that hovers around a dropped item to make it easier to spot.
+    /// SourceMain5.2 CreateShiny equivalent for a dropped item.
+    /// It periodically creates BITMAP_SHINY and BITMAP_SHINY+1 at the same local offset.
     /// </summary>
-    public class DroppedItemShineEffect : SpriteObject
+    public sealed class DroppedItemShineEffect : SpriteObject
     {
-        private const float FlashDuration = 0.55f;
-        private const float MinInterval = 2.4f;
-        private const float MaxInterval = 4.2f;
-        private const float BaseScale = 0.65f;
-        private const float MaxScale = 1.1f;
+        private const float SourceShinyIntervalFrames = 48f;
+        private const float SourceShinyLifeFrames = 18f;
+        private const float SourceShinyRotationSpeed = 12f;
 
-        private float _timeUntilNextFlash;
-        private float _flashElapsed;
-        private bool _isFlashing;
-        private Vector3 _flashOffset;
+        private readonly DroppedItemObject _owner;
+        private readonly ShineParticle[] _particles = new ShineParticle[2];
+        private Texture2D _subTypeTexture;
+        private float _sourceIntervalFrames;
 
-        public override string TexturePath => "Effect/Shiny05.jpg";
-
-        public DroppedItemShineEffect()
+        private struct ShineParticle
         {
+            public bool Active;
+            public Vector3 Position;
+            public float LifeFrames;
+            public float RotationDegrees;
+            public byte SubType;
+        }
+
+        public override string TexturePath => "Effect/Shiny01.jpg";
+
+        public DroppedItemShineEffect(DroppedItemObject owner)
+        {
+            _owner = owner;
+
             BlendState = BlendState.Additive;
             DepthState = DepthStencilState.DepthRead;
             IsTransparent = true;
             AffectedByTransparency = true;
             LightEnabled = false;
-            Alpha = 0f;
-            Scale = BaseScale;
+            Alpha = 1f;
             BoundingBoxLocal = new BoundingBox(Vector3.Zero, Vector3.Zero);
+        }
 
-            ScheduleNextFlash();
+        public override async Task Load()
+        {
+            await base.Load();
+            if (Status != GameControlStatus.Ready)
+                return;
+
+            _subTypeTexture = await TextureLoader.Instance.PrepareAndGetTexture("Effect/Shiny02.jpg");
         }
 
         public override void Update(GameTime gameTime)
         {
             base.Update(gameTime);
-            if (Status != GameControlStatus.Ready)
+            if (Status != GameControlStatus.Ready || _owner == null || !_owner.Visible)
                 return;
 
-            float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
-            if (dt <= 0f)
-                return;
+            float factor = MathF.Max(0.01f, FPSCounter.Instance.FPS_ANIMATION_FACTOR);
+            UpdateParticles(factor);
 
-            if (!_isFlashing)
+            _sourceIntervalFrames += factor;
+            if (_sourceIntervalFrames >= SourceShinyIntervalFrames)
             {
-                _timeUntilNextFlash -= dt;
-                if (_timeUntilNextFlash <= 0f)
+                _sourceIntervalFrames -= SourceShinyIntervalFrames;
+                SpawnSourceShiny();
+            }
+        }
+
+        public override void Draw(GameTime gameTime)
+        {
+            if (!Visible || SpriteTexture == null || !HasActiveParticle())
+                return;
+
+            if (!SpriteBatchScope.BatchIsBegun)
+            {
+                using (new SpriteBatchScope(
+                    GraphicsManager.Instance.Sprite,
+                    SpriteSortMode.Deferred,
+                    BlendState.Additive,
+                    SamplerState.LinearClamp,
+                    DepthState))
                 {
-                    BeginFlash();
+                    DrawParticles();
                 }
-                return;
             }
-
-            _flashElapsed += dt;
-            float t = _flashElapsed / FlashDuration;
-
-            if (t >= 1f)
+            else
             {
-                _isFlashing = false;
-                Alpha = 0f;
-                ScheduleNextFlash();
-                return;
+                DrawParticles();
             }
-
-            float fade = t < 0.5f ? t * 2f : (1f - t) * 2f;
-            Alpha = MathHelper.Clamp(fade, 0f, 1f);
-            Scale = MathHelper.Lerp(BaseScale, MaxScale, fade);
-            Position = _flashOffset;
-
-            // Subtle rotation to avoid static-looking sprite.
-            Angle = new Vector3(0f, 0f, (float)(_flashElapsed * 6f));
         }
 
-        private void BeginFlash()
+        private void UpdateParticles(float factor)
         {
-            _isFlashing = true;
-            _flashElapsed = 0f;
-            _flashOffset = PickLocalOffset();
+            for (int i = 0; i < _particles.Length; i++)
+            {
+                if (!_particles[i].Active)
+                    continue;
+
+                ShineParticle particle = _particles[i];
+                particle.LifeFrames -= factor;
+                particle.RotationDegrees -= particle.SubType == 1
+                    ? SourceShinyRotationSpeed * factor
+                    : 0f;
+
+                if (particle.LifeFrames <= 0f)
+                {
+                    particle.Active = false;
+                }
+
+                _particles[i] = particle;
+            }
         }
 
-        private void ScheduleNextFlash()
+        private void SpawnSourceShiny()
         {
-            float lerp = (float)MuGame.Random.NextDouble();
-            _timeUntilNextFlash = MathHelper.Lerp(MinInterval, MaxInterval, lerp);
+            int localX = MuGame.Random.Next(16, 48);
+            int localZ = MuGame.Random.Next(16, 48);
+            Vector3 localOffset = new Vector3(localX, 0f, localZ);
+            Vector3 rotatedOffset = Vector3.Transform(
+                localOffset,
+                Matrix.CreateFromQuaternion(MathUtils.AngleQuaternion(_owner.ShineAngle)));
+            Vector3 position = _owner.Position + rotatedOffset;
+
+            _particles[0] = new ShineParticle
+            {
+                Active = true,
+                Position = position,
+                LifeFrames = SourceShinyLifeFrames,
+                RotationDegrees = 0f,
+                SubType = 0
+            };
+            _particles[1] = new ShineParticle
+            {
+                Active = true,
+                Position = position,
+                LifeFrames = SourceShinyLifeFrames,
+                RotationDegrees = 0f,
+                SubType = 1
+            };
         }
 
-        private Vector3 PickLocalOffset()
+        private bool HasActiveParticle()
         {
-            var parent = Parent as WorldObject;
-            BoundingBox bounds = parent?.BoundingBoxLocal ?? new BoundingBox(new Vector3(-15f, -15f, 0f), new Vector3(15f, 15f, 20f));
+            return _particles[0].Active || _particles[1].Active;
+        }
 
-            float maxRadius = MathF.Max(MathF.Abs(bounds.Min.X), MathF.Abs(bounds.Max.X));
-            maxRadius = MathF.Max(maxRadius, MathF.Max(MathF.Abs(bounds.Min.Y), MathF.Abs(bounds.Max.Y)));
-            maxRadius = MathF.Max(8f, maxRadius * 0.7f);
+        private void DrawParticles()
+        {
+            for (int i = 0; i < _particles.Length; i++)
+            {
+                ShineParticle particle = _particles[i];
+                if (!particle.Active)
+                    continue;
 
-            float radius = MathHelper.Lerp(maxRadius * 0.25f, maxRadius, (float)MuGame.Random.NextDouble());
-            float angle = (float)(MuGame.Random.NextDouble() * MathHelper.TwoPi);
-            float heightMin = MathF.Max(bounds.Max.Z * 0.5f, 8f);
-            float heightMax = MathF.Max(bounds.Max.Z + 10f, heightMin + 4f);
-            float height = MathHelper.Lerp(heightMin, heightMax, (float)MuGame.Random.NextDouble());
+                Vector3 projected = GraphicsDevice.Viewport.Project(
+                    particle.Position,
+                    Camera.Instance.Projection,
+                    Camera.Instance.View,
+                    Matrix.Identity);
 
-            return new Vector3(
-                MathF.Cos(angle) * radius,
-                MathF.Sin(angle) * radius,
-                height);
+                if (projected.Z < 0f || projected.Z > 1f)
+                    continue;
+
+                float worldScale = WorldPosition.Right.Length();
+                if (worldScale <= 0.001f)
+                    worldScale = 1f;
+
+                float distance = Vector3.Distance(Camera.Instance.Position, particle.Position);
+                float screenScale = worldScale /
+                    (MathF.Max(distance, 0.1f) / Constants.TERRAIN_SIZE) *
+                    Constants.RENDER_SCALE;
+
+                // Source: Scale = sin(LifeTime * 10 degrees). SubType 1 additionally
+                // multiplies the scale by pow(0.75, FPS_ANIMATION_FACTOR).
+                float scale = MathF.Sin(MathHelper.ToRadians(particle.LifeFrames * 10f));
+                if (particle.SubType == 1)
+                    scale *= 0.75f;
+
+                if (scale <= 0.001f)
+                    continue;
+
+                Texture2D texture = particle.SubType == 1
+                    ? (_subTypeTexture ?? SpriteTexture)
+                    : SpriteTexture;
+
+                GraphicsManager.Instance.Sprite.Draw(
+                    texture,
+                    new Vector2(projected.X, projected.Y),
+                    null,
+                    Color.White * TotalAlpha,
+                    MathHelper.ToRadians(particle.RotationDegrees),
+                    new Vector2(SpriteTexture.Width * 0.5f, SpriteTexture.Height * 0.5f),
+                    screenScale * scale,
+                    SpriteEffects.None,
+                    MathHelper.Clamp(projected.Z, 0f, 1f));
+            }
+        }
+
+        public override void Dispose()
+        {
+            base.Dispose();
+            _subTypeTexture = null;
         }
     }
 }

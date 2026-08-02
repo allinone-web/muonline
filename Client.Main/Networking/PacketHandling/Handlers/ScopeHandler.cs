@@ -2595,7 +2595,8 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     dropObj,
                     _characterState.Id,
                     _networkManager.GetCharacterService(),
-                    _loggerFactory.CreateLogger<DroppedItemObject>());
+                    _loggerFactory.CreateLogger<DroppedItemObject>(),
+                    isFreshDrop: true);
                 obj.World = world;
                 obj.Hidden = true;
                 int loadGeneration = obj.LoadGeneration;

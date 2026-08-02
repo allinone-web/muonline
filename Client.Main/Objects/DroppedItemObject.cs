@@ -34,9 +34,10 @@ namespace Client.Main.Objects
         private const float LabelOffsetZ = 10f;
         private const int LabelPixelGap = 20;
         private const float BoundingPadding = 2f; // Small padding for interaction
-        // A coin pile used to create up to 30 complete ModelObject instances.
-        // Twelve keeps the pile readable while sharply reducing updates and draw calls.
-        private const int MaxCoinModels = 12;
+        private const int MaxZenCoins = 80;
+        private const float FreshDropStartHeight = 180f;
+        private const float FreshDropInitialGravity = 20f;
+        private const float FreshDropGravityStep = 6f;
         private const float LabelVisibilityDistSq = 2000f * 2000f; // Squared distance for label visibility check
 
         internal int TileKey => HashCode.Combine(_scope.PositionX, _scope.PositionY);
@@ -53,17 +54,24 @@ namespace Client.Main.Objects
         private ModelObject _modelObj; // Optional 3D model when available
         private ItemDefinition _definition;
         private bool _isMoney;
+        private bool _isFreshDrop;
         private Color _labelColor;
         private readonly List<ModelObject> _coinModels = new List<ModelObject>(); // Multiple coins for money piles
         private readonly DroppedItemVisual _visual = new();
         private int _loadGeneration;
         private bool _visualContentReady;
         private bool _terrainPlacementReady;
+        private bool _freshDropMotionInitialized;
+        private bool _freshDropInFlight;
+        private float _freshDropGroundZ;
+        private float _freshDropGravity;
 
         // ─────────────────── public helpers
         public ushort RawId => _scope?.RawId ?? 0;
         internal int LoadGeneration => _loadGeneration;
         public new string DisplayName { get; private set; }
+        internal Vector3 ShineAngle => _modelObj?.Angle
+            ?? (_coinModels.Count > 0 ? _coinModels[0].Angle : Vector3.Zero);
 
         internal void PrepareRenderResourcesForFirstFrame()
         {
@@ -92,14 +100,15 @@ namespace Client.Main.Objects
               ScopeObject scope,
               ushort mainPlayerId,
               CharacterService charSvc,
-              ILogger<DroppedItemObject> logger = null)
+              ILogger<DroppedItemObject> logger = null,
+              bool isFreshDrop = false)
         {
             if (_pool.TryTake(out var obj))
             {
-                obj.ResetFromScope(scope, mainPlayerId, charSvc, logger);
+                obj.ResetFromScope(scope, mainPlayerId, charSvc, logger, isFreshDrop);
                 return obj;
             }
-            return new DroppedItemObject(scope, mainPlayerId, charSvc, logger);
+            return new DroppedItemObject(scope, mainPlayerId, charSvc, logger, isFreshDrop);
         }
 
         public void Recycle()
@@ -120,16 +129,18 @@ namespace Client.Main.Objects
               ScopeObject scope,
               ushort mainPlayerId,
               CharacterService charSvc,
-              ILogger<DroppedItemObject> logger = null)
+              ILogger<DroppedItemObject> logger = null,
+              bool isFreshDrop = false)
         {
-            ResetFromScope(scope, mainPlayerId, charSvc, logger);
+            ResetFromScope(scope, mainPlayerId, charSvc, logger, isFreshDrop);
         }
 
         private void ResetFromScope(
             ScopeObject scope,
             ushort mainPlayerId,
             CharacterService charSvc,
-            ILogger<DroppedItemObject> logger)
+            ILogger<DroppedItemObject> logger,
+            bool isFreshDrop)
         {
             if (!TryResetLifecycleForReuse())
                 throw new InvalidOperationException("A dropped item was reused while its previous load was still running.");
@@ -148,10 +159,15 @@ namespace Client.Main.Objects
             _modelObj = null;
             _definition = null;
             _isMoney = false;
+            _isFreshDrop = isFreshDrop;
             _coinModels.Clear();
             _visual.Reset();
             _visualContentReady = false;
             _terrainPlacementReady = false;
+            _freshDropMotionInitialized = false;
+            _freshDropInFlight = false;
+            _freshDropGroundZ = 0f;
+            _freshDropGravity = 0f;
             RenderVisuals = true;
 
             // Initialize position at ground level (will be adjusted in Load() after terrain height is known)
@@ -211,44 +227,19 @@ return;
                         return;
                     }
 
-                    // Determine coin count based on amount (more zen = more coins, capped at reasonable number)
+                    // SourceMain5.2 RenderZen: clamp(sqrt(amount) / 2, 3, 80).
                     var moneyScope = _scope as MoneyScopeObject;
-                    int coinCount = Math.Min(CalculateCoinCount(moneyScope?.Amount ?? 0), MaxCoinModels);
+                    int coinCount = CalculateCoinCount(moneyScope?.Amount ?? 0);
+                    var model = new DroppedZenModel();
+                    model.Model = bmd;
+                    model.Angle = new Vector3(0f, 0f, MathHelper.ToRadians(-45f));
+                    model.Scale = 0.8f;
+                    model.LightEnabled = true;
+                    model.ConfigureCoinLayout(coinCount, RawId);
 
-                    // Use deterministic random based on RawId for consistent results
-                    var random = new Random(RawId);
-
-                    // Create multiple coins in a pile with anti-collision positioning
-                    for (int i = 0; i < coinCount; i++)
-                    {
-                        var model = new DroppedItemModel();
-                        model.Model = bmd;
-
-                        // Position coins in a circular pile pattern with vertical stacking
-                        float radius = (float)Math.Sqrt(i) * 8f; // Spiral outward
-                        float angle = i * 2.4f; // Golden angle for even distribution
-                        float offsetX = (float)Math.Cos(angle) * radius;
-                        float offsetY = (float)Math.Sin(angle) * radius;
-                        float offsetZ = (i / 3) * 2f + 1f; // Stack coins, start slightly above ground
-
-                        // Add small random variation to prevent perfect alignment
-                        offsetX += (float)(random.NextDouble() - 0.5) * 4f;
-                        offsetY += (float)(random.NextDouble() - 0.5) * 4f;
-                        offsetZ += (float)(random.NextDouble() - 0.5) * 1f;
-
-                        model.Position = new Vector3(offsetX, offsetY, offsetZ);
-
-                        // Coins lie flat with slight Z rotation for variety
-                        float rotZ = (float)(random.NextDouble() * Math.PI * 2);
-                        model.Angle = new Vector3(0, 0, rotZ);
-
-                        model.Scale = 0.8f;
-                        model.LightEnabled = true;
-
-if (!await TryLoadChildModel(model, world, loadGeneration))
-return;
-_coinModels.Add(model);
-                    }
+                    if (!await TryLoadChildModel(model, world, loadGeneration))
+                        return;
+                    _coinModels.Add(model);
 
                     RecenterCoinsAndFitBoundingBox();
                     _visualContentReady = true;
@@ -366,6 +357,16 @@ _modelObj = model;
             // then accounts for slopes under every transformed vertex of the item model.
             Position = new Vector3(Position.X, Position.Y, groundZ);
             LiftVisualsAboveTerrain();
+            _freshDropGroundZ = Position.Z;
+
+            if (_isFreshDrop && !_freshDropMotionInitialized)
+            {
+                _freshDropMotionInitialized = true;
+                _freshDropInFlight = true;
+                _freshDropGravity = FreshDropInitialGravity;
+                Position = new Vector3(Position.X, Position.Y, _freshDropGroundZ + FreshDropStartHeight);
+            }
+
             _terrainPlacementReady = true;
             return true;
         }
@@ -535,6 +536,12 @@ _modelObj = model;
             if (_coinModels.Count == 0)
                 return;
 
+            if (_coinModels.Count == 1 && _coinModels[0] is DroppedZenModel zenModel)
+            {
+                BoundingBoxLocal = zenModel.PileBounds;
+                return;
+            }
+
             // Calculate bounds from coin positions
             Vector3 min = new Vector3(float.MaxValue);
             Vector3 max = new Vector3(float.MinValue);
@@ -576,10 +583,28 @@ _modelObj = model;
         // =====================================================================
         public override void Update(GameTime gameTime)
         {
-            base.Update(gameTime);
-
             if (!_terrainPlacementReady && _visualContentReady && World != null)
                 TryFinalizeTerrainPlacement(World);
+
+            if (_terrainPlacementReady && _freshDropInFlight)
+            {
+                float factor = MathF.Max(0.01f, FPSCounter.Instance.FPS_ANIMATION_FACTOR);
+                Position = new Vector3(
+                    Position.X,
+                    Position.Y,
+                    Position.Z + _freshDropGravity * factor);
+                _freshDropGravity -= FreshDropGravityStep * factor;
+
+                if (Position.Z <= _freshDropGroundZ)
+                {
+                    Position = new Vector3(Position.X, Position.Y, _freshDropGroundZ);
+                    _freshDropInFlight = false;
+                }
+            }
+
+            // SourceMain5.2 moves the drop before calling CreateShiny. Updating the
+            // vertical motion first keeps the particle origin on the current frame.
+            base.Update(gameTime);
         }
 
         // =====================================================================
@@ -688,20 +713,8 @@ _modelObj = model;
 
         private int CalculateCoinCount(uint zenAmount)
         {
-            var random = new Random(RawId);
-
-            if (zenAmount < 100)
-                return random.Next(2, 5);
-            if (zenAmount < 1000)
-                return random.Next(4, 7);
-            if (zenAmount < 10000)
-                return random.Next(6, 10);
-            if (zenAmount < 100000)
-                return random.Next(9, 14);
-            if (zenAmount < 1000000)
-                return random.Next(12, 17);
-
-            return random.Next(15, 21);
+            int coinCount = (int)MathF.Sqrt(zenAmount) / 2;
+            return Math.Clamp(coinCount, 3, MaxZenCoins);
         }
 
         private Color GetLabelColor(ScopeObject s, ItemDatabase.ItemDetails details)
@@ -775,5 +788,91 @@ _modelObj = model;
         protected override bool AllowAnimationUpdates => false;
         protected override bool AllowLightingUpdates => false;
         protected override bool AllowDynamicLightingShader => false;
+
+        public DroppedItemModel()
+        {
+            RenderShadow = false;
+        }
+    }
+
+    /// <summary>
+    /// Renders the source client's Zen coin heap with one loaded BMD. The original client
+    /// submits all coin transforms through BeginRenderCoinHeap; drawing the same model at
+    /// each source position keeps the same layout without allocating one GPU buffer set per
+    /// coin.
+    /// </summary>
+    internal sealed class DroppedZenModel : DroppedItemModel
+    {
+        private Vector3[] _coinPositions = Array.Empty<Vector3>();
+
+        public BoundingBox PileBounds { get; private set; }
+
+        public void ConfigureCoinLayout(int coinCount, ushort seed)
+        {
+            coinCount = Math.Clamp(coinCount, 3, 80);
+            _coinPositions = new Vector3[coinCount];
+
+            uint state = (uint)seed * 747796405u + 2891336453u;
+            int maxRadius = coinCount + 20;
+            Vector3 min = new Vector3(float.MaxValue);
+            Vector3 max = new Vector3(float.MinValue);
+            float coinRadius = 12f * Scale;
+            float coinHeight = 4f * Scale;
+
+            for (int i = 0; i < coinCount; i++)
+            {
+                int angleDegrees = NextValue(ref state, 360);
+                int radius = NextValue(ref state, maxRadius);
+                float angle = MathHelper.ToRadians(angleDegrees);
+                Vector3 position = new Vector3(
+                    MathF.Cos(angle) * radius,
+                    MathF.Sin(angle) * radius,
+                    0f);
+
+                _coinPositions[i] = position;
+                min = Vector3.Min(min, position - new Vector3(coinRadius, coinRadius, 0f));
+                max = Vector3.Max(max, position + new Vector3(coinRadius, coinRadius, coinHeight));
+            }
+
+            PileBounds = new BoundingBox(
+                new Vector3(min.X, min.Y, 0f),
+                new Vector3(max.X, max.Y, MathF.Max(max.Z, 10f)));
+        }
+
+        public override void Draw(GameTime gameTime)
+        {
+            if (!Visible)
+                return;
+
+            Vector3 originalPosition = Position;
+            for (int i = 0; i < _coinPositions.Length; i++)
+            {
+                Position = _coinPositions[i];
+                base.Draw(gameTime);
+            }
+
+            Position = originalPosition;
+        }
+
+        public override void DrawAfter(GameTime gameTime)
+        {
+            if (!Visible)
+                return;
+
+            Vector3 originalPosition = Position;
+            for (int i = 0; i < _coinPositions.Length; i++)
+            {
+                Position = _coinPositions[i];
+                base.DrawAfter(gameTime);
+            }
+
+            Position = originalPosition;
+        }
+
+        private static int NextValue(ref uint state, int exclusiveMax)
+        {
+            state = state * 1664525u + 1013904223u;
+            return (int)(state % (uint)exclusiveMax);
+        }
     }
 }
