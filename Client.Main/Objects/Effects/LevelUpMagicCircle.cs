@@ -6,11 +6,13 @@ using Microsoft.Xna.Framework.Graphics;
 namespace Client.Main.Objects.Effects
 {
     /// <summary>
-    /// Expanding golden circle rendered horizontally (flat on ground level).
+    /// Short blue ground effect used by the normal level-up animation.
     /// </summary>
     public class LevelUpMagicCircle : SpriteObject
     {
-        private const float _lifeTotal = 3.5f;
+        private const float SourceFrameRate = 25f;
+        private const float LifetimeFrames = 20f;
+        private const float _lifeTotal = LifetimeFrames / SourceFrameRate;
         private float _life = _lifeTotal;
 
         public override string TexturePath => "Effect/Magic_Ground2.jpg";
@@ -19,8 +21,8 @@ namespace Client.Main.Objects.Effects
         {
             Position = startPos;
             IsTransparent = true;
-            BlendState = BlendState.NonPremultiplied;
-            Scale = 0.1f;
+            BlendState = Blendings.OneOneAdditive;
+            Scale = 0f;
             LightEnabled = false;
         }
 
@@ -37,21 +39,11 @@ namespace Client.Main.Objects.Effects
                 return;
             }
 
-            float t = 1f - (_life / _lifeTotal);
-            Scale = MathHelper.Lerp(0.1f, 5.0f, t);
+            float lifeFrames = MathHelper.Clamp(_life * SourceFrameRate, 0f, LifetimeFrames);
+            Scale = (LifetimeFrames - lifeFrames) * 0.15f;
+            Alpha = lifeFrames < 5f ? lifeFrames / 5f : 1f;
 
-            const float fadeStartTime = 0.7f;
-            if (t < fadeStartTime)
-            {
-                Alpha = 1.0f;
-            }
-            else
-            {
-                float fadeProgress = (t - fadeStartTime) / (1.0f - fadeStartTime);
-                Alpha = MathHelper.Lerp(1.0f, 0.0f, fadeProgress);
-            }
-
-            Angle = new Vector3(0, 0, (float)(gameTime.TotalGameTime.TotalSeconds * 0.5f));
+            Angle = Vector3.Zero;
         }
 
         public override void Draw(GameTime gameTime)
@@ -61,48 +53,73 @@ namespace Client.Main.Objects.Effects
             var gd = GraphicsManager.Instance.GraphicsDevice;
             var effect = GraphicsManager.Instance.AlphaTestEffect3D;
 
+            BlendState originalBlend = gd.BlendState;
+            DepthStencilState originalDepth = gd.DepthStencilState;
+            RasterizerState originalRasterizer = gd.RasterizerState;
+            SamplerState originalSampler = gd.SamplerStates[0];
+            Matrix originalWorld = effect.World;
+            Matrix originalView = effect.View;
+            Matrix originalProjection = effect.Projection;
+            Texture2D originalTexture = effect.Texture;
             Vector3 originalDiffuse = effect.DiffuseColor;
             float originalAlpha = effect.Alpha;
             bool originalVertexColorEnabled = effect.VertexColorEnabled;
 
             try
             {
-                Color tint = new Color(255, 255, 100);
+                gd.BlendState = Blendings.OneOneAdditive;
+                gd.DepthStencilState = DepthStencilState.DepthRead;
+                gd.RasterizerState = RasterizerState.CullNone;
+                gd.SamplerStates[0] = SamplerState.LinearClamp;
 
-                effect.World = Matrix.CreateScale(Scale * 75)
+                effect.World = Matrix.CreateScale(Scale * Constants.TERRAIN_SCALE)
                                   * Matrix.CreateRotationX(-MathHelper.PiOver2)
-                                  * Matrix.CreateRotationZ(Angle.Z)
-                                  * Matrix.CreateTranslation(Position);
+                                  * Matrix.CreateRotationZ(-Angle.Z)
+                                  * Matrix.CreateTranslation(Position + new Vector3(0f, 0f, 5f));
                 effect.View = Camera.Instance.View;
                 effect.Projection = Camera.Instance.Projection;
                 effect.Texture = SpriteTexture;
                 effect.VertexColorEnabled = false;
-                effect.DiffuseColor = tint.ToVector3();
+                effect.DiffuseColor = new Vector3(0.4f, 0.6f, 1f);
                 effect.Alpha = this.Alpha;
-
-                var verts = new VertexPositionTexture[4];
-                verts[0] = new VertexPositionTexture(new Vector3(-1, 0, -1), new Vector2(0, 0));
-                verts[1] = new VertexPositionTexture(new Vector3(1, 0, -1), new Vector2(1, 0));
-                verts[2] = new VertexPositionTexture(new Vector3(-1, 0, 1), new Vector2(0, 1));
-                verts[3] = new VertexPositionTexture(new Vector3(1, 0, 1), new Vector2(1, 1));
-
-                short[] idx = { 0, 1, 2, 2, 1, 3 };
 
                 foreach (var pass in effect.CurrentTechnique.Passes)
                 {
                     pass.Apply();
                     gd.DrawUserIndexedPrimitives(
                         PrimitiveType.TriangleList,
-                        verts, 0, 4,
-                        idx, 0, 2);
+                        GroundVertices,
+                        0,
+                        GroundVertices.Length,
+                        GroundIndices,
+                        0,
+                        2);
                 }
             }
             finally
             {
+                gd.BlendState = originalBlend;
+                gd.DepthStencilState = originalDepth;
+                gd.RasterizerState = originalRasterizer;
+                gd.SamplerStates[0] = originalSampler;
+                effect.World = originalWorld;
+                effect.View = originalView;
+                effect.Projection = originalProjection;
+                effect.Texture = originalTexture;
                 effect.DiffuseColor = originalDiffuse;
                 effect.Alpha = originalAlpha;
                 effect.VertexColorEnabled = originalVertexColorEnabled;
             }
         }
+
+        private static readonly VertexPositionTexture[] GroundVertices =
+        {
+            new VertexPositionTexture(new Vector3(-1f, 0f, -1f), new Vector2(0f, 0f)),
+            new VertexPositionTexture(new Vector3(1f, 0f, -1f), new Vector2(1f, 0f)),
+            new VertexPositionTexture(new Vector3(-1f, 0f, 1f), new Vector2(0f, 1f)),
+            new VertexPositionTexture(new Vector3(1f, 0f, 1f), new Vector2(1f, 1f))
+        };
+
+        private static readonly short[] GroundIndices = { 0, 1, 2, 2, 1, 3 };
     }
 }

@@ -162,6 +162,8 @@ namespace Client.Main.Scenes
                             if (activated)
                             {
                                 _activePlayerIds.Add(scopeObject.Id);
+                                if ((scopeObject.RawId & 0x8000) != 0)
+                                    CharacterSpawnEffect.Start(remote);
                                 ElfBuffEffectManager.Instance?.EnsureBuffsForPlayer(scopeObject.Id);
                             }
                             else

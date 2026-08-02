@@ -9,6 +9,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 using MUnique.OpenMU.Network.Packets.ServerToClient;
 using Client.Main.Objects;
+using Client.Main.Objects.Effects;
 using Client.Main.Objects.Effects.Skills;
 using Client.Main.Core.Utilities;
 using Client.Main.Networking.PacketHandling.Handlers; // For CharacterClassNumber
@@ -544,7 +545,10 @@ namespace Client.Main.Scenes
                     MainThreadDispatcher.WorkPriority.Critical);
 
                 if (!worldInstance.Objects.Contains(_hero))
+                {
                     worldInstance.Objects.Add(_hero);
+                    CharacterSpawnEffect.Start(_hero);
+                }
                 if (worldInstance is WalkableWorldControl initializedWalkable)
                     _scopeImportController?.EnsureWalkerNetworkId(initializedWalkable, charState.Id, "after hero publication");
 

@@ -9,6 +9,7 @@ using Client.Main.Controls.UI.Game.Hud;
 using Client.Main.Controls.UI.Game.Map;
 using Client.Main.Models;
 using Client.Main.Objects;
+using Client.Main.Objects.Effects;
 using Client.Main.Objects.Player;
 using Client.Main.Worlds;
 using Microsoft.Extensions.Logging;
@@ -225,6 +226,7 @@ namespace Client.Main.Scenes
                     nextWorld.PrepareInitialVisibilitySnapshot();
                     nextWorld.Visible = true;
                     _scene.Hero.Hidden = false;
+                    CharacterSpawnEffect.Start(_scene.Hero);
                 }, $"MapChange.{worldType.Name}.Activate", cleanupLoadingUi: false);
 
                 await MuGame.YieldToNextFrameAsync(

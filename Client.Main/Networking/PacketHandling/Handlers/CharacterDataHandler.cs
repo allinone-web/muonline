@@ -529,7 +529,18 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                         }
 
                         var heroPosition = gameScene.Hero.Position;
-                        var levelUpEffect = new LevelUpEffect(heroPosition);
+                        bool isMasterClass = gameScene.Hero.CharacterClass is
+                            CharacterClassNumber.GrandMaster or
+                            CharacterClassNumber.BladeMaster or
+                            CharacterClassNumber.HighElf or
+                            CharacterClassNumber.LordEmperor or
+                            CharacterClassNumber.DuelMaster or
+                            CharacterClassNumber.DimensionMaster or
+                            CharacterClassNumber.FistMaster;
+                        var levelUpEffect = new LevelUpEffect(
+                            heroPosition,
+                            masterLevel: isMasterClass,
+                            angle: gameScene.Hero.Angle);
                         gameScene.World.Objects.Add(levelUpEffect);
                         await levelUpEffect.Load(); // Asynchronously load the effect and its children
 
@@ -1141,11 +1152,17 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     _logger.LogInformation("Ⓜ️ MASTER LEVEL UP! Level {Lvl}, Points {Pts}", mlvl, mpts);
                     Console.WriteLine($"*** MASTER LEVEL UP! You are now master level {mlvl}! ***");
                     // TODO: Play master level up sound
-                    MuGame.ScheduleOnMainThread(() =>
+                    MuGame.ScheduleOnMainThread(async () =>
                     {
                         var gameScene = MuGame.Instance?.ActiveScene as Client.Main.Scenes.GameScene;
-                        if (gameScene != null)
+                        if (gameScene?.World != null && gameScene.Hero != null)
                         {
+                            var levelUpEffect = new LevelUpEffect(
+                                gameScene.Hero.Position,
+                                masterLevel: true,
+                                angle: gameScene.Hero.Angle);
+                            gameScene.World.Objects.Add(levelUpEffect);
+                            await levelUpEffect.Load();
                             gameScene.ChatLog?.AddMessage("System", $"You have reached Master Level {mlvl}! You have {mpts} master points remaining.", Client.Main.Models.MessageType.System);
                         }
                     });

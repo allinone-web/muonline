@@ -815,6 +815,10 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     p.MoveTargetPosition = new Vector3(worldX, worldY, 0);
                     p.Position = p.MoveTargetPosition;
                 }
+
+                if ((rawId & 0x8000) != 0)
+                    CharacterSpawnEffect.Start(p);
+
                 _logger.LogDebug("[Spawn] Successfully spawned {Name} ({MaskedId:X4}) into world.", name, maskedId);
             });
         }
