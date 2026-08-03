@@ -14,7 +14,7 @@ namespace Client.Main.Objects.Monsters
     [NpcInfo(77, "Phoenix Of Darkness")]
     public class PhoenixOfDarkness : MonsterObject
     {
-        private readonly ModelObject _body;
+        private readonly PhoenixBodyObject _body;
 
         public PhoenixOfDarkness()
         {
@@ -24,7 +24,6 @@ namespace Client.Main.Objects.Monsters
 
             _body = new PhoenixBodyObject
             {
-                LinkParentAnimation = true,
                 RenderShadow = false
             };
             Children.Add(_body);
@@ -46,6 +45,11 @@ namespace Client.Main.Objects.Monsters
             SetActionSpeed(MonsterActionType.Attack2, 0.33f);
             SetActionSpeed(MonsterActionType.Shock, 0.50f);
             SetActionSpeed(MonsterActionType.Die, 0.22f);
+
+            // Monster56 and Monster57 use different skeletons (61 vs 48 bones).
+            // Keep the original action timing, but never share Monster57's bone palette
+            // with the body model.
+            _body.CopyActionSpeedsFrom(this);
         }
 
         // Sound mapping based on C++ SetMonsterSound(MODEL_MONSTER01 + Type, 183, 184, 185, 185, -1);
@@ -74,6 +78,35 @@ namespace Client.Main.Objects.Monsters
 
         private sealed class PhoenixBodyObject : ModelObject
         {
+            public PhoenixBodyObject()
+            {
+                // MonsterObject uses this animation speed for the Phoenix root.
+                AnimationSpeed = 6f;
+            }
+
+            public override void Update(GameTime gameTime)
+            {
+                if (Parent is PhoenixOfDarkness phoenix)
+                {
+                    CurrentAction = phoenix.CurrentAction;
+                    HoldOnLastFrame = CurrentAction == (int)MonsterActionType.Die || phoenix.IsDead;
+                }
+
+                base.Update(gameTime);
+            }
+
+            public void CopyActionSpeedsFrom(ModelObject source)
+            {
+                if (source?.Model?.Actions == null || Model?.Actions == null)
+                    return;
+
+                int count = Math.Min(source.Model.Actions.Length, Model.Actions.Length);
+                for (int i = 0; i < count; i++)
+                {
+                    if (source.Model.Actions[i] != null && Model.Actions[i] != null)
+                        Model.Actions[i].PlaySpeed = source.Model.Actions[i].PlaySpeed;
+                }
+            }
         }
     }
 }
