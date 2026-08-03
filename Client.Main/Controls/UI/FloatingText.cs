@@ -18,7 +18,6 @@ namespace Client.Main.Controls.UI
         private readonly SpriteFont _font;
         private readonly Vector2 _rawSize;
         private Vector2 _center;
-        private long _jumpsDone;
         private float _alpha = 1f;
 
         /// <summary>
@@ -27,13 +26,16 @@ namespace Client.Main.Controls.UI
         public float CreationTime { get; }
 
         // ────────────────────────── Tuning Constants ──────────────────────────
-        private const float LIFETIME_SECONDS = 60f;   // Total lifespan
-        private const float FADE_START_RATIO = 0.80f; // 80% of lifespan, then begin fade-out
-        private const float PULSE_FREQ_HZ = 0.5f;  // Breathing/pulsing frequency
-        private const float PULSE_MIN_ALPHA = 0.65f; // Minimum alpha during pulse
-        private const float JUMP_INTERVAL = 10f;   // Seconds between upward jumps
-        private const float JUMP_PIXELS = -25f;  // Jump offset (negative = upward)
-        private const float FONT_SCALE = 0.6f;  // Scale relative to original font size
+        private const float FONT_SCALE = 0.6f;
+        private const float ORIGINAL_FPS = 25f;
+        private const float FLASH_STEPS = 10f;
+        private const float FLASH_ON_STEPS = 5f;
+        private const int BACKGROUND_PADDING_X = 2;
+        private const int BACKGROUND_PADDING_Y = 1;
+
+        private static readonly Color GoldenNoticeColor = new(255, 200, 80);
+        private static readonly Color GuildNoticeColor = new(100, 255, 200);
+        private static readonly Color NoticeBackgroundColor = new(0, 0, 0, 128);
 
         // ─────────────────────────── Constructors ───────────────────────────
         public FloatingText(string text, Color color, Vector2 spawnCenter, float creationTime)
@@ -87,64 +89,59 @@ namespace Client.Main.Controls.UI
         {
             if (!Visible) return;
 
-            // Compute age in seconds
-            float age = (float)gameTime.TotalGameTime.TotalSeconds - CreationTime;
-
-            // Hide and dispose after lifespan ends
-            if (age >= LIFETIME_SECONDS)
+            // The original client flashes normal notices in sync with its 25 FPS animation clock.
+            if (IsGoldenNotice)
             {
-                Visible = false;
-                Dispose();
-                return;
-            }
-
-            // Perform periodic jump
-            long targetJumps = (long)(age / JUMP_INTERVAL);
-            if (targetJumps > _jumpsDone)
-            {
-                long jumpsToDo = targetJumps - _jumpsDone;
-                _center.Y += jumpsToDo * JUMP_PIXELS;
-                _jumpsDone = targetJumps;
-                UpdatePosition();
-            }
-
-            // Handle pulsing and fade-out
-            float fadeStart = LIFETIME_SECONDS * FADE_START_RATIO;
-            if (age < fadeStart)
-            {
-                // Pulsing alpha between min and 1.0
-                float phase = age * PULSE_FREQ_HZ * MathHelper.TwoPi;
-                _alpha = MathHelper.Lerp(PULSE_MIN_ALPHA, 1f,
-                                         (float)(Math.Sin(phase) + 1f) * 0.5f);
+                float flashStep = (float)Math.Floor(
+                    gameTime.TotalGameTime.TotalSeconds * ORIGINAL_FPS);
+                _alpha = flashStep % FLASH_STEPS < FLASH_ON_STEPS
+                    ? 128f / 255f
+                    : 1f;
             }
             else
             {
-                // Fade out from alpha=1 to alpha=0
-                float fadeFraction = (age - fadeStart) / (LIFETIME_SECONDS - fadeStart);
-                _alpha = MathHelper.Lerp(1f, 0f, fadeFraction);
+                _alpha = 1f;
             }
         }
 
         public override void Draw(GameTime gameTime)
         {
-            if (!Visible || _alpha <= 0.01f) return;
+            if (!Visible || _alpha <= 0.01f || string.IsNullOrEmpty(Text)) return;
 
             var spriteBatch = GraphicsManager.Instance.Sprite;
+            var pixel = GraphicsManager.Instance.Pixel;
 
-            Vector2 drawPos = new Vector2(
-                _center.X - _rawSize.X * FONT_SCALE * 0.5f,
-                _center.Y - _rawSize.Y * FONT_SCALE * 0.5f);
+            Vector2 scaledSize = _rawSize * FONT_SCALE;
+            Vector2 drawPos = _center - scaledSize * 0.5f;
+
+            if (pixel != null)
+            {
+                var background = new Rectangle(
+                    (int)MathF.Floor(drawPos.X) - BACKGROUND_PADDING_X,
+                    (int)MathF.Floor(drawPos.Y) - BACKGROUND_PADDING_Y,
+                    (int)MathF.Ceiling(scaledSize.X) + BACKGROUND_PADDING_X * 2,
+                    (int)MathF.Ceiling(scaledSize.Y) + BACKGROUND_PADDING_Y * 2);
+
+                spriteBatch.Draw(pixel, background, NoticeBackgroundColor);
+            }
+
+            Color textColor = (IsGoldenNotice ? GoldenNoticeColor : GuildNoticeColor) * _alpha;
 
             spriteBatch.DrawString(
                 _font,
                 Text,
                 drawPos,
-                TextColor * _alpha,
+                textColor,
                 0f,
                 Vector2.Zero,
                 FONT_SCALE,
                 SpriteEffects.None,
                 0f);
         }
+
+        private bool IsGoldenNotice =>
+            TextColor.R == Color.Goldenrod.R &&
+            TextColor.G == Color.Goldenrod.G &&
+            TextColor.B == Color.Goldenrod.B;
     }
 }

@@ -17,8 +17,12 @@ namespace Client.Main.Controls.UI
 
         private Vector2 _spawnCenter;
         private float _latestTotalSeconds;
+        private float _noticeCountdownSeconds = NOTICE_INTERVAL_SECONDS;
 
-        private const float VERTICAL_GAP = 4f; // Vertical gap between notifications
+        private const int MAX_NOTICES = 6;
+        private const float NOTICE_INTERVAL_SECONDS = 12f;
+        private const float ORIGINAL_NOTICE_FIRST_LINE = 300f / 480f;
+        private const float ORIGINAL_NOTICE_LINE_HEIGHT = 13f / 480f;
 
         // ───────────────────────── Constructors ─────────────────────────
         public NotificationManager()
@@ -26,7 +30,10 @@ namespace Client.Main.Controls.UI
             Visible = true;
             Interactive = false;
 
-            _spawnCenter = new Vector2(UiScaler.VirtualSize.X * 0.5f, UiScaler.VirtualSize.Y * 0.75f);
+            float lineHeight = UiScaler.VirtualSize.Y * ORIGINAL_NOTICE_LINE_HEIGHT;
+            _spawnCenter = new Vector2(
+                UiScaler.VirtualSize.X * 0.5f,
+                UiScaler.VirtualSize.Y * ORIGINAL_NOTICE_FIRST_LINE + lineHeight * 0.5f);
         }
 
         // ────────────────────────── Public API ──────────────────────────
@@ -54,14 +61,29 @@ namespace Client.Main.Controls.UI
 
             lock (_sync)
             {
-                var note = new FloatingText(text, color, _spawnCenter, creationTime);
-                _active.Insert(0, note);
-
-                if (Parent != null)
-                    Parent.Controls.Add(note);
-
-                RecalculateStack();
+                AddNoticeSlot(text, color, creationTime);
+                _noticeCountdownSeconds = NOTICE_INTERVAL_SECONDS;
             }
+        }
+
+        private void AddNoticeSlot(string text, Color color, float creationTime)
+        {
+            if (_active.Count >= MAX_NOTICES)
+            {
+                var oldest = _active[0];
+                if (Parent != null)
+                    Parent.Controls.Remove(oldest);
+
+                _active.RemoveAt(0);
+            }
+
+            var note = new FloatingText(text, color, _spawnCenter, creationTime);
+            _active.Add(note);
+
+            if (Parent != null)
+                Parent.Controls.Add(note);
+
+            RecalculateStack();
         }
 
         /// <summary>
@@ -73,7 +95,7 @@ namespace Client.Main.Controls.UI
             foreach (var note in _active)
             {
                 note.SetCenterY(currentY);
-                currentY -= (note.ScaledHeight + VERTICAL_GAP);
+                currentY += UiScaler.VirtualSize.Y * ORIGINAL_NOTICE_LINE_HEIGHT;
             }
         }
 
@@ -81,10 +103,17 @@ namespace Client.Main.Controls.UI
         public override void Update(GameTime gameTime)
         {
             _latestTotalSeconds = (float)gameTime.TotalGameTime.TotalSeconds;
+            _noticeCountdownSeconds -= (float)gameTime.ElapsedGameTime.TotalSeconds;
             bool removedAny = false;
 
             lock (_sync)
             {
+                while (_noticeCountdownSeconds <= 0f)
+                {
+                    AddNoticeSlot(string.Empty, Color.Goldenrod, _latestTotalSeconds);
+                    _noticeCountdownSeconds += NOTICE_INTERVAL_SECONDS;
+                }
+
                 for (int i = _active.Count - 1; i >= 0; i--)
                 {
                     var note = _active[i];

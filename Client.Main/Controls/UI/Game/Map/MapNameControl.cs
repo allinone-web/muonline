@@ -43,9 +43,9 @@ namespace Client.Main.Controls.UI.Game.Map
                 FontSize = 24,
                 TextColor = Color.WhiteSmoke,
                 UseManualPosition = true,
-                IsBold = true,
+                IsBold = false,
                 IsItalic = true,
-                HasUnderline=false
+                HasUnderline = false
             };
 
             LabelText = "Map Name"; // Default
