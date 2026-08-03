@@ -1,5 +1,6 @@
 using Client.Main.Controls;
 using Client.Main.Core.Utilities;
+using Client.Main.Objects.Worlds.BloodCastle;
 using Microsoft.Xna.Framework;
 using System.Threading.Tasks;
 
@@ -12,6 +13,24 @@ namespace Client.Main.Worlds
         {
             BackgroundMusicPath = "Sound/iBloodCastle.wav";
             Name = "Blood Castle 7";
+        }
+
+        protected override void CreateMapTileObjects()
+        {
+            base.CreateMapTileObjects();
+            RegisterBloodCastleObjects();
+        }
+
+        private void RegisterBloodCastleObjects()
+        {
+            MapTileObjects[9] = typeof(BloodCastleObject);
+            MapTileObjects[10] = typeof(BloodCastleObject);
+            MapTileObjects[11] = typeof(BloodCastleObject);
+            MapTileObjects[13] = typeof(BloodCastleObject);
+            MapTileObjects[28] = typeof(BloodCastleObject);
+            MapTileObjects[29] = typeof(BloodCastleObject);
+            MapTileObjects[36] = typeof(BloodCastleObject);
+            MapTileObjects[37] = typeof(BloodCastleObject);
         }
 
         public override async Task Load()
@@ -42,6 +61,7 @@ namespace Client.Main.Worlds
                 Walker.Location = defaultSpawn;
             }
 
+            BloodCastleObject.AttachAmbientEffect(this);
             base.AfterLoad();
         }
     }

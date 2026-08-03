@@ -7,6 +7,8 @@ using Client.Main.Networking;
 using Client.Main.Controls.UI;
 using Client.Main.Controls.UI.Game;
 using Client.Main.Core.Utilities;
+using Client.Main.Controls;
+using Client.Main.Objects.Worlds.BloodCastle;
 
 namespace Client.Main.Networking.PacketHandling.Handlers
 {
@@ -94,6 +96,8 @@ namespace Client.Main.Networking.PacketHandling.Handlers
 
                         case 3: // Special state (bridge activation?)
                             _logger.LogInformation("Blood Castle special state (bridge activation?).");
+                            if (MuGame.Instance?.ActiveScene?.World is WorldControl world)
+                                BloodCastleObject.BeginBridgeOpening(world);
                             break;
 
                         default:
