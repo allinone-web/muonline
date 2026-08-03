@@ -73,6 +73,7 @@ namespace Client.Main.Controls.Terrain
             public readonly VertexPositionColorTexture[] Vertices;
             public readonly BoundingBox Bounds;
             public DynamicVertexBuffer VertexBuffer;
+            public int LastWindVersion = int.MinValue;
 
             public GrassBatch(
                 GraphicsDevice graphicsDevice,
@@ -89,6 +90,40 @@ namespace Client.Main.Controls.Terrain
                     VertexPositionColorTexture.VertexDeclaration,
                     Vertices.Length,
                     BufferUsage.WriteOnly);
+
+                BuildStaticVertices();
+                VertexBuffer.SetData(Vertices, 0, Vertices.Length, SetDataOptions.Discard);
+            }
+
+            private void BuildStaticVertices()
+            {
+                float halfTexelU = 0.5f / Texture.Width;
+                float halfTexelV = 0.5f / Texture.Height;
+
+                for (int i = 0; i < Quads.Length; i++)
+                {
+                    GrassQuad quad = Quads[i];
+                    Vector3 topLeft = quad.BottomLeft;
+                    topLeft.X += GrassHorizontalOffset;
+                    topLeft.Z += quad.Height;
+
+                    Vector3 topRight = quad.BottomRight;
+                    topRight.X += GrassHorizontalOffset;
+                    topRight.Z += quad.Height;
+
+                    int vertex = i * 6;
+                    Vector2 uvTopLeft = new(quad.U + halfTexelU, halfTexelV);
+                    Vector2 uvTopRight = new(quad.U + GrassUvWidth - halfTexelU, halfTexelV);
+                    Vector2 uvBottomRight = new(quad.U + GrassUvWidth - halfTexelU, 1f - halfTexelV);
+                    Vector2 uvBottomLeft = new(quad.U + halfTexelU, 1f - halfTexelV);
+
+                    Vertices[vertex + 0] = new VertexPositionColorTexture(topLeft, quad.Light1, uvTopLeft);
+                    Vertices[vertex + 1] = new VertexPositionColorTexture(topRight, quad.Light2, uvTopRight);
+                    Vertices[vertex + 2] = new VertexPositionColorTexture(quad.BottomRight, quad.Light3, uvBottomRight);
+                    Vertices[vertex + 3] = new VertexPositionColorTexture(quad.BottomRight, quad.Light3, uvBottomRight);
+                    Vertices[vertex + 4] = new VertexPositionColorTexture(quad.BottomLeft, quad.Light4, uvBottomLeft);
+                    Vertices[vertex + 5] = new VertexPositionColorTexture(topLeft, quad.Light1, uvTopLeft);
+                }
             }
 
             public void Dispose()
@@ -361,13 +396,19 @@ namespace Client.Main.Controls.Terrain
                 }
 
                 BoundingFrustum frustum = Camera.Instance.Frustum;
+                int windVersion = _wind.Version;
                 for (int i = 0; i < _batches.Count; i++)
                 {
                     GrassBatch batch = _batches[i];
                     if (frustum.Contains(batch.Bounds) == ContainmentType.Disjoint)
                         continue;
 
-                    UpdateBatchVertices(batch);
+                    if (batch.LastWindVersion != windVersion)
+                    {
+                        UpdateBatchWind(batch);
+                        batch.LastWindVersion = windVersion;
+                    }
+
                     _graphicsDevice.SetVertexBuffer(batch.VertexBuffer);
                     if (additive)
                         additiveEffect.Texture = batch.Texture;
@@ -441,37 +482,23 @@ namespace Client.Main.Controls.Terrain
             return _additiveEffect;
         }
 
-        private void UpdateBatchVertices(GrassBatch batch)
+        private void UpdateBatchWind(GrassBatch batch)
         {
             for (int i = 0; i < batch.Quads.Length; i++)
             {
                 GrassQuad quad = batch.Quads[i];
-                Vector3 topLeft = quad.BottomLeft;
-                topLeft.X += GrassHorizontalOffset;
-                topLeft.Y += _wind.GetWindValue(quad.WindIndex1 % Constants.TERRAIN_SIZE, quad.WindIndex1 / Constants.TERRAIN_SIZE);
-                topLeft.Z += quad.Height;
-
-                Vector3 topRight = quad.BottomRight;
-                topRight.X += GrassHorizontalOffset;
-                topRight.Y += _wind.GetWindValue(quad.WindIndex2 % Constants.TERRAIN_SIZE, quad.WindIndex2 / Constants.TERRAIN_SIZE);
-                topRight.Z += quad.Height;
-
-                Vector3 bottomRight = quad.BottomRight;
-                Vector3 bottomLeft = quad.BottomLeft;
                 int vertex = i * 6;
-                float halfTexelU = 0.5f / batch.Texture.Width;
-                float halfTexelV = 0.5f / batch.Texture.Height;
-                Vector2 uvTopLeft = new(quad.U + halfTexelU, halfTexelV);
-                Vector2 uvTopRight = new(quad.U + GrassUvWidth - halfTexelU, halfTexelV);
-                Vector2 uvBottomRight = new(quad.U + GrassUvWidth - halfTexelU, 1f - halfTexelV);
-                Vector2 uvBottomLeft = new(quad.U + halfTexelU, 1f - halfTexelV);
+                float leftY = quad.BottomLeft.Y + _wind.GetWindValue(quad.WindIndex1);
+                float rightY = quad.BottomRight.Y + _wind.GetWindValue(quad.WindIndex2);
 
-                batch.Vertices[vertex + 0] = new VertexPositionColorTexture(topLeft, quad.Light1, uvTopLeft);
-                batch.Vertices[vertex + 1] = new VertexPositionColorTexture(topRight, quad.Light2, uvTopRight);
-                batch.Vertices[vertex + 2] = new VertexPositionColorTexture(bottomRight, quad.Light3, uvBottomRight);
-                batch.Vertices[vertex + 3] = new VertexPositionColorTexture(bottomRight, quad.Light3, uvBottomRight);
-                batch.Vertices[vertex + 4] = new VertexPositionColorTexture(bottomLeft, quad.Light4, uvBottomLeft);
-                batch.Vertices[vertex + 5] = new VertexPositionColorTexture(topLeft, quad.Light1, uvTopLeft);
+                Vector3 topLeft = batch.Vertices[vertex + 0].Position;
+                topLeft.Y = leftY;
+                batch.Vertices[vertex + 0].Position = topLeft;
+                batch.Vertices[vertex + 5].Position = topLeft;
+
+                Vector3 topRight = batch.Vertices[vertex + 1].Position;
+                topRight.Y = rightY;
+                batch.Vertices[vertex + 1].Position = topRight;
             }
 
             batch.VertexBuffer.SetData(batch.Vertices, 0, batch.Vertices.Length, SetDataOptions.Discard);

@@ -82,9 +82,10 @@ namespace Client.Main.Objects
             _fadeGroundZ = World?.Terrain?.RequestTerrainHeight(Position.X, Position.Y) ?? _startZ;
 
             RenderShadow = false;
-            for (int i = 0; i < Children.Count; i++)
+            var children = Children.GetSnapshotArray();
+            for (int i = 0; i < children.Length; i++)
             {
-                if (Children[i] is ModelObject modelChild)
+                if (children[i] is ModelObject modelChild)
                     modelChild.RenderShadow = false;
             }
 

@@ -14,7 +14,6 @@ using System.Threading.Tasks;
 using Client.Main.Controls;
 using Client.Main.Models;
 using Client.Main.Objects.Player;
-using System.Buffers;
 using Client.Main.Controls.UI.Game.Inventory;
 
 namespace Client.Main.Objects
@@ -33,9 +32,6 @@ namespace Client.Main.Objects
     {
         #region Static Fields and Caches
 
-        // Object pooling for Matrix arrays to reduce GC pressure
-        // ArrayPool is thread-safe and extremely efficient for temporary arrays
-        private static readonly ArrayPool<Matrix> _matrixArrayPool = ArrayPool<Matrix>.Shared;
         private static readonly Dictionary<string, BlendState> _blendStateCache = new Dictionary<string, BlendState>();
 
         // Cached common Vector3 instances to avoid allocations

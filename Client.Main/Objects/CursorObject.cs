@@ -50,10 +50,11 @@ namespace Client.Main.Objects
         private void EnsureSingleMoveTargetEffect()
         {
             MoveTargetPostEffectObject primaryEffect = null;
+            var children = Children.GetSnapshotArray();
 
-            for (int i = Children.Count - 1; i >= 0; i--)
+            for (int i = children.Length - 1; i >= 0; i--)
             {
-                if (Children[i] is not MoveTargetPostEffectObject effect)
+                if (children[i] is not MoveTargetPostEffectObject effect)
                     continue;
 
                 if (primaryEffect == null)

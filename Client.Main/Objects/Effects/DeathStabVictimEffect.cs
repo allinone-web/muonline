@@ -127,15 +127,16 @@ namespace Client.Main.Objects.Effects
                 return;
 
             int lightningCount = 0;
-            for (int i = World.Objects.Count - 1; i >= 0; i--)
+            var objects = World.Objects.GetSnapshotArray();
+            for (int i = objects.Length - 1; i >= 0; i--)
             {
-                if (World.Objects[i] is JointThunderEffect)
+                if (objects[i] is JointThunderEffect effect)
                 {
                     lightningCount++;
                     if (lightningCount > MaxActiveLightningBolts)
                     {
-                        World.Objects[i].Dispose();
-                        World.Objects.RemoveAt(i);
+                        effect.Dispose();
+                        World.Objects.Remove(effect);
                     }
                 }
             }

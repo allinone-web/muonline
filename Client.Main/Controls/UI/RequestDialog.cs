@@ -344,9 +344,10 @@ namespace Client.Main.Controls.UI
 
             sb.Draw(_staticSurface, DisplayRectangle, Color.White * Alpha);
 
-            for (int i = 0; i < Controls.Count; i++)
+            var controls = Controls.GetSnapshotArray();
+            for (int i = 0; i < controls.Length; i++)
             {
-                Controls[i].Draw(gameTime);
+                controls[i].Draw(gameTime);
             }
         }
 

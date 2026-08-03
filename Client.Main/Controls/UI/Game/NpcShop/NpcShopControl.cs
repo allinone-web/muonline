@@ -94,6 +94,7 @@ namespace Client.Main.Controls.UI.Game
         private static NpcShopControl _instance;
 
         private readonly List<InventoryItem> _items = new();
+        private readonly List<(InventoryItem Item, Rectangle Rect)> _jewelEntries = new();
         private readonly Dictionary<string, Texture2D> _itemTextureCache = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<(InventoryItem item, int width, int height, bool animated), Texture2D> _bmdPreviewCache = new();
 
@@ -725,7 +726,7 @@ namespace Client.Main.Controls.UI.Game
             var font = _font ?? GraphicsManager.Instance.Font;
             Point gridOrigin = new(DisplayRectangle.X + _gridRect.X, DisplayRectangle.Y + _gridRect.Y);
             var pixel = GraphicsManager.Instance.Pixel;
-            var jewelEntries = new List<(InventoryItem Item, Rectangle Rect)>();
+            _jewelEntries.Clear();
 
             foreach (var item in _items)
             {
@@ -760,7 +761,7 @@ namespace Client.Main.Controls.UI.Game
 
                     if (JewelShineOverlay.ShouldShine(item))
                     {
-                        jewelEntries.Add((item, rect));
+                        _jewelEntries.Add((item, rect));
                     }
                 }
                 else if (pixel != null)
@@ -780,9 +781,9 @@ namespace Client.Main.Controls.UI.Game
                       Theme.TextGray,
                new Color(0, 0, 0, 180));
 
-                if (jewelEntries.Count > 0)
+                if (_jewelEntries.Count > 0)
                 {
-                    JewelShineOverlay.DrawBatch(spriteBatch, jewelEntries, _currentGameTime, Alpha, UiScaler.SpriteTransform);
+                    JewelShineOverlay.DrawBatch(spriteBatch, _jewelEntries, _currentGameTime, Alpha, UiScaler.SpriteTransform);
                 }
             }
         }
@@ -988,9 +989,10 @@ namespace Client.Main.Controls.UI.Game
             var scene = Scene;
             if (scene == null) return false;
 
-            for (int i = scene.Controls.Count - 1; i >= 0; i--)
+            var controls = scene.Controls.GetSnapshotArray();
+            for (int i = controls.Length - 1; i >= 0; i--)
             {
-                if (scene.Controls[i] is DialogControl dialog && dialog.Visible)
+                if (controls[i] is DialogControl dialog && dialog.Visible)
                 {
                     return true;
                 }

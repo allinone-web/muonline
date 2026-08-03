@@ -767,9 +767,10 @@ namespace Client.Main.Objects
         {
             model.Color = tint;
 
-            for (int i = 0; i < model.Children.Count; i++)
+            var children = model.Children.GetSnapshotArray();
+            for (int i = 0; i < children.Length; i++)
             {
-                if (model.Children[i] is ModelObject childModel)
+                if (children[i] is ModelObject childModel)
                     ApplyTintRecursive(childModel, tint);
             }
         }

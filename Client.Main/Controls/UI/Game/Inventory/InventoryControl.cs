@@ -207,6 +207,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
         private readonly Dictionary<(InventoryItem item, int width, int height, bool animated), Texture2D> _bmdPreviewCache = new();
 
         private readonly List<InventoryItem> _items = new();
+        private readonly List<(InventoryItem Item, Rectangle Rect)> _jewelEntries = new();
         private readonly Dictionary<byte, InventoryItem> _equippedItems = new();
         private InventoryItem[,] _itemGrid;
 
@@ -2134,7 +2135,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
             if (GraphicsManager.Instance.Pixel == null || GraphicsManager.Instance.Font == null)
                 return;
 
-            var jewelEntries = new List<(InventoryItem Item, Rectangle Rect)>();
+            _jewelEntries.Clear();
 
             Point gridTopLeft = Translate(_gridRect).Location;
             var font = GraphicsManager.Instance.Font;
@@ -2176,7 +2177,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
 
                     if (JewelShineOverlay.ShouldShine(item))
                     {
-                        jewelEntries.Add((item, itemRect));
+                        _jewelEntries.Add((item, itemRect));
                     }
                 }
                 else
@@ -2202,9 +2203,9 @@ namespace Client.Main.Controls.UI.Game.Inventory
                                        new Color(0, 0, 0, 180));
                 }
 
-                if (jewelEntries.Count > 0)
+                if (_jewelEntries.Count > 0)
                 {
-                    JewelShineOverlay.DrawBatch(spriteBatch, jewelEntries, _currentGameTime, Alpha, UiScaler.SpriteTransform);
+                    JewelShineOverlay.DrawBatch(spriteBatch, _jewelEntries, _currentGameTime, Alpha, UiScaler.SpriteTransform);
                 }
             }
         }

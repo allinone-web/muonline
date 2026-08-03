@@ -1736,10 +1736,13 @@ namespace Client.Main.Controls.UI.Game.Trade
                 }
             }
 
-            var keysPressed = MuGame.Instance.Keyboard.GetPressedKeys();
-            foreach (var key in keysPressed)
+            KeyboardState keyboard = MuGame.Instance.Keyboard;
+            KeyboardState previousKeyboard = MuGame.Instance.PrevKeyboard;
+            Keys[] inputKeys = DesktopTextInputKeys.DigitsAndCommands;
+            for (int i = 0; i < inputKeys.Length; i++)
             {
-                if (MuGame.Instance.PrevKeyboard.IsKeyUp(key))
+                Keys key = inputKeys[i];
+                if (keyboard.IsKeyDown(key) && previousKeyboard.IsKeyUp(key))
                 {
                     if (key == Keys.Back)
                     {

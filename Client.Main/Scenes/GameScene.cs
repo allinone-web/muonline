@@ -929,9 +929,10 @@ namespace Client.Main.Scenes
                        DepthStencilState.None,
                        transform: UiScaler.SpriteTransform))
             {
-                for (int i = 0; i < Controls.Count; i++)
+                var controls = Controls.GetSnapshotArray();
+                for (int i = 0; i < controls.Length; i++)
                 {
-                    var ctrl = Controls[i];
+                    var ctrl = controls[i];
                     if (ctrl == null || ctrl == World || ctrl == _fpsLabel || ctrl == _pingLabel || !ctrl.Visible)
                     {
                         continue;

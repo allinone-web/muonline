@@ -401,9 +401,10 @@ namespace Client.Main.Objects
                 await TextureLoader.Instance.PrepareAndGetTexture(texturePath).ConfigureAwait(false);
             }
 
-            for (int i = 0; i < Children.Count; i++)
+            var children = Children.GetSnapshotArray();
+            for (int i = 0; i < children.Length; i++)
             {
-                if (Children[i] is ModelObject childModel)
+                if (children[i] is ModelObject childModel)
                     await childModel.PrepareGpuTexturesForFirstFrameAsync().ConfigureAwait(false);
             }
         }
@@ -415,9 +416,10 @@ namespace Client.Main.Objects
 
             SetDynamicBuffers(allowHidden: true);
 
-            for (int i = 0; i < Children.Count; i++)
+            var children = Children.GetSnapshotArray();
+            for (int i = 0; i < children.Length; i++)
             {
-                if (Children[i] is ModelObject childModel)
+                if (children[i] is ModelObject childModel)
                     childModel.PrepareRenderResourcesForFirstFrame();
             }
         }
@@ -644,23 +646,28 @@ namespace Client.Main.Objects
                 _sortTextureHint = null;
             }
 
-            for (int i = 0; i < Children.Count; i++)
+            var children = Children.GetSnapshotArray();
+            for (int i = 0; i < children.Length; i++)
             {
-                if (Children[i] is not ModelObject modelObject)
+                if (children[i] is not ModelObject modelObject ||
+                    !ReferenceEquals(modelObject.Parent, this))
+                {
                     continue;
+                }
 
                 MeshDirtyFlags childFlags = flags;
+                bool poseDependsOnParent = modelObject.LinkParentAnimation || modelObject.ParentBoneLink >= 0;
 
-                if ((childFlags & MeshDirtyFlags.Transform) != 0 &&
-                    (modelObject.LinkParentAnimation || modelObject.ParentBoneLink >= 0))
+                if (poseDependsOnParent)
                 {
-                    childFlags &= ~MeshDirtyFlags.Transform;
+                    // Bone-linked parts refresh their transform from the parent pose, while
+                    // LinkParentAnimation parts also invalidate animation data after observing
+                    // the parent's pose version. Recursive propagation repeats the same walk.
+                    childFlags &= ~(MeshDirtyFlags.Transform | MeshDirtyFlags.Animation);
                 }
 
                 if (childFlags != MeshDirtyFlags.None)
-                {
                     modelObject.InvalidateBuffers(childFlags);
-                }
             }
         }
 

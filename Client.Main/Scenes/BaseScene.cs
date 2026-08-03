@@ -425,9 +425,10 @@ namespace Client.Main.Scenes
 
         private GameControl FindTopmostUiControlAtPoint(Point mousePosition, bool interactiveOnly)
         {
-            for (int i = Controls.Count - 1; i >= 0; i--)
+            var controls = Controls.GetSnapshotArray();
+            for (int i = controls.Length - 1; i >= 0; i--)
             {
-                var hit = FindTopmostUiControlAtPointRecursive(Controls[i], mousePosition, interactiveOnly);
+                var hit = FindTopmostUiControlAtPointRecursive(controls[i], mousePosition, interactiveOnly);
                 if (hit != null)
                 {
                     return hit;
@@ -444,9 +445,10 @@ namespace Client.Main.Scenes
                 return null;
             }
 
-            for (int i = control.Controls.Count - 1; i >= 0; i--)
+            var children = control.Controls.GetSnapshotArray();
+            for (int i = children.Length - 1; i >= 0; i--)
             {
-                var childHit = FindTopmostUiControlAtPointRecursive(control.Controls[i], mousePosition, interactiveOnly);
+                var childHit = FindTopmostUiControlAtPointRecursive(children[i], mousePosition, interactiveOnly);
                 if (childHit != null)
                 {
                     return childHit;

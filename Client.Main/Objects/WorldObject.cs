@@ -48,6 +48,17 @@ namespace Client.Main.Objects
         public int RenderOrder { get; set; }
         public DepthStencilState DepthState { get; set; } = DepthStencilState.Default;
 
+        // WorldControl computes these once while building the render lists. Sorting then
+        // compares plain fields instead of repeatedly invoking virtual properties, texture
+        // lookup helpers and RuntimeHelpers.GetHashCode during O(n log n) comparisons.
+        internal float RenderSortDepth;
+        internal int RenderSortDepthBucket;
+        internal int RenderSortModelKey;
+        internal int RenderSortTextureKey;
+        internal int RenderSortBlendKey;
+        internal int RenderSortReferenceKey;
+        internal bool RenderSortIsModel;
+
         private SpriteFont _font;
 
         // PERFORMANCE: Static bbox indices to avoid per-frame allocation
@@ -283,9 +294,16 @@ namespace Client.Main.Objects
 
             // Hover picking is handled by WorldHoverSystem, called from WorldControl.RenderObjects.
 
-            var objects = Children;
-            for (int i = objects.Count - 1; i >= 0; i--)
-                objects[i].Update(gameTime);
+            var objects = Children.GetSnapshotArray();
+            for (int i = objects.Length - 1; i >= 0; i--)
+            {
+                var child = objects[i];
+                if (child.Status != GameControlStatus.Disposed &&
+                    ReferenceEquals(child.Parent, this))
+                {
+                    child.Update(gameTime);
+                }
+            }
         }
 
 
@@ -315,18 +333,32 @@ namespace Client.Main.Objects
         {
             if (!Visible) return;
 
-            var objects = Children;
-            for (int i = 0; i < objects.Count; i++)
-                objects[i].DrawAfter(gameTime);
+            var objects = Children.GetSnapshotArray();
+            for (int i = 0; i < objects.Length; i++)
+            {
+                var child = objects[i];
+                if (child.Status != GameControlStatus.Disposed &&
+                    ReferenceEquals(child.Parent, this))
+                {
+                    child.DrawAfter(gameTime);
+                }
+            }
         }
 
         internal void DrawChildrenOnly(GameTime gameTime)
         {
             if (!Visible) return;
 
-            var objects = Children;
-            for (int i = 0; i < objects.Count; i++)
-                objects[i].Draw(gameTime);
+            var objects = Children.GetSnapshotArray();
+            for (int i = 0; i < objects.Length; i++)
+            {
+                var child = objects[i];
+                if (child.Status != GameControlStatus.Disposed &&
+                    ReferenceEquals(child.Parent, this))
+                {
+                    child.Draw(gameTime);
+                }
+            }
         }
 
         /// <summary>

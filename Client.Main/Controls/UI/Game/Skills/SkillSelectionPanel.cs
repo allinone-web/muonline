@@ -263,9 +263,10 @@ namespace Client.Main.Controls.UI.Game.Skills
 
             DrawWindowFrame(spriteBatch, pixel, Alpha);
 
-            for (int i = 0; i < Controls.Count; i++)
+            var controls = Controls.GetSnapshotArray();
+            for (int i = 0; i < controls.Length; i++)
             {
-                Controls[i].Draw(gameTime);
+                controls[i].Draw(gameTime);
             }
         }
 
@@ -399,9 +400,10 @@ namespace Client.Main.Controls.UI.Game.Skills
 
         private void ApplyAlphaToChildren(float alpha)
         {
-            for (int i = 0; i < Controls.Count; i++)
+            var controls = Controls.GetSnapshotArray();
+            for (int i = 0; i < controls.Length; i++)
             {
-                ApplyAlphaRecursive(Controls[i], alpha);
+                ApplyAlphaRecursive(controls[i], alpha);
             }
         }
 
@@ -413,9 +415,10 @@ namespace Client.Main.Controls.UI.Game.Skills
                 label.Alpha = alpha;
             }
 
-            for (int i = 0; i < control.Controls.Count; i++)
+            var children = control.Controls.GetSnapshotArray();
+            for (int i = 0; i < children.Length; i++)
             {
-                ApplyAlphaRecursive(control.Controls[i], alpha);
+                ApplyAlphaRecursive(children[i], alpha);
             }
         }
 

@@ -20,10 +20,14 @@ namespace Client.Main.Controls.UI.Common
         private double _cursorBlinkTimer = 0;
         private bool _cursorVisible = true;
         private KeyboardState _previousKeyboardState;
+        private string _cachedText = string.Empty;
+        private bool _textCacheDirty;
+        private string _placeholderText = string.Empty;
+        private string _normalizedPlaceholderText = string.Empty;
         
         public string Text
         {
-            get => _text.ToString();
+            get => GetCachedText();
             set
             {
                 _text.Clear();
@@ -32,11 +36,20 @@ namespace Client.Main.Controls.UI.Common
                     string normalized = value.Normalize(NormalizationForm.FormC);
                     _text.Append(normalized.Substring(0, Math.Min(normalized.Length, MaxLength)));
                 }
+                MarkTextChanged();
             }
         }
 
         public int MaxLength { get; set; } = 50;
-        public string PlaceholderText { get; set; } = "";
+        public string PlaceholderText
+        {
+            get => _placeholderText;
+            set
+            {
+                _placeholderText = value;
+                _normalizedPlaceholderText = value?.Normalize(NormalizationForm.FormC) ?? string.Empty;
+            }
+        }
         public float FontSize { get; set; } = 14f;
         public Color TextColor { get; set; } = Color.White;
         public Color PlaceholderColor { get; set; } = Color.Gray;
@@ -70,14 +83,12 @@ namespace Client.Main.Controls.UI.Common
 
                 // Handle keyboard input
                 var currentKeyboardState = Keyboard.GetState();
-                var pressedKeys = currentKeyboardState.GetPressedKeys();
-
-                foreach (var key in pressedKeys)
+                Keys[] inputKeys = DesktopTextInputKeys.All;
+                for (int i = 0; i < inputKeys.Length; i++)
                 {
-                    if (_previousKeyboardState.IsKeyUp(key))
-                    {
+                    Keys key = inputKeys[i];
+                    if (currentKeyboardState.IsKeyDown(key) && _previousKeyboardState.IsKeyUp(key))
                         HandleKeyPress(key, currentKeyboardState);
-                    }
                 }
 
                 _previousKeyboardState = currentKeyboardState;
@@ -91,12 +102,14 @@ namespace Client.Main.Controls.UI.Common
             if (key == Keys.Back && _text.Length > 0)
             {
                 _text.Remove(_text.Length - 1, 1);
+                MarkTextChanged();
                 return;
             }
 
             if (key == Keys.Delete)
             {
                 _text.Clear();
+                MarkTextChanged();
                 return;
             }
 
@@ -116,7 +129,24 @@ namespace Client.Main.Controls.UI.Common
             if (c.HasValue)
             {
                 _text.Append(c.Value);
+                MarkTextChanged();
             }
+        }
+
+        private void MarkTextChanged()
+        {
+            _textCacheDirty = true;
+        }
+
+        private string GetCachedText()
+        {
+            if (_textCacheDirty)
+            {
+                _cachedText = _text.ToString().Normalize(NormalizationForm.FormC);
+                _textCacheDirty = false;
+            }
+
+            return _cachedText;
         }
 
         private char? KeyToChar(Keys key, bool shift)
@@ -195,7 +225,8 @@ namespace Client.Main.Controls.UI.Common
             SpriteFont font = GraphicsManager.GetUiFont(FontSize, out float scale);
             if (font != null)
             {
-                string displayText = (_text.Length > 0 ? _text.ToString() : PlaceholderText)?.Normalize(NormalizationForm.FormC) ?? string.Empty;
+                string currentText = GetCachedText();
+                string displayText = _text.Length > 0 ? currentText : _normalizedPlaceholderText;
                 var textColor = _text.Length > 0 ? TextColor : PlaceholderColor;
                 var textPosition = new Vector2(
                     DisplayPosition.X + Padding,
@@ -207,7 +238,7 @@ namespace Client.Main.Controls.UI.Common
                 // Cursor
                 if (_isFocused && _cursorVisible && _text.Length > 0)
                 {
-                    var textSize = font.MeasureString(_text.ToString()) * scale;
+                    var textSize = font.MeasureString(currentText) * scale;
                     var cursorX = textPosition.X + textSize.X;
                     var cursorRect = new Rectangle(
                         (int)cursorX,

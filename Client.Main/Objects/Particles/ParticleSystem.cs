@@ -2,7 +2,6 @@
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System.Collections.Generic;
-using System.Threading.Tasks;
 
 namespace Client.Main.Objects.Particles
 {
@@ -50,12 +49,10 @@ namespace Client.Main.Objects.Particles
                 int randomIndex = MuGame.Random.Next(_particles.Count);
                 var particleType = _particles[randomIndex];
                 var particle = particleType.Emit();
+                // GameControl.Update initializes newly attached children on the game thread.
+                // Do not start particle Load() through Task.Run: model/texture initialization may
+                // eventually touch GraphicsDevice and every first emission would allocate a Task.
                 Children.Add(particle);
-
-                if (particle.Status == Models.GameControlStatus.NonInitialized)
-                {
-                    Task.Run(() => particle.Load());
-                }
             }
         }
 

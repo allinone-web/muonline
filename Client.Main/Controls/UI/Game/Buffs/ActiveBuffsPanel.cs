@@ -94,9 +94,10 @@ namespace Client.Main.Controls.UI.Game.Buffs
 
             try
             {
-                for (int i = 0; i < Controls.Count; i++)
+                var controls = Controls.GetSnapshotArray();
+                for (int i = 0; i < controls.Length; i++)
                 {
-                    Controls[i].Draw(gameTime);
+                    controls[i].Draw(gameTime);
                 }
             }
             finally

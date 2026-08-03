@@ -1,7 +1,6 @@
 using Client.Main.Graphics;
 using Microsoft.Xna.Framework;
 using System;
-using System.Threading.Tasks;
 
 namespace Client.Main.Controls.Terrain
 {
@@ -18,6 +17,7 @@ namespace Client.Main.Controls.Terrain
         private double _lastUpdateTime;
 
         public short WorldIndex { get; set; }
+        public int Version { get; private set; }
 
         public WindSimulator(TerrainData data)
         {
@@ -67,12 +67,22 @@ namespace Client.Main.Controls.Terrain
                         _windCache.FastSin(windSpeed + x * step) * windScale;
                 }
             }
+
+            unchecked { Version++; }
         }
 
         public float GetWindValue(int x, int y)
         {
             if (_data.GrassWind == null) return 0f;
             return _data.GrassWind[y * Constants.TERRAIN_SIZE + x];
+        }
+
+        public float GetWindValue(int terrainIndex)
+        {
+            float[] wind = _data.GrassWind;
+            return wind != null && (uint)terrainIndex < (uint)wind.Length
+                ? wind[terrainIndex]
+                : 0f;
         }
 
         private class WindCache

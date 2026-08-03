@@ -260,11 +260,12 @@ namespace Client.Main.Controls
             {
                 Status = GameControlStatus.Initializing;
 
-                var taskList = new List<Task>(Controls.Count);
+                var controls = Controls.GetSnapshotArray();
+                var taskList = new List<Task>(controls.Length);
 
-                for (int i = 0; i < Controls.Count; i++)
+                for (int i = 0; i < controls.Length; i++)
                 {
-                    var control = Controls[i];
+                    var control = controls[i];
                     if (control.Status == GameControlStatus.NonInitialized)
                         taskList.Add(control.Initialize());
                 }
@@ -290,8 +291,9 @@ namespace Client.Main.Controls
 
         public virtual void AfterLoad()
         {
-            for (int i = 0; i < Controls.Count; i++)
-                Controls[i].AfterLoad();
+            var controls = Controls.GetSnapshotArray();
+            for (int i = 0; i < controls.Length; i++)
+                controls[i].AfterLoad();
         }
 
         public virtual void Update(GameTime gameTime)
@@ -362,15 +364,16 @@ namespace Client.Main.Controls
                 }
             }
 
-            // Iterate over a copy for updating children to prevent collection modification issues
-            // Use direct iteration with bounds checking to avoid ToArray() allocation
-            for (int i = Controls.Count - 1; i >= 0; i--)
+            // Iterate over the cached immutable snapshot. It is rebuilt only when the
+            // collection changes, avoiding one lock for Count and another for every index.
+            var controls = Controls.GetSnapshotArray();
+            for (int i = controls.Length - 1; i >= 0; i--)
             {
-                if (i >= Controls.Count) continue; // Skip if collection was modified
-                var control = Controls[i];
-                // If a control was disposed by a previous sibling's update in the same frame,
-                // it might still be in `childrenToUpdate` but its Status would be Disposed.
-                if (control.Status != GameControlStatus.Disposed)
+                var control = controls[i];
+                // A child removed by a previous sibling remains in this frame's snapshot,
+                // so skip it when disposal already completed.
+                if (control.Status != GameControlStatus.Disposed &&
+                    ReferenceEquals(control.Parent, this))
                 {
                     control.Update(gameTime);
                 }
@@ -395,11 +398,9 @@ namespace Client.Main.Controls
                 await TextureLoader.Instance.PrepareAndGetTexture(tc.TexturePath);
             }
 
-            for (int i = 0; i < Controls.Count; i++)
-            {
-                var child = Controls[i];
-                await child.PreloadAssetsAsync();
-            }
+            var controls = Controls.GetSnapshotArray();
+            for (int i = 0; i < controls.Length; i++)
+                await controls[i].PreloadAssetsAsync();
         }
 
         public virtual void Draw(GameTime gameTime)
@@ -410,8 +411,13 @@ namespace Client.Main.Controls
             DrawBackground();
             DrawBorder();
 
-            for (int i = 0; i < Controls.Count; i++)
-                Controls[i].Draw(gameTime);
+            var controls = Controls.GetSnapshotArray();
+            for (int i = 0; i < controls.Length; i++)
+            {
+                var child = controls[i];
+                if (ReferenceEquals(child.Parent, this))
+                    child.Draw(gameTime);
+            }
         }
 
         public virtual void DrawAfter(GameTime gameTime)
@@ -419,8 +425,13 @@ namespace Client.Main.Controls
             if (Status != GameControlStatus.Ready || !Visible)
                 return;
 
-            for (int i = 0; i < Controls.Count; i++)
-                Controls[i].DrawAfter(gameTime);
+            var controls = Controls.GetSnapshotArray();
+            for (int i = 0; i < controls.Length; i++)
+            {
+                var child = controls[i];
+                if (ReferenceEquals(child.Parent, this))
+                    child.DrawAfter(gameTime);
+            }
         }
 
         public virtual void Dispose()
@@ -430,11 +441,9 @@ namespace Client.Main.Controls
             Controls.ControlAdded -= OnChildCollectionChanged;
             Controls.ControlRemoved -= OnChildCollectionChanged;
 
-            // Use reverse iteration to avoid ToArray() allocation
-            for (int i = Controls.Count - 1; i >= 0; i--)
-            {
-                Controls[i].Dispose();
-            }
+            var controls = Controls.GetSnapshotArray();
+            for (int i = controls.Length - 1; i >= 0; i--)
+                controls[i].Dispose();
 
             Controls.Clear();
 
@@ -452,7 +461,8 @@ namespace Client.Main.Controls
         {
             if (Status == GameControlStatus.Disposed) return;
             if (Parent == null) return;
-            if (Parent.Controls.Count == 0 || Parent.Controls[^1] == this) return; // Check count before accessing ^1
+            var siblings = Parent.Controls.GetSnapshotArray();
+            if (siblings.Length == 0 || siblings[^1] == this) return;
             Parent.Controls.MoveToEnd(this);
         }
 
@@ -460,7 +470,8 @@ namespace Client.Main.Controls
         {
             if (Status == GameControlStatus.Disposed) return;
             if (Parent == null) return;
-            if (Parent.Controls.Count == 0 || Parent.Controls[0] == this) return; // Check count before accessing [0]
+            var siblings = Parent.Controls.GetSnapshotArray();
+            if (siblings.Length == 0 || siblings[0] == this) return;
             Parent.Controls.MoveToStart(this);
         }
 
@@ -477,9 +488,10 @@ namespace Client.Main.Controls
                 int maxWidth = 0;
                 int maxHeight = 0;
 
-                for (int i = 0; i < Controls.Count; i++)
+                var controls = Controls.GetSnapshotArray();
+                for (int i = 0; i < controls.Length; i++)
                 {
-                    var control = Controls[i];
+                    var control = controls[i];
                     if (control.Status == GameControlStatus.Disposed)
                         continue;
 
@@ -522,8 +534,9 @@ namespace Client.Main.Controls
             if (Controls == null)
                 return;
 
-            for (int i = 0; i < Controls.Count; i++)
-                Controls[i]._layoutDirty = true;
+            var controls = Controls.GetSnapshotArray();
+            for (int i = 0; i < controls.Length; i++)
+                controls[i]._layoutDirty = true;
         }
 
         protected virtual void AlignControl()
@@ -586,8 +599,9 @@ namespace Client.Main.Controls
             if (Parent != null)
                 Parent._layoutDirty = true;
 
-            for (int i = 0; i < Controls.Count; i++)
-                Controls[i]._layoutDirty = true;
+            var controls = Controls.GetSnapshotArray();
+            for (int i = 0; i < controls.Length; i++)
+                controls[i]._layoutDirty = true;
 
             SizeChanged?.Invoke(this, EventArgs.Empty);
         }

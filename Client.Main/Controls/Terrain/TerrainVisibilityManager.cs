@@ -43,7 +43,7 @@ namespace Client.Main.Controls.Terrain
         private readonly List<TerrainBlock> _visibleBlocks = new(256);
         // Scratch list reused each frame to avoid per-update allocations
         private readonly List<TerrainBlock> _visibleScratch = new(256);
-        private readonly object _visibleScratchLock = new();
+        private TerrainBlock[] _classificationScratch = Array.Empty<TerrainBlock>();
         private readonly BoundingBox[] _tilePaddedBounds = new BoundingBox[Constants.TERRAIN_SIZE * Constants.TERRAIN_SIZE];
         private Vector2 _lastCameraPosition;
         private Vector3 _lastCameraDirection;
@@ -196,31 +196,26 @@ namespace Client.Main.Controls.Terrain
 
             if (useParallelCulling)
             {
-                Parallel.For(
-                    startY,
-                    endY + 1,
-                    CullingParallelOptions,
-                    () => new List<TerrainBlock>(16),
-                    (gy, _, localVisible) =>
+                EnsureClassificationScratchCapacity(expected);
+                int width = endX - startX + 1;
+                Parallel.For(startY, endY + 1, CullingParallelOptions, gy =>
+                {
+                    int resultIndex = (gy - startY) * width;
+                    for (int gx = startX; gx <= endX; gx++, resultIndex++)
                     {
-                        for (int gx = startX; gx <= endX; gx++)
-                        {
-                            if (TryClassifyVisibleBlock(gx, gy, cameraPosition, renderDistSq, frustum, out var block))
-                                localVisible.Add(block);
-                        }
+                        _classificationScratch[resultIndex] =
+                            TryClassifyVisibleBlock(gx, gy, cameraPosition, renderDistSq, frustum, out var block)
+                                ? block
+                                : null;
+                    }
+                });
 
-                        return localVisible;
-                    },
-                    localVisible =>
-                    {
-                        if (localVisible.Count == 0)
-                            return;
-
-                        lock (_visibleScratchLock)
-                        {
-                            visible.AddRange(localVisible);
-                        }
-                    });
+                for (int i = 0; i < expected; i++)
+                {
+                    TerrainBlock block = _classificationScratch[i];
+                    if (block != null)
+                        visible.Add(block);
+                }
             }
             else
             {
@@ -237,6 +232,18 @@ namespace Client.Main.Controls.Terrain
             _visibleBlocks.AddRange(visible);
 
             unchecked { Version++; }
+        }
+
+        private void EnsureClassificationScratchCapacity(int required)
+        {
+            if (_classificationScratch.Length >= required)
+                return;
+
+            int capacity = 1024;
+            while (capacity < required)
+                capacity <<= 1;
+
+            _classificationScratch = new TerrainBlock[capacity];
         }
 
         private bool TryClassifyVisibleBlock(

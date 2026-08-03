@@ -1,4 +1,4 @@
-﻿using Client.Data.BMD;
+using Client.Data.BMD;
 using Client.Main.Content;
 using Client.Main.Controls.UI.Game.Inventory;
 using Client.Main.Models;
@@ -6,7 +6,6 @@ using Client.Main.Objects.Player;
 using Client.Main.Objects.Wings;
 using Microsoft.Xna.Framework;
 using System;
-using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -144,7 +143,6 @@ namespace Client.Main.Objects
             _animationStepAccumulatorSeconds = 0f;
 
             GenerateBoneMatrix(resolvedAction, resolvedFrame, nextFrame, 0f);
-            InvalidateBuffers(MeshDirtyFlags.Animation);
             UpdateBoundings();
         }
 
@@ -196,7 +194,6 @@ namespace Client.Main.Objects
                 {
                     GenerateBoneMatrix(currentActionIndex, 0, 0, 0);
                     _priorActionIndex = currentActionIndex;
-                    InvalidateBuffers(MeshDirtyFlags.Animation);
                 }
                 CurrentFrame = 0;
                 return;
@@ -410,144 +407,112 @@ namespace Client.Main.Objects
             // a unique pose (cache miss, blend, procedural post-process, etc.).
             EnsureWritableBoneTransforms(bones.Length);
 
-            // Rent temp array from pool for safer hierarchical calculations
-            // ArrayPool may return larger array, so we use bones.Length for actual operations
-            Matrix[] tempBoneTransforms = _matrixArrayPool.Rent(bones.Length);
+            bool lockPositions = action.LockPositions;
+            float bodyHeight = BodyHeight;
+            bool anyBoneChanged = false;
 
-            try
+            // Pre-clamp frame indices to valid ranges
+            int maxFrameIndex = action.NumAnimationKeys - 1;
+            frame0 = Math.Clamp(frame0, 0, maxFrameIndex);
+            frame1 = Math.Clamp(frame1, 0, maxFrameIndex);
+
+            // If frames are the same, no interpolation is needed.
+            if (frame0 == frame1)
+                t = 0f;
+
+            // BoneTransform is writable at this point and BMD bones are ordered parent-first.
+            // Writing the new pose directly removes one ArrayPool rent/return and one full
+            // Matrix[] copy for every sampled animation pose while preserving the exact
+            // parent-to-child calculation order.
+            for (int i = 0; i < bones.Length; i++)
             {
-                bool lockPositions = action.LockPositions;
-                float bodyHeight = BodyHeight;
-                bool anyBoneChanged = false;
+                var bone = bones[i];
+                Matrix previousTransform = BoneTransform[i];
+                Matrix worldTransform;
 
-                // Pre-clamp frame indices to valid ranges
-                int maxFrameIndex = action.NumAnimationKeys - 1;
-                frame0 = Math.Clamp(frame0, 0, maxFrameIndex);
-                frame1 = Math.Clamp(frame1, 0, maxFrameIndex);
-
-                // If frames are the same, no interpolation needed
-                if (frame0 == frame1) t = 0f;
-
-                // Process bones in order (parents before children)
-                for (int i = 0; i < bones.Length; i++)
+                if (bone == BMDTextureBone.Dummy || bone.Matrixes == null || actionIdx >= bone.Matrixes.Length)
                 {
-                    var bone = bones[i];
-
-                    // Skip invalid bones
-                    if (bone == BMDTextureBone.Dummy || bone.Matrixes == null || actionIdx >= bone.Matrixes.Length)
-                    {
-                        tempBoneTransforms[i] = Matrix.Identity;
-                        if (BoneTransform[i] != Matrix.Identity)
-                            anyBoneChanged = true;
-                        continue;
-                    }
-
+                    worldTransform = Matrix.Identity;
+                }
+                else
+                {
                     var bm = bone.Matrixes[actionIdx];
                     int numPosKeys = bm.Position?.Length ?? 0;
                     int numQuatKeys = bm.Quaternion?.Length ?? 0;
 
                     if (numPosKeys == 0 || numQuatKeys == 0)
                     {
-                        tempBoneTransforms[i] = Matrix.Identity;
-                        if (BoneTransform[i] != Matrix.Identity)
-                            anyBoneChanged = true;
-                        continue;
-                    }
-
-                    // Ensure frame indices are valid for this specific bone
-                    int boneMaxFrame = Math.Min(numPosKeys, numQuatKeys) - 1;
-                    int boneFrame0 = Math.Min(frame0, boneMaxFrame);
-                    int boneFrame1 = Math.Min(frame1, boneMaxFrame);
-                    float boneT = (boneFrame0 == boneFrame1) ? 0f : t;
-
-                    Matrix localTransform;
-
-                    // Optimize for common case: no interpolation needed
-                    if (boneT == 0f)
-                    {
-                        // Direct keyframe - no interpolation
-                        localTransform = Matrix.CreateFromQuaternion(bm.Quaternion[boneFrame0]);
-                        localTransform.Translation = bm.Position[boneFrame0];
+                        worldTransform = Matrix.Identity;
                     }
                     else
                     {
-                        // Interpolated keyframe - use fast normalized lerp instead of costly Slerp
-                        Quaternion q = Nlerp(bm.Quaternion[boneFrame0], bm.Quaternion[boneFrame1], boneT);
-                        Vector3 p0 = bm.Position[boneFrame0];
-                        Vector3 p1 = bm.Position[boneFrame1];
+                        int boneMaxFrame = Math.Min(numPosKeys, numQuatKeys) - 1;
+                        int boneFrame0 = Math.Min(frame0, boneMaxFrame);
+                        int boneFrame1 = Math.Min(frame1, boneMaxFrame);
+                        float boneT = boneFrame0 == boneFrame1 ? 0f : t;
 
-                        localTransform = Matrix.CreateFromQuaternion(q);
-                        localTransform.M41 = p0.X + (p1.X - p0.X) * boneT;
-                        localTransform.M42 = p0.Y + (p1.Y - p0.Y) * boneT;
-                        localTransform.M43 = p0.Z + (p1.Z - p0.Z) * boneT;
-                    }
+                        Matrix localTransform;
+                        if (boneT == 0f)
+                        {
+                            localTransform = Matrix.CreateFromQuaternion(bm.Quaternion[boneFrame0]);
+                            localTransform.Translation = bm.Position[boneFrame0];
+                        }
+                        else
+                        {
+                            Quaternion q = Nlerp(bm.Quaternion[boneFrame0], bm.Quaternion[boneFrame1], boneT);
+                            Vector3 p0 = bm.Position[boneFrame0];
+                            Vector3 p1 = bm.Position[boneFrame1];
 
-                    // Apply position locking for root bone
-                    if (i == 0 && lockPositions && bm.Position.Length > 0)
-                    {
-                        var rootPos = bm.Position[0];
-                        localTransform.Translation = new Vector3(rootPos.X, rootPos.Y, localTransform.M43 + bodyHeight);
-                    }
+                            localTransform = Matrix.CreateFromQuaternion(q);
+                            localTransform.M41 = p0.X + (p1.X - p0.X) * boneT;
+                            localTransform.M42 = p0.Y + (p1.Y - p0.Y) * boneT;
+                            localTransform.M43 = p0.Z + (p1.Z - p0.Z) * boneT;
+                        }
 
-                    // Apply parent transformation with safety checks
-                    Matrix worldTransform;
-                    if (bone.Parent >= 0 && bone.Parent < bones.Length)
-                    {
-                        worldTransform = localTransform * tempBoneTransforms[bone.Parent];
-                    }
-                    else
-                    {
-                        worldTransform = localTransform;
-                    }
+                        if (i == 0 && lockPositions && bm.Position.Length > 0)
+                        {
+                            var rootPos = bm.Position[0];
+                            localTransform.Translation = new Vector3(
+                                rootPos.X,
+                                rootPos.Y,
+                                localTransform.M43 + bodyHeight);
+                        }
 
-                    // Store in temp array
-                    tempBoneTransforms[i] = worldTransform;
-
-                    // Check if this bone actually changed (simple comparison for performance)
-                    if (BoneTransform[i] != worldTransform)
-                    {
-                        anyBoneChanged = true;
+                        worldTransform = bone.Parent >= 0 && bone.Parent < bones.Length
+                            ? localTransform * BoneTransform[bone.Parent]
+                            : localTransform;
                     }
                 }
 
-                // For static objects (single frame) or first-time setup, always update
-                bool forceUpdate = action.NumAnimationKeys <= 1 || !_animationStateValid;
-
-                // Allow derived objects to apply procedural bone post-processing (e.g., head look-at).
-                // Must run on the temp array so the result also propagates to children using LinkParentAnimation.
-                if (PostProcessBoneTransforms(bones, tempBoneTransforms))
-                {
+                BoneTransform[i] = worldTransform;
+                if (previousTransform != worldTransform)
                     anyBoneChanged = true;
-                }
-
-                // Only update final transforms and invalidate if something actually changed OR force update
-                if (anyBoneChanged || forceUpdate)
-                {
-                    Array.Copy(tempBoneTransforms, BoneTransform, bones.Length);
-                    _animationPoseVersion++;
-                    InvalidateBuffers(MeshDirtyFlags.Animation);
-                }
-
-                if (canUseSharedPalette)
-                    StoreSharedAnimationPalette(sharedPaletteKey, BoneTransform, bones.Length);
-
-                // Always update cache for objects that should use it
-                if (shouldCheckCache)
-                {
-                    _lastAnimationState = currentAnimState;
-                    _animationStateValid = true;
-                }
-                else if (action.NumAnimationKeys <= 1)
-                {
-                    // Mark static objects as having valid animation state
-                    _animationStateValid = true;
-                }
             }
-            finally
+
+            bool forceUpdate = action.NumAnimationKeys <= 1 || !_animationStateValid;
+
+            // Procedural adjustments operate on the same final palette used by rendering,
+            // linked equipment and shadows.
+            if (PostProcessBoneTransforms(bones, BoneTransform))
+                anyBoneChanged = true;
+
+            if (anyBoneChanged || forceUpdate)
             {
-                // CRITICAL: Always return rented array to pool to prevent memory leaks
-                // clearArray: false because we don't need to zero out Matrix structs (performance)
-                _matrixArrayPool.Return(tempBoneTransforms, clearArray: false);
+                unchecked { _animationPoseVersion++; }
+                InvalidateBuffers(MeshDirtyFlags.Animation);
+            }
+
+            if (canUseSharedPalette)
+                StoreSharedAnimationPalette(sharedPaletteKey, BoneTransform, bones.Length);
+
+            if (shouldCheckCache)
+            {
+                _lastAnimationState = currentAnimState;
+                _animationStateValid = true;
+            }
+            else if (action.NumAnimationKeys <= 1)
+            {
+                _animationStateValid = true;
             }
         }
 

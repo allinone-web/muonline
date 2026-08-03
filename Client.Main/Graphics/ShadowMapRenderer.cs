@@ -31,7 +31,8 @@ namespace Client.Main.Graphics
         private float _lastShadowDistance = float.NaN;
         private bool _forceRender = true;
         private bool _shadowCasterSupported;
-        private int _lastWorldGeometryTick = int.MinValue;
+        private long _lastWorldInstanceId = long.MinValue;
+        private int _lastWorldGeometryVersion = int.MinValue;
         private ulong _currentCasterSignature;
         private ulong _renderedCasterSignature = ulong.MaxValue;
         private bool _casterSelectionValid;
@@ -182,20 +183,33 @@ namespace Client.Main.Graphics
 
             EnsureRenderTarget();
 
+            bool worldChanged = world.WorldInstanceId != _lastWorldInstanceId;
+            if (worldChanged)
+            {
+                _lastWorldInstanceId = world.WorldInstanceId;
+                _lastWorldGeometryVersion = int.MinValue;
+                _casterSelectionValid = false;
+                _renderedCasters.Clear();
+                _forceRender = true;
+            }
+
             float shadowDistance = ComputeShadowDistance(camera);
             bool cameraChanged = HasCameraChanged(camera, shadowDistance);
+            bool lightDirectionChanged = HasLightDirectionChanged();
+            bool lightViewChanged = cameraChanged || lightDirectionChanged;
             float frustumGuardBand = Math.Max(5f, shadowDistance * 0.01f);
 
-            int worldTick = Controls.WorldControl.WorldGeometryTick;
-            bool worldGeometryChanged = worldTick != _lastWorldGeometryTick;
+            int worldGeometryVersion = world.CommitWorldGeometryVersionForRender();
+            bool worldGeometryChanged = worldGeometryVersion != _lastWorldGeometryVersion;
 
-            // The global geometry tick also changes for moving objects outside the current
-            // shadow area. Refresh the bounded local selection and compare a quantized caster
-            // signature before deciding to rebuild the expensive map.
-            if (_forceRender || cameraChanged || worldGeometryChanged || !_casterSelectionValid)
+            // Geometry versions are world-local and coalesced per render cycle. Refresh the
+            // bounded local selection only when the active world actually changed.
+            if (_forceRender || lightViewChanged || worldGeometryChanged || !_casterSelectionValid)
             {
-                BuildCasterSelection(world, camera, shadowDistance, frustumGuardBand, cameraChanged);
-                _lastWorldGeometryTick = worldTick;
+                // Until the new light matrix is committed, the previous light frustum cannot
+                // safely reject candidates after a camera or sun-direction change.
+                BuildCasterSelection(world, camera, shadowDistance, frustumGuardBand, lightViewChanged);
+                _lastWorldGeometryVersion = worldGeometryVersion;
             }
             else
             {
@@ -206,7 +220,7 @@ namespace Client.Main.Graphics
             }
 
             bool relevantCastersChanged = _currentCasterSignature != _renderedCasterSignature;
-            if (!_forceRender && !cameraChanged && !relevantCastersChanged)
+            if (!_forceRender && !lightViewChanged && !relevantCastersChanged)
                 return;
 
             // Throttle by preset interval. A pending signature remains different from the
@@ -233,8 +247,12 @@ namespace Client.Main.Graphics
                 return;
             }
 
+            bool rebuildSelectionForNewLightView = _forceRender || lightViewChanged;
             UpdateLightMatrices(camera, shadowDistance);
-            BuildCasterSelection(world, camera, shadowDistance, frustumGuardBand, skipLightFrustum: false);
+            if (rebuildSelectionForNewLightView)
+            {
+                BuildCasterSelection(world, camera, shadowDistance, frustumGuardBand, skipLightFrustum: false);
+            }
             _lastCameraPosition = camera.Position;
             _lastCameraTarget = camera.Target;
             _forceRender = false;
@@ -360,12 +378,13 @@ namespace Client.Main.Graphics
                 // Modular player/NPC actors load and swap body-part models independently.
                 // Include direct child readiness/model state so the shadow map refreshes
                 // when armor, boots, helm, wings or weapons become drawable.
-                int childCount = caster.Children.Count;
+                var children = caster.Children.GetSnapshotArray();
+                int childCount = children.Length;
                 hash ^= unchecked((uint)childCount);
                 hash *= prime;
                 for (int childIndex = 0; childIndex < childCount; childIndex++)
                 {
-                    if (caster.Children[childIndex] is not ModelObject child)
+                    if (children[childIndex] is not ModelObject child)
                         continue;
 
                     uint childIdentity = unchecked((uint)RuntimeHelpers.GetHashCode(child));
@@ -449,6 +468,16 @@ namespace Client.Main.Graphics
                 return true;
 
             return Math.Abs(shadowDistance - _lastShadowDistance) > texelWorldSize;
+        }
+
+        private bool HasLightDirectionChanged()
+        {
+            Vector3 direction = Constants.SUN_DIRECTION;
+            if (direction.LengthSquared() < 0.0001f)
+                direction = new Vector3(-1f, 0f, -0.6f);
+            direction.Normalize();
+
+            return Vector3.Dot(direction, LightDirection) < 0.99999f;
         }
 
         private void UpdateLightMatrices(Camera camera, float shadowDistance)

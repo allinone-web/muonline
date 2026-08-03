@@ -94,6 +94,7 @@ namespace Client.Main.Controls.UI.Game
         private static VaultControl _instance;
 
         private readonly List<InventoryItem> _items = new();
+        private readonly List<(InventoryItem Item, Rectangle Rect)> _jewelEntries = new();
         private InventoryItem[,] _itemGrid = new InventoryItem[Columns, Rows];
 
         private readonly Dictionary<string, Texture2D> _itemTextureCache = new(StringComparer.OrdinalIgnoreCase);
@@ -846,7 +847,7 @@ namespace Client.Main.Controls.UI.Game
             var font = _font ?? GraphicsManager.Instance.Font;
             Point gridOrigin = new(DisplayRectangle.X + _gridRect.X, DisplayRectangle.Y + _gridRect.Y);
             var pixel = GraphicsManager.Instance.Pixel;
-            var jewelEntries = new List<(InventoryItem Item, Rectangle Rect)>();
+            _jewelEntries.Clear();
 
             foreach (var item in _items)
             {
@@ -883,7 +884,7 @@ namespace Client.Main.Controls.UI.Game
 
                     if (JewelShineOverlay.ShouldShine(item))
                     {
-                        jewelEntries.Add((item, rect));
+                        _jewelEntries.Add((item, rect));
                     }
                 }
                 else if (pixel != null)
@@ -907,9 +908,9 @@ namespace Client.Main.Controls.UI.Game
                 }
             }
 
-            if (jewelEntries.Count > 0)
+            if (_jewelEntries.Count > 0)
             {
-                JewelShineOverlay.DrawBatch(spriteBatch, jewelEntries, _currentGameTime, Alpha, UiScaler.SpriteTransform);
+                JewelShineOverlay.DrawBatch(spriteBatch, _jewelEntries, _currentGameTime, Alpha, UiScaler.SpriteTransform);
             }
         }
 
@@ -1492,10 +1493,13 @@ namespace Client.Main.Controls.UI.Game
                 }
             }
 
-            var keysPressed = MuGame.Instance.Keyboard.GetPressedKeys();
-            foreach (var key in keysPressed)
+            KeyboardState keyboard = MuGame.Instance.Keyboard;
+            KeyboardState previousKeyboard = MuGame.Instance.PrevKeyboard;
+            Keys[] inputKeys = DesktopTextInputKeys.DigitsAndCommands;
+            for (int i = 0; i < inputKeys.Length; i++)
             {
-                if (MuGame.Instance.PrevKeyboard.IsKeyUp(key))
+                Keys key = inputKeys[i];
+                if (keyboard.IsKeyDown(key) && previousKeyboard.IsKeyUp(key))
                 {
                     if (key == Keys.Back)
                     {

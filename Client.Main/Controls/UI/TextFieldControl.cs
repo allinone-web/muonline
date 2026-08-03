@@ -32,6 +32,13 @@ namespace Client.Main.Controls.UI
         private double _cursorBlinkTimer;
         private bool _showCursor;
         private float _scrollOffset;
+        private string _cachedValue = string.Empty;
+        private string _cachedMaskedValue = string.Empty;
+        private bool _textCacheDirty;
+        private bool _scrollMetricsDirty = true;
+        private int _scrollMetricsWidth = -1;
+        private float _scrollMetricsFontSize = float.NaN;
+        private bool _scrollMetricsMaskValue;
 
         private const int TextMargin = 5;
         private const int CursorBlinkInterval = 500;
@@ -40,6 +47,10 @@ namespace Client.Main.Controls.UI
         private static readonly string[] s_nineSliceSuffixes =
         {
             "01", "02", "03", "04", "05", "06", "07", "08", "09"
+        };
+        private static readonly RasterizerState s_scissorRasterizerState = new()
+        {
+            ScissorTestEnable = true
         };
 
         private static readonly ILogger _logger = MuGame.AppLoggerFactory?.CreateLogger<TextFieldControl>();
@@ -53,12 +64,12 @@ namespace Client.Main.Controls.UI
 
         public string Value
         {
-            get => _inputText.ToString();
+            get => GetCachedValue();
             set
             {
                 _inputText.Clear();
                 _inputText.Append(value ?? string.Empty);
-                UpdateScrollOffset();
+                MarkTextChanged();
                 MoveCursorToEnd();
             }
         }
@@ -145,11 +156,56 @@ namespace Client.Main.Controls.UI
             SpriteFont font = GraphicsManager.GetUiFont(FontSize, out float scaleFactor);
             if (font == null) return;
 
-            var textToDisplay = MaskValue ? new string('*', _inputText.Length) : _inputText.ToString();
+            string textToDisplay = GetDisplayText();
             var textWidth = font.MeasureString(textToDisplay).X * scaleFactor;
             float maxVisibleWidth = DisplayRectangle.Width - TextMargin * 2;
 
             _scrollOffset = textWidth > maxVisibleWidth ? textWidth - maxVisibleWidth : 0;
+            _scrollMetricsDirty = false;
+            _scrollMetricsWidth = DisplayRectangle.Width;
+            _scrollMetricsFontSize = FontSize;
+            _scrollMetricsMaskValue = MaskValue;
+        }
+
+        private void EnsureScrollOffsetCurrent()
+        {
+            if (_scrollMetricsDirty ||
+                _scrollMetricsWidth != DisplayRectangle.Width ||
+                _scrollMetricsFontSize != FontSize ||
+                _scrollMetricsMaskValue != MaskValue)
+            {
+                UpdateScrollOffset();
+            }
+        }
+
+        private void MarkTextChanged()
+        {
+            _textCacheDirty = true;
+            _scrollMetricsDirty = true;
+        }
+
+        private string GetCachedValue()
+        {
+            RefreshTextCache();
+            return _cachedValue;
+        }
+
+        private string GetDisplayText()
+        {
+            RefreshTextCache();
+            return MaskValue ? _cachedMaskedValue : _cachedValue;
+        }
+
+        private void RefreshTextCache()
+        {
+            if (!_textCacheDirty)
+                return;
+
+            _cachedValue = _inputText.ToString();
+            _cachedMaskedValue = _inputText.Length == 0
+                ? string.Empty
+                : new string('*', _inputText.Length);
+            _textCacheDirty = false;
         }
 
         protected void OnEnterKeyPressed()
@@ -183,6 +239,7 @@ namespace Client.Main.Controls.UI
                 if (_inputText.Length > 0)
                 {
                     _inputText.Remove(_inputText.Length - 1, 1);
+                    MarkTextChanged();
                     textChanged = true;
                 }
             }
@@ -190,12 +247,12 @@ namespace Client.Main.Controls.UI
             {
                 // Standard printable character input
                 _inputText.Append(e.Character);
+                MarkTextChanged();
                 textChanged = true;
             }
 
             if (textChanged)
             {
-                UpdateScrollOffset();
                 MoveCursorToEnd();
                 ValueChanged?.Invoke(this, EventArgs.Empty);
             }
@@ -210,24 +267,20 @@ namespace Client.Main.Controls.UI
 
 #if !ANDROID
             // On non-Android platforms (Windows, Linux, Mac), use keyboard polling
-            var keysPressed = MuGame.Instance.Keyboard.GetPressedKeys();
-            bool shift = MuGame.Instance.Keyboard.IsKeyDown(Keys.LeftShift) || MuGame.Instance.Keyboard.IsKeyDown(Keys.RightShift);
+            KeyboardState keyboard = MuGame.Instance.Keyboard;
+            KeyboardState previousKeyboard = MuGame.Instance.PrevKeyboard;
+            bool shift = keyboard.IsKeyDown(Keys.LeftShift) || keyboard.IsKeyDown(Keys.RightShift);
             bool capsLock = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows) ? Console.CapsLock : false;
 
-            bool textModifiedByKey = false;
-            foreach (var key in keysPressed)
+            Keys[] inputKeys = DesktopTextInputKeys.All;
+            for (int i = 0; i < inputKeys.Length; i++)
             {
-                if (MuGame.Instance.PrevKeyboard.IsKeyUp(key))
-                {
+                Keys key = inputKeys[i];
+                if (keyboard.IsKeyDown(key) && previousKeyboard.IsKeyUp(key))
                     ProcessKey(key, shift, capsLock);
-                    textModifiedByKey = true;
-                }
             }
 
-            if (textModifiedByKey || (IsFocused && !MuGame.Instance.PrevKeyboard.GetPressedKeys().Any()))
-            {
-                UpdateScrollOffset();
-            }
+            EnsureScrollOffsetCurrent();
 #endif
 
             _cursorBlinkTimer += gameTime.ElapsedGameTime.TotalMilliseconds;
@@ -246,6 +299,7 @@ namespace Client.Main.Controls.UI
             if (key == Keys.Back && _inputText.Length > 0)
             {
                 _inputText.Remove(_inputText.Length - 1, 1);
+                MarkTextChanged();
                 textChanged = true;
             }
             else if (key == Keys.Enter)
@@ -259,13 +313,13 @@ namespace Client.Main.Controls.UI
                 if (character != '\0')
                 {
                     _inputText.Append(character);
+                    MarkTextChanged();
                     textChanged = true;
                 }
             }
 
             if (textChanged)
             {
-                UpdateScrollOffset();
                 MoveCursorToEnd();
                 ValueChanged?.Invoke(this, EventArgs.Empty);
             }
@@ -387,6 +441,8 @@ namespace Client.Main.Controls.UI
             SpriteFont font = GraphicsManager.GetUiFont(FontSize, out float scale);
             if (font == null) return;
 
+            EnsureScrollOffsetCurrent();
+
             var gd = GraphicsManager.Instance.GraphicsDevice;
             var originalScissorRect = gd.ScissorRectangle;
             var area = new Rectangle(
@@ -396,9 +452,9 @@ namespace Client.Main.Controls.UI
                 DisplayRectangle.Height
             );
             gd.ScissorRectangle = Rectangle.Intersect(originalScissorRect, area);
-            gd.RasterizerState = new RasterizerState { ScissorTestEnable = true };
+            gd.RasterizerState = s_scissorRasterizerState;
 
-            string text = MaskValue ? new string('*', _inputText.Length) : _inputText.ToString();
+            string text = GetDisplayText();
             Vector2 textPos = new Vector2(DisplayRectangle.X + TextMargin - _scrollOffset,
                                           DisplayRectangle.Y + (DisplayRectangle.Height - font.MeasureString("A").Y * scale) / 2f);
 

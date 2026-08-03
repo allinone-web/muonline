@@ -200,10 +200,11 @@ namespace Client.Main.Controls
         private void EnsureSingleCursorObject()
         {
             CursorObject primaryCursor = null;
+            var objects = Objects.GetSnapshotArray();
 
-            for (int i = Objects.Count - 1; i >= 0; i--)
+            for (int i = objects.Length - 1; i >= 0; i--)
             {
-                if (Objects[i] is not CursorObject cursorObj)
+                if (objects[i] is not CursorObject cursorObj)
                     continue;
 
                 if (primaryCursor == null)

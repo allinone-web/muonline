@@ -238,7 +238,7 @@ namespace Client.Main.Controls
 
             FrameMetrics.Reset();
             var terrainStarted = RenderPassProfiler.Start();
-            _renderer.Draw(after: false);
+            _renderer.Draw();
             RenderPassProfiler.AddTerrainOpaque(terrainStarted);
 
             // Aggregate metrics from renderers
@@ -260,12 +260,12 @@ namespace Client.Main.Controls
 
         public override void DrawAfter(GameTime gameTime)
         {
-            if (!Visible || Status != Models.GameControlStatus.Ready || _renderer == null || _grassRenderer == null)
+            if (!Visible || Status != Models.GameControlStatus.Ready)
                 return;
 
-            var terrainAfterStarted = RenderPassProfiler.Start();
-            _renderer.Draw(after: true);
-            RenderPassProfiler.AddTerrainAfter(terrainAfterStarted);
+            // Terrain alpha layers are already rendered in TerrainRenderer.Draw().
+            // The previous after-pass still configured the complete renderer and walked every
+            // visible block, while RenderTerrainTile returned immediately for after == true.
             base.DrawAfter(gameTime);
         }
 

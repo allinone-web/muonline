@@ -183,10 +183,10 @@ namespace Client.Main.Objects
                 return false;
 
             int substantialParts = 0;
-            int childCount = Children.Count;
-            for (int i = 0; i < childCount; i++)
+            var children = Children.GetSnapshotArray();
+            for (int i = 0; i < children.Length; i++)
             {
-                if (Children[i] is not ModelObject child ||
+                if (children[i] is not ModelObject child ||
                     child.Hidden ||
                     !child.RenderShadow ||
                     child.Status != GameControlStatus.Ready ||
@@ -1313,11 +1313,11 @@ namespace Client.Main.Objects
             }
 
             // Recursively draw shadow casters for all children (armor, weapons, helm, etc.).
-            int childCount = Children.Count;
+            var children = Children.GetSnapshotArray();
             bool skipSmallParts = Constants.SHADOW_SKIP_SMALL_PARTS;
-            for (int i = 0; i < childCount; i++)
+            for (int i = 0; i < children.Length; i++)
             {
-                var child = Children[i];
+                var child = children[i];
                 if (child is ModelObject modelChild &&
                     modelChild.Status == GameControlStatus.Ready &&
                     !modelChild.Hidden &&

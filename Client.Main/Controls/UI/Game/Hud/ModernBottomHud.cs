@@ -64,6 +64,18 @@ namespace Client.Main.Controls.UI.Game.Hud
         // Resource bar display values (lerped for animation)
         private float _displayHpPct, _displayMpPct, _displaySdPct, _displayAgPct;
         private float _targetHpPct, _targetMpPct, _targetSdPct, _targetAgPct;
+        private uint _lastCurrentHealth = uint.MaxValue;
+        private uint _lastMaximumHealth = uint.MaxValue;
+        private uint _lastCurrentShield = uint.MaxValue;
+        private uint _lastMaximumShield = uint.MaxValue;
+        private uint _lastCurrentMana = uint.MaxValue;
+        private uint _lastMaximumMana = uint.MaxValue;
+        private uint _lastCurrentAbility = uint.MaxValue;
+        private uint _lastMaximumAbility = uint.MaxValue;
+        private string _healthText = string.Empty;
+        private string _shieldText = string.Empty;
+        private string _manaText = string.Empty;
+        private string _abilityText = string.Empty;
         private const float LerpSpeed = 6f;
 
         // Layout rects (recomputed on resize)
@@ -164,6 +176,7 @@ namespace Client.Main.Controls.UI.Game.Hud
             _targetMpPct = _state.MaximumMana > 0 ? _state.CurrentMana / (float)_state.MaximumMana : 0f;
             _targetSdPct = _state.MaximumShield > 0 ? _state.CurrentShield / (float)_state.MaximumShield : 0f;
             _targetAgPct = _state.MaximumAbility > 0 ? _state.CurrentAbility / (float)_state.MaximumAbility : 0f;
+            RefreshResourceTexts();
 
             _displayHpPct = MathHelper.Lerp(_displayHpPct, _targetHpPct, LerpSpeed * dt);
             _displayMpPct = MathHelper.Lerp(_displayMpPct, _targetMpPct, LerpSpeed * dt);
@@ -213,18 +226,18 @@ namespace Client.Main.Controls.UI.Game.Hud
                 // Left bars: HP + SD (next to quick slots)
                 DrawResourceBar(spriteBatch, pixel, _hpBarRect, _displayHpPct,
                     HpColorDark, HpColor, HpColorBright, HpGlow,
-                    $"{_state.CurrentHealth}/{_state.MaximumHealth}", "HP", critical: _targetHpPct < 0.25f);
+                    _healthText, "HP", critical: _targetHpPct < 0.25f);
                 DrawResourceBar(spriteBatch, pixel, _sdBarRect, _displaySdPct,
                     SdColorDark, SdColor, SdColorBright, SdGlow,
-                    $"{_state.CurrentShield}/{_state.MaximumShield}", "SD", critical: false);
+                    _shieldText, "SD", critical: false);
 
                 // Right bars: MP + AG (next to quick slots)
                 DrawResourceBar(spriteBatch, pixel, _mpBarRect, _displayMpPct,
                     MpColorDark, MpColor, MpColorBright, MpGlow,
-                    $"{_state.CurrentMana}/{_state.MaximumMana}", "MP", critical: _targetMpPct < 0.15f);
+                    _manaText, "MP", critical: _targetMpPct < 0.15f);
                 DrawResourceBar(spriteBatch, pixel, _agBarRect, _displayAgPct,
                     AgColorDark, AgColor, AgColorBright, AgGlow,
-                    $"{_state.CurrentAbility}/{_state.MaximumAbility}", "AG", critical: false);
+                    _abilityText, "AG", critical: false);
 
                 DrawQuickSlots(spriteBatch, pixel);
                 DrawInterfaceButtons(spriteBatch, pixel);
@@ -281,6 +294,37 @@ namespace Client.Main.Controls.UI.Game.Hud
                 return true;
 
             return false;
+        }
+
+        private void RefreshResourceTexts()
+        {
+            if (_lastCurrentHealth != _state.CurrentHealth || _lastMaximumHealth != _state.MaximumHealth)
+            {
+                _lastCurrentHealth = _state.CurrentHealth;
+                _lastMaximumHealth = _state.MaximumHealth;
+                _healthText = $"{_lastCurrentHealth}/{_lastMaximumHealth}";
+            }
+
+            if (_lastCurrentShield != _state.CurrentShield || _lastMaximumShield != _state.MaximumShield)
+            {
+                _lastCurrentShield = _state.CurrentShield;
+                _lastMaximumShield = _state.MaximumShield;
+                _shieldText = $"{_lastCurrentShield}/{_lastMaximumShield}";
+            }
+
+            if (_lastCurrentMana != _state.CurrentMana || _lastMaximumMana != _state.MaximumMana)
+            {
+                _lastCurrentMana = _state.CurrentMana;
+                _lastMaximumMana = _state.MaximumMana;
+                _manaText = $"{_lastCurrentMana}/{_lastMaximumMana}";
+            }
+
+            if (_lastCurrentAbility != _state.CurrentAbility || _lastMaximumAbility != _state.MaximumAbility)
+            {
+                _lastCurrentAbility = _state.CurrentAbility;
+                _lastMaximumAbility = _state.MaximumAbility;
+                _abilityText = $"{_lastCurrentAbility}/{_lastMaximumAbility}";
+            }
         }
 
         private void HandleKeyboard()
@@ -554,9 +598,10 @@ namespace Client.Main.Controls.UI.Game.Hud
 
         private static void ToggleWindow<T>(Scenes.GameScene gs) where T : GameControl
         {
-            for (int i = 0; i < gs.Controls.Count; i++)
+            var controls = gs.Controls.GetSnapshotArray();
+            for (int i = 0; i < controls.Length; i++)
             {
-                if (gs.Controls[i] is T ctrl)
+                if (controls[i] is T ctrl)
                 {
                     ctrl.Visible = !ctrl.Visible;
                     return;

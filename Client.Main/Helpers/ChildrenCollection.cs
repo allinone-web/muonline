@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace Client.Main.Helpers
 {
@@ -23,19 +24,11 @@ namespace Client.Main.Helpers
         private List<T> _controls = new List<T>();
         private volatile bool _snapshotDirty = true;
         private T[] _snapshot = Array.Empty<T>();
+        private int _count;
         private readonly object _lock = new object();
 
         public T Parent { get; private set; }
-        public int Count
-        {
-            get
-            {
-                lock (_lock)
-                {
-                    return _controls.Count;
-                }
-            }
-        }
+        public int Count => Volatile.Read(ref _count);
         public bool IsReadOnly => false;
 
         public event EventHandler<ChildrenEventArgs<T>> ControlAdded;
@@ -66,10 +59,7 @@ namespace Client.Main.Helpers
 
         public int IndexOf(T control)
         {
-            lock (_lock)
-            {
-                return _controls.IndexOf(control);
-            }
+            return Array.IndexOf(GetSnapshotArray(), control);
         }
 
         public bool MoveToEnd(T control)
@@ -110,6 +100,7 @@ namespace Client.Main.Helpers
                 control.Parent = Parent;
                 _controls.Add(control);
                 InvalidateSnapshot();
+                Volatile.Write(ref _count, _controls.Count);
             }
             ControlAdded?.Invoke(this, new ChildrenEventArgs<T>(control));
         }
@@ -133,7 +124,10 @@ namespace Client.Main.Helpers
             {
                 removed = _controls.Remove(control);
                 if (removed)
+                {
                     InvalidateSnapshot();
+                    Volatile.Write(ref _count, _controls.Count);
+                }
             }
 
             if (removed)
@@ -151,6 +145,7 @@ namespace Client.Main.Helpers
                 control.Parent = Parent;
                 _controls.Insert(index, control);
                 InvalidateSnapshot();
+                Volatile.Write(ref _count, _controls.Count);
             }
 
             ControlAdded?.Invoke(this, new ChildrenEventArgs<T>(control));
@@ -200,10 +195,7 @@ namespace Client.Main.Helpers
 
         public bool Contains(T item)
         {
-            lock (_lock)
-            {
-                return _controls.Contains(item);
-            }
+            return Array.IndexOf(GetSnapshotArray(), item) >= 0;
         }
 
         public void CopyTo(T[] array, int arrayIndex)
@@ -221,7 +213,10 @@ namespace Client.Main.Helpers
             {
                 removed = _controls.Remove(control);
                 if (removed)
+                {
                     InvalidateSnapshot();
+                    Volatile.Write(ref _count, _controls.Count);
+                }
             }
 
             if (removed)
@@ -241,6 +236,7 @@ namespace Client.Main.Helpers
                 control = _controls[index];
                 _controls.RemoveAt(index);
                 InvalidateSnapshot();
+                Volatile.Write(ref _count, _controls.Count);
             }
 
             control.Parent = null;
@@ -255,6 +251,7 @@ namespace Client.Main.Helpers
                 controls = _controls.ToArray();
                 _controls.Clear();
                 InvalidateSnapshot();
+                Volatile.Write(ref _count, 0);
             }
 
             foreach (var control in controls)
@@ -271,17 +268,24 @@ namespace Client.Main.Helpers
 
         private void InvalidateSnapshot() => _snapshotDirty = true;
 
-        private T[] GetSnapshotArray()
+        internal T[] GetSnapshotArray()
         {
+            // Collection mutations publish _snapshotDirty through a volatile write. The
+            // immutable cached array can therefore be returned without entering the lock
+            // during the steady state, which is the common Update/Draw path.
+            if (!_snapshotDirty)
+                return _snapshot;
+
             lock (_lock)
             {
                 if (_snapshotDirty)
                 {
                     _snapshot = _controls.Count == 0
                         ? Array.Empty<T>()
-                        : _controls.ToArray(); // new snapshot instance prevents in-place mutation during iteration
+                        : _controls.ToArray(); // never mutate a snapshot already used by a traversal
                     _snapshotDirty = false;
                 }
+
                 return _snapshot;
             }
         }

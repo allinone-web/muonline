@@ -35,7 +35,7 @@ namespace Client.Main.Controls
             if (a is null) return -1;
             if (b is null) return 1;
 
-            int cmp = a.Depth.CompareTo(b.Depth);
+            int cmp = a.RenderSortDepth.CompareTo(b.RenderSortDepth);
             if (cmp != 0) return cmp;
             return a.NetworkId.CompareTo(b.NetworkId);
         }
@@ -52,7 +52,7 @@ namespace Client.Main.Controls
             if (a is null) return 1;
             if (b is null) return -1;
 
-            int cmp = b.Depth.CompareTo(a.Depth);
+            int cmp = b.RenderSortDepth.CompareTo(a.RenderSortDepth);
             if (cmp != 0) return cmp;
             return b.NetworkId.CompareTo(a.NetworkId);
         }
@@ -64,14 +64,34 @@ namespace Client.Main.Controls
         private const float DepthBucketSize = 512f;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int ReferenceKey(object value) => value == null ? 0 : RuntimeHelpers.GetHashCode(value);
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static int DepthBucket(float depth)
         {
             if (!float.IsFinite(depth))
                 return int.MaxValue;
             return (int)MathF.Floor(depth / DepthBucketSize);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void Prepare(WorldObject obj, float depth)
+        {
+            obj.RenderSortDepth = depth;
+            obj.RenderSortDepthBucket = DepthBucket(depth);
+            obj.RenderSortReferenceKey = RuntimeHelpers.GetHashCode(obj);
+            obj.RenderSortBlendKey = obj.BlendState == null ? 0 : RuntimeHelpers.GetHashCode(obj.BlendState);
+
+            if (obj is ModelObject model)
+            {
+                obj.RenderSortIsModel = true;
+                obj.RenderSortModelKey = model.Model == null ? 0 : RuntimeHelpers.GetHashCode(model.Model);
+                var texture = model.GetSortTextureHint();
+                obj.RenderSortTextureKey = texture == null ? 0 : RuntimeHelpers.GetHashCode(texture);
+            }
+            else
+            {
+                obj.RenderSortIsModel = false;
+                obj.RenderSortModelKey = 0;
+                obj.RenderSortTextureKey = 0;
+            }
         }
 
         public int Compare(WorldObject a, WorldObject b)
@@ -82,33 +102,31 @@ namespace Client.Main.Controls
 
             // Keep approximate front-to-back ordering for early-Z, then group nearby
             // objects by model/material to reduce state and geometry switches.
-            int comparison = DepthBucket(a.Depth).CompareTo(DepthBucket(b.Depth));
+            int comparison = a.RenderSortDepthBucket.CompareTo(b.RenderSortDepthBucket);
             if (comparison != 0) return comparison;
 
-            bool aIsModel = a is ModelObject;
-            bool bIsModel = b is ModelObject;
-            comparison = bIsModel.CompareTo(aIsModel);
+            comparison = b.RenderSortIsModel.CompareTo(a.RenderSortIsModel);
             if (comparison != 0) return comparison;
 
-            if (a is ModelObject aModel && b is ModelObject bModel)
+            if (a.RenderSortIsModel && b.RenderSortIsModel)
             {
-                comparison = ReferenceKey(aModel.Model).CompareTo(ReferenceKey(bModel.Model));
+                comparison = a.RenderSortModelKey.CompareTo(b.RenderSortModelKey);
                 if (comparison != 0) return comparison;
 
-                comparison = ReferenceKey(aModel.GetSortTextureHint()).CompareTo(ReferenceKey(bModel.GetSortTextureHint()));
+                comparison = a.RenderSortTextureKey.CompareTo(b.RenderSortTextureKey);
                 if (comparison != 0) return comparison;
             }
 
-            comparison = ReferenceKey(a.BlendState).CompareTo(ReferenceKey(b.BlendState));
+            comparison = a.RenderSortBlendKey.CompareTo(b.RenderSortBlendKey);
             if (comparison != 0) return comparison;
 
-            comparison = a.Depth.CompareTo(b.Depth);
+            comparison = a.RenderSortDepth.CompareTo(b.RenderSortDepth);
             if (comparison != 0) return comparison;
 
             comparison = a.NetworkId.CompareTo(b.NetworkId);
             return comparison != 0
                 ? comparison
-                : ReferenceKey(a).CompareTo(ReferenceKey(b));
+                : a.RenderSortReferenceKey.CompareTo(b.RenderSortReferenceKey);
         }
     }
 
@@ -145,15 +163,14 @@ namespace Client.Main.Controls
         // Overlay/UI passes (nameplates, bbox, hover) should iterate this rather than the
         // full World.Objects snapshot to avoid touching everything on the map.
         public IReadOnlyList<WorldObject> VisibleObjects => _visibleObjects;
-        private readonly HashSet<WorldObject> _visibleObjectSet = [];
         private readonly Dictionary<WorldObject, int> _visibleObjectIndices = [];
         private bool _isUpdatingVisibleObjects;
         private bool _visibleObjectsNeedCompaction;
         private readonly HashSet<WorldObject> _positionDirtyObjects = [];
+        private readonly HashSet<WorldObject> _spatialDirtyObjects = [];
         private WorldObject[] _dirtyVisibilityScratch = Array.Empty<WorldObject>();
-        private readonly List<WorldObject> _pendingVisibleAdd = new(256);
-        private readonly List<WorldObject> _pendingVisibleRemove = new(256);
-        private readonly object _visibleMergeLock = new();
+        private byte[] _visibilityResultScratch = Array.Empty<byte>();
+        private byte[] _dirtyVisibilityResultScratch = Array.Empty<byte>();
         private bool _dirtyVisibleObjects = true;
         private bool _hasVisibilitySnapshot;
         private ulong _lastCulledCameraVersion;
@@ -186,7 +203,6 @@ namespace Client.Main.Controls
         private readonly List<WorldObject> _spatialOffGridObjects = [];
         private readonly Dictionary<WorldObject, int> _spatialObjectSectors = [];
         private readonly List<WorldObject> _spatialCandidates = [];
-        private readonly HashSet<WorldObject> _spatialCandidateSet = [];
 
         public Dictionary<ushort, WalkerObject> WalkerObjectsById { get; } = [];
 
@@ -276,24 +292,40 @@ namespace Client.Main.Controls
         {
             if (sender is WorldObject obj)
             {
+                // Position can change several times while a modular actor updates its root,
+                // equipment and helper transforms. Defer spatial-bucket maintenance so each
+                // root is re-registered at most once before the next culling/query phase.
                 _positionDirtyObjects.Add(obj);
-                UpdateSpatialRegistration(obj);
+                _spatialDirtyObjects.Add(obj);
             }
             else
+            {
                 _dirtyVisibleObjects = true;
+            }
 
             MarkWorldGeometryChanged();
         }
 
-        private static int s_worldGeometryTick;
+        private int _worldGeometryVersion;
+        private int _worldGeometryDirty;
 
-        // Monotonic counter bumped whenever tracked world geometry or caster visibility changes.
-        // Read by ShadowMapRenderer to detect a fully static frame and skip redundant casters.
-        public static int WorldGeometryTick => System.Threading.Volatile.Read(ref s_worldGeometryTick);
+        // Geometry changes are coalesced until the shadow pass consumes them. This avoids a
+        // process-wide atomic increment for every transform notification and prevents an
+        // off-screen world from invalidating the active world's shadow selection.
+        public int WorldGeometryVersion => Volatile.Read(ref _worldGeometryVersion);
 
-        private static void MarkWorldGeometryChanged()
+        private void MarkWorldGeometryChanged()
         {
-            unchecked { System.Threading.Interlocked.Increment(ref s_worldGeometryTick); }
+            if (Volatile.Read(ref _worldGeometryDirty) == 0)
+                Interlocked.Exchange(ref _worldGeometryDirty, 1);
+        }
+
+        internal int CommitWorldGeometryVersionForRender()
+        {
+            if (Interlocked.Exchange(ref _worldGeometryDirty, 0) != 0)
+                Interlocked.Increment(ref _worldGeometryVersion);
+
+            return Volatile.Read(ref _worldGeometryVersion);
         }
 
         private void Object_StatusChanged(object sender, EventArgs e)
@@ -304,7 +336,7 @@ namespace Client.Main.Controls
             if (obj.Status == GameControlStatus.Ready)
             {
                 _positionDirtyObjects.Add(obj);
-                UpdateSpatialRegistration(obj);
+                _spatialDirtyObjects.Add(obj);
                 MarkWorldGeometryChanged();
                 return;
             }
@@ -313,6 +345,7 @@ namespace Client.Main.Controls
             {
                 RemoveVisibleObject(obj);
                 _positionDirtyObjects.Remove(obj);
+                _spatialDirtyObjects.Remove(obj);
                 UnregisterSpatialObject(obj);
                 MarkWorldGeometryChanged();
             }
@@ -452,6 +485,7 @@ namespace Client.Main.Controls
             UpdatePassProfiler.AddWorldInitialization(initializationStarted);
 
             long visibilityStarted = UpdatePassProfiler.Start();
+            FlushSpatialUpdates();
             // Keep update list current for object movement, but defer full camera recull to end of update
             // so rendering uses the latest camera state from this frame.
             if (_positionDirtyObjects.Count > 0 && !_dirtyVisibleObjects)
@@ -460,6 +494,7 @@ namespace Client.Main.Controls
             }
 
             UpdateVisibleObjects(time);
+            FlushSpatialUpdates();
             UpdatePassProfiler.AddWorldVisibility(visibilityStarted);
 
             long cullStarted = UpdatePassProfiler.Start();
@@ -529,7 +564,7 @@ namespace Client.Main.Controls
         }
 
         internal bool IsObjectVisibleInSnapshot(WorldObject obj) =>
-            obj != null && _visibleObjectSet.Contains(obj);
+            obj != null && _visibleObjectIndices.ContainsKey(obj);
 
         internal void ClearObjectRenderFault(WorldObject obj)
         {
@@ -936,6 +971,7 @@ namespace Client.Main.Controls
 
             RemoveVisibleObject(e.Control);
             _positionDirtyObjects.Remove(e.Control);
+            _spatialDirtyObjects.Remove(e.Control);
             _queuedForInitialization.Remove(e.Control);
             _initializationHiddenStates.TryRemove(e.Control, out _);
             _renderFaults.Remove(e.Control);
@@ -1129,12 +1165,18 @@ namespace Client.Main.Controls
                 if (!obj.Visible || IsExternallyRenderedObject(obj))
                     continue;
 
+                float depth = obj.Depth;
+                obj.RenderSortDepth = depth;
+
                 if (obj.IsTransparent)
                 {
                     _transparentObjects.Add(obj);
                 }
                 else
                 {
+                    if (Constants.ENABLE_BATCH_OPTIMIZED_SORTING)
+                        WorldObjectOpaqueBatchComparer.Prepare(obj, depth);
+
                     _solidBehind.Add(obj);
                 }
             }
@@ -1680,8 +1722,8 @@ namespace Client.Main.Controls
             if (obj == null)
                 return false;
 
-            var children = obj.Children;
-            for (int i = 0; i < children.Count; i++)
+            var children = obj.Children.GetSnapshotArray();
+            for (int i = 0; i < children.Length; i++)
             {
                 var child = children[i];
                 if (child?.RenderPolicy.ForceVisible == true || child?.RenderPolicy.ForceVisibleInLoginWorld == true)
@@ -1697,20 +1739,14 @@ namespace Client.Main.Controls
             if (obj == null)
                 return;
 
-            if (_visibleObjectSet.Add(obj))
-            {
-                _visibleObjectIndices[obj] = _visibleObjects.Count;
+            if (_visibleObjectIndices.TryAdd(obj, _visibleObjects.Count))
                 _visibleObjects.Add(obj);
-            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void RemoveVisibleObject(WorldObject obj)
         {
             if (obj == null)
-                return;
-
-            if (!_visibleObjectSet.Remove(obj))
                 return;
 
             if (!_visibleObjectIndices.TryGetValue(obj, out int index) ||
@@ -1899,22 +1935,24 @@ namespace Client.Main.Controls
                 _spatialObjectSectors[obj] = sector;
                 AddToSpatialBucket(obj, sector);
             }
+
+            _spatialDirtyObjects.Clear();
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void AddSpatialCandidate(WorldObject obj)
+        private void FlushSpatialUpdates()
         {
-            if (obj == null)
+            if (_spatialDirtyObjects.Count == 0)
                 return;
 
-            if (_spatialCandidateSet.Add(obj))
-                _spatialCandidates.Add(obj);
+            foreach (WorldObject obj in _spatialDirtyObjects)
+                UpdateSpatialRegistration(obj);
+
+            _spatialDirtyObjects.Clear();
         }
 
         private void BuildSpatialCandidates(Vector2 center, float maxViewDistance)
         {
             _spatialCandidates.Clear();
-            _spatialCandidateSet.Clear();
 
             if (!TryGetSpatialSector(new Vector3(center, 0f), out int centerSectorX, out int centerSectorY))
             {
@@ -1934,19 +1972,43 @@ namespace Client.Main.Controls
                 {
                     var bucket = _spatialSectors[sectorX, sectorY];
                     for (int i = 0; i < bucket.Count; i++)
-                        AddSpatialCandidate(bucket[i]);
+                    {
+                        WorldObject obj = bucket[i];
+                        if (obj != null)
+                            _spatialCandidates.Add(obj);
+                    }
                 }
             }
 
             for (int i = 0; i < _spatialOffGridObjects.Count; i++)
-                AddSpatialCandidate(_spatialOffGridObjects[i]);
+            {
+                WorldObject obj = _spatialOffGridObjects[i];
+                if (obj != null)
+                    _spatialCandidates.Add(obj);
+            }
 
+            // Every registered object belongs to exactly one sector (or the off-grid list),
+            // so the normal candidate walk cannot produce duplicates. Only force-visible
+            // objects outside the selected sector rectangle need to be appended.
             var snapshot = Objects.GetSnapshot();
             for (int i = 0; i < snapshot.Count; i++)
             {
-                var obj = snapshot[i];
-                if (ShouldForceVisible(obj))
-                    AddSpatialCandidate(obj);
+                WorldObject obj = snapshot[i];
+                if (!ShouldForceVisible(obj) || !_spatialObjectSectors.TryGetValue(obj, out int sector))
+                    continue;
+
+                if (sector == SpatialInvalidSector)
+                    continue; // Already included through the off-grid list.
+
+                int sectorX = sector % SpatialSectorsPerAxis;
+                int sectorY = sector / SpatialSectorsPerAxis;
+                if (sectorX >= minSectorX && sectorX <= maxSectorX &&
+                    sectorY >= minSectorY && sectorY <= maxSectorY)
+                {
+                    continue; // Already included through its regular bucket.
+                }
+
+                _spatialCandidates.Add(obj);
             }
         }
 
@@ -1954,7 +2016,6 @@ namespace Client.Main.Controls
         {
             _cullingStopwatch.Restart();
             _visibleObjects.Clear();
-            _visibleObjectSet.Clear();
             _visibleObjectIndices.Clear();
             _visibleObjectsNeedCompaction = false;
             _positionDirtyObjects.Clear();
@@ -1988,32 +2049,22 @@ namespace Client.Main.Controls
 
             if (useParallel)
             {
-                Parallel.For(
-                    0,
-                    snapshot.Count,
-                    VisibleParallelOptions,
-                    () => new List<WorldObject>(32),
-                    (i, _, localVisible) =>
-                    {
-                        var obj = snapshot[i];
-                        if (obj != null && obj.Visible &&
-                            (ShouldForceVisible(obj) || IsObjectInView(obj, cam2, maxDistSq, frustum)))
-                        {
-                            localVisible.Add(obj);
-                        }
+                EnsureVisibilityResultScratchCapacity(snapshot.Count);
+                Parallel.For(0, snapshot.Count, VisibleParallelOptions, i =>
+                {
+                    var obj = snapshot[i];
+                    _visibilityResultScratch[i] =
+                        obj != null && obj.Visible &&
+                        (ShouldForceVisible(obj) || IsObjectInView(obj, cam2, maxDistSq, frustum))
+                            ? (byte)1
+                            : (byte)0;
+                });
 
-                        return localVisible;
-                    },
-                    localVisible =>
-                    {
-                        if (localVisible.Count == 0)
-                            return;
-
-                        lock (_visibleMergeLock)
-                        {
-                            _visibleObjects.AddRange(localVisible);
-                        }
-                    });
+                for (int i = 0; i < snapshot.Count; i++)
+                {
+                    if (_visibilityResultScratch[i] != 0)
+                        _visibleObjects.Add(snapshot[i]);
+                }
             }
             else
             {
@@ -2032,10 +2083,7 @@ namespace Client.Main.Controls
             {
                 var obj = _visibleObjects[i];
                 if (obj != null)
-                {
-                    _visibleObjectSet.Add(obj);
                     _visibleObjectIndices[obj] = i;
-                }
             }
 
             _cullingStopwatch.Stop();
@@ -2067,59 +2115,33 @@ namespace Client.Main.Controls
             _positionDirtyObjects.CopyTo(_dirtyVisibilityScratch);
             _positionDirtyObjects.Clear();
 
-            for (int i = 0; i < dirtyCount; i++)
-                UpdateSpatialRegistration(_dirtyVisibilityScratch[i]);
-
             bool useParallel = Environment.ProcessorCount > 2 &&
                                dirtyCount >= ParallelDirtyRefreshThreshold;
 
             if (useParallel)
             {
-                _pendingVisibleAdd.Clear();
-                _pendingVisibleRemove.Clear();
-                if (_pendingVisibleAdd.Capacity < dirtyCount) _pendingVisibleAdd.Capacity = dirtyCount;
-                if (_pendingVisibleRemove.Capacity < dirtyCount) _pendingVisibleRemove.Capacity = dirtyCount;
+                EnsureDirtyVisibilityResultScratchCapacity(dirtyCount);
+                Parallel.For(0, dirtyCount, VisibleParallelOptions, i =>
+                {
+                    var obj = _dirtyVisibilityScratch[i];
+                    _dirtyVisibilityResultScratch[i] =
+                        obj != null && obj.Visible &&
+                        (ShouldForceVisible(obj) || IsObjectInView(obj, cam2, maxDistSq, frustum))
+                            ? (byte)1
+                            : (byte)0;
+                });
 
-                Parallel.For(
-                    0,
-                    dirtyCount,
-                    VisibleParallelOptions,
-                    () => (add: new List<WorldObject>(32), remove: new List<WorldObject>(32)),
-                    (i, _, local) =>
-                    {
-                        var obj = _dirtyVisibilityScratch[i];
-                        if (obj == null || !obj.Visible)
-                        {
-                            if (obj != null)
-                                local.remove.Add(obj);
-                            return local;
-                        }
+                for (int i = 0; i < dirtyCount; i++)
+                {
+                    var obj = _dirtyVisibilityScratch[i];
+                    if (obj == null)
+                        continue;
 
-                        bool inView = ShouldForceVisible(obj) || IsObjectInView(obj, cam2, maxDistSq, frustum);
-                        if (inView)
-                            local.add.Add(obj);
-                        else
-                            local.remove.Add(obj);
-
-                        return local;
-                    },
-                    local =>
-                    {
-                        if (local.add.Count == 0 && local.remove.Count == 0)
-                            return;
-
-                        lock (_visibleMergeLock)
-                        {
-                            _pendingVisibleAdd.AddRange(local.add);
-                            _pendingVisibleRemove.AddRange(local.remove);
-                        }
-                    });
-
-                for (int i = 0; i < _pendingVisibleRemove.Count; i++)
-                    RemoveVisibleObject(_pendingVisibleRemove[i]);
-
-                for (int i = 0; i < _pendingVisibleAdd.Count; i++)
-                    AddVisibleObject(_pendingVisibleAdd[i]);
+                    if (_dirtyVisibilityResultScratch[i] != 0)
+                        AddVisibleObject(obj);
+                    else
+                        RemoveVisibleObject(obj);
+                }
             }
             else
             {
@@ -2163,6 +2185,30 @@ namespace Client.Main.Controls
                 capacity <<= 1;
 
             _dirtyVisibilityScratch = new WorldObject[capacity];
+        }
+
+        private void EnsureVisibilityResultScratchCapacity(int required)
+        {
+            if (_visibilityResultScratch.Length >= required)
+                return;
+
+            int capacity = 2048;
+            while (capacity < required)
+                capacity <<= 1;
+
+            _visibilityResultScratch = new byte[capacity];
+        }
+
+        private void EnsureDirtyVisibilityResultScratchCapacity(int required)
+        {
+            if (_dirtyVisibilityResultScratch.Length >= required)
+                return;
+
+            int capacity = 1024;
+            while (capacity < required)
+                capacity <<= 1;
+
+            _dirtyVisibilityResultScratch = new byte[capacity];
         }
 
         private void UpdateVisibleObjects(GameTime time)
@@ -2314,6 +2360,7 @@ namespace Client.Main.Controls
             if (destination == null)
                 throw new ArgumentNullException(nameof(destination));
 
+            FlushSpatialUpdates();
             destination.Clear();
             float safeRadius = MathF.Max(0f, radius);
 
@@ -2398,15 +2445,14 @@ namespace Client.Main.Controls
             _droppedItems.Clear();
             _objectsToInitialize.Clear();
             _queuedForInitialization.Clear();
-            _visibleObjectSet.Clear();
             _visibleObjectIndices.Clear();
             _visibleObjectsNeedCompaction = false;
             _isUpdatingVisibleObjects = false;
             _positionDirtyObjects.Clear();
+            _spatialDirtyObjects.Clear();
             _spatialObjectSectors.Clear();
             _spatialOffGridObjects.Clear();
             _spatialCandidates.Clear();
-            _spatialCandidateSet.Clear();
             _hasVisibilitySnapshot = false;
             foreach (var bucket in _spatialSectors)
                 bucket.Clear();
