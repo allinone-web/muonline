@@ -23,6 +23,11 @@ namespace Client.Main.Objects.Monsters
             BlendMesh = 1;
             BlendMeshLight = 1.0f;
 
+            EnableCustomShader = true;
+            SimpleColorMode = true;
+            GlowColor = new Vector3(1.0f, 1.4f, 1.6f);
+            GlowIntensity = 3.0f;
+
             _rightHandWeapon = new WeaponObject { LinkParentAnimation = false, ParentBoneLink = 36, ItemLevel = 9 };
             _leftHandWeapon = new WeaponObject { LinkParentAnimation = false, ParentBoneLink = 45, ItemLevel = 9 };
             Children.Add(_rightHandWeapon);
