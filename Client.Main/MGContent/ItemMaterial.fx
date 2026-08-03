@@ -374,14 +374,9 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     if (useHighLevelArmor == true)
     {
         // Build the +11/+13 chrome material first, then continue through the
-        // existing ancient/excellent glow section below. The previous early
-        // return skipped that entire section and removed the legacy glow.
+        // level-dependent glow section below. Ordinary upgraded armor must
+        // keep the same level glow as weapons and non-armor equipment.
         color = RenderHighLevelArmor(input, color, normal, itemLevel);
-
-        // Ordinary +11/+13 armor needs no legacy ghost samples. Continue only
-        // for special items whose ancient/excellent glow must be layered on top.
-        if (IsAncient == false && IsExcellent == false)
-            return color;
     }
     else
     {
@@ -447,11 +442,10 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     float4 ghost2 = 0.0;
     float4 ghost3 = 0.0;
     float4 ghost4 = 0.0;
-    // High-level ancient armor still needs the regular level-dependent glow.
-    // Ordinary +11/+13 armor keeps the dedicated Chrome material only, while
-    // excellent items keep their existing excellent-specific glow path.
-    bool applyAncientLevelGlow = useHighLevelArmor && IsAncient && !IsExcellent;
-    if ((useHighLevelArmor == false || applyAncientLevelGlow == true) && itemLevel >= 7.0)
+    // High-level armor keeps its Chrome material and also receives the regular
+    // upgrade-level glow unless the Excellent path supplies its own effect.
+    bool applyHighLevelLevelGlow = useHighLevelArmor && IsExcellent == false;
+    if ((useHighLevelArmor == false || applyHighLevelLevelGlow == true) && itemLevel >= 7.0)
     {
         ghost1 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset1);
         ghost2 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset2);
@@ -507,7 +501,7 @@ float4 MainPS(VertexShaderOutput input) : COLOR
         float glowEffect = (1.0 + sin(Time * 1.0)) * 0.03 + 0.2;
         color.rgb += effectColor * glowEffect * extraGlow * level10Mask;
     }
-    else if (applyAncientLevelGlow == true)
+    else if (applyHighLevelLevelGlow == true)
     {
         // Preserve the +11/+13 Chrome material and add only the old upgrade-level
         // glow on top. Do not recolor or multiply the base material again.

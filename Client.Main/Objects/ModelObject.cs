@@ -422,11 +422,49 @@ namespace Client.Main.Objects
 
         protected ILogger _logger;
 
-        public int ItemLevel { get; set; } = 0;
+        private int _itemLevel;
+        public int ItemLevel
+        {
+            get => _itemLevel;
+            set
+            {
+                if (_itemLevel == value)
+                    return;
+
+                _itemLevel = value;
+                InvalidateMeshRenderPlan();
+            }
+        }
         public int MaterialItemGroup { get; set; } = -1;
         public int MaterialItemIndex { get; set; } = -1;
-        public bool IsExcellentItem { get; set; } = false;
-        public bool IsAncientItem { get; set; } = false;
+
+        private bool _isExcellentItem;
+        public bool IsExcellentItem
+        {
+            get => _isExcellentItem;
+            set
+            {
+                if (_isExcellentItem == value)
+                    return;
+
+                _isExcellentItem = value;
+                InvalidateMeshRenderPlan();
+            }
+        }
+
+        private bool _isAncientItem;
+        public bool IsAncientItem
+        {
+            get => _isAncientItem;
+            set
+            {
+                if (_isAncientItem == value)
+                    return;
+
+                _isAncientItem = value;
+                InvalidateMeshRenderPlan();
+            }
+        }
 
         // Monster/NPC glow properties
         public Vector3 GlowColor { get; set; } = new Vector3(1.0f, 0.8f, 0.0f); // Default gold
