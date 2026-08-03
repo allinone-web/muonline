@@ -610,6 +610,19 @@ ShadowVertexOutput ShadowVS_Skinned(VertexInputSkinned input)
     output.Depth = output.Position.zw;
     return output;
 }
+
+ShadowVertexOutput ShadowVS_SkinnedInstanced(VertexInputSkinnedInstanced input)
+{
+    ShadowVertexOutput output;
+    int boneIndex = min(max((int)input.BoneIndices.x, 0), 255);
+    float4x4 instanceWorld = float4x4(input.InstWorld0, input.InstWorld1, input.InstWorld2, input.InstWorld3);
+    float4 localPos = mul(float4(input.Position, 1.0), BoneMatrices[boneIndex]);
+    float4 worldPos = mul(localPos, instanceWorld);
+    output.Position = mul(worldPos, LightViewProjection);
+    output.TexCoord = CalculateProceduralUV(worldPos.xyz, input.TexCoord) + TextureCoordinateOffset;
+    output.Depth = output.Position.zw;
+    return output;
+}
 #endif
 
 float4 ShadowPS(ShadowVertexOutput input) : SV_TARGET
@@ -641,6 +654,16 @@ technique ShadowCaster_Skinned
     pass Pass1
     {
         VertexShader = compile VS_SHADERMODEL ShadowVS_Skinned();
+        PixelShader  = compile PS_SHADERMODEL ShadowPS();
+    }
+}
+
+
+technique ShadowCaster_SkinnedInstanced
+{
+    pass Pass1
+    {
+        VertexShader = compile VS_SHADERMODEL ShadowVS_SkinnedInstanced();
         PixelShader  = compile PS_SHADERMODEL ShadowPS();
     }
 }

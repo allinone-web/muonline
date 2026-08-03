@@ -14,6 +14,9 @@ namespace Client.Main.Controls
         public int TransparentObjects { get; internal set; }
         public int SpriteBatchObjects { get; internal set; }
         public int ModelObjects { get; internal set; }
+        public int DedicatedStaticMapObjects { get; internal set; }
+        public int StaticMapUpdateSkips { get; internal set; }
+        public int DrawAfterSkips { get; internal set; }
         public int AnimationUpdates { get; internal set; }
         public int AnimationSkips { get; internal set; }
         public int LowQualityObjects { get; internal set; }
@@ -41,6 +44,9 @@ namespace Client.Main.Controls
             TransparentObjects = 0;
             SpriteBatchObjects = 0;
             ModelObjects = 0;
+            DedicatedStaticMapObjects = 0;
+            StaticMapUpdateSkips = 0;
+            DrawAfterSkips = 0;
             AnimationUpdates = 0;
             AnimationSkips = 0;
             LowQualityObjects = 0;

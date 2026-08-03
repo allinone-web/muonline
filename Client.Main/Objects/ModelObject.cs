@@ -787,6 +787,12 @@ namespace Client.Main.Objects
 
             _meshes = null;
             _staticMapInstancedMeshFrameTags = null;
+            _staticMapInstancingMeshPlan = Array.Empty<StaticMapInstancingMeshPlan>();
+            _staticMapInstancingMeshPlanCount = 0;
+            _staticMapInstancingOpaqueMeshCount = 0;
+            _builtStaticMapInstancingPlanVersion = 0;
+            _staticMapInstancingPlanRetryFrame = 0;
+            _staticMapInstancingPlanValidationFrame = 0;
             _blendMeshIndicesScratch = null;
             _contentLoaded = false;
             _boundingComputed = false;

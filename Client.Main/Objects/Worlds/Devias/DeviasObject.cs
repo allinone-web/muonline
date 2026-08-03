@@ -22,7 +22,7 @@ namespace Client.Main.Objects.Worlds.Devias
     {
         private readonly DeviasObjectEffect _effect;
 
-        protected override bool AllowMapObjectInstancing => false;
+        protected override bool AllowMapObjectInstancing => true;
 
         public DeviasObject()
         {

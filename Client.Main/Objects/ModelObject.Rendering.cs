@@ -141,6 +141,11 @@ namespace Client.Main.Objects
         private void InvalidateMeshRenderPlan()
         {
             ReleaseFastMeshBatchBuffers();
+            _builtStaticMapInstancingPlanVersion = 0;
+            _staticMapInstancingMeshPlanCount = 0;
+            _staticMapInstancingOpaqueMeshCount = 0;
+            _staticMapInstancingPlanRetryFrame = 0;
+            _staticMapInstancingPlanValidationFrame = 0;
             unchecked { _meshRenderPlanVersion++; }
             if (_meshRenderPlanVersion == 0)
                 _meshRenderPlanVersion = 1;

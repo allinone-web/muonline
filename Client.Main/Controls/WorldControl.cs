@@ -145,6 +145,8 @@ namespace Client.Main.Controls
 
         private readonly List<WorldObject> _solidBehind = [];
         private readonly List<WorldObject> _transparentObjects = [];
+        private readonly List<ModelObject> _dedicatedStaticMapObjects = [];
+        private readonly List<ModelObject> _queuedDedicatedStaticMapObjects = [];
         private readonly List<ModelObject> _queuedCrowdSidePasses = [];
         private readonly List<WalkerObject> _walkers = [];
         private readonly List<PlayerObject> _players = [];
@@ -1155,6 +1157,8 @@ namespace Client.Main.Controls
             _renderCounter = 0;
             _solidBehind.Clear();
             _transparentObjects.Clear();
+            _dedicatedStaticMapObjects.Clear();
+            _queuedDedicatedStaticMapObjects.Clear();
 
             var objects = _visibleObjects;
 
@@ -1164,6 +1168,13 @@ namespace Client.Main.Controls
 
                 if (!obj.Visible || IsExternallyRenderedObject(obj))
                     continue;
+
+                if (obj is ModelObject staticMapModel &&
+                    staticMapModel.CanUseDedicatedStaticMapRenderQueue())
+                {
+                    _dedicatedStaticMapObjects.Add(staticMapModel);
+                    continue;
+                }
 
                 float depth = obj.Depth;
                 obj.RenderSortDepth = depth;
@@ -1184,6 +1195,7 @@ namespace Client.Main.Controls
             FrameMetrics.SolidBehindObjects = _solidBehind.Count;
             FrameMetrics.SolidInFrontObjects = 0;
             FrameMetrics.TransparentObjects = _transparentObjects.Count;
+            FrameMetrics.DedicatedStaticMapObjects = _dedicatedStaticMapObjects.Count;
 
             if (_solidBehind.Count > 1)
             {
@@ -1196,6 +1208,7 @@ namespace Client.Main.Controls
             if (_transparentObjects.Count > 1)
                 _transparentObjects.Sort(WorldObjectDepthDesc.Instance);
 
+            DrawDedicatedStaticMapObjects(time);
             DrawListWithSpriteBatchGrouping(_solidBehind, DepthStateDefault, time);
             DrawListWithSpriteBatchGrouping(_transparentObjects, DepthStateDepthRead, time);
 
@@ -1237,6 +1250,74 @@ namespace Client.Main.Controls
             LogRenderMetricsIfEnabled();
         }
 
+        private void DrawDedicatedStaticMapObjects(GameTime time)
+        {
+            int count = _dedicatedStaticMapObjects.Count;
+            if (count == 0)
+                return;
+
+            SetDepthState(DepthStateDefault);
+            for (int i = 0; i < count; i++)
+            {
+                ModelObject model = _dedicatedStaticMapObjects[i];
+                if (model == null || ShouldSkipRender(model))
+                    continue;
+
+                ModelObject.StaticMapInstancingQueueResult result =
+                    ModelObject.TryQueueStaticMapObjectForInstancing(model);
+                if (result == ModelObject.StaticMapInstancingQueueResult.Full)
+                {
+                    _queuedDedicatedStaticMapObjects.Add(model);
+                    _renderFaults.Remove(model);
+                    model.RenderOrder = ++_renderCounter;
+                    FrameMetrics.ModelObjects++;
+                    continue;
+                }
+
+                // A texture or shared GPU buffer can be replaced between classification and
+                // drawing. Keep a contained fallback instead of dropping the placement.
+                try
+                {
+                    model.Draw(time);
+                    ClearRenderFault(model, "Draw.StaticMapFallback");
+                    FrameMetrics.ModelObjects++;
+                }
+                catch (Exception ex)
+                {
+                    RecordRenderFailure(model, "Draw.StaticMapFallback", ex);
+                }
+
+                model.RenderOrder = ++_renderCounter;
+            }
+
+            if (ModelObject.HasPendingStaticMapInstancingBatches() &&
+                !FlushStaticMapBatchesSafely())
+            {
+                // This path is intentionally failure-only. Restore the classic opaque draw in
+                // the same frame so a lost shader or shared GPU buffer cannot create holes.
+                for (int i = 0; i < _queuedDedicatedStaticMapObjects.Count; i++)
+                {
+                    ModelObject model = _queuedDedicatedStaticMapObjects[i];
+                    if (model == null || ShouldSkipRender(model))
+                        continue;
+
+                    model.CancelStaticMapInstancingForCurrentFrame();
+                    ModelObject.RegisterStaticMapInstancingFallback();
+                    try
+                    {
+                        model.Draw(time);
+                        ClearRenderFault(model, "Draw.StaticMapBatchFallback");
+                    }
+                    catch (Exception ex)
+                    {
+                        RecordRenderFailure(model, "Draw.StaticMapBatchFallback", ex);
+                    }
+                }
+            }
+
+            _queuedDedicatedStaticMapObjects.Clear();
+        }
+
         private void LogRenderMetricsIfEnabled()
         {
             if (Constants.RENDER_METRICS_LEVEL < 2)
@@ -1248,7 +1329,7 @@ namespace Client.Main.Controls
 
             _lastRenderMetricsLogFrame = frame;
             _logger?.LogInformation(
-                "World perf W:{WorldIndex} Cull:{CullMode} C:{CullCandidates} V:{Visible} Ms:{CullMs:F2} Lists:{Behind}/{Front}/{Transparent} DrawObj S:{SpriteObjects} M:{ModelObjects} Anim U:{AnimUpdates} Skip:{AnimSkips} LQ:{LowQuality}",
+                "World perf W:{WorldIndex} Cull:{CullMode} C:{CullCandidates} V:{Visible} Ms:{CullMs:F2} Lists:{Behind}/{Front}/{Transparent} StaticBatch:{StaticBatch} DrawObj S:{SpriteObjects} M:{ModelObjects} UpdateSkip:{StaticUpdateSkips} AfterSkip:{DrawAfterSkips} Anim U:{AnimUpdates} Skip:{AnimSkips} LQ:{LowQuality}",
                 WorldIndex,
                 LastCullWasRebuild ? "R" : "I",
                 FrameMetrics.CullCandidates,
@@ -1257,8 +1338,11 @@ namespace Client.Main.Controls
                 FrameMetrics.SolidBehindObjects,
                 FrameMetrics.SolidInFrontObjects,
                 FrameMetrics.TransparentObjects,
+                FrameMetrics.DedicatedStaticMapObjects,
                 FrameMetrics.SpriteBatchObjects,
                 FrameMetrics.ModelObjects,
+                FrameMetrics.StaticMapUpdateSkips,
+                FrameMetrics.DrawAfterSkips,
                 FrameMetrics.AnimationUpdates,
                 FrameMetrics.AnimationSkips,
                 FrameMetrics.LowQualityObjects);
@@ -1454,16 +1538,17 @@ namespace Client.Main.Controls
             }
         }
 
-        private void FlushStaticMapBatchesSafely()
+        private bool FlushStaticMapBatchesSafely()
         {
             try
             {
-                ModelObject.FlushStaticMapInstancingBatches(this);
+                return ModelObject.FlushStaticMapInstancingBatches(this);
             }
             catch (Exception ex)
             {
                 RecordRenderFailure(null, "Draw.StaticMapBatch", ex);
                 ModelObject.ResetWorldScopedInstancingState();
+                return false;
             }
         }
 
@@ -1487,6 +1572,12 @@ namespace Client.Main.Controls
                 if (obj is DamageTextObject)
                 {
                     damageCount++;
+                    continue;
+                }
+
+                if (obj is ModelObject model && model.CanSkipDefaultDrawAfterPass())
+                {
+                    FrameMetrics.DrawAfterSkips++;
                     continue;
                 }
 
@@ -2233,6 +2324,16 @@ namespace Client.Main.Controls
                     if (obj == null || !obj.Visible)
                         continue;
 
+                    // Static map placements have no movement, animation, child update or CPU
+                    // lighting work. Reject them before distance/quality calculations as well as
+                    // before the virtual Update call.
+                    if (obj is ModelObject staticMapModel &&
+                        staticMapModel.CanSkipStaticMapWorldUpdate())
+                    {
+                        FrameMetrics.StaticMapUpdateSkips++;
+                        continue;
+                    }
+
                     int stride = 1;
                     if (!ShouldAlwaysUpdate(obj))
                     {
@@ -2443,6 +2544,10 @@ namespace Client.Main.Controls
             _players.Clear();
             _monsters.Clear();
             _droppedItems.Clear();
+            _dedicatedStaticMapObjects.Clear();
+            _queuedDedicatedStaticMapObjects.Clear();
+            _solidBehind.Clear();
+            _transparentObjects.Clear();
             _objectsToInitialize.Clear();
             _queuedForInitialization.Clear();
             _visibleObjectIndices.Clear();

@@ -1,4 +1,4 @@
-﻿using Client.Data;
+using Client.Data;
 using Client.Main.Content;
 using Microsoft.Xna.Framework.Graphics;
 using System;
@@ -11,8 +11,8 @@ namespace Client.Main.Objects.Worlds.Lorencia
 {
     public class MuWallObject : ModelObject
     {
-        // These walls rely on the regular per-mesh path to preserve partially transparent sections.
-        protected override bool AllowMapObjectInstancing => false;
+        // Opaque wall meshes may be instanced; transparent sections remain on the regular per-object pass.
+        protected override bool AllowMapObjectInstancing => true;
 
         public MuWallObject()
         {

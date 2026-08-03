@@ -30,6 +30,7 @@ namespace Client.Main.Objects
         private WorldControl _world;
         private bool _interactive;
         private bool _isTransformDirty = true;
+        private uint _transformVersion = 1;
         private bool _hidden = false;
         private GameControlStatus _status = GameControlStatus.NonInitialized;
         private int _disposeRequested;
@@ -113,6 +114,7 @@ namespace Client.Main.Objects
                 ? WorldObjectRenderPolicy.Default.With(forceVisible: true)
                 : WorldObjectRenderPolicy.Default;
         internal int UpdateOffset => _updateOffset;
+        internal uint TransformVersion => _transformVersion;
         public bool Visible => Status == GameControlStatus.Ready && !Hidden;
 
         /// <summary>
@@ -555,6 +557,13 @@ namespace Client.Main.Objects
 
         private void OnWorldPositionChanged()
         {
+            unchecked
+            {
+                _transformVersion++;
+                if (_transformVersion == 0)
+                    _transformVersion = 1;
+            }
+
             UpdateWorldBoundingBox();
             MatrixChanged?.Invoke(this, EventArgs.Empty);
         }

@@ -1,4 +1,4 @@
-﻿using Client.Data;
+using Client.Data;
 using Client.Main.Content;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
@@ -9,8 +9,8 @@ namespace Client.Main.Objects.Worlds.Lorencia
 {
     public class HouseObject : ModelObject
     {
-        // These walls rely on the regular per-mesh path to preserve partially transparent sections.
-        protected override bool AllowMapObjectInstancing => false;
+        // Opaque house meshes may be instanced; animated additive meshes remain per object.
+        protected override bool AllowMapObjectInstancing => true;
         private const double LegacyStepSeconds = 1.0 / 25.0;
         private double _legacyAccumulator;
 
@@ -68,9 +68,5 @@ namespace Client.Main.Objects.Worlds.Lorencia
             }
         }
 
-        public override void Draw(GameTime gameTime)
-        {
-            base.Draw(gameTime);
-        }
     }
 }

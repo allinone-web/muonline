@@ -1,4 +1,4 @@
-﻿using Client.Data;
+using Client.Data;
 using Client.Main.Content;
 using Client.Main.Controllers;
 using Client.Main.Controls;
@@ -11,8 +11,8 @@ namespace Client.Main.Objects.Worlds.Lorencia
 {
     public class HouseWallObject : ModelObject
     {
-        // These walls rely on the regular per-mesh path to preserve partially transparent sections.
-        protected override bool AllowMapObjectInstancing => false;
+        // Opaque wall meshes may be instanced while fade and flicker meshes remain per object.
+        protected override bool AllowMapObjectInstancing => true;
         // Constants
         private const float TARGET_ALPHA = 0.3f;
         private const float FADE_SPEED = 0.3f;

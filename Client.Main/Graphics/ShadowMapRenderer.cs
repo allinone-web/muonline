@@ -23,6 +23,7 @@ namespace Client.Main.Graphics
         private readonly List<WorldObject> _nearbyObjects = new(256);
         private readonly PriorityQueue<ModelObject, float> _closestCasters = new();
         private readonly List<ModelObject> _selectedCasters = new(128);
+        private readonly List<ModelObject> _staticInstancedCasters = new(128);
         private readonly HashSet<ModelObject> _renderedCasters = new();
         private readonly BoundingFrustum _lightFrustum = new BoundingFrustum(Matrix.Identity);
         private readonly ConditionalWeakTable<Effect, ShadowEffectBindings> _effectBindings = new();
@@ -115,6 +116,7 @@ namespace Client.Main.Graphics
             _shadowMap = null;
             _shadowCasterSupported = false;
             _renderedCasters.Clear();
+            _staticInstancedCasters.Clear();
         }
 
         public void EnsureRenderTarget()
@@ -278,13 +280,58 @@ namespace Client.Main.Graphics
                 world.Terrain?.RenderShadowMap(shadowEffect, LightViewProjection);
 
                 _renderedCasters.Clear();
+                _staticInstancedCasters.Clear();
                 for (int i = 0; i < _selectedCasters.Count; i++)
                 {
                     ModelObject caster = _selectedCasters[i];
+                    bool queuedForInstancing = false;
+                    try
+                    {
+                        queuedForInstancing = ModelObject.TryQueueStaticMapShadowCaster(caster);
+                    }
+                    catch
+                    {
+                        // The normal caster path below remains the compatibility fallback.
+                    }
+
+                    if (queuedForInstancing)
+                    {
+                        _staticInstancedCasters.Add(caster);
+                        continue;
+                    }
+
                     if (caster.DrawShadowCaster(shadowEffect, LightViewProjection) > 0)
                         _renderedCasters.Add(caster);
                 }
 
+                if (_staticInstancedCasters.Count > 0)
+                {
+                    bool instancedDrawSucceeded = ModelObject.FlushStaticMapShadowInstancingBatches(
+                        shadowEffect,
+                        LightViewProjection,
+                        world);
+
+                    if (instancedDrawSucceeded)
+                    {
+                        ModelObject.RegisterStaticMapShadowInstancedObjects(_staticInstancedCasters.Count);
+                        for (int i = 0; i < _staticInstancedCasters.Count; i++)
+                            _renderedCasters.Add(_staticInstancedCasters[i]);
+                    }
+                    else
+                    {
+                        // A shader, texture or shared buffer may disappear between selection and
+                        // rendering. Fall back to the original per-object caster path instead of
+                        // leaving holes in the shadow map.
+                        for (int i = 0; i < _staticInstancedCasters.Count; i++)
+                        {
+                            ModelObject caster = _staticInstancedCasters[i];
+                            if (caster.DrawShadowCaster(shadowEffect, LightViewProjection) > 0)
+                                _renderedCasters.Add(caster);
+                        }
+                    }
+                }
+
+                _staticInstancedCasters.Clear();
                 _renderedCasterSignature = _currentCasterSignature;
 
                 // Restore the regular technique when this effect exposes one.
@@ -354,12 +401,26 @@ namespace Client.Main.Graphics
             for (int i = 0; i < casters.Count; i++)
             {
                 ModelObject caster = casters[i];
-                Matrix world = caster.WorldPosition;
-                Vector3 position = world.Translation;
                 uint identity = unchecked((uint)RuntimeHelpers.GetHashCode(caster));
                 uint modelIdentity = unchecked((uint)(caster.Model != null
                     ? RuntimeHelpers.GetHashCode(caster.Model)
                     : 0));
+                hash ^= identity;
+                hash *= prime;
+                hash ^= modelIdentity;
+                hash *= prime;
+                hash ^= caster.AnimationPoseVersion;
+                hash *= prime;
+
+                if (caster.CanUseCompactStaticMapShadowSignature)
+                {
+                    hash ^= caster.TransformVersion;
+                    hash *= prime;
+                    continue;
+                }
+
+                Matrix world = caster.WorldPosition;
+                Vector3 position = world.Translation;
                 int qx = (int)MathF.Round(position.X / quantization);
                 int qy = (int)MathF.Round(position.Y / quantization);
                 int qz = (int)MathF.Round(position.Z / quantization);
@@ -367,13 +428,6 @@ namespace Client.Main.Graphics
                 int qM12 = (int)MathF.Round(world.M12 * 128f);
                 int qM21 = (int)MathF.Round(world.M21 * 128f);
                 int qM22 = (int)MathF.Round(world.M22 * 128f);
-
-                hash ^= identity;
-                hash *= prime;
-                hash ^= modelIdentity;
-                hash *= prime;
-                hash ^= caster.AnimationPoseVersion;
-                hash *= prime;
 
                 // Modular player/NPC actors load and swap body-part models independently.
                 // Include direct child readiness/model state so the shadow map refreshes

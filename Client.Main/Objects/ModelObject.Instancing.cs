@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
@@ -15,6 +16,53 @@ namespace Client.Main.Objects
     public abstract partial class ModelObject
     {
         private static readonly Dictionary<Type, bool> NpcCrowdRenderingCompatibility = new();
+        private static readonly ConcurrentDictionary<Type, StaticMapTypeCompatibility> StaticMapRenderingCompatibility = new();
+
+        private readonly struct StaticMapTypeCompatibility
+        {
+            public StaticMapTypeCompatibility(
+                bool defaultUpdate,
+                bool defaultDraw,
+                bool defaultDrawAfter,
+                bool defaultMeshRendering,
+                bool defaultShadowCaster)
+            {
+                DefaultUpdate = defaultUpdate;
+                DefaultDraw = defaultDraw;
+                DefaultDrawAfter = defaultDrawAfter;
+                DefaultMeshRendering = defaultMeshRendering;
+                DefaultShadowCaster = defaultShadowCaster;
+            }
+
+            public bool DefaultUpdate { get; }
+            public bool DefaultDraw { get; }
+            public bool DefaultDrawAfter { get; }
+            public bool DefaultMeshRendering { get; }
+            public bool DefaultShadowCaster { get; }
+        }
+
+        private StaticMapTypeCompatibility GetStaticMapTypeCompatibility()
+        {
+            if (_staticMapTypeCompatibilityInitialized)
+                return _staticMapTypeCompatibility;
+
+            Type type = GetType();
+            StaticMapTypeCompatibility compatibility = StaticMapRenderingCompatibility.GetOrAdd(
+                type,
+                static concreteType => new StaticMapTypeCompatibility(
+                    IsInheritedFromModelObject(concreteType, "Update", typeof(GameTime)),
+                    IsInheritedFromModelObject(concreteType, "Draw", typeof(GameTime)),
+                    IsInheritedFromModelObject(concreteType, "DrawAfter", typeof(GameTime)),
+                    IsInheritedFromModelObject(concreteType, "DrawMesh", typeof(int)) &&
+                    IsInheritedFromModelObject(concreteType, "DrawMeshWithItemMaterial", typeof(int)) &&
+                    IsInheritedFromModelObject(concreteType, "DrawMeshWithMonsterMaterial", typeof(int)) &&
+                    IsInheritedFromModelObject(concreteType, "DrawMeshWithDynamicLighting", typeof(int)),
+                    IsInheritedFromModelObject(concreteType, "DrawShadowCaster", typeof(Effect), typeof(Matrix))));
+
+            _staticMapTypeCompatibility = compatibility;
+            _staticMapTypeCompatibilityInitialized = true;
+            return compatibility;
+        }
 
         private static bool UsesDefaultNpcCrowdRendering(NPCObject npc)
         {
@@ -36,9 +84,9 @@ namespace Client.Main.Objects
             }
         }
 
-        private static bool IsInheritedFromModelObject(Type type, string methodName, Type parameterType)
+        private static bool IsInheritedFromModelObject(Type type, string methodName, params Type[] parameterTypes)
         {
-            var method = type.GetMethod(methodName, new[] { parameterType });
+            var method = type.GetMethod(methodName, parameterTypes);
             return method?.DeclaringType == typeof(ModelObject);
         }
 
@@ -51,25 +99,33 @@ namespace Client.Main.Objects
 
         private readonly struct StaticMapInstancingBatchKey : IEquatable<StaticMapInstancingBatchKey>
         {
-            public StaticMapInstancingBatchKey(BMD model, int meshIndex, Texture2D texture, bool twoSided)
+            public StaticMapInstancingBatchKey(
+                BMD model,
+                int meshIndex,
+                Texture2D texture,
+                bool twoSided,
+                int poseKey)
             {
                 Model = model;
                 MeshIndex = meshIndex;
                 Texture = texture;
                 TwoSided = twoSided;
+                PoseKey = poseKey;
             }
 
             public BMD Model { get; }
             public int MeshIndex { get; }
             public Texture2D Texture { get; }
             public bool TwoSided { get; }
+            public int PoseKey { get; }
 
             public bool Equals(StaticMapInstancingBatchKey other)
             {
                 return ReferenceEquals(Model, other.Model)
                     && MeshIndex == other.MeshIndex
                     && ReferenceEquals(Texture, other.Texture)
-                    && TwoSided == other.TwoSided;
+                    && TwoSided == other.TwoSided
+                    && PoseKey == other.PoseKey;
             }
 
             public override bool Equals(object obj) => obj is StaticMapInstancingBatchKey other && Equals(other);
@@ -83,9 +139,36 @@ namespace Client.Main.Objects
                     hash = (hash * 31) + MeshIndex;
                     hash = (hash * 31) + RuntimeHelpers.GetHashCode(Texture);
                     hash = (hash * 31) + (TwoSided ? 1 : 0);
+                    hash = (hash * 31) + PoseKey;
                     return hash;
                 }
             }
+        }
+
+        private readonly struct StaticMapInstancingMeshPlan
+        {
+            public StaticMapInstancingMeshPlan(
+                int meshIndex,
+                VertexBuffer geometryVertexBuffer,
+                IndexBuffer geometryIndexBuffer,
+                int boneCount,
+                Texture2D texture,
+                bool twoSided)
+            {
+                MeshIndex = meshIndex;
+                GeometryVertexBuffer = geometryVertexBuffer;
+                GeometryIndexBuffer = geometryIndexBuffer;
+                BoneCount = boneCount;
+                Texture = texture;
+                TwoSided = twoSided;
+            }
+
+            public int MeshIndex { get; }
+            public VertexBuffer GeometryVertexBuffer { get; }
+            public IndexBuffer GeometryIndexBuffer { get; }
+            public int BoneCount { get; }
+            public Texture2D Texture { get; }
+            public bool TwoSided { get; }
         }
 
         private readonly struct WalkerCrowdInstancingBatchKey : IEquatable<WalkerCrowdInstancingBatchKey>
@@ -158,6 +241,8 @@ namespace Client.Main.Objects
 
         private sealed class StaticMapInstancingBatch : IDisposable
         {
+            private const ulong EmptySignature = 1469598103934665603UL;
+
             public VertexBuffer GeometryVertexBuffer;
             public IndexBuffer GeometryIndexBuffer;
             public int PrimitiveCount;
@@ -165,19 +250,42 @@ namespace Client.Main.Objects
             public bool TwoSided;
             public Texture2D Texture;
             public ModelObject PoseSource;
-            public readonly List<StaticModelInstanceData> Instances = new List<StaticModelInstanceData>(64);
+            public StaticModelInstanceData[] InstanceData = new StaticModelInstanceData[64];
+            public int InstanceCount;
             public DynamicVertexBuffer InstanceBuffer;
             public int InstanceBufferCapacity;
-            public StaticModelInstanceData[] UploadBuffer = Array.Empty<StaticModelInstanceData>();
             public readonly VertexBufferBinding[] VertexBindings = new VertexBufferBinding[2];
+            public ulong QueueSignature = EmptySignature;
+            public ulong UploadedSignature;
+            public int UploadedInstanceCount;
+            public long UploadedWorldInstanceId;
+            public bool UploadedInstancesValid;
+
+            public void AddInstance(in StaticModelInstanceData instanceData)
+            {
+                if (InstanceCount == InstanceData.Length)
+                    Array.Resize(ref InstanceData, Math.Max(64, InstanceData.Length * 2));
+
+                InstanceData[InstanceCount++] = instanceData;
+            }
+
+            public void ResetQueue()
+            {
+                InstanceCount = 0;
+                QueueSignature = EmptySignature;
+            }
 
             public void Dispose()
             {
                 InstanceBuffer?.Dispose();
                 InstanceBuffer = null;
                 InstanceBufferCapacity = 0;
-                UploadBuffer = Array.Empty<StaticModelInstanceData>();
-                Instances.Clear();
+                InstanceData = Array.Empty<StaticModelInstanceData>();
+                ResetQueue();
+                UploadedInstancesValid = false;
+                UploadedInstanceCount = 0;
+                UploadedWorldInstanceId = 0;
+                UploadedSignature = 0;
             }
         }
 
@@ -208,13 +316,17 @@ namespace Client.Main.Objects
 
         private static readonly Dictionary<StaticMapInstancingBatchKey, StaticMapInstancingBatch> _staticMapInstancingBatches = new Dictionary<StaticMapInstancingBatchKey, StaticMapInstancingBatch>(128);
         private static readonly List<StaticMapInstancingBatch> _staticMapInstancingActiveBatches = new List<StaticMapInstancingBatch>(128);
+        private static readonly Dictionary<StaticMapInstancingBatchKey, StaticMapInstancingBatch> _staticMapShadowInstancingBatches = new Dictionary<StaticMapInstancingBatchKey, StaticMapInstancingBatch>(128);
+        private static readonly List<StaticMapInstancingBatch> _staticMapShadowInstancingActiveBatches = new List<StaticMapInstancingBatch>(128);
         private static readonly DynamicLightGpuUploader _staticInstancingLightUploader = new(32);
         private static readonly Dictionary<WalkerCrowdInstancingBatchKey, WalkerCrowdInstancingBatch> _walkerCrowdInstancingBatches = new Dictionary<WalkerCrowdInstancingBatchKey, WalkerCrowdInstancingBatch>(128);
         private static readonly List<WalkerCrowdInstancingBatch> _walkerCrowdInstancingActiveBatches = new List<WalkerCrowdInstancingBatch>(128);
         private static bool _staticMapInstancingFailed;
+        private static bool _staticMapShadowInstancingFailed;
         private static bool _walkerCrowdInstancingFailed;
         private static Effect _cachedStaticMapInstancingEffect;
         private static EffectTechnique _cachedStaticMapInstancingTechnique;
+        private static EffectTechnique _cachedStaticMapShadowInstancingTechnique;
         private static readonly Matrix _identity = Matrix.Identity;
 
         private static int _staticMapInstancedObjectsThisFrame = 0;
@@ -222,15 +334,37 @@ namespace Client.Main.Objects
         private static int _staticMapInstancedBatchesThisFrame = 0;
         private static int _staticMapInstancedDrawCallsThisFrame = 0;
         private static int _staticMapInstancingFallbacksThisFrame = 0;
+        private static int _staticMapInstanceUploadsThisFrame = 0;
+        private static int _staticMapInstanceUploadReusesThisFrame = 0;
+        private static int _staticMapShadowInstancedObjectsThisFrame = 0;
+        private static int _staticMapShadowInstancedDrawCallsThisFrame = 0;
+        private static int _staticMapShadowInstanceUploadsThisFrame = 0;
+        private static int _staticMapShadowInstanceUploadReusesThisFrame = 0;
+
+        private StaticMapInstancingMeshPlan[] _staticMapInstancingMeshPlan = Array.Empty<StaticMapInstancingMeshPlan>();
+        private int _staticMapInstancingMeshPlanCount;
+        private int _staticMapInstancingOpaqueMeshCount;
+        private uint _builtStaticMapInstancingPlanVersion;
+        private int _staticMapInstancingPlanRetryFrame;
+        private int _staticMapInstancingPlanValidationFrame;
+        private StaticMapTypeCompatibility _staticMapTypeCompatibility;
+        private bool _staticMapTypeCompatibilityInitialized;
 
         public static int LastFrameStaticMapInstancedObjects { get; private set; }
         public static int LastFrameStaticMapInstancedMeshInstances { get; private set; }
         public static int LastFrameStaticMapInstancedBatches { get; private set; }
         public static int LastFrameStaticMapInstancedDrawCalls { get; private set; }
         public static int LastFrameStaticMapInstancingFallbacks { get; private set; }
+        public static int LastFrameStaticMapInstanceUploads { get; private set; }
+        public static int LastFrameStaticMapInstanceUploadReuses { get; private set; }
+        public static int LastFrameStaticMapShadowInstancedObjects { get; private set; }
+        public static int LastFrameStaticMapShadowInstancedDrawCalls { get; private set; }
+        public static int LastFrameStaticMapShadowInstanceUploads { get; private set; }
+        public static int LastFrameStaticMapShadowInstanceUploadReuses { get; private set; }
         public static bool IsStaticMapInstancingBackendSupported => SupportsGpuDynamicSkinning;
         public static bool IsStaticMapInstancingRuntimeDisabled =>
             _staticMapInstancingFailed || (_walkerCrowdInstancingFailed && _walkerCrowdMultiPoseInstancingFailed);
+        public static bool IsStaticMapShadowInstancingRuntimeDisabled => _staticMapShadowInstancingFailed;
 
         private static void BeginFrameStaticMapInstancingMetrics()
         {
@@ -239,12 +373,24 @@ namespace Client.Main.Objects
             LastFrameStaticMapInstancedBatches = _staticMapInstancedBatchesThisFrame;
             LastFrameStaticMapInstancedDrawCalls = _staticMapInstancedDrawCallsThisFrame;
             LastFrameStaticMapInstancingFallbacks = _staticMapInstancingFallbacksThisFrame;
+            LastFrameStaticMapInstanceUploads = _staticMapInstanceUploadsThisFrame;
+            LastFrameStaticMapInstanceUploadReuses = _staticMapInstanceUploadReusesThisFrame;
+            LastFrameStaticMapShadowInstancedObjects = _staticMapShadowInstancedObjectsThisFrame;
+            LastFrameStaticMapShadowInstancedDrawCalls = _staticMapShadowInstancedDrawCallsThisFrame;
+            LastFrameStaticMapShadowInstanceUploads = _staticMapShadowInstanceUploadsThisFrame;
+            LastFrameStaticMapShadowInstanceUploadReuses = _staticMapShadowInstanceUploadReusesThisFrame;
 
             _staticMapInstancedObjectsThisFrame = 0;
             _staticMapInstancedMeshInstancesThisFrame = 0;
             _staticMapInstancedBatchesThisFrame = 0;
             _staticMapInstancedDrawCallsThisFrame = 0;
             _staticMapInstancingFallbacksThisFrame = 0;
+            _staticMapInstanceUploadsThisFrame = 0;
+            _staticMapInstanceUploadReusesThisFrame = 0;
+            _staticMapShadowInstancedObjectsThisFrame = 0;
+            _staticMapShadowInstancedDrawCallsThisFrame = 0;
+            _staticMapShadowInstanceUploadsThisFrame = 0;
+            _staticMapShadowInstanceUploadReusesThisFrame = 0;
             BeginFrameWalkerCrowdMultiPoseMetrics();
         }
 
@@ -266,6 +412,28 @@ namespace Client.Main.Objects
             return modelObject.TryQueueStaticMapObjectForInstancing();
         }
 
+        internal static bool TryQueueStaticMapShadowCaster(ModelObject modelObject)
+        {
+            if (modelObject == null)
+                return false;
+
+            try
+            {
+                return modelObject.TryQueueStaticMapShadowCaster();
+            }
+            catch
+            {
+                ClearStaticMapShadowInstancingQueues();
+                return false;
+            }
+        }
+
+        internal static void RegisterStaticMapShadowInstancedObjects(int count)
+        {
+            if (count > 0)
+                _staticMapShadowInstancedObjectsThisFrame += count;
+        }
+
         internal static bool IsWalkerCrowdInstancingCandidate(WorldObject obj)
         {
             return obj is MonsterObject ||
@@ -280,15 +448,16 @@ namespace Client.Main.Objects
             return modelObject.TryQueueWalkerCrowdForInstancing();
         }
 
-        internal static void FlushStaticMapInstancingBatches(WorldControl world)
+        internal static bool FlushStaticMapInstancingBatches(WorldControl world)
         {
             if (_staticMapInstancingActiveBatches.Count == 0)
-                return;
+                return true;
 
+            bool success = true;
             if (_staticMapInstancingFailed || !IsStaticMapInstancingSupported())
             {
                 ClearStaticMapInstancingQueues();
-                return;
+                return false;
             }
 
             var graphicsManager = GraphicsManager.Instance;
@@ -296,7 +465,7 @@ namespace Client.Main.Objects
             if (effect == null || _cachedStaticMapInstancingTechnique == null)
             {
                 ClearStaticMapInstancingQueues();
-                return;
+                return false;
             }
 
             ModelEffectBindings bindings = GetModelEffectBindings(effect);
@@ -316,25 +485,45 @@ namespace Client.Main.Objects
                 for (int i = 0; i < _staticMapInstancingActiveBatches.Count; i++)
                 {
                     var batch = _staticMapInstancingActiveBatches[i];
-                    int instanceCount = batch.Instances.Count;
+                    int instanceCount = batch.InstanceCount;
                     if (instanceCount <= 0 ||
-                        batch.GeometryVertexBuffer == null ||
-                        batch.GeometryIndexBuffer == null ||
-                        batch.Texture == null ||
+                        batch.GeometryVertexBuffer == null || batch.GeometryVertexBuffer.IsDisposed ||
+                        batch.GeometryIndexBuffer == null || batch.GeometryIndexBuffer.IsDisposed ||
+                        batch.Texture == null || batch.Texture.IsDisposed ||
                         batch.PoseSource == null)
                     {
+                        success = false;
                         continue;
                     }
 
                     if (!batch.PoseSource.TryUploadGpuSkinBoneMatrices(effect, batch.BoneCount))
+                    {
+                        success = false;
                         continue;
+                    }
 
-                    EnsureInstanceUploadBuffer(batch, instanceCount);
-                    for (int j = 0; j < instanceCount; j++)
-                        batch.UploadBuffer[j] = batch.Instances[j];
+                    bool instanceBufferRecreated = EnsureInstanceVertexBuffer(gd, batch, instanceCount);
+                    bool instanceUploadRequired =
+                        !Constants.ENABLE_STATIC_MAP_INSTANCE_UPLOAD_CACHE ||
+                        instanceBufferRecreated ||
+                        !batch.UploadedInstancesValid ||
+                        batch.UploadedWorldInstanceId != (world?.WorldInstanceId ?? 0) ||
+                        batch.UploadedInstanceCount != instanceCount ||
+                        batch.UploadedSignature != batch.QueueSignature;
 
-                    EnsureInstanceVertexBuffer(gd, batch, instanceCount);
-                    batch.InstanceBuffer.SetData(batch.UploadBuffer, 0, instanceCount, SetDataOptions.Discard);
+                    if (instanceUploadRequired)
+                    {
+                        batch.InstanceBuffer.SetData(batch.InstanceData, 0, instanceCount, SetDataOptions.Discard);
+                        batch.UploadedInstancesValid = true;
+                        batch.UploadedWorldInstanceId = world?.WorldInstanceId ?? 0;
+                        batch.UploadedInstanceCount = instanceCount;
+                        batch.UploadedSignature = batch.QueueSignature;
+                        _staticMapInstanceUploadsThisFrame++;
+                    }
+                    else
+                    {
+                        _staticMapInstanceUploadReusesThisFrame++;
+                    }
 
                     gd.RasterizerState = batch.TwoSided ? RasterizerState.CullNone : RasterizerState.CullClockwise;
                     bindings.DiffuseTexture?.SetValue(batch.Texture);
@@ -361,6 +550,7 @@ namespace Client.Main.Objects
             }
             catch (Exception ex)
             {
+                success = false;
                 _staticMapInstancingFailed = true;
                 MuGame.AppLoggerFactory?.CreateLogger<ModelObject>()?.LogWarning(ex, "Static map hardware instancing disabled after runtime failure.");
             }
@@ -372,6 +562,132 @@ namespace Client.Main.Objects
                 gd.SamplerStates[0] = prevSampler;
                 ClearStaticMapInstancingQueues();
             }
+
+            return success;
+        }
+
+        internal static bool FlushStaticMapShadowInstancingBatches(
+            Effect shadowEffect,
+            Matrix lightViewProjection,
+            WorldControl world)
+        {
+            if (_staticMapShadowInstancingActiveBatches.Count == 0)
+                return true;
+
+            bool success = true;
+            if (shadowEffect == null || !IsStaticMapShadowInstancingSupported())
+            {
+                ClearStaticMapShadowInstancingQueues();
+                return false;
+            }
+
+            ModelEffectBindings bindings = GetModelEffectBindings(shadowEffect);
+            var gd = GraphicsManager.Instance.GraphicsDevice;
+            var previousBlend = gd.BlendState;
+            var previousDepth = gd.DepthStencilState;
+            var previousRaster = gd.RasterizerState;
+            var previousSampler = gd.SamplerStates[0];
+            var previousTechnique = shadowEffect.CurrentTechnique;
+
+            try
+            {
+                shadowEffect.CurrentTechnique = _cachedStaticMapShadowInstancingTechnique;
+                bindings.World?.SetValue(_identity);
+                bindings.LightViewProjection?.SetValue(lightViewProjection);
+                int shadowSize = GraphicsManager.Instance.ShadowMapRenderer?.ShadowMap?.Width
+                    ?? Math.Max(256, Constants.SHADOW_MAP_SIZE);
+                bindings.ShadowMapTexelSize?.SetValue(new Vector2(1f / shadowSize, 1f / shadowSize));
+                bindings.ShadowBias?.SetValue(Constants.SHADOW_BIAS);
+                bindings.ShadowNormalBias?.SetValue(Constants.SHADOW_NORMAL_BIAS);
+                bindings.SunDirection?.SetValue(
+                    GraphicsManager.Instance.ShadowMapRenderer?.LightDirection ?? Constants.SUN_DIRECTION);
+                bindings.UseProceduralTerrainUv?.SetValue(0.0f);
+                bindings.IsWaterTexture?.SetValue(0.0f);
+                bindings.TextureCoordinateOffset?.SetValue(Vector2.Zero);
+
+                gd.BlendState = BlendState.Opaque;
+                gd.DepthStencilState = DepthStencilState.Default;
+                gd.SamplerStates[0] = GraphicsManager.GetQualityLinearSamplerState();
+
+                for (int i = 0; i < _staticMapShadowInstancingActiveBatches.Count; i++)
+                {
+                    StaticMapInstancingBatch batch = _staticMapShadowInstancingActiveBatches[i];
+                    int instanceCount = batch.InstanceCount;
+                    if (instanceCount <= 0 ||
+                        batch.GeometryVertexBuffer == null || batch.GeometryVertexBuffer.IsDisposed ||
+                        batch.GeometryIndexBuffer == null || batch.GeometryIndexBuffer.IsDisposed ||
+                        batch.Texture == null || batch.Texture.IsDisposed ||
+                        batch.PoseSource == null ||
+                        !batch.PoseSource.TryUploadGpuSkinBoneMatrices(shadowEffect, batch.BoneCount))
+                    {
+                        success = false;
+                        continue;
+                    }
+
+                    bool instanceBufferRecreated = EnsureInstanceVertexBuffer(gd, batch, instanceCount);
+                    bool uploadRequired =
+                        !Constants.ENABLE_STATIC_MAP_INSTANCE_UPLOAD_CACHE ||
+                        instanceBufferRecreated ||
+                        !batch.UploadedInstancesValid ||
+                        batch.UploadedWorldInstanceId != (world?.WorldInstanceId ?? 0) ||
+                        batch.UploadedInstanceCount != instanceCount ||
+                        batch.UploadedSignature != batch.QueueSignature;
+
+                    if (uploadRequired)
+                    {
+                        batch.InstanceBuffer.SetData(batch.InstanceData, 0, instanceCount, SetDataOptions.Discard);
+                        batch.UploadedInstancesValid = true;
+                        batch.UploadedWorldInstanceId = world?.WorldInstanceId ?? 0;
+                        batch.UploadedInstanceCount = instanceCount;
+                        batch.UploadedSignature = batch.QueueSignature;
+                        _staticMapShadowInstanceUploadsThisFrame++;
+                    }
+                    else
+                    {
+                        _staticMapShadowInstanceUploadReusesThisFrame++;
+                    }
+
+                    gd.RasterizerState = batch.TwoSided ? RasterizerState.CullNone : RasterizerState.CullClockwise;
+                    bindings.DiffuseTexture?.SetValue(batch.Texture);
+                    batch.VertexBindings[0] = new VertexBufferBinding(batch.GeometryVertexBuffer);
+                    batch.VertexBindings[1] = new VertexBufferBinding(batch.InstanceBuffer, 0, 1);
+                    gd.SetVertexBuffers(batch.VertexBindings);
+                    gd.Indices = batch.GeometryIndexBuffer;
+
+                    int passCount = shadowEffect.CurrentTechnique.Passes.Count;
+                    for (int passIndex = 0; passIndex < passCount; passIndex++)
+                    {
+                        shadowEffect.CurrentTechnique.Passes[passIndex].Apply();
+                        gd.DrawInstancedPrimitives(
+                            PrimitiveType.TriangleList,
+                            0,
+                            0,
+                            batch.PrimitiveCount,
+                            instanceCount);
+                        _staticMapShadowInstancedDrawCallsThisFrame++;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                success = false;
+                _staticMapShadowInstancingFailed = true;
+                MuGame.AppLoggerFactory?.CreateLogger<ModelObject>()?.LogWarning(
+                    ex,
+                    "Static map shadow instancing disabled after runtime failure.");
+            }
+            finally
+            {
+                if (previousTechnique != null)
+                    shadowEffect.CurrentTechnique = previousTechnique;
+                gd.BlendState = previousBlend;
+                gd.DepthStencilState = previousDepth;
+                gd.RasterizerState = previousRaster;
+                gd.SamplerStates[0] = previousSampler;
+                ClearStaticMapShadowInstancingQueues();
+            }
+
+            return success;
         }
 
         private static void FlushWalkerCrowdLegacyInstancingBatches(WorldControl world)
@@ -472,6 +788,14 @@ namespace Client.Main.Objects
         }
 
         internal static bool HasPendingStaticMapInstancingBatches() => _staticMapInstancingActiveBatches.Count > 0;
+
+        internal void CancelStaticMapInstancingForCurrentFrame()
+        {
+            if (_staticMapInstancedMeshFrameTags == null)
+                return;
+
+            Array.Clear(_staticMapInstancedMeshFrameTags, 0, _staticMapInstancedMeshFrameTags.Length);
+        }
         private static bool HasPendingWalkerCrowdLegacyInstancingBatches() => _walkerCrowdInstancingActiveBatches.Count > 0;
 
         /// <summary>
@@ -481,27 +805,33 @@ namespace Client.Main.Objects
         /// </summary>
         internal static void ResetWorldScopedInstancingState()
         {
-            ClearStaticMapInstancingQueues();
+            DisposeStaticMapInstancingBatches();
             ClearWalkerCrowdLegacyInstancingQueues();
             ClearWalkerCrowdMultiPoseQueues();
         }
 
-        private static void EnsureInstanceUploadBuffer(StaticMapInstancingBatch batch, int instanceCount)
+        private static void DisposeStaticMapInstancingBatches()
         {
-            if (batch.UploadBuffer.Length >= instanceCount)
-                return;
+            foreach (StaticMapInstancingBatch batch in _staticMapInstancingBatches.Values)
+                batch.Dispose();
 
-            int newSize = Math.Max(instanceCount, batch.UploadBuffer.Length == 0 ? 64 : batch.UploadBuffer.Length * 2);
-            batch.UploadBuffer = new StaticModelInstanceData[newSize];
+            _staticMapInstancingBatches.Clear();
+            _staticMapInstancingActiveBatches.Clear();
+
+            foreach (StaticMapInstancingBatch batch in _staticMapShadowInstancingBatches.Values)
+                batch.Dispose();
+
+            _staticMapShadowInstancingBatches.Clear();
+            _staticMapShadowInstancingActiveBatches.Clear();
         }
 
-        private static void EnsureInstanceVertexBuffer(GraphicsDevice gd, StaticMapInstancingBatch batch, int instanceCount)
+        private static bool EnsureInstanceVertexBuffer(GraphicsDevice gd, StaticMapInstancingBatch batch, int instanceCount)
         {
             if (batch.InstanceBuffer != null &&
                 !batch.InstanceBuffer.IsDisposed &&
                 batch.InstanceBufferCapacity >= instanceCount)
             {
-                return;
+                return false;
             }
 
             batch.InstanceBuffer?.Dispose();
@@ -512,6 +842,8 @@ namespace Client.Main.Objects
                 capacity,
                 BufferUsage.WriteOnly);
             batch.InstanceBufferCapacity = capacity;
+            batch.UploadedInstancesValid = false;
+            return true;
         }
 
         private static void EnsureInstanceUploadBuffer(WalkerCrowdInstancingBatch batch, int instanceCount)
@@ -545,9 +877,17 @@ namespace Client.Main.Objects
         private static void ClearStaticMapInstancingQueues()
         {
             for (int i = 0; i < _staticMapInstancingActiveBatches.Count; i++)
-                _staticMapInstancingActiveBatches[i].Instances.Clear();
+                _staticMapInstancingActiveBatches[i].ResetQueue();
 
             _staticMapInstancingActiveBatches.Clear();
+        }
+
+        private static void ClearStaticMapShadowInstancingQueues()
+        {
+            for (int i = 0; i < _staticMapShadowInstancingActiveBatches.Count; i++)
+                _staticMapShadowInstancingActiveBatches[i].ResetQueue();
+
+            _staticMapShadowInstancingActiveBatches.Clear();
         }
 
         private static void ClearWalkerCrowdLegacyInstancingQueues()
@@ -575,9 +915,34 @@ namespace Client.Main.Objects
             {
                 _cachedStaticMapInstancingEffect = effect;
                 _cachedStaticMapInstancingTechnique = TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced");
+                _cachedStaticMapShadowInstancingTechnique = TryGetTechnique(effect, "ShadowCaster_SkinnedInstanced");
             }
 
             return _cachedStaticMapInstancingTechnique != null;
+        }
+
+        private static bool IsStaticMapShadowInstancingSupported()
+        {
+            if (_staticMapShadowInstancingFailed ||
+                !Constants.ENABLE_STATIC_MAP_SHADOW_INSTANCING ||
+                !Constants.ENABLE_GPU_SKINNING ||
+                !SupportsGpuDynamicSkinning)
+            {
+                return false;
+            }
+
+            var effect = GraphicsManager.Instance.DynamicLightingEffect;
+            if (effect == null)
+                return false;
+
+            if (!ReferenceEquals(_cachedStaticMapInstancingEffect, effect))
+            {
+                _cachedStaticMapInstancingEffect = effect;
+                _cachedStaticMapInstancingTechnique = TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced");
+                _cachedStaticMapShadowInstancingTechnique = TryGetTechnique(effect, "ShadowCaster_SkinnedInstanced");
+            }
+
+            return _cachedStaticMapShadowInstancingTechnique != null;
         }
 
         private static bool IsWalkerCrowdLegacyInstancingSupported()
@@ -598,6 +963,7 @@ namespace Client.Main.Objects
             {
                 _cachedStaticMapInstancingEffect = effect;
                 _cachedStaticMapInstancingTechnique = TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced");
+                _cachedStaticMapShadowInstancingTechnique = TryGetTechnique(effect, "ShadowCaster_SkinnedInstanced");
             }
 
             return _cachedStaticMapInstancingTechnique != null;
@@ -605,78 +971,133 @@ namespace Client.Main.Objects
 
         private StaticMapInstancingQueueResult TryQueueStaticMapObjectForInstancing()
         {
-            if (!CanUseStaticMapInstancing())
+            if (!CanUseStaticMapInstancingObjectState() || !EnsureStaticMapInstancingPlan())
                 return StaticMapInstancingQueueResult.None;
 
-            if (Model?.Meshes == null || _meshes == null)
-                return StaticMapInstancingQueueResult.None;
-
-            int meshCount = Model.Meshes.Length;
-            EnsureStaticMapInstancingFrameTags(meshCount);
+            EnsureStaticMapInstancingFrameTags(Model.Meshes.Length);
             int instancingFrameTag = MuGame.FrameIndex + 1;
-            int opaqueMeshCount = 0;
-            int queuedOpaqueMeshCount = 0;
             byte alpha = (byte)MathHelper.Clamp(TotalAlpha * 255f, 0f, 255f);
+            int poseKey = GetStaticMapPoseKey();
             var instanceData = new StaticModelInstanceData(WorldPosition, new Color((byte)255, (byte)255, (byte)255, alpha));
 
-            for (int meshIndex = 0; meshIndex < meshCount; meshIndex++)
+            for (int planIndex = 0; planIndex < _staticMapInstancingMeshPlanCount; planIndex++)
             {
-                if (!ShouldQueueStaticMapMesh(meshIndex))
-                    continue;
-
-                opaqueMeshCount++;
-
-                if (!CanUseStaticMapMeshForInstancing(meshIndex))
-                    continue;
-
-                if (!BMDLoader.Instance.TryGetGpuSkinnedMeshBuffers(
+                StaticMapInstancingMeshPlan meshPlan = _staticMapInstancingMeshPlan[planIndex];
+                var key = new StaticMapInstancingBatchKey(
                     Model,
-                    meshIndex,
-                    out var geometryVB,
-                    out var geometryIB,
-                    out var boneCount))
-                {
-                    continue;
-                }
-
-                bool twoSided = IsMeshTwoSided(meshIndex, false);
-                Texture2D texture = _meshes[meshIndex].Texture;
-                var key = new StaticMapInstancingBatchKey(Model, meshIndex, texture, twoSided);
+                    meshPlan.MeshIndex,
+                    meshPlan.Texture,
+                    meshPlan.TwoSided,
+                    poseKey);
                 if (!_staticMapInstancingBatches.TryGetValue(key, out var batch))
                 {
                     batch = new StaticMapInstancingBatch();
                     _staticMapInstancingBatches[key] = batch;
                 }
 
-                batch.GeometryVertexBuffer = geometryVB;
-                batch.GeometryIndexBuffer = geometryIB;
-                batch.PrimitiveCount = geometryIB.IndexCount / 3;
-                batch.BoneCount = boneCount;
-                batch.TwoSided = twoSided;
-                batch.Texture = texture;
+                batch.GeometryVertexBuffer = meshPlan.GeometryVertexBuffer;
+                batch.GeometryIndexBuffer = meshPlan.GeometryIndexBuffer;
+                batch.PrimitiveCount = meshPlan.GeometryIndexBuffer.IndexCount / 3;
+                batch.BoneCount = meshPlan.BoneCount;
+                batch.TwoSided = meshPlan.TwoSided;
+                batch.Texture = meshPlan.Texture;
 
-                if (batch.PoseSource == null || !ReferenceEquals(batch.PoseSource.Model, Model))
+                if (batch.InstanceCount == 0)
+                {
                     batch.PoseSource = this;
-
-                if (batch.Instances.Count == 0)
                     _staticMapInstancingActiveBatches.Add(batch);
+                }
 
-                batch.Instances.Add(instanceData);
-                _staticMapInstancedMeshFrameTags[meshIndex] = instancingFrameTag;
+                batch.AddInstance(instanceData);
+                batch.QueueSignature = MixStaticMapInstanceSignature(
+                    batch.QueueSignature,
+                    RuntimeHelpers.GetHashCode(this),
+                    TransformVersion,
+                    alpha);
+                _staticMapInstancedMeshFrameTags[meshPlan.MeshIndex] = instancingFrameTag;
                 _staticMapInstancedMeshInstancesThisFrame++;
-                queuedOpaqueMeshCount++;
             }
 
-            if (opaqueMeshCount == 0)
-                return StaticMapInstancingQueueResult.None;
-
-            if (queuedOpaqueMeshCount == 0)
-                return StaticMapInstancingQueueResult.None;
-
             _staticMapInstancedObjectsThisFrame++;
-            return queuedOpaqueMeshCount == opaqueMeshCount
+            return _staticMapInstancingMeshPlanCount == _staticMapInstancingOpaqueMeshCount
                 ? StaticMapInstancingQueueResult.Full
                 : StaticMapInstancingQueueResult.Partial;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private int GetStaticMapPoseKey()
+        {
+            if (Model?.Actions == null || Model.Actions.Length == 0)
+                return 0;
+
+            return Math.Clamp(CurrentAction, 0, Model.Actions.Length - 1);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static ulong MixStaticMapInstanceSignature(
+            ulong current,
+            int objectIdentity,
+            uint transformVersion,
+            byte alpha)
+        {
+            unchecked
+            {
+                current ^= (uint)objectIdentity;
+                current *= 1099511628211UL;
+                current ^= transformVersion;
+                current *= 1099511628211UL;
+                current ^= alpha;
+                current *= 1099511628211UL;
+                return current;
+            }
+        }
+
+        private bool TryQueueStaticMapShadowCaster()
+        {
+            if (!CanUseFullStaticMapShadowInstancing())
+                return false;
+
+            byte alpha = 255;
+            int poseKey = GetStaticMapPoseKey();
+            var instanceData = new StaticModelInstanceData(WorldPosition, Color.White);
+            for (int planIndex = 0; planIndex < _staticMapInstancingMeshPlanCount; planIndex++)
+            {
+                StaticMapInstancingMeshPlan meshPlan = _staticMapInstancingMeshPlan[planIndex];
+                var key = new StaticMapInstancingBatchKey(
+                    Model,
+                    meshPlan.MeshIndex,
+                    meshPlan.Texture,
+                    meshPlan.TwoSided,
+                    poseKey);
+
+                if (!_staticMapShadowInstancingBatches.TryGetValue(key, out StaticMapInstancingBatch batch))
+                {
+                    batch = new StaticMapInstancingBatch();
+                    _staticMapShadowInstancingBatches[key] = batch;
+                }
+
+                batch.GeometryVertexBuffer = meshPlan.GeometryVertexBuffer;
+                batch.GeometryIndexBuffer = meshPlan.GeometryIndexBuffer;
+                batch.PrimitiveCount = meshPlan.GeometryIndexBuffer.IndexCount / 3;
+                batch.BoneCount = meshPlan.BoneCount;
+                batch.TwoSided = meshPlan.TwoSided;
+                batch.Texture = meshPlan.Texture;
+
+                if (batch.InstanceCount == 0)
+                {
+                    batch.PoseSource = this;
+                    _staticMapShadowInstancingActiveBatches.Add(batch);
+                }
+
+                batch.AddInstance(instanceData);
+                batch.QueueSignature = MixStaticMapInstanceSignature(
+                    batch.QueueSignature,
+                    RuntimeHelpers.GetHashCode(this),
+                    TransformVersion,
+                    alpha);
+            }
+
+            return true;
         }
 
         private bool TryQueueWalkerCrowdLegacyForInstancing()
@@ -787,7 +1208,129 @@ namespace Client.Main.Objects
             return true;
         }
 
+        internal bool CanUseCompactStaticMapShadowSignature
+        {
+            get
+            {
+                return IsMapPlacementObject &&
+                       Children.Count == 0 &&
+                       !RequiresPerFrameAnimation &&
+                       !ContinuousAnimation &&
+                       !LinkParentAnimation &&
+                       ParentBoneLink < 0 &&
+                       !HasAnimatedCurrentAction();
+            }
+        }
+
+        private bool CanUseFullStaticMapShadowInstancing()
+        {
+            if (!IsStaticMapShadowInstancingSupported() ||
+                !RenderShadow ||
+                Children.Count != 0 ||
+                !GetStaticMapTypeCompatibility().DefaultShadowCaster)
+            {
+                return false;
+            }
+
+            EnsureMeshRenderPlans();
+            if (!CanUseStaticMapInstancingObjectState() ||
+                _transparentMeshPlan.Count != 0 ||
+                !EnsureStaticMapInstancingPlan())
+            {
+                return false;
+            }
+
+            return _staticMapInstancingOpaqueMeshCount > 0 &&
+                   _staticMapInstancingMeshPlanCount == _staticMapInstancingOpaqueMeshCount;
+        }
+
+        internal bool CanUseDedicatedStaticMapRenderQueue()
+        {
+            if (!Constants.ENABLE_STATIC_MAP_RENDER_QUEUE ||
+                Constants.DRAW_BOUNDING_BOXES ||
+                Constants.DRAW_BOUNDING_BOXES_INTERACTIVES ||
+                IsTransparent ||
+                Interactive ||
+                Children.Count != 0)
+            {
+                return false;
+            }
+
+            StaticMapTypeCompatibility compatibility = GetStaticMapTypeCompatibility();
+            if (!compatibility.DefaultUpdate ||
+                !compatibility.DefaultDraw ||
+                !compatibility.DefaultDrawAfter ||
+                !compatibility.DefaultMeshRendering)
+            {
+                return false;
+            }
+
+            EnsureMeshRenderPlans();
+            if (!CanUseStaticMapInstancingObjectState() ||
+                _transparentMeshPlan.Count != 0 ||
+                !EnsureStaticMapInstancingPlan())
+            {
+                return false;
+            }
+
+            return _staticMapInstancingOpaqueMeshCount > 0 &&
+                   _staticMapInstancingMeshPlanCount == _staticMapInstancingOpaqueMeshCount;
+        }
+
+        internal bool CanSkipStaticMapWorldUpdate()
+        {
+            if (!Constants.ENABLE_STATIC_MAP_UPDATE_SKIP ||
+                !IsMapPlacementObject ||
+                !_contentLoaded ||
+                !Visible ||
+                Children.Count != 0 ||
+                RequiresPerFrameWorldUpdate ||
+                ContinuousAnimation ||
+                LinkParentAnimation ||
+                ParentBoneLink >= 0 ||
+                HasAnimatedCurrentAction() ||
+                _invalidatedBufferFlags != MeshDirtyFlags.None)
+            {
+                return false;
+            }
+
+            if (!GetStaticMapTypeCompatibility().DefaultUpdate)
+                return false;
+
+            // CPU-lit fallback geometry still needs its periodic lighting refresh. The shader
+            // path evaluates terrain, sun and dynamic lights during rendering, so a fully static
+            // placement has no meaningful per-frame ModelObject work once its buffers are ready.
+            if (AllowLightingUpdates &&
+                (!Constants.ENABLE_DYNAMIC_LIGHTING_SHADER ||
+                 GraphicsManager.Instance.DynamicLightingEffect == null))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        internal bool CanSkipDefaultDrawAfterPass()
+        {
+            if (!IsMapPlacementObject ||
+                Constants.DRAW_BOUNDING_BOXES ||
+                Constants.DRAW_BOUNDING_BOXES_INTERACTIVES ||
+                Children.Count != 0 ||
+                !GetStaticMapTypeCompatibility().DefaultDrawAfter)
+            {
+                return false;
+            }
+
+            EnsureMeshRenderPlans();
+            return _transparentMeshPlan.Count == 0;
+        }
+
         private bool CanUseStaticMapInstancing()
+        {
+            return CanUseStaticMapInstancingObjectState() && EnsureStaticMapInstancingPlan();
+        }
+
+        private bool CanUseStaticMapInstancingObjectState()
         {
             if (!IsStaticMapInstancingSupported())
                 return false;
@@ -801,7 +1344,7 @@ namespace Client.Main.Objects
             if (HasAnimatedCurrentAction())
                 return false;
 
-            if (!Visible || Children.Count > 0 || Model?.Meshes == null || Model.Meshes.Length == 0)
+            if (!Visible || Model?.Meshes == null || Model.Meshes.Length == 0)
                 return false;
 
             if (LinkParentAnimation || ParentBoneLink >= 0 || RequiresPerFrameAnimation || ContinuousAnimation)
@@ -810,10 +1353,101 @@ namespace Client.Main.Objects
             if (TotalAlpha < 0.999f)
                 return false;
 
-            if (HasVisibleTransparentMapMesh())
+            return true;
+        }
+
+        private bool EnsureStaticMapInstancingPlan()
+        {
+            int frame = MuGame.FrameIndex;
+            if (_builtStaticMapInstancingPlanVersion == _meshRenderPlanVersion &&
+                frame < _staticMapInstancingPlanValidationFrame &&
+                (_staticMapInstancingMeshPlanCount == _staticMapInstancingOpaqueMeshCount ||
+                 frame < _staticMapInstancingPlanRetryFrame))
+            {
+                return _staticMapInstancingMeshPlanCount > 0;
+            }
+
+            if (_builtStaticMapInstancingPlanVersion == _meshRenderPlanVersion &&
+                IsStaticMapInstancingPlanAlive() &&
+                (_staticMapInstancingMeshPlanCount == _staticMapInstancingOpaqueMeshCount ||
+                 frame < _staticMapInstancingPlanRetryFrame))
+            {
+                _staticMapInstancingPlanValidationFrame = frame + 120;
+                return _staticMapInstancingMeshPlanCount > 0;
+            }
+
+            RebuildStaticMapInstancingPlan();
+            return _staticMapInstancingMeshPlanCount > 0;
+        }
+
+        private bool IsStaticMapInstancingPlanAlive()
+        {
+            if (_builtStaticMapInstancingPlanVersion == 0)
                 return false;
 
+            for (int i = 0; i < _staticMapInstancingMeshPlanCount; i++)
+            {
+                StaticMapInstancingMeshPlan plan = _staticMapInstancingMeshPlan[i];
+                if (plan.GeometryVertexBuffer == null || plan.GeometryVertexBuffer.IsDisposed ||
+                    plan.GeometryIndexBuffer == null || plan.GeometryIndexBuffer.IsDisposed ||
+                    plan.Texture == null || plan.Texture.IsDisposed ||
+                    _meshes == null ||
+                    (uint)plan.MeshIndex >= (uint)_meshes.Length ||
+                    !ReferenceEquals(plan.Texture, _meshes[plan.MeshIndex].Texture))
+                {
+                    return false;
+                }
+            }
+
             return true;
+        }
+
+        private void RebuildStaticMapInstancingPlan()
+        {
+            _staticMapInstancingMeshPlanCount = 0;
+            _staticMapInstancingOpaqueMeshCount = 0;
+            _builtStaticMapInstancingPlanVersion = _meshRenderPlanVersion;
+            _staticMapInstancingPlanRetryFrame = MuGame.FrameIndex + 120;
+            _staticMapInstancingPlanValidationFrame = MuGame.FrameIndex + 120;
+
+            if (Model?.Meshes == null || _meshes == null)
+                return;
+
+            int meshCount = Math.Min(Model.Meshes.Length, _meshes.Length);
+            if (_staticMapInstancingMeshPlan.Length < meshCount)
+                _staticMapInstancingMeshPlan = new StaticMapInstancingMeshPlan[meshCount];
+
+            for (int meshIndex = 0; meshIndex < meshCount; meshIndex++)
+            {
+                if (!ShouldQueueStaticMapMesh(meshIndex))
+                    continue;
+
+                _staticMapInstancingOpaqueMeshCount++;
+                if (!CanUseStaticMapMeshForInstancing(meshIndex))
+                    continue;
+
+                if (!BMDLoader.Instance.TryGetGpuSkinnedMeshBuffers(
+                    Model,
+                    meshIndex,
+                    out VertexBuffer geometryVertexBuffer,
+                    out IndexBuffer geometryIndexBuffer,
+                    out int boneCount))
+                {
+                    continue;
+                }
+
+                _staticMapInstancingMeshPlan[_staticMapInstancingMeshPlanCount++] =
+                    new StaticMapInstancingMeshPlan(
+                        meshIndex,
+                        geometryVertexBuffer,
+                        geometryIndexBuffer,
+                        boneCount,
+                        _meshes[meshIndex].Texture,
+                        IsMeshTwoSided(meshIndex, false));
+            }
+
+            if (_staticMapInstancingMeshPlanCount == _staticMapInstancingOpaqueMeshCount)
+                _staticMapInstancingPlanRetryFrame = int.MaxValue;
         }
 
         private enum WalkerCrowdRejectionReason

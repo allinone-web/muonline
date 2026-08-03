@@ -156,6 +156,9 @@ public sealed record WorldTelemetry
     public int ModelObjects { get; init; }
     public int SpriteObjects { get; init; }
     public int TransparentObjects { get; init; }
+    public int DedicatedStaticMapObjects { get; init; }
+    public int StaticMapUpdateSkips { get; init; }
+    public int DrawAfterSkips { get; init; }
     public int AnimationUpdates { get; init; }
     public int AnimationSkips { get; init; }
     public int LowQualityObjects { get; init; }
@@ -209,6 +212,12 @@ public sealed record AnimationTelemetry
     public int StaticInstancedObjects { get; init; }
     public int StaticMeshInstances { get; init; }
     public int StaticDrawCalls { get; init; }
+    public int StaticInstanceUploads { get; init; }
+    public int StaticInstanceUploadReuses { get; init; }
+    public int StaticShadowObjects { get; init; }
+    public int StaticShadowDrawCalls { get; init; }
+    public int StaticShadowUploads { get; init; }
+    public int StaticShadowUploadReuses { get; init; }
     public bool MultiPoseEnabled { get; init; }
     public int MultiPoseObjects { get; init; }
     public int MultiPoseMeshInstances { get; init; }

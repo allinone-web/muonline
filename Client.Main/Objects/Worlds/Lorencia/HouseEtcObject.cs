@@ -1,15 +1,13 @@
-﻿using Client.Data;
+using Client.Data;
 using Client.Main.Content;
-using Microsoft.Xna.Framework;
-using Microsoft.Xna.Framework.Graphics;
 using System.Threading.Tasks;
 
 namespace Client.Main.Objects.Worlds.Lorencia
 {
     public class HouseEtcObject : ModelObject
     {
-        // These walls rely on the regular per-mesh path to preserve partially transparent sections.
-        protected override bool AllowMapObjectInstancing => false;
+        // Opaque meshes may be instanced; transparent sections remain on the regular per-object pass.
+        protected override bool AllowMapObjectInstancing => true;
         public HouseEtcObject()
         {
             LightEnabled = true;
@@ -22,14 +20,5 @@ namespace Client.Main.Objects.Worlds.Lorencia
             await base.Load();
         }
 
-        public override void Update(GameTime gameTime)
-        {
-            base.Update(gameTime);
-        }
-
-        public override void Draw(GameTime gameTime)
-        {
-            base.Draw(gameTime);
-        }
     }
 }

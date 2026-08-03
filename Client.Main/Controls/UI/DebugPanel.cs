@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Text;
 using Client.Main.Content;
 using Client.Main.Controllers;
@@ -403,6 +403,7 @@ namespace Client.Main.Controls.UI
                 : ModernHudTheme.Warning;
 
             var terrainMetrics = walkableWorld.Terrain.FrameMetrics;
+            var worldMetrics = walkableWorld.FrameMetrics;
             int queuedMainThreadActions = MuGame.MainThreadPendingActions;
             int processedMainThreadActions = MuGame.MainThreadProcessedActionsLastFrame;
             int queuedSchedulerTasks = MuGame.TaskScheduler?.QueuedTaskCount ?? 0;
@@ -421,6 +422,10 @@ namespace Client.Main.Controls.UI
                 .Append('\n')
                 .Append("Visible  ").Append(walkableWorld.LastCullVisibleCount)
                 .Append("  ·  ").Append(walkableWorld.LastCullRebuildMs.ToString("F2")).Append(" ms")
+                .Append('\n')
+                .Append("Static map  queue ").Append(worldMetrics.DedicatedStaticMapObjects)
+                .Append("  ·  update skip ").Append(worldMetrics.StaticMapUpdateSkips)
+                .Append("  ·  after skip ").Append(worldMetrics.DrawAfterSkips)
                 .Append('\n')
                 .Append("Frame  p95 ").Append(framePerformance.P95Ms.ToString("F1"))
                 .Append(" ms  ·  p99 ").Append(framePerformance.P99Ms.ToString("F1"))
@@ -467,6 +472,17 @@ namespace Client.Main.Controls.UI
                 .Append("Batches  ").Append(ModelObject.LastFrameStaticMapInstancedBatches)
                 .Append("  ·  draws ").Append(ModelObject.LastFrameStaticMapInstancedDrawCalls)
                 .Append("  ·  fallback ").Append(ModelObject.LastFrameStaticMapInstancingFallbacks)
+                .Append('\n')
+                .Append("Instance upload  ").Append(ModelObject.LastFrameStaticMapInstanceUploads)
+                .Append("  ·  reused ").Append(ModelObject.LastFrameStaticMapInstanceUploadReuses)
+                .Append('\n')
+                .Append("Shadow inst  ").Append(Constants.ENABLE_STATIC_MAP_SHADOW_INSTANCING ? "ON" : "OFF")
+                .Append(ModelObject.IsStaticMapShadowInstancingRuntimeDisabled ? " / runtime OFF" : string.Empty)
+                .Append("  ·  objects ").Append(ModelObject.LastFrameStaticMapShadowInstancedObjects)
+                .Append("  ·  draws ").Append(ModelObject.LastFrameStaticMapShadowInstancedDrawCalls)
+                .Append('\n')
+                .Append("Shadow upload  ").Append(ModelObject.LastFrameStaticMapShadowInstanceUploads)
+                .Append("  ·  reused ").Append(ModelObject.LastFrameStaticMapShadowInstanceUploadReuses)
                 .Append('\n')
                 .Append("Multi-pose  ").Append(ModelObject.IsWalkerCrowdMultiPoseActive ? "ON" : "LEGACY")
                 .Append("  ·  objects ").Append(ModelObject.LastFrameWalkerCrowdMultiPoseObjects)
