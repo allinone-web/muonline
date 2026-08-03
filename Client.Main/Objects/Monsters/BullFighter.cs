@@ -20,6 +20,8 @@ namespace Client.Main.Objects.Monsters
         {
             RenderShadow = true;
             Scale = 0.8f;
+            HiddenMesh = 0; // SourceMain5.2: c->Object.HiddenMesh = 0
+            MoveSpeed = 250f; // SourceMain5.2: default monster MoveSpeed (10 * 25 FPS)
             _rightHandWeapon = new WeaponObject
             {
                 LinkParentAnimation = false,
@@ -50,6 +52,15 @@ namespace Client.Main.Objects.Monsters
             var item = ItemDatabase.GetItemDefinition(1, 6);
             _rightHandWeapon.Model = await BMDLoader.Instance.Prepare(item.TexturePath);
             await base.Load();
+
+            // SourceMain5.2 ZzzOpenData.cpp: base monster action speeds.
+            SetActionSpeed(MonsterActionType.Stop1, 0.25f);
+            SetActionSpeed(MonsterActionType.Stop2, 0.20f);
+            SetActionSpeed(MonsterActionType.Walk, 0.34f);
+            SetActionSpeed(MonsterActionType.Attack1, 0.33f);
+            SetActionSpeed(MonsterActionType.Attack2, 0.33f);
+            SetActionSpeed(MonsterActionType.Shock, 0.50f);
+            SetActionSpeed(MonsterActionType.Die, 0.55f);
         }
 
         // Sound mapping based on C++ SetMonsterSound(MODEL_MONSTER01 + Type, 0, 1, 2, 3, 4);
@@ -57,16 +68,30 @@ namespace Client.Main.Objects.Monsters
         {
             base.OnIdle();
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            // Play one of the idle sounds (index 0 or 1)
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mBull1.wav", Position, listenerPosition);
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mBull1.wav"
+                : "Sound/mBull2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
         }
 
         public override void OnPerformAttack(int attackType = 1)
         {
             base.OnPerformAttack(attackType);
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            // Play one of the attack sounds (index 2 or 3)
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mBullAttack1.wav", Position, listenerPosition);
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mBullAttack1.wav"
+                : "Sound/mBullAttack2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
+        }
+
+        public override void OnReceiveDamage()
+        {
+            base.OnReceiveDamage();
+            Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mBullAttack1.wav"
+                : "Sound/mBullAttack2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
         }
 
         public override void OnDeathAnimationStart()

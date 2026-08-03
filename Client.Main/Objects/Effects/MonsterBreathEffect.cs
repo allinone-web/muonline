@@ -41,6 +41,12 @@ namespace Client.Main.Objects.Effects
         /// <summary>Bone index the breath comes from (e.g. 24 for BullFighter mouth).</summary>
         public int SourceBone { get; set; } = -1;
 
+        /// <summary>Emit while no animation windows are configured.</summary>
+        public bool EmitWhenNoTriggers { get; set; }
+
+        /// <summary>Local offset applied before transforming the source bone.</summary>
+        public Vector3 SourceOffset { get; set; } = new(0f, -4f, 0f);
+
         /// <summary>How many particles per second during active trigger windows.</summary>
         public float EmissionRate { get; set; } = 12.5f;
 
@@ -139,7 +145,9 @@ namespace Client.Main.Objects.Effects
             }
 
             // Check trigger windows and emit
-            bool inWindow = IsInTriggerWindow(parentModel);
+            bool inWindow = Triggers.Count == 0
+                ? EmitWhenNoTriggers
+                : IsInTriggerWindow(parentModel);
             if (inWindow)
             {
                 _emissionAccumulator += EmissionRate * dt;
@@ -261,9 +269,7 @@ namespace Client.Main.Objects.Effects
             if (bones == null || SourceBone < 0 || SourceBone >= bones.Length)
                 return parentModel.WorldPosition.Translation;
 
-            Vector3 bonePosition = Vector3.Transform(
-                new Vector3(0f, -4f, 0f),
-                bones[SourceBone]);
+            Vector3 bonePosition = Vector3.Transform(SourceOffset, bones[SourceBone]);
             return Vector3.Transform(bonePosition, parentModel.WorldPosition);
         }
 

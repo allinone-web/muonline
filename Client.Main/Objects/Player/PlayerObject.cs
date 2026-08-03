@@ -80,6 +80,8 @@ namespace Client.Main.Objects.Player
         };
 
         private bool _weaponsHolstered;
+        private FlyingHelperKind _equippedHelperSlotKind = FlyingHelperKind.None;
+        private bool _darkRavenWeaponEquipped;
 
         // Vehicle/mount state
         private bool _isRiding;
@@ -939,6 +941,19 @@ namespace Client.Main.Objects.Player
         public async Task UpdateEquipmentAppearanceFromConfig(AppearanceConfig appearanceConfig)
         {
             if (appearanceConfig == null) return; // No appearance data to process
+
+            // Dark Raven is encoded as the group-13/number-5 weapon item in the classic
+            // appearance path. Some server snapshots also expose it through the pet field.
+            _equippedHelperSlotKind = appearanceConfig.Pet == 5
+                ? FlyingHelperKind.DarkRaven
+                : FlyingHelperKind.None;
+            _darkRavenWeaponEquipped = IsDarkRavenItem(
+                    appearanceConfig.LeftHandItemGroup,
+                    appearanceConfig.LeftHandItemIndex) ||
+                IsDarkRavenItem(
+                    appearanceConfig.RightHandItemGroup,
+                    appearanceConfig.RightHandItemIndex);
+            await RefreshEquippedHelperAsync();
 
             // Helm
             if (appearanceConfig.HelmItemIndex != 0XFFFF)
@@ -4064,10 +4079,20 @@ namespace Client.Main.Objects.Player
                 {
                     case InventoryConstants.LeftHandSlot: // 0 - Left Hand (Weapon)
                         await UpdateWeaponSlotAsync(Weapon1, equipmentData, 33);
+                        _darkRavenWeaponEquipped = IsDarkRavenItem(
+                                equipmentData.ItemGroup,
+                                (short)equipmentData.ItemNumber) ||
+                            IsDarkRavenWeapon(Weapon2);
+                        await RefreshEquippedHelperAsync();
                         break;
 
                     case InventoryConstants.RightHandSlot: // 1 - Right Hand (Shield/Weapon)
                         await UpdateWeaponSlotAsync(Weapon2, equipmentData, 42);
+                        _darkRavenWeaponEquipped = IsDarkRavenWeapon(Weapon1) ||
+                            IsDarkRavenItem(
+                                equipmentData.ItemGroup,
+                                (short)equipmentData.ItemNumber);
+                        await RefreshEquippedHelperAsync();
                         break;
 
                     case InventoryConstants.HelmSlot: // 2 - Helm
@@ -4122,12 +4147,16 @@ namespace Client.Main.Objects.Player
                     Weapon1.Model = null;
                     Weapon1.TexturePath = null;
                     ClearItemProperties(Weapon1);
+                    _darkRavenWeaponEquipped = IsDarkRavenWeapon(Weapon2);
+                    await RefreshEquippedHelperAsync();
                     break;
 
                 case InventoryConstants.RightHandSlot:
                     Weapon2.Model = null;
                     Weapon2.TexturePath = null;
                     ClearItemProperties(Weapon2);
+                    _darkRavenWeaponEquipped = IsDarkRavenWeapon(Weapon1);
+                    await RefreshEquippedHelperAsync();
                     break;
 
                 case InventoryConstants.HelmSlot:
@@ -4162,7 +4191,8 @@ namespace Client.Main.Objects.Player
                     break;
 
                 case InventoryConstants.PetSlot:
-                    await EquippedHelper.SetKindAsync(FlyingHelperKind.None);
+                    _equippedHelperSlotKind = FlyingHelperKind.None;
+                    await RefreshEquippedHelperAsync();
                     break;
 
                 default:
@@ -4268,34 +4298,102 @@ namespace Client.Main.Objects.Player
                 helperKind = MapFlyingHelper(appearanceGroup, appearanceNumber);
             }
 
-            await EquippedHelper.RestoreAfterWorldChangeAsync(helperKind);
+            _equippedHelperSlotKind = helperKind;
+            _darkRavenWeaponEquipped = inventory != null
+                ? ContainsDarkRavenWeapon(inventory)
+                : IsDarkRavenItem(Appearance.LeftHandItemGroup, Appearance.LeftHandItemNumber) ||
+                  IsDarkRavenItem(Appearance.RightHandItemGroup, Appearance.RightHandItemNumber);
+
+            FlyingHelperKind resolvedKind = _equippedHelperSlotKind != FlyingHelperKind.None
+                ? _equippedHelperSlotKind
+                : _darkRavenWeaponEquipped
+                    ? FlyingHelperKind.DarkRaven
+                    : FlyingHelperKind.None;
+
+            if (IsMainWalker)
+            {
+                _networkManager?.GetCharacterState().SetDarkRavenEquipped(
+                    resolvedKind == FlyingHelperKind.DarkRaven);
+            }
+            await EquippedHelper.RestoreAfterWorldChangeAsync(resolvedKind);
         }
 
         private async Task UpdateHelperFromInventoryAsync(IReadOnlyDictionary<byte, byte[]> inventory)
         {
-            if (!inventory.TryGetValue(InventoryConstants.PetSlot, out byte[] itemData) ||
-                !ItemDatabase.TryGetItemGroupAndNumber(itemData, out byte itemGroup, out short itemNumber))
+            _equippedHelperSlotKind = FlyingHelperKind.None;
+            if (inventory.TryGetValue(InventoryConstants.PetSlot, out byte[] itemData) &&
+                ItemDatabase.TryGetItemGroupAndNumber(itemData, out byte itemGroup, out short itemNumber))
             {
-                await EquippedHelper.SetKindAsync(FlyingHelperKind.None);
-                return;
+                _equippedHelperSlotKind = MapFlyingHelper(itemGroup, itemNumber);
             }
 
-            await EquippedHelper.SetKindAsync(MapFlyingHelper(itemGroup, itemNumber));
+            _darkRavenWeaponEquipped = ContainsDarkRavenWeapon(inventory);
+            await RefreshEquippedHelperAsync();
         }
 
         private Task UpdateHelperFromAppearanceAsync()
         {
-            if (!Appearance.TryGetHelperItem(out byte itemGroup, out short itemNumber))
-                return EquippedHelper.SetKindAsync(FlyingHelperKind.None);
+            _equippedHelperSlotKind = Appearance.TryGetHelperItem(
+                out byte itemGroup,
+                out short itemNumber)
+                ? MapFlyingHelper(itemGroup, itemNumber)
+                : FlyingHelperKind.None;
 
-            return EquippedHelper.SetKindAsync(MapFlyingHelper(itemGroup, itemNumber));
+            _darkRavenWeaponEquipped = IsDarkRavenItem(
+                    Appearance.LeftHandItemGroup,
+                    Appearance.LeftHandItemNumber) ||
+                IsDarkRavenItem(
+                    Appearance.RightHandItemGroup,
+                    Appearance.RightHandItemNumber);
+
+            return RefreshEquippedHelperAsync();
+        }
+
+        private Task RefreshEquippedHelperAsync()
+        {
+            FlyingHelperKind resolvedKind = _equippedHelperSlotKind != FlyingHelperKind.None
+                ? _equippedHelperSlotKind
+                : _darkRavenWeaponEquipped
+                    ? FlyingHelperKind.DarkRaven
+                    : FlyingHelperKind.None;
+
+            if (IsMainWalker)
+            {
+                _networkManager?.GetCharacterState().SetDarkRavenEquipped(
+                    resolvedKind == FlyingHelperKind.DarkRaven);
+            }
+
+            return EquippedHelper.SetKindAsync(resolvedKind);
         }
 
         private Task UpdateHelperSlotAsync(EquipmentSlotData equipmentData)
         {
-            return EquippedHelper.SetKindAsync(
-                MapFlyingHelper(equipmentData.ItemGroup, (short)equipmentData.ItemNumber));
+            _equippedHelperSlotKind = MapFlyingHelper(
+                equipmentData.ItemGroup,
+                (short)equipmentData.ItemNumber);
+            return RefreshEquippedHelperAsync();
         }
+
+        private static bool ContainsDarkRavenWeapon(IReadOnlyDictionary<byte, byte[]> inventory)
+        {
+            return IsDarkRavenInventoryItem(inventory, InventoryConstants.LeftHandSlot) ||
+                   IsDarkRavenInventoryItem(inventory, InventoryConstants.RightHandSlot);
+        }
+
+        private static bool IsDarkRavenInventoryItem(
+            IReadOnlyDictionary<byte, byte[]> inventory,
+            byte slot)
+        {
+            return inventory.TryGetValue(slot, out byte[] itemData) &&
+                   ItemDatabase.TryGetItemGroupAndNumber(itemData, out byte itemGroup, out short itemNumber) &&
+                   IsDarkRavenItem(itemGroup, itemNumber);
+        }
+
+        private static bool IsDarkRavenItem(byte itemGroup, short itemNumber) =>
+            itemGroup == 13 && itemNumber == 5;
+
+        private static bool IsDarkRavenWeapon(WeaponObject weapon) =>
+            weapon.MaterialItemGroup == 13 && weapon.MaterialItemIndex == 5;
 
         private static FlyingHelperKind MapFlyingHelper(byte itemGroup, short itemNumber)
         {
@@ -4306,6 +4404,7 @@ namespace Client.Main.Objects.Player
             {
                 0 => FlyingHelperKind.GuardianAngel,
                 1 => FlyingHelperKind.Imp,
+                5 => FlyingHelperKind.DarkRaven,
                 _ => FlyingHelperKind.None
             };
         }

@@ -1,10 +1,13 @@
 #nullable enable
 using Client.Data.BMD;
+using Client.Data.ATT;
 using Client.Main.Content;
+using Client.Main.Controls;
 using Client.Main.Controllers;
 using Client.Main.Core.Utilities;
 using Client.Main.Graphics;
 using Client.Main.Models;
+using Client.Main.Objects.Effects;
 using Client.Main.Objects.Player;
 using Client.Main.Scenes;
 using Microsoft.Xna.Framework;
@@ -19,17 +22,36 @@ namespace Client.Main.Objects.Pets
     {
         None = -1,
         GuardianAngel = 0,
-        Imp = 1
+        Imp = 1,
+        DarkRaven = 2
+    }
+
+    public enum DarkRavenCommandMode
+    {
+        Follow = 0,
+        AutoAttack = 1,
+        AttackWithCharacter = 2,
+        AttackTarget = 3
+    }
+
+    public enum DarkRavenAttackKind
+    {
+        SingleTarget = 0,
+        Range = 1
     }
 
     /// <summary>
     /// Guardian Angel flies independently around its owner. Imp keeps its own animated BMD pose,
-    /// but follows the player's right shoulder instead of using the free-flight simulation.
+    /// but follows the player's right shoulder. Dark Raven follows the original DarkSpirit
+    /// flight/stand state machine and emits its blue bone sparks.
     /// </summary>
     public sealed class FlyingHelperObject : ModelObject
     {
         private const string GuardianModelPath = "Player/Helper01.bmd";
         private const string ImpModelPath = "Player/Helper02.bmd";
+        private const string DarkRavenModelPath = "Skill/DarkSpirit.bmd";
+        private const string DarkRavenRushSoundPath = "Sound/DSpirit_Rush.wav";
+        private const string DarkRavenMissileSoundPath = "Sound/DSpirit_Missile.wav";
         private const string SparkTexturePath = "Effect/Spark01.jpg";
         private const string LightTexturePath = "Effect/flare01.jpg";
 
@@ -42,6 +64,18 @@ namespace Client.Main.Objects.Pets
         private const float GuardianCharacterSceneScale = 0.78f;
         private const float ImpWorldScale = 0.5f;
         private const float ImpCharacterSceneScale = 0.6f;
+        // SourceMain's CreatePetPointer initializes DarkSpirit at scale 0.7.
+        private const float DarkRavenWorldScale = 0.7f;
+        private const float DarkRavenCharacterSceneScale = 0.7f;
+        private const float DarkRavenAnimationSpeed = 10f;
+        private const float DarkRavenStartHeight = 300f;
+        private const float DarkRavenFlightHeight = 250f;
+        private const float DarkRavenStandAngleOffset = -2.0943952f;
+        private const float DarkRavenSkillSpinRadiansPerFrame = 0.7853982f;
+        private const int DarkRavenStandBoneIndex = 37;
+        private const int DarkRavenSparkBoneCount = 66;
+        private const int DarkRavenAttackBoneCount = 66;
+        private const ushort NoDarkRavenTarget = 0xFFFF;
         private const int MaxLegacyStepsPerFrame = 5;
         private const float FlyRange = 150f;
         private const int UnresolvedBoneIndex = int.MinValue;
@@ -68,6 +102,14 @@ namespace Client.Main.Objects.Pets
         private float _verticalSpeed;
         private float _legacyAccumulator;
         private int _impShoulderBoneIndex = UnresolvedBoneIndex;
+        private DarkRavenMotion _darkRavenMotion = DarkRavenMotion.Flying;
+        private float _darkRavenLandingSpeed;
+        private DarkRavenCommandMode _darkRavenCommandMode = DarkRavenCommandMode.Follow;
+        private ushort _darkRavenCommandTargetId = NoDarkRavenTarget;
+        private DarkRavenAttackKind? _darkRavenAttackKind;
+        private ushort _darkRavenAttackTargetId = NoDarkRavenTarget;
+        private int _darkRavenAttackTime;
+        private bool _darkRavenAttackFlashSpawned;
 
         // Offsets applied in world space: horizontal X/Y pushes the helper outward from the
         // body axis onto the shoulder, and world Z (height) lifts it onto the shoulder line.
@@ -81,6 +123,8 @@ namespace Client.Main.Objects.Pets
         private bool _ownsLightTexture;
 
         public FlyingHelperKind Kind => _kind;
+        public DarkRavenCommandMode CommandMode => _darkRavenCommandMode;
+        public ushort CommandTargetId => _darkRavenCommandTargetId;
 
         protected override bool RequiresPerFrameAnimation => true;
         protected override bool PreserveBlendMeshesInLowQuality => true;
@@ -90,6 +134,16 @@ namespace Client.Main.Objects.Pets
         protected override bool AllowGpuSkinning => false;
         protected override bool AllowDynamicLightingShader => false;
         protected override bool ForceTwoSidedMeshes => true;
+
+        protected override bool ShouldRenderMesh(int meshIndex)
+        {
+            // SourceMain renders DarkSpirit's base mesh (2) together with its effect mesh (3)
+            // for the default pet level. Keep alternate data packs with fewer meshes usable.
+            if (_kind != FlyingHelperKind.DarkRaven || Model?.Meshes == null || Model.Meshes.Length < 4)
+                return true;
+
+            return meshIndex == 2 || meshIndex == 3;
+        }
 
         public FlyingHelperObject()
         {
@@ -115,6 +169,41 @@ namespace Client.Main.Objects.Pets
                 new Vector3(80f, 80f, 120f));
 
             BuildStaticIndices();
+        }
+
+        public void SetDarkRavenCommand(DarkRavenCommandMode mode, ushort targetId)
+        {
+            if (_kind != FlyingHelperKind.DarkRaven ||
+                (int)mode < (int)DarkRavenCommandMode.Follow ||
+                (int)mode > (int)DarkRavenCommandMode.AttackTarget)
+            {
+                return;
+            }
+
+            _darkRavenCommandMode = mode;
+            _darkRavenCommandTargetId = mode == DarkRavenCommandMode.AttackTarget
+                ? targetId
+                : NoDarkRavenTarget;
+        }
+
+        public void StartDarkRavenAttack(DarkRavenAttackKind attackKind, ushort targetId)
+        {
+            if (_kind != FlyingHelperKind.DarkRaven ||
+                Status != GameControlStatus.Ready ||
+                _darkRavenMotion != DarkRavenMotion.Flying)
+            {
+                return;
+            }
+
+            _darkRavenAttackKind = attackKind;
+            _darkRavenAttackTargetId = targetId;
+            _darkRavenAttackTime = 0;
+            _darkRavenAttackFlashSpawned = false;
+            SetDarkRavenAnimation(3);
+            SoundController.Instance.PlayBuffer(
+                attackKind == DarkRavenAttackKind.Range
+                    ? DarkRavenMissileSoundPath
+                    : DarkRavenRushSoundPath);
         }
 
         public override async Task Load()
@@ -158,9 +247,13 @@ namespace Client.Main.Objects.Pets
                 if (_kind == kind && Model != null && _modelContentReady)
                     return;
 
-                string primaryPath = kind == FlyingHelperKind.GuardianAngel
-                    ? GuardianModelPath
-                    : ImpModelPath;
+                string primaryPath = kind switch
+                {
+                    FlyingHelperKind.GuardianAngel => GuardianModelPath,
+                    FlyingHelperKind.Imp => ImpModelPath,
+                    FlyingHelperKind.DarkRaven => DarkRavenModelPath,
+                    _ => string.Empty
+                };
 
                 model = await PrepareModelWithFallbackAsync(primaryPath, kind);
                 if (requestVersion != Volatile.Read(ref _modelRequestVersion))
@@ -220,16 +313,25 @@ namespace Client.Main.Objects.Pets
                 _modelContentReady = false;
                 _spawnInitialized = false;
                 ClearSparks();
+                ClearDarkRavenAttack();
 
                 _kind = resolvedModel == null ? FlyingHelperKind.None : requestedKind;
                 Model = resolvedModel;
                 BlendMesh = _kind == FlyingHelperKind.GuardianAngel ? 1 : -1;
                 BlendMeshLight = 1f;
+                // SourceMain's DarkSpirit pointer explicitly disables its cast shadow.
+                RenderShadow = false;
                 Alpha = 0f;
                 CurrentAction = 0;
                 AnimationSpeed = HelperWingAnimationSpeed;
                 Scale = GetWorldScale(requestedKind);
                 _impShoulderBoneIndex = UnresolvedBoneIndex;
+                _darkRavenMotion = DarkRavenMotion.Flying;
+                _darkRavenCommandMode = DarkRavenCommandMode.Follow;
+                _darkRavenCommandTargetId = NoDarkRavenTarget;
+                Light = _kind == FlyingHelperKind.DarkRaven
+                    ? new Vector3(0.5f, 0.5f, 0.5f)
+                    : new Vector3(3f, 3f, 3f);
 
                 // Load only the ModelObject content here. Billboard resources belong to the helper
                 // itself and were already initialized by the normal child Load() lifecycle.
@@ -350,6 +452,10 @@ namespace Client.Main.Objects.Pets
             {
                 UpdateImpShoulderTransform(owner);
             }
+            else if (_kind == FlyingHelperKind.DarkRaven)
+            {
+                UpdateDarkRavenTransform(owner);
+            }
             else
             {
                 float interpolation = MathHelper.Clamp(_legacyAccumulator / LegacyStepSeconds, 0f, 1f);
@@ -364,7 +470,7 @@ namespace Client.Main.Objects.Pets
         {
             base.DrawAfter(gameTime);
 
-            if (!Visible || _kind != FlyingHelperKind.GuardianAngel ||
+            if (!Visible || (_kind != FlyingHelperKind.GuardianAngel && _kind != FlyingHelperKind.DarkRaven) ||
                 _billboardEffect == null || Parent is not PlayerObject owner)
             {
                 return;
@@ -390,12 +496,19 @@ namespace Client.Main.Objects.Pets
                 _billboardEffect.View = Camera.Instance.View;
                 _billboardEffect.Projection = Camera.Instance.Projection;
 
-                DrawGuardianGlow(inheritedAlpha);
+                if (_kind == FlyingHelperKind.GuardianAngel)
+                {
+                    DrawGuardianGlow(inheritedAlpha);
 
-                // The original suppresses spark emission during cloaking, while still requesting
-                // the helper glow. TotalAlpha is the available equivalent of the cloak render state.
-                if (owner.TotalAlpha >= 0.8f)
-                    DrawGuardianSparks(inheritedAlpha);
+                    // The original suppresses spark emission during cloaking, while still requesting
+                    // the helper glow. TotalAlpha is the available equivalent of the cloak render state.
+                    if (owner.TotalAlpha >= 0.8f)
+                        DrawGuardianSparks(inheritedAlpha);
+                }
+                else if (owner.TotalAlpha >= 0.8f)
+                {
+                    DrawDarkRavenSparks(inheritedAlpha);
+                }
             }
             finally
             {
@@ -427,6 +540,11 @@ namespace Client.Main.Objects.Pets
                     ownerPosition.X + _random.Next(-256, 256),
                     ownerPosition.Y + _random.Next(-256, 256),
                     ownerPosition.Z + _random.Next(128, 256));
+            }
+            else if (_kind == FlyingHelperKind.DarkRaven)
+            {
+                spawn = ownerPosition + new Vector3(0f, 0f, DarkRavenStartHeight);
+                _darkRavenMotion = DarkRavenMotion.Flying;
             }
             else
             {
@@ -479,6 +597,12 @@ namespace Client.Main.Objects.Pets
                 return;
             }
 
+            if (_kind == FlyingHelperKind.DarkRaven)
+            {
+                TickDarkRaven(owner);
+                return;
+            }
+
             Vector3 ownerPosition = owner.WorldPosition.Translation;
             Vector2 delta = new(
                 ownerPosition.X - _simulationPosition.X,
@@ -527,6 +651,291 @@ namespace Client.Main.Objects.Pets
             UpdateSparks();
         }
 
+        private void TickDarkRaven(PlayerObject owner)
+        {
+            if (IsOwnerInSafeZone(owner))
+            {
+                ClearDarkRavenAttack();
+                _localSpeed = 0f;
+                _verticalSpeed = 0f;
+                ClearSparks();
+
+                if (_darkRavenMotion == DarkRavenMotion.Flying)
+                {
+                    _darkRavenMotion = DarkRavenMotion.Landing;
+                    _darkRavenLandingSpeed = 3f;
+                }
+
+                if (_darkRavenMotion == DarkRavenMotion.Landing)
+                {
+                    TickDarkRavenLanding(owner);
+                    return;
+                }
+
+                SetDarkRavenAnimation(2);
+                return;
+            }
+
+            if (_darkRavenMotion == DarkRavenMotion.Standing ||
+                _darkRavenMotion == DarkRavenMotion.Landing)
+            {
+                _darkRavenMotion = DarkRavenMotion.Flying;
+                Vector3 ownerPosition = owner.WorldPosition.Translation;
+                _previousSimulationPosition = _simulationPosition =
+                    ownerPosition + new Vector3(0f, 0f, DarkRavenFlightHeight);
+                _simulationYaw = owner.Angle.Z;
+            }
+
+            if (_darkRavenAttackKind.HasValue)
+            {
+                TickDarkRavenAttack(owner);
+                return;
+            }
+
+            Vector3 currentOwnerPosition = owner.WorldPosition.Translation;
+            Vector2 delta = new(
+                currentOwnerPosition.X - _simulationPosition.X,
+                currentOwnerPosition.Y - _simulationPosition.Y);
+            float distanceSquared = delta.LengthSquared();
+
+            if (distanceSquared >= FlyRange * FlyRange)
+            {
+                float targetYaw = MathF.Atan2(delta.X, -delta.Y);
+                _simulationYaw = TurnTowards(_simulationYaw, targetYaw, MathHelper.ToRadians(20f));
+            }
+
+            float forwardX = MathF.Sin(_simulationYaw);
+            float forwardY = -MathF.Cos(_simulationYaw);
+            _simulationPosition.X += forwardX * -_localSpeed;
+            _simulationPosition.Y += forwardY * -_localSpeed;
+            _simulationPosition.Z += _verticalSpeed;
+            _simulationPosition.Z += _random.Next(-32, 32) * 0.1f;
+
+            if (_random.Next(32) == 0)
+            {
+                if (distanceSquared >= FlyRange * FlyRange)
+                {
+                    _localSpeed = -(_random.Next(128, 192) * 0.1f);
+                }
+                else
+                {
+                    _localSpeed = -(_random.Next(16, 80) * 0.1f);
+                    _simulationYaw = MathHelper.ToRadians(_random.Next(0, 360));
+                }
+
+                _verticalSpeed = _random.Next(-32, 32) * 0.1f;
+            }
+
+            float targetHeight = currentOwnerPosition.Z + DarkRavenFlightHeight;
+            if (_simulationPosition.Z < targetHeight - 25f)
+                _verticalSpeed += 1.5f;
+            if (_simulationPosition.Z > targetHeight + 25f)
+                _verticalSpeed -= 1.5f;
+
+            SetDarkRavenAnimation(_localSpeed <= -12f ? 1 : 0);
+
+            // SourceMain emits one blue spark from a random DarkSpirit bone per legacy tick.
+            if (owner.TotalAlpha >= 0.8f)
+                SpawnSpark();
+
+            UpdateSparks();
+        }
+
+        private void TickDarkRavenLanding(PlayerObject owner)
+        {
+            if (!owner.TryGetBoneWorldMatrix(PlayerObject.RightHandBoneIndex, out Matrix handMatrix))
+            {
+                _darkRavenMotion = DarkRavenMotion.Standing;
+                SetDarkRavenAnimation(2);
+                return;
+            }
+
+            Vector3 handPosition = handMatrix.Translation;
+            Vector3 toHand = handPosition - _simulationPosition;
+            float distance = toHand.Length();
+            if (distance < 50f)
+            {
+                _simulationPosition = handPosition;
+                _darkRavenMotion = DarkRavenMotion.Standing;
+                _darkRavenLandingSpeed = 0f;
+                SetDarkRavenAnimation(2);
+                return;
+            }
+
+            _simulationYaw = MathF.Atan2(toHand.X, -toHand.Y);
+            _simulationPosition += toHand / distance * MathF.Min(distance, _darkRavenLandingSpeed);
+            _darkRavenLandingSpeed += 1f;
+            SetDarkRavenAnimation(1);
+        }
+
+        private void TickDarkRavenAttack(PlayerObject owner)
+        {
+            DarkRavenAttackKind attackKind = _darkRavenAttackKind!.Value;
+            WalkerObject target = null;
+            if (_darkRavenAttackTargetId != NoDarkRavenTarget &&
+                owner.World is WalkableWorldControl world)
+            {
+                ushort maskedTargetId = (ushort)(_darkRavenAttackTargetId & 0x7FFF);
+                world.TryGetWalkerById(maskedTargetId, out target);
+            }
+
+            Vector3 targetPosition = target?.WorldPosition.Translation ?? _simulationPosition;
+            Vector3 movementTarget = targetPosition;
+            if (attackKind == DarkRavenAttackKind.SingleTarget && target != null)
+                movementTarget.Z += 50f;
+
+            Vector3 toTarget = movementTarget - _simulationPosition;
+            float distance = toTarget.Length();
+
+            if (distance > 0.01f)
+                _simulationYaw = MathF.Atan2(toTarget.X, -toTarget.Y);
+
+            // SourceMain's physical attack advances the raven toward its target while the
+            // attack action is active. The range attack stays in place and only turns toward it.
+            if (attackKind == DarkRavenAttackKind.SingleTarget &&
+                distance > 20f &&
+                _darkRavenAttackTime < 20)
+            {
+                _simulationPosition += toTarget / distance * MathF.Min(24f, distance);
+            }
+
+            distance = Vector3.Distance(movementTarget, _simulationPosition);
+
+            SetDarkRavenAnimation(3);
+
+            if (attackKind == DarkRavenAttackKind.SingleTarget)
+            {
+                if (target != null && _darkRavenAttackTime <= 2)
+                {
+                    for (int i = 0; i < 10; i++)
+                    {
+                        SpawnDarkRavenAttackLight(
+                            _simulationPosition + new Vector3(
+                                _random.Next(-20, 21),
+                                _random.Next(-20, 21),
+                                _random.Next(-8, 25)),
+                            new Vector3(1f, 0.8f, 0.6f),
+                            0.18f);
+                    }
+
+                    if (!_darkRavenAttackFlashSpawned)
+                    {
+                        SpawnDarkRavenModelEffect(
+                            "Skill/darklordskill.bmd",
+                            "Skill/DarkLordSkill.bmd",
+                            _simulationPosition,
+                            new Vector3(
+                                MathHelper.ToRadians(45f),
+                                MathHelper.ToRadians(_random.Next(-90, 91)),
+                                0f),
+                            new Vector3(1f, 0.8f, 0.6f),
+                            0.2f,
+                            -2,
+                            10f,
+                            growthPerFrame: 0.1f,
+                            growthAcceleration: 0.04f,
+                            fadeBase: 1f / 1.8f,
+                            fadeStartFrame: 3f);
+                        _darkRavenAttackFlashSpawned = true;
+                    }
+                }
+
+                if (_darkRavenAttackTime > 3 &&
+                    _darkRavenAttackTime % 2 == 1 &&
+                    distance > 20f &&
+                    _simulationPosition.Z > owner.WorldPosition.Translation.Z + 100f)
+                {
+                    Vector3 airForcePosition = GetDarkRavenBoneWorldPosition(
+                        6,
+                        new Vector3(50f, 0f, 0f),
+                        _simulationPosition);
+                    SpawnDarkRavenModelEffect(
+                        "Skill/AirForce.bmd",
+                        "Skill/airforce.bmd",
+                        airForcePosition,
+                        new Vector3(0f, 0f, _simulationYaw),
+                        Light,
+                        0.6f,
+                        -2,
+                        15f,
+                        growthPerFrame: 0.2f,
+                        fadeBase: 1f / 1.5f);
+                }
+            }
+            else
+            {
+                if (_darkRavenAttackTime < 15)
+                    SpawnDarkRavenMagicAttackLights();
+                else if (target != null && _darkRavenAttackTime == 15)
+                    SpawnDarkRavenMagicImpact(targetPosition);
+            }
+
+            _darkRavenAttackTime++;
+            int attackLife = attackKind == DarkRavenAttackKind.Range ? 16 : 22;
+            if (_darkRavenAttackTime >= attackLife)
+            {
+                ClearDarkRavenAttack();
+                _darkRavenMotion = DarkRavenMotion.Flying;
+                SetDarkRavenAnimation(1);
+            }
+
+            UpdateSparks();
+        }
+
+        private void UpdateDarkRavenTransform(PlayerObject owner)
+        {
+            if (_darkRavenMotion == DarkRavenMotion.Standing)
+            {
+                Position = GetDarkRavenStandPosition(owner);
+                Vector3 angle = owner.Angle;
+                angle.Z += DarkRavenStandAngleOffset;
+                Angle = angle;
+                return;
+            }
+
+            float interpolation = MathHelper.Clamp(_legacyAccumulator / LegacyStepSeconds, 0f, 1f);
+            Position = Vector3.Lerp(
+                _previousSimulationPosition,
+                _simulationPosition,
+                interpolation);
+            Angle = new Vector3(0f, 0f, _simulationYaw);
+        }
+
+        private Vector3 GetDarkRavenStandPosition(PlayerObject owner)
+        {
+            if (owner.TryGetBoneWorldMatrix(DarkRavenStandBoneIndex, out Matrix boneMatrix))
+            {
+                return Vector3.Transform(new Vector3(-10f, 0f, 10f), boneMatrix);
+            }
+
+            float bodyHeight = owner.BodyHeight > 1f ? owner.BodyHeight * 0.72f : 110f;
+            return owner.WorldPosition.Translation + new Vector3(0f, 0f, bodyHeight);
+        }
+
+        private static bool IsOwnerInSafeZone(PlayerObject owner)
+        {
+            return owner.World is WalkableWorldControl world &&
+                   world.Terrain.RequestTerrainFlag((int)owner.Location.X, (int)owner.Location.Y)
+                       .HasFlag(TWFlags.SafeZone);
+        }
+
+        private void SetDarkRavenAnimation(int action)
+        {
+            int resolvedAction = action;
+            if (Model?.Actions == null ||
+                action < 0 || action >= Model.Actions.Length ||
+                Model.Actions[action] == null)
+            {
+                resolvedAction = ResolveWingAnimationAction();
+            }
+
+            if (CurrentAction == resolvedAction)
+                return;
+
+            CurrentAction = resolvedAction;
+            InvalidateBuffers(BufferFlagAnimation);
+        }
+
         /// <summary>
         /// Rebinds an equipped helper after the persistent player object is moved to another
         /// WorldControl. Map changes intentionally retain the local player, so no equipment packet
@@ -554,6 +963,8 @@ namespace Client.Main.Objects.Pets
             _spawnInitialized = false;
             _legacyAccumulator = 0f;
             _impShoulderBoneIndex = UnresolvedBoneIndex;
+            _darkRavenMotion = DarkRavenMotion.Flying;
+            ClearDarkRavenAttack();
             Hidden = true;
             Alpha = 0f;
             BlendMeshLight = 1f;
@@ -561,18 +972,35 @@ namespace Client.Main.Objects.Pets
             InvalidateBuffers(BufferFlagLighting | BufferFlagMaterial | BufferFlagAnimation);
         }
 
-        private static float GetWorldScale(FlyingHelperKind kind) =>
-            kind == FlyingHelperKind.GuardianAngel ? GuardianWorldScale : ImpWorldScale;
+        private static float GetWorldScale(FlyingHelperKind kind) => kind switch
+        {
+            FlyingHelperKind.GuardianAngel => GuardianWorldScale,
+            FlyingHelperKind.Imp => ImpWorldScale,
+            FlyingHelperKind.DarkRaven => DarkRavenWorldScale,
+            _ => ImpWorldScale
+        };
 
-        private static float GetCharacterSceneScale(FlyingHelperKind kind) =>
-            kind == FlyingHelperKind.GuardianAngel
-                ? GuardianCharacterSceneScale
-                : ImpCharacterSceneScale;
+        private static float GetCharacterSceneScale(FlyingHelperKind kind) => kind switch
+        {
+            FlyingHelperKind.GuardianAngel => GuardianCharacterSceneScale,
+            FlyingHelperKind.Imp => ImpCharacterSceneScale,
+            FlyingHelperKind.DarkRaven => DarkRavenCharacterSceneScale,
+            _ => ImpCharacterSceneScale
+        };
 
         private void ConfigureWingAnimation()
         {
-            CurrentAction = ResolveWingAnimationAction();
-            AnimationSpeed = HelperWingAnimationSpeed;
+            if (_kind == FlyingHelperKind.DarkRaven)
+            {
+                CurrentAction = ResolveWingAnimationAction();
+                AnimationSpeed = DarkRavenAnimationSpeed;
+            }
+            else
+            {
+                CurrentAction = ResolveWingAnimationAction();
+                AnimationSpeed = HelperWingAnimationSpeed;
+            }
+
             ContinuousAnimation = true;
             FreezeAnimationPose = false;
             InvalidateBuffers(BufferFlagAnimation);
@@ -704,30 +1132,34 @@ namespace Client.Main.Objects.Pets
             return fallback;
         }
 
-        private void SpawnSpark()
+        private int FindSparkSlot()
         {
-            int slot = -1;
             for (int i = 0; i < _sparks.Length; i++)
             {
                 if (!_sparks[i].Active)
-                {
-                    slot = i;
-                    break;
-                }
+                    return i;
             }
 
-            if (slot < 0)
-                slot = _random.Next(_sparks.Length);
+            return _random.Next(_sparks.Length);
+        }
 
-            Vector3 position = _simulationPosition + new Vector3(
-                _random.Next(-8, 8),
-                _random.Next(-8, 8),
-                _random.Next(-8, 8));
+        private void SpawnSpark()
+        {
+            int slot = FindSparkSlot();
+
+            Vector3 position = _kind == FlyingHelperKind.DarkRaven
+                ? GetDarkRavenSparkPosition()
+                : _simulationPosition + new Vector3(
+                    _random.Next(-8, 8),
+                    _random.Next(-8, 8),
+                    _random.Next(-8, 8));
 
             int lifeTicks = 10 + _random.Next(0, 5);
             _sparks[slot] = new SparkParticle
             {
                 Active = true,
+                UseLightTexture = false,
+                Color = Vector3.Zero,
                 Position = position,
                 PreviousPosition = position,
                 VelocityPerTick = new Vector3(
@@ -740,6 +1172,136 @@ namespace Client.Main.Objects.Pets
                 LifeTicks = lifeTicks,
                 MaxLifeTicks = lifeTicks
             };
+        }
+
+        private Vector3 GetDarkRavenSparkPosition()
+        {
+            Matrix[] bones = GetBoneTransforms();
+            if (bones != null && bones.Length > 0)
+            {
+                int boneCount = Math.Min(DarkRavenSparkBoneCount, bones.Length);
+                int boneIndex = _random.Next(boneCount);
+                return Vector3.Transform(
+                    Vector3.Zero,
+                    bones[boneIndex] * GetDarkRavenSimulationWorldMatrix());
+            }
+
+            return _simulationPosition;
+        }
+
+        private Vector3 GetDarkRavenBoneWorldPosition(
+            int boneIndex,
+            Vector3 localPosition,
+            Vector3 fallback)
+        {
+            Matrix[] bones = GetBoneTransforms();
+            if (bones != null && (uint)boneIndex < (uint)bones.Length)
+            {
+                return Vector3.Transform(
+                    localPosition,
+                    bones[boneIndex] * GetDarkRavenSimulationWorldMatrix());
+            }
+
+            return fallback;
+        }
+
+        private Matrix GetDarkRavenSimulationWorldMatrix()
+        {
+            return Matrix.CreateScale(Scale) *
+                   Matrix.CreateFromQuaternion(
+                       Client.Main.Core.Utilities.MathUtils.AngleQuaternion(
+                           new Vector3(0f, 0f, _simulationYaw))) *
+                   Matrix.CreateTranslation(_simulationPosition);
+        }
+
+        private void SpawnDarkRavenAttackLight(Vector3 position, Vector3 color, float scale)
+        {
+            int slot = FindSparkSlot();
+            int lifeTicks = 4 + _random.Next(0, 4);
+            _sparks[slot] = new SparkParticle
+            {
+                Active = true,
+                UseLightTexture = true,
+                Color = color,
+                Position = position,
+                PreviousPosition = position,
+                VelocityPerTick = new Vector3(
+                    (_random.NextSingle() - 0.5f) * 2.4f,
+                    (_random.NextSingle() - 0.5f) * 2.4f,
+                    (_random.NextSingle() - 0.5f) * 1.8f),
+                Rotation = _random.NextSingle() * MathHelper.TwoPi,
+                RotationPerTick = (_random.NextSingle() - 0.5f) * 0.5f,
+                Scale = scale,
+                LifeTicks = lifeTicks,
+                MaxLifeTicks = lifeTicks
+            };
+        }
+
+        private void SpawnDarkRavenMagicAttackLights()
+        {
+            Matrix[] bones = GetBoneTransforms();
+            if (bones == null || bones.Length == 0)
+                return;
+
+            int boneCount = Math.Min(DarkRavenAttackBoneCount, bones.Length);
+            int start = _random.Next(2);
+            for (int i = start; i < boneCount; i += 2)
+            {
+                if (Model?.Bones != null && Model.Bones[i] == BMDTextureBone.Dummy)
+                    continue;
+
+                Vector3 position = Vector3.Transform(Vector3.Zero, bones[i] * WorldPosition);
+                SpawnDarkRavenAttackLight(position, new Vector3(1f, 0.6f, 0.4f), 0.11f);
+            }
+        }
+
+        private void SpawnDarkRavenMagicImpact(Vector3 position)
+        {
+            for (int i = 0; i < 12; i++)
+            {
+                SpawnDarkRavenAttackLight(
+                    position + new Vector3(
+                        _random.Next(-24, 25),
+                        _random.Next(-24, 25),
+                        _random.Next(0, 42)),
+                    new Vector3(1f, 0.6f, 0.4f),
+                    0.16f);
+            }
+        }
+
+        private void SpawnDarkRavenModelEffect(
+            string modelPath,
+            string fallbackModelPath,
+            Vector3 position,
+            Vector3 angle,
+            Vector3 light,
+            float scale,
+            int blendMesh,
+            float lifeFrames,
+            float growthPerFrame = 0f,
+            float growthAcceleration = 0f,
+            float fadeBase = 1f,
+            float fadeStartFrame = 0f)
+        {
+            if (World == null)
+                return;
+
+            World.Objects.Add(new DarkRavenAttackModelEffect(
+                modelPath,
+                fallbackModelPath,
+                position,
+                angle,
+                light,
+                scale,
+                blendMesh,
+                lifeFrames,
+                growthPerFrame,
+                growthAcceleration,
+                fadeBase,
+                fadeStartFrame,
+                modelPath.EndsWith("DarkLordSkill.bmd", StringComparison.OrdinalIgnoreCase)
+                    ? DarkRavenSkillSpinRadiansPerFrame
+                    : 0f));
         }
 
         private void UpdateSparks()
@@ -783,6 +1345,17 @@ namespace Client.Main.Objects.Pets
 
         private void DrawGuardianSparks(float alpha)
         {
+            DrawSparks(alpha, new Vector3(0.4f, 0.4f, 0.4f), 1f);
+        }
+
+        private void DrawDarkRavenSparks(float alpha)
+        {
+            DrawSparks(alpha, new Vector3(0.22f, 0.45f, 1f), 0.9f);
+            DrawDarkRavenAttackLights(alpha);
+        }
+
+        private void DrawSparks(float alpha, Vector3 sparkColor, float sizeMultiplier)
+        {
             if (_sparkTexture == null || _sparkTexture.IsDisposed)
                 return;
 
@@ -795,23 +1368,54 @@ namespace Client.Main.Objects.Pets
             for (int i = 0; i < _sparks.Length && quadCount < MaxSparks; i++)
             {
                 SparkParticle spark = _sparks[i];
-                if (!spark.Active)
+                if (!spark.Active || spark.UseLightTexture)
                     continue;
 
                 Vector3 center = Vector3.Lerp(spark.PreviousPosition, spark.Position, interpolation);
                 float life = MathHelper.Clamp(spark.LifeTicks / (float)Math.Max(1, spark.MaxLifeTicks), 0f, 1f);
                 float fadeIn = MathHelper.Clamp((1f - life) * 5f, 0f, 1f);
                 float intensity = MathF.Pow(life, 0.8f) * fadeIn * alpha;
-                float halfSize = 9f * spark.Scale * (0.65f + life * 0.35f) * (Scale / 1f);
+                float halfSize = 9f * spark.Scale * (0.65f + life * 0.35f) * sizeMultiplier * (Scale / 1f);
 
                 Vector3 right = cameraRight * halfSize;
                 Vector3 up = cameraUp * halfSize;
                 RotateBillboardAxes(ref right, ref up, spark.Rotation);
-                Color color = ToAdditiveColor(new Vector3(0.4f, 0.4f, 0.4f) * intensity);
+                Color color = ToAdditiveColor(sparkColor * intensity);
                 WriteBillboardQuad(quadCount++, center, right, up, color);
             }
 
             DrawBillboardBatch(_sparkTexture, quadCount);
+        }
+
+        private void DrawDarkRavenAttackLights(float alpha)
+        {
+            if (_lightTexture == null || _lightTexture.IsDisposed)
+                return;
+
+            Matrix inverseView = Matrix.Invert(Camera.Instance.View);
+            Vector3 cameraRight = inverseView.Right;
+            Vector3 cameraUp = inverseView.Up;
+            float interpolation = MathHelper.Clamp(_legacyAccumulator / LegacyStepSeconds, 0f, 1f);
+            int quadCount = 0;
+
+            for (int i = 0; i < _sparks.Length && quadCount < MaxSparks; i++)
+            {
+                SparkParticle spark = _sparks[i];
+                if (!spark.Active || !spark.UseLightTexture)
+                    continue;
+
+                Vector3 center = Vector3.Lerp(spark.PreviousPosition, spark.Position, interpolation);
+                float life = MathHelper.Clamp(spark.LifeTicks / (float)Math.Max(1, spark.MaxLifeTicks), 0f, 1f);
+                float intensity = MathF.Pow(life, 0.7f) * alpha;
+                float halfSize = 14f * spark.Scale * (0.75f + life * 0.35f) * (Scale / 1f);
+                Vector3 right = cameraRight * halfSize;
+                Vector3 up = cameraUp * halfSize;
+                RotateBillboardAxes(ref right, ref up, spark.Rotation);
+                WriteBillboardQuad(quadCount++, center, right, up,
+                    ToAdditiveColor(spark.Color * intensity));
+            }
+
+            DrawBillboardBatch(_lightTexture, quadCount);
         }
 
         private void DrawBillboardBatch(Texture2D texture, int quadCount)
@@ -872,6 +1476,14 @@ namespace Client.Main.Objects.Pets
             Array.Clear(_sparks, 0, _sparks.Length);
         }
 
+        private void ClearDarkRavenAttack()
+        {
+            _darkRavenAttackKind = null;
+            _darkRavenAttackTargetId = NoDarkRavenTarget;
+            _darkRavenAttackTime = 0;
+            _darkRavenAttackFlashSpawned = false;
+        }
+
         private static float TurnTowards(float current, float target, float maxStep)
         {
             float delta = MathHelper.WrapAngle(target - current);
@@ -900,20 +1512,28 @@ namespace Client.Main.Objects.Pets
             string primaryPath,
             FlyingHelperKind kind)
         {
-            string fileName = kind == FlyingHelperKind.GuardianAngel ? "helper01.bmd" : "helper02.bmd";
-            short itemNumber = kind == FlyingHelperKind.GuardianAngel ? (short)0 : (short)1;
-            var definition = ItemDatabase.GetItemDefinition(13, itemNumber);
-            string? inventoryPath = NormalizeModelPath(definition?.TexturePath);
-
-            // Use exactly the model selected by the item database first. This is the asset which
-            // is already proven to render in the inventory preview. Keep SourceMain's Player model
-            // and the historical Item model as fallbacks for different data packs.
-            string?[] paths =
+            string fileName = kind switch
             {
-                inventoryPath,
-                primaryPath,
-                $"Item/{fileName}"
+                FlyingHelperKind.GuardianAngel => "helper01.bmd",
+                FlyingHelperKind.Imp => "helper02.bmd",
+                FlyingHelperKind.DarkRaven => "DarkSpirit.bmd",
+                _ => string.Empty
             };
+
+            string? inventoryPath = null;
+            if (kind != FlyingHelperKind.DarkRaven)
+            {
+                short itemNumber = kind == FlyingHelperKind.GuardianAngel ? (short)0 : (short)1;
+                var definition = ItemDatabase.GetItemDefinition(13, itemNumber);
+                inventoryPath = NormalizeModelPath(definition?.TexturePath);
+            }
+
+            // Use exactly the model selected by the item database first for the legacy helper
+            // models. Dark Raven is a skill model in SourceMain, so it intentionally bypasses the
+            // inventory item model (SpiritBill) and loads Skill/DarkSpirit.bmd instead.
+            string?[] paths = kind == FlyingHelperKind.DarkRaven
+                ? new[] { primaryPath, "Skill/darkspirit.bmd" }
+                : new[] { inventoryPath, primaryPath, $"Item/{fileName}" };
 
             for (int i = 0; i < paths.Length; i++)
             {
@@ -1011,6 +1631,8 @@ namespace Client.Main.Objects.Pets
         private struct SparkParticle
         {
             public bool Active;
+            public bool UseLightTexture;
+            public Vector3 Color;
             public Vector3 Position;
             public Vector3 PreviousPosition;
             public Vector3 VelocityPerTick;
@@ -1019,6 +1641,13 @@ namespace Client.Main.Objects.Pets
             public float Scale;
             public int LifeTicks;
             public int MaxLifeTicks;
+        }
+
+        private enum DarkRavenMotion
+        {
+            Flying,
+            Landing,
+            Standing
         }
     }
 }

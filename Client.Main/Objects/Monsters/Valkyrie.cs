@@ -18,6 +18,7 @@ namespace Client.Main.Objects.Monsters
         {
             RenderShadow = true;
             Scale = 1.1f; // Set according to C++ Setting_Monster
+            MoveSpeed = 250f; // SourceMain5.2: default monster MoveSpeed (10 * 25 FPS)
             BlendMesh = 0;
             BlendMeshLight = 1.0f;
             _rightHandWeapon = new WeaponObject
@@ -36,7 +37,13 @@ namespace Client.Main.Objects.Monsters
             if (weapon != null)
                 _rightHandWeapon.Model = await BMDLoader.Instance.Prepare(weapon.TexturePath);
             await base.Load();
-            // No specific PlaySpeed adjustments mentioned
+            SetActionSpeed(MonsterActionType.Stop1, 0.25f);
+            SetActionSpeed(MonsterActionType.Stop2, 0.20f);
+            SetActionSpeed(MonsterActionType.Walk, 0.34f);
+            SetActionSpeed(MonsterActionType.Attack1, 0.33f);
+            SetActionSpeed(MonsterActionType.Attack2, 0.33f);
+            SetActionSpeed(MonsterActionType.Shock, 0.50f);
+            SetActionSpeed(MonsterActionType.Die, 0.55f);
             // C++: Models[MODEL_MONSTER01+Type].BoneHead = 19;
         }
 
@@ -52,7 +59,14 @@ namespace Client.Main.Objects.Monsters
         {
             base.OnPerformAttack(attackType);
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mValkyrieAttack1.wav", Position, listenerPosition); // Index 2 -> Sound 136
+            SoundController.Instance.PlayBufferWithAttenuation("Sound/mBaliAttack2.wav", Position, listenerPosition);
+        }
+
+        public override void OnReceiveDamage()
+        {
+            base.OnReceiveDamage();
+            Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
+            SoundController.Instance.PlayBufferWithAttenuation("Sound/mBaliAttack2.wav", Position, listenerPosition);
         }
 
         public override void OnDeathAnimationStart()

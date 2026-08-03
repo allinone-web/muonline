@@ -881,6 +881,34 @@ namespace Client.Main.Networking.Services
         }
 
         /// <summary>
+        /// Sends one of the four Dark Raven command modes used by the classic client.
+        /// </summary>
+        public async Task SendDarkRavenCommandAsync(PetCommandMode commandMode, ushort targetId)
+        {
+            if (!_connectionManager.IsConnected)
+            {
+                _logger.LogError("Not connected — cannot send Dark Raven command.");
+                return;
+            }
+
+            try
+            {
+                await _connectionManager.Connection.SendPetCommandRequestAsync(
+                    PetType.DarkRaven,
+                    commandMode,
+                    targetId);
+                _logger.LogDebug(
+                    "Dark Raven command sent: Mode={Mode}, TargetId={TargetId:X4}.",
+                    commandMode,
+                    targetId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error sending Dark Raven command {Mode}.", commandMode);
+            }
+        }
+
+        /// <summary>
         /// Sends a consume item request packet to the server (potions, jewels, etc.).
         /// </summary>
         public async Task SendConsumeItemRequestAsync(byte itemSlot, byte targetSlot = 0)

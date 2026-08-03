@@ -3,6 +3,7 @@ using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Models;
 using Microsoft.Xna.Framework;
+using Client.Main.Objects.Effects;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -16,12 +17,34 @@ namespace Client.Main.Objects.Monsters
     {
         public Bali()
         {
+            Scale = 0.12f; // SourceMain5.2 MONSTER_BALI
+            MoveSpeed = 250f;
+            Children.Add(new MonsterBoneFireEffect
+            {
+                EmissionRate = 6.25f,
+                ParticleScaleMin = 0.10f,
+                ParticleScaleMax = 0.14f,
+                ActionBoneMap = new System.Collections.Generic.Dictionary<int, int>
+                {
+                    [(int)MonsterActionType.Attack1] = 33,
+                    [(int)MonsterActionType.Attack2] = 20,
+                    [(int)MonsterActionType.Attack3] = 41,
+                    [(int)MonsterActionType.Attack4] = 49
+                }
+            });
         }
 
         public override async Task Load()
         {
             Model = await BMDLoader.Instance.Prepare($"Monster/Monster33.bmd");
             await base.Load();
+            SetActionSpeed(MonsterActionType.Stop1, 0.25f);
+            SetActionSpeed(MonsterActionType.Stop2, 0.20f);
+            SetActionSpeed(MonsterActionType.Walk, 0.34f);
+            SetActionSpeed(MonsterActionType.Attack1, 0.33f);
+            SetActionSpeed(MonsterActionType.Attack2, 0.33f);
+            SetActionSpeed(MonsterActionType.Shock, 0.50f);
+            SetActionSpeed(MonsterActionType.Die, 0.55f);
 
             // Specific PlaySpeed adjustments from C++ OpenMonsterModel
             if (Model?.Actions != null)

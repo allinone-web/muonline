@@ -19,6 +19,7 @@ namespace Client.Main.Objects.Effects
 
         public int LeftEyeBone { get; set; } = -1;
         public int RightEyeBone { get; set; } = -1;
+        public float SpriteScale { get; set; } = 1f;
         public Vector3 LeftEyeOffset { get; set; } = new Vector3(5f, 0f, 0f);
         public Vector3 RightEyeOffset { get; set; } = new Vector3(-5f, 0f, 0f);
 
@@ -90,7 +91,7 @@ namespace Client.Main.Objects.Effects
             if (ownerScale <= 0.001f)
                 ownerScale = 1f;
 
-            float screenScale = ownerScale /
+            float screenScale = SpriteScale * ownerScale /
                 (MathF.Max(distance, 0.1f) / Constants.TERRAIN_SIZE) *
                 Constants.RENDER_SCALE;
 

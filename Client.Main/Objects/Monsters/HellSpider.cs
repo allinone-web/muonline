@@ -17,9 +17,10 @@ namespace Client.Main.Objects.Monsters
         {
             RenderShadow = true;
             Scale = 1.1f; // Set according to C++ Setting_Monster
+            MoveSpeed = 250f; // SourceMain5.2: default monster MoveSpeed (10 * 25 FPS)
             _rightHandWeapon = new WeaponObject
             {
-                LinkParentAnimation = true,
+                LinkParentAnimation = false,
                 ParentBoneLink = 29
             };
             Children.Add(_rightHandWeapon);
@@ -35,8 +36,14 @@ namespace Client.Main.Objects.Monsters
 
             await base.Load();
 
-            // Specific PlaySpeed adjustment from C++
+            // SourceMain5.2 ZzzOpenData.cpp: base speeds with the Hell Spider walk override.
+            SetActionSpeed(MonsterActionType.Stop1, 0.25f);
+            SetActionSpeed(MonsterActionType.Stop2, 0.20f);
             SetActionSpeed(MonsterActionType.Walk, 0.7f);
+            SetActionSpeed(MonsterActionType.Attack1, 0.33f);
+            SetActionSpeed(MonsterActionType.Attack2, 0.33f);
+            SetActionSpeed(MonsterActionType.Shock, 0.50f);
+            SetActionSpeed(MonsterActionType.Die, 0.55f);
         }
 
         // Sound mapping based on C++ SetMonsterSound(MODEL_MONSTER01 + Type, 32, 33, 33, 33, 34);
@@ -54,11 +61,18 @@ namespace Client.Main.Objects.Monsters
             SoundController.Instance.PlayBufferWithAttenuation("Sound/mHellSpiderAttack1.wav", Position, listenerPosition); // Index 2 -> Sound 33
         }
 
+        public override void OnReceiveDamage()
+        {
+            base.OnReceiveDamage();
+            Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
+            SoundController.Instance.PlayBufferWithAttenuation("Sound/mHellSpiderAttack1.wav", Position, listenerPosition);
+        }
+
         public override void OnDeathAnimationStart()
         {
             base.OnDeathAnimationStart();
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mHellSpiderDie.wav", Position, listenerPosition); // Index 4 -> Sound 34
+            SoundController.Instance.PlayBufferWithAttenuation("Sound/mHellSpiderDie.wav", Position, listenerPosition);
         }
     }
 }

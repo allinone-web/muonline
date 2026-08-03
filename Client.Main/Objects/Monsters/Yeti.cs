@@ -2,6 +2,7 @@
 using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Models;
+using Client.Main.Objects.Effects;
 using Microsoft.Xna.Framework;
 using System.Threading.Tasks;
 
@@ -14,6 +15,14 @@ namespace Client.Main.Objects.Monsters
         {
             RenderShadow = true;
             Scale = 1.1f; // Set according to C++ Setting_Monster
+            MoveSpeed = 250f; // SourceMain5.2: default monster MoveSpeed (10 * 25 FPS)
+            Children.Add(new MonsterBreathEffect
+            {
+                SourceBone = 22,
+                EmitWhenNoTriggers = true,
+                EmissionRate = 6.25f,
+                SourceOffset = Vector3.Zero
+            });
         }
 
         public override async Task Load()
@@ -22,15 +31,13 @@ namespace Client.Main.Objects.Monsters
             Model = await BMDLoader.Instance.Prepare($"Monster/Monster13.bmd");
             await base.Load();
 
-            // Specific PlaySpeed adjustment from C++ OpenMonsterModel
-            if (Model?.Actions != null)
-            {
-                const int MONSTER_ACTION_WALK = (int)MonsterActionType.Walk;
-                if (MONSTER_ACTION_WALK < Model.Actions.Length && Model.Actions[MONSTER_ACTION_WALK] != null)
-                {
-                    SetActionSpeed(MonsterActionType.Walk, 0.3f);
-                }
-            }
+            SetActionSpeed(MonsterActionType.Stop1, 0.25f);
+            SetActionSpeed(MonsterActionType.Stop2, 0.20f);
+            SetActionSpeed(MonsterActionType.Walk, 0.30f);
+            SetActionSpeed(MonsterActionType.Attack1, 0.33f);
+            SetActionSpeed(MonsterActionType.Attack2, 0.33f);
+            SetActionSpeed(MonsterActionType.Shock, 0.50f);
+            SetActionSpeed(MonsterActionType.Die, 0.55f);
             // C++: Models[MODEL_YETI].BoneHead = 20; (Additional info)
         }
 
@@ -39,14 +46,21 @@ namespace Client.Main.Objects.Monsters
         {
             base.OnIdle();
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mYeti1.wav", Position, listenerPosition); // Index 0 -> Sound 68
+            SoundController.Instance.PlayBufferWithAttenuation("Sound/mYeti1.wav", Position, listenerPosition);
         }
 
         public override void OnPerformAttack(int attackType = 1)
         {
             base.OnPerformAttack(attackType);
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mYetiAttack1.wav", Position, listenerPosition); // Index 2 -> Sound 70
+            SoundController.Instance.PlayBufferWithAttenuation("Sound/mYetiAttack1.wav", Position, listenerPosition);
+        }
+
+        public override void OnReceiveDamage()
+        {
+            base.OnReceiveDamage();
+            Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
+            SoundController.Instance.PlayBufferWithAttenuation("Sound/mYetiAttack1.wav", Position, listenerPosition);
         }
 
         public override void OnDeathAnimationStart()

@@ -1,7 +1,6 @@
 using Client.Main.Content;
 using Client.Main.Controllers;
 using Client.Main.Models;
-using Client.Main.Extensions;
 using Microsoft.Xna.Framework;
 using System.Threading.Tasks;
 
@@ -15,13 +14,7 @@ namespace Client.Main.Objects.Monsters
             Scale = 0.7f; // Set according to C++ Setting_Monster
         }
 
-        public override async Task Load()
-        {
-            await base.Load();
-            
-            // Apply intense golden glow effect
-            this.SetGoldGlow(2.5f);
-        }
+        // SourceMain5.2 uses the same MODEL_BUDGE_DRAGON visuals; only the scale differs.
         // Sounds inherited
     }
 }

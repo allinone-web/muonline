@@ -3,6 +3,7 @@ using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Objects.Player;
 using Client.Main.Core.Utilities;
+using Client.Main.Models;
 using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
@@ -20,6 +21,7 @@ namespace Client.Main.Objects.Monsters
         public Soldier()
         {
             Scale = 1.3f;
+            MoveSpeed = 250f;
             _leftHandWeapon = new WeaponObject
             {
                 LinkParentAnimation = false,
@@ -35,6 +37,13 @@ namespace Client.Main.Objects.Monsters
             if (weapon != null)
                 _leftHandWeapon.Model = await BMDLoader.Instance.Prepare(weapon.TexturePath);
             await base.Load();
+            SetActionSpeed(MonsterActionType.Stop1, 0.25f);
+            SetActionSpeed(MonsterActionType.Stop2, 0.20f);
+            SetActionSpeed(MonsterActionType.Walk, 0.34f);
+            SetActionSpeed(MonsterActionType.Attack1, 0.33f);
+            SetActionSpeed(MonsterActionType.Attack2, 0.33f);
+            SetActionSpeed(MonsterActionType.Shock, 0.50f);
+            SetActionSpeed(MonsterActionType.Die, 0.55f);
             // C++: Models[MODEL_MONSTER01+Type].BoneHead = 6; (for Soldier)
         }
 

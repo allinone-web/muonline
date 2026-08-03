@@ -1,0 +1,106 @@
+using Client.Main.Controls;
+using Client.Main.Models;
+using Microsoft.Xna.Framework;
+using System;
+
+namespace Client.Main.Objects.Effects
+{
+    /// <summary>
+    /// Short monster magic attack: animated hand/bone origins linked to the packet target.
+    /// This mirrors the Cursed Wizard branch in SourceMain5.2 AttackEffect.
+    /// </summary>
+    public sealed class MonsterMagicAttackEffect : EffectObject
+    {
+        private const float LifetimeSeconds = 0.6f;
+
+        private readonly ModelObject _sourceModel;
+        private readonly ushort _targetId;
+        private readonly int _requiredAction;
+        private float _elapsed;
+
+        public MonsterMagicAttackEffect(
+            ModelObject sourceModel,
+            int[] sourceBones,
+            ushort targetId,
+            int requiredAction,
+            Vector3 sourceOffset = default)
+        {
+            _sourceModel = sourceModel;
+            _targetId = targetId;
+            _requiredAction = requiredAction;
+
+            int[] bones = sourceBones == null || sourceBones.Length == 0
+                ? new[] { 0 }
+                : (int[])sourceBones.Clone();
+
+            Position = sourceModel.Position;
+            IsTransparent = true;
+            AffectedByTransparency = true;
+            BlendState = Microsoft.Xna.Framework.Graphics.BlendState.Additive;
+            DepthState = Microsoft.Xna.Framework.Graphics.DepthStencilState.DepthRead;
+            BoundingBoxLocal = new BoundingBox(
+                new Vector3(-5000f, -5000f, -5000f),
+                new Vector3(5000f, 5000f, 5000f));
+
+            Children.Add(new MonsterBoneLightningEffect
+            {
+                SourceModel = sourceModel,
+                SourceBoneIndices = bones,
+                SourceOffset = sourceOffset,
+                TargetProvider = GetTargetPosition,
+                LightColor = Color.White,
+                LineScale = 0.65f,
+                RequiredAction = requiredAction
+            });
+            Children.Add(new MonsterBoneLightningEffect
+            {
+                SourceModel = sourceModel,
+                SourceBoneIndices = bones,
+                SourceOffset = sourceOffset,
+                TargetProvider = GetTargetPosition,
+                LightColor = new Color(180, 220, 255),
+                LineScale = 0.35f,
+                RequiredAction = requiredAction
+            });
+            Children.Add(new MonsterBoneEnergyEffect
+            {
+                SourceModel = sourceModel,
+                SourceBoneIndices = bones,
+                SourceOffset = sourceOffset,
+                EmitOnce = true,
+                RequiredAction = requiredAction
+            });
+        }
+
+        public override void Update(GameTime gameTime)
+        {
+            base.Update(gameTime);
+
+            if (Status != GameControlStatus.Ready)
+                return;
+
+            _elapsed += (float)gameTime.ElapsedGameTime.TotalSeconds;
+            if (_elapsed >= LifetimeSeconds)
+                RemoveSelf();
+        }
+
+        private Vector3 GetTargetPosition()
+        {
+            if (_targetId != 0 && _sourceModel.World is WalkableWorldControl world &&
+                world.TryGetWalkerById(_targetId, out var target))
+                return target.WorldPosition.Translation;
+
+            return _sourceModel.WorldPosition.Translation + Vector3.UnitZ * 80f;
+        }
+
+        private void RemoveSelf()
+        {
+            if (Parent != null)
+                Parent.Children.Remove(this);
+            else
+                World?.RemoveObject(this);
+
+            Dispose();
+        }
+    }
+}

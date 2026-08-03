@@ -3,6 +3,7 @@ using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Graphics;
 using Client.Main.Models;
+using Client.Main.Objects.Effects;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics; // Needed for BlendState
 using System.Threading.Tasks;
@@ -12,12 +13,20 @@ namespace Client.Main.Objects.Monsters
     [NpcInfo(36, "Shadow")]
     public class ShadowMonster : MonsterObject // Renamed
     {
-        public ShadowMonster()
+        public ShadowMonster() : this(false)
         {
-            RenderShadow = false;
+        }
+
+        protected ShadowMonster(bool poisonVariant)
+        {
+            RenderShadow = true;
             Scale = 1.2f; // Set according to C++ Setting_Monster
-            Alpha = 0.7f; // Default transparency
-            BlendState = Blendings.Alpha;
+            MoveSpeed = 250f; // SourceMain5.2: default monster MoveSpeed (10 * 25 FPS)
+            Children.Add(new ShadowMonsterVisualEffect { PoisonVariant = poisonVariant });
+            Children.Add(new MonsterBoneEnergyEffect
+            {
+                EmitOnlyDuringAttack = true
+            });
         }
 
         public override async Task Load()
@@ -26,16 +35,14 @@ namespace Client.Main.Objects.Monsters
             Model = await BMDLoader.Instance.Prepare($"Monster/Monster29.bmd");
             await base.Load();
 
-            // Specific PlaySpeed adjustment from C++ OpenMonsterModel
-            if (Model?.Actions != null)
-            {
-                const int MONSTER_ACTION_WALK = (int)MonsterActionType.Walk;
-                if (MONSTER_ACTION_WALK < Model.Actions.Length && Model.Actions[MONSTER_ACTION_WALK] != null)
-                {
-                    SetActionSpeed(MonsterActionType.Walk, 0.3f);
-                    // C++: Models[MODEL_MONSTER01+Type].BoneHead = 5;
-                }
-            }
+            SetActionSpeed(MonsterActionType.Stop1, 0.25f);
+            SetActionSpeed(MonsterActionType.Stop2, 0.20f);
+            SetActionSpeed(MonsterActionType.Walk, 0.30f);
+            SetActionSpeed(MonsterActionType.Attack1, 0.33f);
+            SetActionSpeed(MonsterActionType.Attack2, 0.33f);
+            SetActionSpeed(MonsterActionType.Shock, 0.50f);
+            SetActionSpeed(MonsterActionType.Die, 0.55f);
+            // C++: Models[MODEL_MONSTER01+Type].BoneHead = 5;
         }
 
         // Sound mapping based on C++ SetMonsterSound(MODEL_MONSTER01 + Type, 113, 114, 115, 116, 117);
@@ -43,14 +50,30 @@ namespace Client.Main.Objects.Monsters
         {
             base.OnIdle();
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mShadow1.wav", Position, listenerPosition); // Index 0 -> Sound 113
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mShadow1.wav"
+                : "Sound/mShadow2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
         }
 
         public override void OnPerformAttack(int attackType = 1)
         {
             base.OnPerformAttack(attackType);
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mShadowAttack1.wav", Position, listenerPosition); // Index 2 -> Sound 115
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mShadowAttack1.wav"
+                : "Sound/mShadowAttack2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
+        }
+
+        public override void OnReceiveDamage()
+        {
+            base.OnReceiveDamage();
+            Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mShadowAttack1.wav"
+                : "Sound/mShadowAttack2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
         }
 
         public override void OnDeathAnimationStart()

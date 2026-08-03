@@ -10,10 +10,18 @@ namespace Client.Main.Objects.Monsters
     [NpcInfo(39, "Poison Shadow")]
     public class PoisonShadow : ShadowMonster // Inherits from ShadowMonster
     {
-        public PoisonShadow()
+        public PoisonShadow() : base(true)
         {
             Scale = 1.2f; // Inherited scale
-            // Inherited Alpha and BlendState
+        }
+
+        public override void OnPerformAttack(int attackType = 1)
+        {
+            base.OnPerformAttack(attackType);
+            SpawnMagicAttackEffect(
+                new[] { 33 },
+                attackType,
+                new Vector3(0f, -130f, 0f));
         }
 
         // Load() and sound methods inherited from ShadowMonster

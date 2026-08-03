@@ -306,12 +306,19 @@ namespace Client.Main.Objects
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        protected virtual bool ShouldRenderMesh(int mesh)
+        {
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool IsHiddenMesh(int mesh)
         {
             if (_meshes == null || (uint)mesh >= (uint)_meshes.Length)
                 return false;
 
-            return HiddenMesh == mesh || HiddenMesh == -2 || _meshes[mesh].HiddenByScript;
+            return !ShouldRenderMesh(mesh) ||
+                   HiddenMesh == mesh || HiddenMesh == -2 || _meshes[mesh].HiddenByScript;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

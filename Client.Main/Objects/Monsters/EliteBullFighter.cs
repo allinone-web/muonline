@@ -80,16 +80,30 @@ namespace Client.Main.Objects.Monsters
         {
             base.OnIdle();
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            // Play one of the idle sounds (index 0 or 1)
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mBull1.wav", Position, listenerPosition);
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mBull1.wav"
+                : "Sound/mBull2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
         }
 
         public override void OnPerformAttack(int attackType = 1)
         {
             base.OnPerformAttack(attackType);
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            // Play one of the attack sounds (index 2 or 3)
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mBullAttack1.wav", Position, listenerPosition);
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mBullAttack1.wav"
+                : "Sound/mBullAttack2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
+        }
+
+        public override void OnReceiveDamage()
+        {
+            base.OnReceiveDamage();
+            Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mBullAttack1.wav"
+                : "Sound/mBullAttack2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
         }
 
         public override void OnDeathAnimationStart()

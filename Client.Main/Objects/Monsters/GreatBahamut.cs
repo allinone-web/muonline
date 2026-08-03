@@ -9,7 +9,7 @@ namespace Client.Main.Objects.Monsters
     [NpcInfo(51, "Great Bahamut")]
     public class GreatBahamut : Bahamut // Inherits from Bahamut
     {
-        public GreatBahamut()
+        public GreatBahamut() : base(true)
         {
             Scale = 1.0f; // Set according to C++ Setting_Monster (same as Bahamut?)
         }

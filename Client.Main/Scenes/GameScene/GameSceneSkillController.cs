@@ -8,10 +8,12 @@ using Client.Main.Core.Utilities;
 using Client.Main.Objects;
 using Client.Main.Objects.Effects;
 using Client.Main.Objects.Player;
+using Client.Main.Objects.Pets;
 using Microsoft.Extensions.Logging;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 using MUnique.OpenMU.Network.Packets;
+using MUnique.OpenMU.Network.Packets.ClientToServer;
 
 namespace Client.Main.Scenes
 {
@@ -24,6 +26,8 @@ namespace Client.Main.Scenes
         private const ushort EvilSpiritSkillId = 9;
         private const ushort NovaSkillId = 40;
         private const ushort NovaStartSkillId = 58;
+        private const ushort DarkRavenCommandFirstSkillId = 120;
+        private const ushort DarkRavenCommandLastSkillId = 123;
 
         private readonly GameScene _scene;
         private readonly ModernBottomHud _hud;
@@ -118,6 +122,12 @@ namespace Client.Main.Scenes
             if (hero == null || hero.IsDead || walkableForSkills == null)
                 return;
 
+            if (IsDarkRavenCommandSkill(skill.SkillId))
+            {
+                TryUseDarkRavenCommand(skill.SkillId, hero, rightJustPressed);
+                return;
+            }
+
             if (skill.SkillId == NovaSkillId)
             {
                 TryStartNovaCharge(skill, hero, walkableForSkills, rightJustPressed);
@@ -203,6 +213,37 @@ namespace Client.Main.Scenes
                 }
             }
 
+            _scene.SetMouseInputConsumed();
+        }
+
+        private void TryUseDarkRavenCommand(ushort skillId, PlayerObject hero, bool rightJustPressed)
+        {
+            if (!rightJustPressed)
+                return;
+
+            if (hero.EquippedHelper?.Kind != FlyingHelperKind.DarkRaven)
+            {
+                _logger?.LogDebug("Dark Raven command ignored because Dark Raven is not equipped.");
+                _scene.SetMouseInputConsumed();
+                return;
+            }
+
+            PetCommandMode commandMode = (PetCommandMode)(skillId - DarkRavenCommandFirstSkillId);
+            ushort targetId = 0xFFFF;
+            if (commandMode == PetCommandMode.AttackTarget)
+            {
+                WalkerObject target = GetHoveredSkillTarget();
+                if (target == null)
+                {
+                    _logger?.LogDebug("Dark Raven target command ignored because no valid target is hovered.");
+                    _scene.SetMouseInputConsumed();
+                    return;
+                }
+
+                targetId = target.NetworkId;
+            }
+
+            _ = MuGame.Network.GetCharacterService().SendDarkRavenCommandAsync(commandMode, targetId);
             _scene.SetMouseInputConsumed();
         }
 
@@ -392,6 +433,12 @@ namespace Client.Main.Scenes
         private static bool IsAreaSkill(ushort skillId)
         {
             return SkillDatabase.IsAreaSkill(skillId);
+        }
+
+        private static bool IsDarkRavenCommandSkill(ushort skillId)
+        {
+            return skillId >= DarkRavenCommandFirstSkillId &&
+                   skillId <= DarkRavenCommandLastSkillId;
         }
 
         private bool IsInSkillRange(Vector2 targetLocation, uint allowedRange)

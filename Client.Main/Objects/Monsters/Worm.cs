@@ -14,6 +14,7 @@ namespace Client.Main.Objects.Monsters
         {
             RenderShadow = true;
             Scale = 1.0f; // Default
+            MoveSpeed = 250f; // SourceMain5.2: default monster MoveSpeed (10 * 25 FPS)
         }
 
         public override async Task Load()
@@ -22,8 +23,13 @@ namespace Client.Main.Objects.Monsters
             Model = await BMDLoader.Instance.Prepare($"Monster/Monster18.bmd");
             await base.Load();
 
-            // Specific PlaySpeed adjustment from C++ OpenMonsterModel
+            SetActionSpeed(MonsterActionType.Stop1, 0.25f);
+            SetActionSpeed(MonsterActionType.Stop2, 0.20f);
             SetActionSpeed(MonsterActionType.Walk, 0.5f);
+            SetActionSpeed(MonsterActionType.Attack1, 0.33f);
+            SetActionSpeed(MonsterActionType.Attack2, 0.33f);
+            SetActionSpeed(MonsterActionType.Shock, 0.50f);
+            SetActionSpeed(MonsterActionType.Die, 0.55f);
         }
 
         // Sound mapping based on C++ SetMonsterSound(MODEL_MONSTER01 + Type, 53, 53, 55, 55, 55);

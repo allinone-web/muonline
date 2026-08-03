@@ -1,5 +1,6 @@
 using Client.Data.BMD;
 using Client.Main.Controllers;
+using Client.Main.Controls;
 using Client.Main.Helpers;
 using Client.Main.Models;
 using Client.Main.Objects.Player;
@@ -229,6 +230,33 @@ namespace Client.Main.Objects
         }
 
         /// <summary>
+        /// Starts a short bone-to-target magic attack effect using the target id
+        /// captured from the server animation packet.
+        /// </summary>
+        protected void SpawnMagicAttackEffect(
+            int[] sourceBones,
+            int attackType,
+            Vector3 sourceOffset = default)
+        {
+            if (World is not WalkableWorldControl world ||
+                Status != GameControlStatus.Ready ||
+                Model == null)
+                return;
+
+            int requiredAction = attackType == 2
+                ? (int)MonsterActionType.Attack2
+                : (int)MonsterActionType.Attack1;
+            var effect = new Effects.MonsterMagicAttackEffect(
+                this,
+                sourceBones,
+                LastAttackTargetId,
+                requiredAction,
+                sourceOffset);
+            world.Objects.Add(effect);
+            _ = effect.Load();
+        }
+
+        /// <summary>
         /// Called when the monster receives damage.
         /// </summary>
         public virtual void OnReceiveDamage()
@@ -347,21 +375,25 @@ namespace Client.Main.Objects
             {
                 int dst = kv.Key;
                 int src = kv.Value;
-                if (src >= 0 && src < srcModel.Actions.Length)
+                if (dst < 0 || dst >= actions.Length ||
+                    srcModel.Actions == null || src < 0 || src >= srcModel.Actions.Length)
+                    continue;
+
+                var srcAction = srcModel.Actions[src];
+                if (srcAction == null)
+                    continue;
+
+                // Clone the action to avoid sharing PlaySpeed with player
+                // Player's dynamic attack speed modifiers should not affect monsters
+                // Use base PlaySpeed values from PlayerObject.InitializeActionSpeeds()
+                float basePlaySpeed = GetPlayerActionBaseSpeed(src);
+                actions[dst] = new BMDTextureAction
                 {
-                    var srcAction = srcModel.Actions[src];
-                    // Clone the action to avoid sharing PlaySpeed with player
-                    // Player's dynamic attack speed modifiers should not affect monsters
-                    // Use base PlaySpeed values from PlayerObject.InitializeActionSpeeds()
-                    float basePlaySpeed = GetPlayerActionBaseSpeed(src);
-                    actions[dst] = new BMDTextureAction
-                    {
-                        NumAnimationKeys = srcAction.NumAnimationKeys,
-                        LockPositions = srcAction.LockPositions,
-                        Positions = srcAction.Positions, // Array reference is fine, positions don't change
-                        PlaySpeed = basePlaySpeed
-                    };
-                }
+                    NumAnimationKeys = srcAction.NumAnimationKeys,
+                    LockPositions = srcAction.LockPositions,
+                    Positions = srcAction.Positions, // Array reference is fine, positions don't change
+                    PlaySpeed = basePlaySpeed
+                };
             }
             return actions;
         }
@@ -381,17 +413,20 @@ namespace Client.Main.Objects
                 PlayerAction.PlayerStopSword => 0.26f,
                 PlayerAction.PlayerStopTwoHandSword => 0.24f,
                 PlayerAction.PlayerStopSpear => 0.24f,
+                PlayerAction.PlayerStopScythe => 0.28f,
                 PlayerAction.PlayerStopBow => 0.22f,
                 PlayerAction.PlayerStopCrossbow => 0.22f,
 
                 // Walk animations
                 PlayerAction.PlayerWalkMale or PlayerAction.PlayerWalkFemale or
                 PlayerAction.PlayerWalkSword or PlayerAction.PlayerWalkTwoHandSword or
-                PlayerAction.PlayerWalkSpear or PlayerAction.PlayerWalkBow or
+                PlayerAction.PlayerWalkSpear or PlayerAction.PlayerWalkScythe or
+                PlayerAction.PlayerWalkBow or
                 PlayerAction.PlayerWalkCrossbow => 0.38f,
 
                 // Run animations
-                PlayerAction.PlayerRun => 0.34f,
+                PlayerAction.PlayerRun or PlayerAction.PlayerRunSword or
+                PlayerAction.PlayerRunSpear => 0.34f,
 
                 // Attack animations: base 0.25f (without player's attack speed bonus)
                 PlayerAction.PlayerAttackFist => 0.25f,
@@ -402,6 +437,9 @@ namespace Client.Main.Objects
                 PlayerAction.PlayerAttackScythe1 or PlayerAction.PlayerAttackScythe2 or
                 PlayerAction.PlayerAttackScythe3 => 0.25f,
                 PlayerAction.PlayerAttackBow or PlayerAction.PlayerAttackCrossbow => 0.30f,
+
+                // Two-handed staff attacks
+                PlayerAction.PlayerSkillWeapon1 or PlayerAction.PlayerSkillWeapon2 => 0.29f,
 
                 // Shock
                 PlayerAction.PlayerShock => 0.40f,
@@ -441,7 +479,8 @@ namespace Client.Main.Objects
                 {
                     int dst = kv.Key;
                     int srcIdx = kv.Value;
-                    if (srcIdx >= 0 && srcIdx < src.Matrixes.Length)
+                    if (dst >= 0 && dst < matrices.Length &&
+                        src.Matrixes != null && srcIdx >= 0 && srcIdx < src.Matrixes.Length)
                         matrices[dst] = src.Matrixes[srcIdx];
                 }
 

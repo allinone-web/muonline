@@ -2,6 +2,7 @@ using Client.Main.Content;
 using Client.Main.Controllers;
 using Client.Main.Models;
 using Client.Main.Objects.Player;
+using Client.Main.Objects.Effects;
 using Client.Main.Core.Utilities;
 using System;
 using System.Collections.Generic;
@@ -32,11 +33,13 @@ namespace Client.Main.Objects.Monsters
         {
             Scale = 1.1f; // Set according to C++ Setting_Monster
             RenderShadow = true;
+            MoveSpeed = 250f; // SourceMain5.2: default monster MoveSpeed (10 * 25 FPS)
             AnimationSpeed = 25f; // Uses Player.bmd animations, needs player animation speed
             _rightHandWeapon = new WeaponObject
             {
                 LinkParentAnimation = false,
-                ParentBoneLink = 33
+                ParentBoneLink = 42,
+                ItemLevel = 1
             };
             Children.Add(_rightHandWeapon);
         }
@@ -73,12 +76,25 @@ namespace Client.Main.Objects.Monsters
             base.OnStartWalk();
             var listenerPosition = ((Controls.WalkableWorldControl)World).Walker.Position;
             SoundController.Instance.PlayBufferWithAttenuation("Sound/mBone1.wav", Position, listenerPosition);
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mBone2.wav", Position, listenerPosition);
         }
 
         public override void OnReceiveDamage()
         {
             base.OnReceiveDamage();
+            var listenerPosition = ((Controls.WalkableWorldControl)World).Walker.Position;
+            SoundController.Instance.PlayBufferWithAttenuation("Sound/mBone1.wav", Position, listenerPosition);
+        }
+
+        public override void OnDeathAnimationStart()
+        {
+            base.OnDeathAnimationStart();
+            Blood = false;
+            if (World != null)
+            {
+                var effect = new SkeletonDeathBoneEffect(Position, Angle);
+                World.Objects.Add(effect);
+                _ = effect.Load();
+            }
             var listenerPosition = ((Controls.WalkableWorldControl)World).Walker.Position;
             SoundController.Instance.PlayBufferWithAttenuation("Sound/mBone2.wav", Position, listenerPosition);
         }

@@ -767,8 +767,8 @@ namespace Client.Main.Models
         }
 
         /// <summary>
-        /// Tries to decode the equipped helper. Item group 13, number 0 is Guardian Angel
-        /// and number 1 is Imp. In the legacy 18-byte format 0x3F is the empty marker,
+        /// Tries to decode the equipped helper. Item group 13, number 0 is Guardian Angel,
+        /// number 1 is Imp, and number 5 is Dark Raven. In the legacy 18-byte format 0x3F is the empty marker,
         /// so item number 0 must never be treated as an empty slot.
         /// </summary>
         public bool TryGetHelperItem(out byte itemGroup, out short itemNumber)

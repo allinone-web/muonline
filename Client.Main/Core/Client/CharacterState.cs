@@ -348,6 +348,7 @@ namespace Client.Main.Core.Client
 
         // Skills
         private readonly ConcurrentDictionary<ushort, SkillEntryState> _skillList = new();
+        private volatile bool _darkRavenEquipped;
 
         // Active Buffs/Effects
         private readonly ConcurrentDictionary<(byte EffectId, ushort PlayerIdMasked), ActiveBuffState> _activeBuffs = new();
@@ -1599,6 +1600,18 @@ namespace Client.Main.Core.Client
         // --- Skill List Methods ---
 
         /// <summary>
+        /// Enables the four classic Dark Raven command skills in the client UI.
+        /// They are protocol commands, not learned character skills, so they are kept
+        /// outside the server-provided skill dictionary.
+        /// </summary>
+        public void SetDarkRavenEquipped(bool equipped)
+        {
+            _darkRavenEquipped = equipped;
+        }
+
+        public bool IsDarkRavenEquipped => _darkRavenEquipped;
+
+        /// <summary>
         /// Clears the character's skill list.
         /// </summary>
         public void ClearSkillList()
@@ -1637,7 +1650,23 @@ namespace Client.Main.Core.Client
         /// </summary>
         public IEnumerable<SkillEntryState> GetSkills()
         {
-            return _skillList.Values.OrderBy(s => s.SkillId);
+            foreach (var skill in _skillList.Values.OrderBy(s => s.SkillId))
+                yield return skill;
+
+            if (!_darkRavenEquipped)
+                yield break;
+
+            for (ushort skillId = 120; skillId <= 123; skillId++)
+            {
+                if (!_skillList.ContainsKey(skillId))
+                {
+                    yield return new SkillEntryState
+                    {
+                        SkillId = skillId,
+                        SkillLevel = 1
+                    };
+                }
+            }
         }
 
         // --- Active Buffs/Effects Methods ---

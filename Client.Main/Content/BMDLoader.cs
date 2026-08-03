@@ -1682,6 +1682,18 @@ namespace Client.Main.Content
             return result;
         }
 
+        public void RegisterDerivedModel(BMD source, BMD derived)
+        {
+            if (source == null || derived == null)
+                return;
+
+            lock (_texturePathMap)
+            {
+                if (_texturePathMap.TryGetValue(source, out Dictionary<string, string> texturePaths))
+                    _texturePathMap[derived] = texturePaths;
+            }
+        }
+
         // Clear cache when needed (e.g., when objects are disposed)
         public void ClearBufferCache()
         {

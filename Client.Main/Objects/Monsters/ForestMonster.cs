@@ -14,6 +14,7 @@ namespace Client.Main.Objects.Monsters
         {
             RenderShadow = true;
             Scale = 0.75f; // Set according to C++ Setting_Monster
+            MoveSpeed = 250f; // SourceMain5.2: default monster MoveSpeed (10 * 25 FPS)
         }
 
         public override async Task Load()
@@ -21,7 +22,13 @@ namespace Client.Main.Objects.Monsters
             // Model Loading Type: 23 -> File Number: 23 + 1 = 24
             Model = await BMDLoader.Instance.Prepare($"Monster/Monster24.bmd");
             await base.Load();
-            // No specific PlaySpeed adjustments mentioned
+            SetActionSpeed(MonsterActionType.Stop1, 0.25f);
+            SetActionSpeed(MonsterActionType.Stop2, 0.20f);
+            SetActionSpeed(MonsterActionType.Walk, 0.34f);
+            SetActionSpeed(MonsterActionType.Attack1, 0.33f);
+            SetActionSpeed(MonsterActionType.Attack2, 0.33f);
+            SetActionSpeed(MonsterActionType.Shock, 0.50f);
+            SetActionSpeed(MonsterActionType.Die, 0.55f);
             // C++: Models[MODEL_MONSTER01+Type].BoneHead = 6;
         }
 
@@ -30,16 +37,30 @@ namespace Client.Main.Objects.Monsters
         {
             base.OnIdle();
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mWoodMon1.wav", Position, listenerPosition); // Index 0 -> Sound 90
-                                                                                                                   // SoundController.Instance.PlayBufferWithAttenuation("Sound/mWoodMon2.wav", Position, listenerPosition); // Index 1 -> Sound 91
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mWoodMon1.wav"
+                : "Sound/mWoodMon2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
         }
 
         public override void OnPerformAttack(int attackType = 1)
         {
             base.OnPerformAttack(attackType);
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mWoodMonAttack1.wav", Position, listenerPosition); // Index 2 -> Sound 92
-                                                                                                                         // SoundController.Instance.PlayBufferWithAttenuation("Sound/mWoodMonAttack2.wav", Position, listenerPosition); // Index 3 -> Sound 93
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mWoodMonAttack1.wav"
+                : "Sound/mWoodMonAttack2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
+        }
+
+        public override void OnReceiveDamage()
+        {
+            base.OnReceiveDamage();
+            Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mWoodMonAttack1.wav"
+                : "Sound/mWoodMonAttack2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
         }
 
         public override void OnDeathAnimationStart()

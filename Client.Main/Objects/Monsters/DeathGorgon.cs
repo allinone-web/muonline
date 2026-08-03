@@ -21,17 +21,18 @@ namespace Client.Main.Objects.Monsters
         {
             RenderShadow = true;
             Scale = 1.3f; // Set according to C++ Setting_Monster
+            MoveSpeed = 250f; // SourceMain5.2: default monster MoveSpeed (10 * 25 FPS)
+            BlendMesh = 1;
+            BlendMeshLight = 1f;
             _rightHandWeapon = new WeaponObject
             {
                 LinkParentAnimation = false,
-                ParentBoneLink = 30,
-                ItemLevel = 2
+                ParentBoneLink = 30
             };
             _leftHandWeapon = new WeaponObject
             {
                 LinkParentAnimation = false,
-                ParentBoneLink = 39,
-                ItemLevel = 2
+                ParentBoneLink = 39
             };
             Children.Add(_rightHandWeapon);
             Children.Add(_leftHandWeapon);
@@ -50,6 +51,13 @@ namespace Client.Main.Objects.Monsters
                 _leftHandWeapon.Model = await BMDLoader.Instance.Prepare(weapon.TexturePath);
             }
             await base.Load();
+            SetActionSpeed(MonsterActionType.Stop1, 0.25f);
+            SetActionSpeed(MonsterActionType.Stop2, 0.20f);
+            SetActionSpeed(MonsterActionType.Walk, 0.34f);
+            SetActionSpeed(MonsterActionType.Attack1, 0.33f);
+            SetActionSpeed(MonsterActionType.Attack2, 0.33f);
+            SetActionSpeed(MonsterActionType.Shock, 0.50f);
+            SetActionSpeed(MonsterActionType.Die, 0.55f);
         }
 
         public override void Update(GameTime gameTime)
@@ -60,19 +68,10 @@ namespace Client.Main.Objects.Monsters
                 return;
 
             if (IsDead)
-            {
-                _fireAura.SetActive(false);
-                BlendMeshLight = 0f;
                 return;
-            }
-
-            _fireAura.SetActive(true);
-
-            float time = (float)gameTime.TotalGameTime.TotalSeconds;
-            float pulse = 0.5f + 0.5f * MathF.Sin(time * 13.7f + NetworkId * 0.07f);
 
             BlendMesh = 1;
-            BlendMeshLight = 0.35f + 0.65f * pulse;
+            BlendMeshLight = MuGame.Random.Next(10) * 0.1f;
         }
 
         // Sound mapping based on C++ SetMonsterSound(MODEL_MONSTER01 + Type, 45, 46, 47, 48, 49);
@@ -80,14 +79,30 @@ namespace Client.Main.Objects.Monsters
         {
             base.OnIdle();
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mGorgon1.wav", Position, listenerPosition); // Index 0 -> Sound 45
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mGorgon1.wav"
+                : "Sound/mGorgon2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
         }
 
         public override void OnPerformAttack(int attackType = 1)
         {
             base.OnPerformAttack(attackType);
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mGorgonAttack1.wav", Position, listenerPosition); // Index 2 -> Sound 47
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mGorgonAttack1.wav"
+                : "Sound/mGorgonAttack2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
+        }
+
+        public override void OnReceiveDamage()
+        {
+            base.OnReceiveDamage();
+            Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mGorgonAttack1.wav"
+                : "Sound/mGorgonAttack2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
         }
 
         public override void OnDeathAnimationStart()

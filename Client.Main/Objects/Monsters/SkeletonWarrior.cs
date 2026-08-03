@@ -6,6 +6,7 @@ using Client.Main.Controllers;
 using System.Linq;
 using System;
 using Client.Main.Objects.Player;
+using Client.Main.Objects.Effects;
 using Client.Main.Core.Utilities;
 
 namespace Client.Main.Objects.Monsters
@@ -15,8 +16,8 @@ namespace Client.Main.Objects.Monsters
     {
         private static readonly Dictionary<MonsterActionType, PlayerAction> _actionMap = new()
         {
-            { MonsterActionType.Stop1,   PlayerAction.PlayerStopMale },
-            { MonsterActionType.Stop2,   PlayerAction.PlayerStopMale },
+            { MonsterActionType.Stop1,   PlayerAction.PlayerStopSword },
+            { MonsterActionType.Stop2,   PlayerAction.PlayerStopSword },
             { MonsterActionType.Walk,    PlayerAction.PlayerWalkSword },
             { MonsterActionType.Attack1, PlayerAction.PlayerAttackSwordRight1 },
             { MonsterActionType.Attack2, PlayerAction.PlayerAttackSwordRight2 },
@@ -33,6 +34,7 @@ namespace Client.Main.Objects.Monsters
         {
             Scale = 0.95f; // Set according to C++ Setting_Monster
             RenderShadow = true;
+            MoveSpeed = 250f; // SourceMain5.2: default monster MoveSpeed (10 * 25 FPS)
             AnimationSpeed = 25f; // Uses Player.bmd animations, needs player animation speed
             _rightHandWeapon = new WeaponObject
             {
@@ -85,12 +87,25 @@ namespace Client.Main.Objects.Monsters
             base.OnStartWalk();
             var listenerPosition = ((Controls.WalkableWorldControl)World).Walker.Position;
             SoundController.Instance.PlayBufferWithAttenuation("Sound/mBone1.wav", Position, listenerPosition);
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mBone2.wav", Position, listenerPosition);
         }
 
         public override void OnReceiveDamage()
         {
             base.OnReceiveDamage();
+            var listenerPosition = ((Controls.WalkableWorldControl)World).Walker.Position;
+            SoundController.Instance.PlayBufferWithAttenuation("Sound/mBone1.wav", Position, listenerPosition);
+        }
+
+        public override void OnDeathAnimationStart()
+        {
+            base.OnDeathAnimationStart();
+            Blood = false;
+            if (World != null)
+            {
+                var effect = new SkeletonDeathBoneEffect(Position, Angle);
+                World.Objects.Add(effect);
+                _ = effect.Load();
+            }
             var listenerPosition = ((Controls.WalkableWorldControl)World).Walker.Position;
             SoundController.Instance.PlayBufferWithAttenuation("Sound/mBone2.wav", Position, listenerPosition);
         }

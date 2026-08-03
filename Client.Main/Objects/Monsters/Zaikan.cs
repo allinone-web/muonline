@@ -2,6 +2,7 @@
 using Client.Main.Objects.Effects;
 using Client.Main.Objects.Player;
 using Client.Main.Core.Utilities;
+using Client.Main.Models;
 using Microsoft.Xna.Framework;
 using System.Threading.Tasks;
 
@@ -16,9 +17,8 @@ namespace Client.Main.Objects.Monsters
         public Zaikan()
         {
             Scale = 2.1f;
-            BlendMesh = -2;
+            BlendMesh = 2;
             BlendMeshLight = 1.0f;
-            Type = 1;
 
             _rightHandWeapon = new WeaponObject
             {
@@ -26,6 +26,12 @@ namespace Client.Main.Objects.Monsters
                 ParentBoneLink = 43
             };
             Children.Add(_rightHandWeapon);
+            Children.Add(new MonsterBoneFireEffect
+            {
+                SourceBones = new[] { 6, 13 },
+                EmitAllSourceBones = true,
+                EmissionRate = 6.25f
+            });
 
             // Same model as Tantalos — eyes: 24 (R), 25 (L)
             _eyeGlow = new GlowingEyesEffect { LeftEyeBone = 25, RightEyeBone = 24, GlowColor = new Color(80, 170, 255) };
@@ -39,7 +45,13 @@ namespace Client.Main.Objects.Monsters
             if (weapon != null)
                 _rightHandWeapon.Model = await BMDLoader.Instance.Prepare(weapon.TexturePath);
             await base.Load();
-            //TODO Zaikan uses tantalos model with some different blending options
+            SetActionSpeed(MonsterActionType.Stop1, 0.25f);
+            SetActionSpeed(MonsterActionType.Stop2, 0.20f);
+            SetActionSpeed(MonsterActionType.Walk, 0.34f);
+            SetActionSpeed(MonsterActionType.Attack1, 0.35f);
+            SetActionSpeed(MonsterActionType.Attack2, 0.35f);
+            SetActionSpeed(MonsterActionType.Shock, 0.50f);
+            SetActionSpeed(MonsterActionType.Die, 0.55f);
         }
     }
 }

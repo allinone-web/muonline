@@ -18,6 +18,7 @@ namespace Client.Main.Objects.Monsters
         {
             RenderShadow = true;
             Scale = 1.3f; // Set according to C++ Setting_Monster
+            MoveSpeed = 250f; // SourceMain5.2: default monster MoveSpeed (10 * 25 FPS)
             _rightHandWeapon = new WeaponObject
             {
                 LinkParentAnimation = false,
@@ -43,7 +44,13 @@ namespace Client.Main.Objects.Monsters
                 _leftHandWeapon.Model = await BMDLoader.Instance.Prepare(item.TexturePath);
             }
             await base.Load();
-            // No specific PlaySpeed adjustments mentioned
+            SetActionSpeed(MonsterActionType.Stop1, 0.25f);
+            SetActionSpeed(MonsterActionType.Stop2, 0.20f);
+            SetActionSpeed(MonsterActionType.Walk, 0.34f);
+            SetActionSpeed(MonsterActionType.Attack1, 0.33f);
+            SetActionSpeed(MonsterActionType.Attack2, 0.33f);
+            SetActionSpeed(MonsterActionType.Shock, 0.50f);
+            SetActionSpeed(MonsterActionType.Die, 0.55f);
             // C++: Models[MODEL_MONSTER01+Type].BoneHead = 16;
         }
 
@@ -52,16 +59,30 @@ namespace Client.Main.Objects.Monsters
         {
             base.OnIdle();
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mArgon1.wav", Position, listenerPosition); // Index 0 -> Sound 95
-            // SoundController.Instance.PlayBufferWithAttenuation("Sound/mArgon2.wav", Position, listenerPosition); // Index 1 -> Sound 96
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mArgon1.wav"
+                : "Sound/mArgon2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
         }
 
         public override void OnPerformAttack(int attackType = 1)
         {
             base.OnPerformAttack(attackType);
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mArgonAttack1.wav", Position, listenerPosition); // Index 2 -> Sound 97
-            // SoundController.Instance.PlayBufferWithAttenuation("Sound/mArgonAttack2.wav", Position, listenerPosition); // Index 3 -> Sound 98
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mArgonAttack1.wav"
+                : "Sound/mArgonAttack2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
+        }
+
+        public override void OnReceiveDamage()
+        {
+            base.OnReceiveDamage();
+            Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mArgonAttack1.wav"
+                : "Sound/mArgonAttack2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
         }
 
         public override void OnDeathAnimationStart()

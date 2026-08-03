@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 namespace Client.Main.Objects.Monsters.BloodCastle
 {
     [NpcInfo(125, "Chief Skeleton Warrior")]
-    public class ChiefSkeletonWarrior6 : MonsterObject
+    public class ChiefSkeletonWarrior6 : ChiefSkeletonWarrior1
     {
         public ChiefSkeletonWarrior6()
         {
@@ -13,7 +13,7 @@ namespace Client.Main.Objects.Monsters.BloodCastle
 
         public override async Task Load()
         {
-            Model = await BMDLoader.Instance.Prepare($"Monster/Monster48.bmd");
+            // Visual setup and model loading are inherited from the source-matched base variant.
             await base.Load();
         }
     }

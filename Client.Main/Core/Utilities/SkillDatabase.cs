@@ -51,7 +51,14 @@ namespace Client.Main.Core.Utilities
         /// Gets skill name by skill ID.
         /// </summary>
         public static string GetSkillName(int skillId) =>
-            GetSkillDefinition(skillId)?.Name ?? $"Unknown Skill {skillId}";
+            skillId switch
+            {
+                120 => "Follow",
+                121 => "Auto-attack",
+                122 => "Attack with Character",
+                123 => "Attack Target",
+                _ => GetSkillDefinition(skillId)?.Name ?? $"Unknown Skill {skillId}"
+            };
 
         /// <summary>
         /// Gets skill type (AREA/TARGET/SELF) by skill ID.

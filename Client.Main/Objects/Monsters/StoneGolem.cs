@@ -2,6 +2,7 @@
 using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Models;
+using Client.Main.Objects.Effects;
 using Microsoft.Xna.Framework;
 using System.Threading.Tasks;
 
@@ -13,7 +14,8 @@ namespace Client.Main.Objects.Monsters
         public StoneGolem()
         {
             RenderShadow = true;
-            Scale = 1.0f; // Default
+            Scale = 1.0f; // SourceMain5.2: default scale
+            MoveSpeed = 250f; // SourceMain5.2: default monster MoveSpeed (10 * 25 FPS)
         }
 
         public override async Task Load()
@@ -29,6 +31,7 @@ namespace Client.Main.Objects.Monsters
             SetActionSpeed(MonsterActionType.Attack1, 0.33f * 0.7f);
             SetActionSpeed(MonsterActionType.Attack2, 0.33f * 0.7f);
             SetActionSpeed(MonsterActionType.Shock, 0.5f * 0.7f);
+            SetActionSpeed(MonsterActionType.Die, 0.55f);
             // C++: Models[MODEL_MONSTER01+Type].BoneHead = 5;
         }
 
@@ -37,23 +40,44 @@ namespace Client.Main.Objects.Monsters
         {
             base.OnIdle();
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mGolem1.wav", Position, listenerPosition); // Index 0 -> Sound 100
-                                                                                                                 // SoundController.Instance.PlayBufferWithAttenuation("Sound/mGolem2.wav", Position, listenerPosition); // Index 1 -> Sound 101
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mGolem1.wav"
+                : "Sound/mGolem2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
         }
 
         public override void OnPerformAttack(int attackType = 1)
         {
             base.OnPerformAttack(attackType);
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mGolemAttack1.wav", Position, listenerPosition); // Index 2 -> Sound 102
-                                                                                                                       // SoundController.Instance.PlayBufferWithAttenuation("Sound/mGolemAttack2.wav", Position, listenerPosition); // Index 3 -> Sound 103
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mGolemAttack1.wav"
+                : "Sound/mGolemAttack2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
+        }
+
+        public override void OnReceiveDamage()
+        {
+            base.OnReceiveDamage();
+            Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
+            string sound = MuGame.Random.Next(2) == 0
+                ? "Sound/mGolemAttack1.wav"
+                : "Sound/mGolemAttack2.wav";
+            SoundController.Instance.PlayBufferWithAttenuation(sound, Position, listenerPosition);
         }
 
         public override void OnDeathAnimationStart()
         {
             base.OnDeathAnimationStart();
+            Blood = false;
+            if (World != null)
+            {
+                var effect = new StoneGolemDeathRockEffect(Position, Angle);
+                World.Objects.Add(effect);
+                _ = effect.Load();
+            }
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
-            SoundController.Instance.PlayBufferWithAttenuation("Sound/mGolemDie.wav", Position, listenerPosition); // Index 4 -> Sound 104
+            SoundController.Instance.PlayBufferWithAttenuation("Sound/mGolemDie.wav", Position, listenerPosition);
         }
     }
 }

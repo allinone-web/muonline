@@ -85,6 +85,7 @@ namespace Client.Main.Controls.UI.Game.Hud
         private int _activeSkillSlot = 3;
         private int _pendingAssignSlot = -1;
         private bool _quickSlotsRestored;
+        private bool _lastDarkRavenEquipped;
 
         // Potion slot assignments (Q=0, W=1, E=2) — stores item type
         private readonly (byte Group, int Id)?[] _potionAssignments = new (byte, int)?[PotionSlotCount];
@@ -147,6 +148,13 @@ namespace Client.Main.Controls.UI.Game.Hud
         {
             base.Update(gameTime);
             RefreshLayout();
+
+            if (_lastDarkRavenEquipped != _state.IsDarkRavenEquipped)
+            {
+                _lastDarkRavenEquipped = _state.IsDarkRavenEquipped;
+                _quickSlotsRestored = false;
+            }
+
             RestoreQuickSlotsIfNeeded();
 
             float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;

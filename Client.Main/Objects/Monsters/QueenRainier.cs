@@ -2,6 +2,7 @@
 using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Models;
+using Client.Main.Objects.Effects;
 using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
@@ -16,25 +17,35 @@ namespace Client.Main.Objects.Monsters
     {
         public QueenRainier()
         {
-            BlendMesh = -2; // Use full blending like other semi-transparent monsters
-            BlendMeshLight = 0.7f; // Reduced light for more subtle blending
-            Alpha = 0.85f; // Slightly transparent for better blending with environment
+            Scale = 1.3f;
+            MoveSpeed = 250f;
+            BlendMesh = -2;
+            BlendMeshLight = 1.0f;
+            RenderShadow = false;
+            Children.Add(new MonsterBoneLightningEffect
+            {
+                LineScale = 0.28f,
+                BonePairs = new[]
+                {
+                    2, 3, 3, 4, 4, 5,
+                    2, 10, 10, 11,
+                    2, 18, 18, 22, 23, 22, 24, 23, 25, 24,
+                    18, 31, 32, 31, 33, 32, 34, 33
+                }
+            });
         }
 
         public override async Task Load()
         {
             Model = await BMDLoader.Instance.Prepare($"Monster/Monster52.bmd");
             await base.Load();
-
-            // Specific PlaySpeed adjustment from C++ OpenMonsterModel
-            if (Model?.Actions != null)
-            {
-                const int MONSTER_ACTION_DIE = (int)MonsterActionType.Die;
-                if (MONSTER_ACTION_DIE < Model.Actions.Length && Model.Actions[MONSTER_ACTION_DIE] != null)
-                {
-                    Model.Actions[MONSTER_ACTION_DIE].PlaySpeed = 0.22f;
-                }
-            }
+            SetActionSpeed(MonsterActionType.Stop1, 0.25f);
+            SetActionSpeed(MonsterActionType.Stop2, 0.20f);
+            SetActionSpeed(MonsterActionType.Walk, 0.34f);
+            SetActionSpeed(MonsterActionType.Attack1, 0.33f);
+            SetActionSpeed(MonsterActionType.Attack2, 0.33f);
+            SetActionSpeed(MonsterActionType.Shock, 0.50f);
+            SetActionSpeed(MonsterActionType.Die, 0.22f);
         }
 
         // Sound mapping based on C++ SetMonsterSound(MODEL_MONSTER01 + Type, 171, -1, 172, 172, 173);

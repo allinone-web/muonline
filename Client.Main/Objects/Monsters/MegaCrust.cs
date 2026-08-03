@@ -6,6 +6,7 @@ using Microsoft.Xna.Framework;
 using Client.Main.Objects.Player;
 using Client.Main.Core.Utilities;
 using Client.Main.Models;
+using Microsoft.Xna.Framework;
 
 namespace Client.Main.Objects.Monsters
 {
@@ -14,11 +15,12 @@ namespace Client.Main.Objects.Monsters
     {
         private WeaponObject _rightHandWeapon;
         private WeaponObject _leftHandWeapon;
-        private GlowingEyesEffect _eyeGlow;
+        private SourceMonsterEyeEffect _eyeGlow;
 
         public MegaCrust()
         {
             Scale = 1.1f;
+            MoveSpeed = 250f;
             BlendMesh = 1;
             BlendMeshLight = 1.0f;
             _rightHandWeapon = new WeaponObject { LinkParentAnimation = false, ParentBoneLink = 36, ItemLevel = 5 };
@@ -27,7 +29,7 @@ namespace Client.Main.Objects.Monsters
             Children.Add(_leftHandWeapon);
 
             // Eyes: bones 26 (L), 27 (R), size 2.0 — original RenderEye(o, 26, 27, 2.0f)
-            _eyeGlow = new GlowingEyesEffect { LeftEyeBone = 26, RightEyeBone = 27, GlowColor = new Color(60, 180, 255), GlowScale = 3.0f };
+            _eyeGlow = new SourceMonsterEyeEffect { LeftEyeBone = 26, RightEyeBone = 27, SpriteScale = 2.0f };
             Children.Add(_eyeGlow);
         }
 
@@ -42,16 +44,22 @@ namespace Client.Main.Objects.Monsters
                 _leftHandWeapon.Model = await BMDLoader.Instance.Prepare(shield.TexturePath);
 
             await base.Load();
+            SetActionSpeed(MonsterActionType.Stop1, 0.25f);
+            SetActionSpeed(MonsterActionType.Stop2, 0.20f);
+            SetActionSpeed(MonsterActionType.Walk, 0.34f);
+            SetActionSpeed(MonsterActionType.Attack1, 0.33f);
+            SetActionSpeed(MonsterActionType.Attack2, 0.33f);
+            SetActionSpeed(MonsterActionType.Shock, 0.50f);
+            SetActionSpeed(MonsterActionType.Die, 0.22f);
+        }
 
-            // Specific PlaySpeed adjustment from C++ OpenMonsterModel
-            if (Model?.Actions != null)
-            {
-                const int MONSTER_ACTION_DIE = (int)MonsterActionType.Die;
-                if (MONSTER_ACTION_DIE < Model.Actions.Length && Model.Actions[MONSTER_ACTION_DIE] != null)
-                {
-                    Model.Actions[MONSTER_ACTION_DIE].PlaySpeed = 0.22f;
-                }
-            }
+        public override void Update(GameTime gameTime)
+        {
+            base.Update(gameTime);
+            TextureCoordinateOffsetMeshIndex = BlendMesh;
+            TextureCoordinateOffset = new Vector2(
+                -((long)gameTime.TotalGameTime.TotalMilliseconds % 10000L) * 0.0004f,
+                0f);
         }
 
         // Sound mapping based on C++ SetMonsterSound(MODEL_MONSTER01 + Type, 180, 180, 181, 181, 182);
@@ -67,6 +75,13 @@ namespace Client.Main.Objects.Monsters
             base.OnPerformAttack(attackType);
             Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
             SoundController.Instance.PlayBufferWithAttenuation("Sound/mMegaCrustAttack1.wav", Position, listenerPosition); // Sound 181
+        }
+
+        public override void OnReceiveDamage()
+        {
+            base.OnReceiveDamage();
+            Vector3 listenerPosition = ((WalkableWorldControl)World).Walker.Position;
+            SoundController.Instance.PlayBufferWithAttenuation("Sound/mMegaCrustAttack1.wav", Position, listenerPosition);
         }
 
         public override void OnDeathAnimationStart()

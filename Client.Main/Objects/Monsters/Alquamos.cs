@@ -17,25 +17,22 @@ namespace Client.Main.Objects.Monsters
         public Alquamos()
         {
             Scale = 1.0f;
-            BlendMesh = -2; // Use full blending like other semi-transparent monsters
-            BlendMeshLight = 0.7f; // Reduced light for more subtle blending
-            Alpha = 0.85f; // Slightly transparent for better blending with environment
+            MoveSpeed = 250f;
+            BlendMesh = 0; // SourceMain5.2 CreateCharacter: BlendMesh = 0
+            BlendMeshLight = 1.0f;
         }
 
         public override async Task Load()
         {
             Model = await BMDLoader.Instance.Prepare($"Monster/Monster51.bmd");
             await base.Load();
-
-            // Specific PlaySpeed adjustment from C++ OpenMonsterModel
-            if (Model?.Actions != null)
-            {
-                const int MONSTER_ACTION_DIE = (int)MonsterActionType.Die;
-                if (MONSTER_ACTION_DIE < Model.Actions.Length && Model.Actions[MONSTER_ACTION_DIE] != null)
-                {
-                    Model.Actions[MONSTER_ACTION_DIE].PlaySpeed = 0.22f;
-                }
-            }
+            SetActionSpeed(MonsterActionType.Stop1, 0.25f);
+            SetActionSpeed(MonsterActionType.Stop2, 0.20f);
+            SetActionSpeed(MonsterActionType.Walk, 0.34f);
+            SetActionSpeed(MonsterActionType.Attack1, 0.33f);
+            SetActionSpeed(MonsterActionType.Attack2, 0.33f);
+            SetActionSpeed(MonsterActionType.Shock, 0.50f);
+            SetActionSpeed(MonsterActionType.Die, 0.22f);
         }
 
         // Sound mapping based on C++ SetMonsterSound(MODEL_MONSTER01 + Type, 175, 175, 175, 175, 176);
