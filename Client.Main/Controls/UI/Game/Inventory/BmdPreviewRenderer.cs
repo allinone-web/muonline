@@ -176,9 +176,8 @@ namespace Client.Main.Controls.UI.Game.Inventory
         {
             public Effect Effect;
             public EffectTechnique Technique;
+            public EffectTechnique FastTechnique;
             public EffectParameter World;
-            public EffectParameter View;
-            public EffectParameter Projection;
             public EffectParameter WorldViewProjection;
             public EffectParameter EyePosition;
             public EffectParameter DiffuseTexture;
@@ -193,6 +192,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
             public EffectParameter IsAncient;
             public EffectParameter Time;
             public EffectParameter Alpha;
+            public EffectParameter ShadowsEnabled;
         }
 
         private sealed class ReferenceComparer<T> : IEqualityComparer<T> where T : class
@@ -566,9 +566,8 @@ namespace Client.Main.Controls.UI.Game.Inventory
             {
                 Effect = effect,
                 Technique = technique,
+                FastTechnique = FindTechnique(effect, "BasicColorDrawing_UpgradeFast"),
                 World = effect.Parameters["World"],
-                View = effect.Parameters["View"],
-                Projection = effect.Parameters["Projection"],
                 WorldViewProjection = effect.Parameters["WorldViewProjection"],
                 EyePosition = effect.Parameters["EyePosition"],
                 DiffuseTexture = effect.Parameters["DiffuseTexture"],
@@ -583,6 +582,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 IsAncient = effect.Parameters["IsAncient"],
                 Time = effect.Parameters["Time"],
                 Alpha = effect.Parameters["Alpha"],
+                ShadowsEnabled = effect.Parameters["ShadowsEnabled"],
             };
 
             return _itemPreviewEffectBindings;
@@ -1233,21 +1233,32 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 else
                 {
                     float shaderTime = ResolveEffectTime(gameTime);
-                    for (int i = 0; i < pose.MeshOrder.Length; i++)
+                    ItemPreviewEffectBindings previewBindings = GetItemPreviewEffectBindings();
+                    previewBindings?.ShadowsEnabled?.SetValue(0f);
+                    try
                     {
-                        int meshIndex = pose.MeshOrder[i];
-                        RenderMeshWithItemMaterialPreview(
-                            gd,
-                            bmd,
-                            meshIndex,
-                            pose.Meshes[meshIndex],
-                            world,
-                            view,
-                            projection,
-                            worldViewProjection,
-                            eyePosition,
-                            props,
-                            shaderTime);
+                        for (int i = 0; i < pose.MeshOrder.Length; i++)
+                        {
+                            int meshIndex = pose.MeshOrder[i];
+                            RenderMeshWithItemMaterialPreview(
+                                gd,
+                                bmd,
+                                meshIndex,
+                                pose.Meshes[meshIndex],
+                                world,
+                                worldViewProjection,
+                                eyePosition,
+                                props,
+                                shaderTime);
+                        }
+                    }
+                    finally
+                    {
+                        // ItemMaterialEffect is shared with the world renderer. Restore its
+                        // shadow bindings once after the whole preview instead of per mesh.
+                        GraphicsManager.Instance.ShadowMapRenderer?.ApplyShadowParameters(
+                            previewBindings?.Effect,
+                            force: true);
                     }
                 }
 
@@ -1313,11 +1324,8 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 gd.Indices = geometry.IndexBuffer;
 
                 int primitiveCount = geometry.IndexBuffer.IndexCount / 3;
-                foreach (var pass in effect.CurrentTechnique.Passes)
-                {
-                    pass.Apply();
-                    gd.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, primitiveCount);
-                }
+                effect.CurrentTechnique.Passes[0].Apply();
+                gd.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, primitiveCount);
             }
             finally
             {
@@ -1326,13 +1334,31 @@ namespace Client.Main.Controls.UI.Game.Inventory
             }
         }
 
+        private static bool CanUseFastItemPreviewShader(
+            ItemPreviewEffectBindings bindings,
+            in ItemRenderProperties props)
+        {
+            if (!Constants.ENABLE_FAST_MATERIAL_SHADERS ||
+                bindings?.FastTechnique == null ||
+                props.Level < 7 ||
+                props.IsExcellent ||
+                props.IsAncient)
+            {
+                return false;
+            }
+
+            bool isArmorPart = props.ItemGroup >= 7 && props.ItemGroup <= 11;
+            bool usesHighLevelArmor = isArmorPart &&
+                                      props.Level >= 11 &&
+                                      GraphicsManager.Instance.HasItemUpgradeTextures;
+            return !usesHighLevelArmor;
+        }
+
         private static void RenderMeshWithItemMaterialPreview(GraphicsDevice gd,
                                                               BMD bmd,
                                                               int meshIdx,
                                                               PreviewMeshGeometry geometry,
                                                               Matrix world,
-                                                              Matrix view,
-                                                              Matrix projection,
                                                               Matrix worldViewProjection,
                                                               Vector3 eyePosition,
                                                               in ItemRenderProperties props,
@@ -1352,10 +1378,10 @@ namespace Client.Main.Controls.UI.Game.Inventory
             try
             {
                 // Item previews use CPU-skinned VertexPositionColorNormalTexture buffers.
-                // The shared ItemMaterial effect may have been left on the skinned technique
-                // by world rendering, which requires TEXCOORD1 (bone indices) and is therefore
-                // incompatible with the preview vertex declaration.
-                effect.CurrentTechnique = bindings.Technique;
+                // Select the compact ordinary-upgrade shader only when no Ancient, Excellent
+                // or high-level armor material data is required.
+                bool fastShader = CanUseFastItemPreviewShader(bindings, props);
+                effect.CurrentTechnique = fastShader ? bindings.FastTechnique : bindings.Technique;
                 BlendState customBlendState = GetBlendStateForMesh(mesh);
                 if (customBlendState != null)
                 {
@@ -1381,24 +1407,25 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 }
 
                 bindings.World?.SetValue(world);
-                bindings.View?.SetValue(view);
-                bindings.Projection?.SetValue(projection);
                 bindings.WorldViewProjection?.SetValue(worldViewProjection);
-                bindings.EyePosition?.SetValue(eyePosition);
                 bindings.DiffuseTexture?.SetValue(texture);
 
                 GraphicsManager graphics = GraphicsManager.Instance;
-                Texture2D fallback = graphics.BlackPixel ?? graphics.Pixel;
-                bindings.Chrome02Texture?.SetValue(graphics.ItemChrome02Texture ?? fallback);
-                bindings.Shiny01Texture?.SetValue(graphics.ItemShiny01Texture ?? fallback);
-                bindings.Chrome01Texture?.SetValue(graphics.ItemChrome01Texture ?? fallback);
+                if (!fastShader)
+                {
+                    bindings.EyePosition?.SetValue(eyePosition);
+                    Texture2D fallback = graphics.BlackPixel ?? graphics.Pixel;
+                    bindings.Chrome02Texture?.SetValue(graphics.ItemChrome02Texture ?? fallback);
+                    bindings.Shiny01Texture?.SetValue(graphics.ItemShiny01Texture ?? fallback);
+                    bindings.Chrome01Texture?.SetValue(graphics.ItemChrome01Texture ?? fallback);
+                    bindings.ItemMaterialGroup?.SetValue(props.ItemGroup);
+                    bindings.ItemMaterialIndex?.SetValue(props.ItemIndex);
+                    bindings.HighLevelTexturesAvailable?.SetValue(
+                        graphics.HasItemUpgradeTextures ? 1f : 0f);
+                    bindings.IsExcellent?.SetValue(props.IsExcellent);
+                    bindings.IsAncient?.SetValue(props.IsAncient);
+                }
                 bindings.ItemOptions?.SetValue(props.ItemOptions);
-                bindings.ItemMaterialGroup?.SetValue(props.ItemGroup);
-                bindings.ItemMaterialIndex?.SetValue(props.ItemIndex);
-                bindings.HighLevelTexturesAvailable?.SetValue(
-                    graphics.HasItemUpgradeTextures ? 1f : 0f);
-                bindings.IsExcellent?.SetValue(props.IsExcellent);
-                bindings.IsAncient?.SetValue(props.IsAncient);
                 bindings.Time?.SetValue(shaderTime);
                 bindings.Alpha?.SetValue(1f);
 
@@ -1406,11 +1433,8 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 gd.Indices = geometry.IndexBuffer;
 
                 int primitiveCount = geometry.IndexBuffer.IndexCount / 3;
-                foreach (var pass in effect.CurrentTechnique.Passes)
-                {
-                    pass.Apply();
-                    gd.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, primitiveCount);
-                }
+                effect.CurrentTechnique.Passes[0].Apply();
+                gd.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, primitiveCount);
             }
             finally
             {

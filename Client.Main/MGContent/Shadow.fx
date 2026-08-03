@@ -9,8 +9,7 @@
 #endif
 
 
-float4x4 World;
-float4x4 ViewProjection;
+float4x4 WorldViewProjection;
 float4   ShadowTint;
 texture  ShadowTexture;
 
@@ -29,8 +28,7 @@ struct VS_OUT { float4 Position : SV_POSITION; float2 Tex : TEXCOORD0; };
 VS_OUT ShadowVS(VS_IN vin)
 {
     VS_OUT vout;
-    vout.Position = mul(vin.Position, World);
-    vout.Position = mul(vout.Position, ViewProjection);
+    vout.Position = mul(vin.Position, WorldViewProjection);
     vout.Tex      = vin.Tex;
     return vout;
 }

@@ -1,4 +1,4 @@
-﻿#if OPENGL
+#if OPENGL
     #define SV_POSITION POSITION
     #define VS_SHADERMODEL vs_3_0
     #define PS_SHADERMODEL ps_3_0
@@ -14,8 +14,6 @@ static const float GlowIntensityScale = 0.80;
 #endif
 
 float4x4 World;
-float4x4 View;
-float4x4 Projection;
 float4x4 WorldViewProjection;
 #if !OPENGL
 float4x4 BoneMatrices[256];
@@ -23,8 +21,6 @@ float4x4 BoneMatrices[256];
 
 float3 EyePosition;
 float3 LightDirection = float3(0.707, -0.707, 0);
-float4 AmbientColor = float4(0.3, 0.3, 0.3, 1.0);
-float4 DiffuseColor = float4(1.0, 1.0, 1.0, 1.0);
 
 texture DiffuseTexture;
 sampler2D DiffuseSampler = sampler_state
@@ -124,54 +120,17 @@ struct VertexShaderOutput
     float3 ViewDirection : TEXCOORD3;
 };
 
-float GetRandom(float2 coords)
+struct VertexShaderOutputFast
 {
-    return frac(sin(dot(coords, float2(12.9898, 78.233))) * 43758.5453);
-}
+    float4 Position : SV_POSITION;
+    float3 WorldPosition : TEXCOORD0;
+    float3 Normal : TEXCOORD1;
+    float2 TextureCoordinate : TEXCOORD2;
+};
 
-float Noise2(float2 coords)
-{
-    float2 texSize = float2(1.0, 1.0);
-    float2 pc = coords * texSize;
-    float2 base = floor(pc);
-    float s1 = GetRandom((base + float2(0.0, 0.0)) / texSize);
-    float s2 = GetRandom((base + float2(1.0, 0.0)) / texSize);
-    float s3 = GetRandom((base + float2(0.0, 1.0)) / texSize);
-    float s4 = GetRandom((base + float2(1.0, 1.0)) / texSize);
-    float2 f = smoothstep(0.0, 1.0, frac(pc));
-    float px1 = lerp(s1, s2, f.x);
-    float px2 = lerp(s3, s4, f.x);
-    float result = lerp(px1, px2, f.y);
-    return result;
-}
+
 
 // HSV to RGB conversion for smooth rainbow
-float3 HSVtoRGB(float3 hsv)
-{
-    float h = hsv.x;
-    float s = hsv.y;
-    float v = hsv.z;
-    
-    float c = v * s;
-    float x = c * (1.0 - abs(fmod(h * 6.0, 2.0) - 1.0));
-    float m = v - c;
-    
-    float3 rgb;
-    if (h < 1.0/6.0)
-        rgb = float3(c, x, 0);
-    else if (h < 2.0/6.0)
-        rgb = float3(x, c, 0);
-    else if (h < 3.0/6.0)
-        rgb = float3(0, c, x);
-    else if (h < 4.0/6.0)
-        rgb = float3(0, x, c);
-    else if (h < 5.0/6.0)
-        rgb = float3(x, 0, c);
-    else
-        rgb = float3(c, 0, x);
-    
-    return rgb + m;
-}
 
 // Custom spectrum for Excellent items: Blue -> Orange -> Violet (NO GREEN)
 // blueScale: controls blue intensity (0.30 for +7+, 1.0 for +0-+6)
@@ -206,20 +165,15 @@ float SampleShadow(float3 worldPos, float3 normal)
     float ndotl = saturate(dot(normal, -LightDirection));
     float bias = ShadowBias + ShadowNormalBias * (1.0 - ndotl);
 
-    float shadow = 0.0;
-    [unroll]
-    for (int x = -1; x <= 1; x++)
-    {
-        [unroll]
-        for (int y = -1; y <= 1; y++)
-        {
-            float2 offset = float2(x, y) * ShadowMapTexelSize;
-            float sampleDepth = tex2D(ShadowSampler, uv + offset).r;
-            shadow += step(depth - bias, sampleDepth);
-        }
-    }
-
-    return lerp(1.0, shadow / 9.0, inBounds);
+    float2 offset = ShadowMapTexelSize * 0.5;
+    float4 depths;
+    depths.x = tex2D(ShadowSampler, uv + float2(-offset.x, -offset.y)).r;
+    depths.y = tex2D(ShadowSampler, uv + float2( offset.x, -offset.y)).r;
+    depths.z = tex2D(ShadowSampler, uv + float2(-offset.x,  offset.y)).r;
+    depths.w = tex2D(ShadowSampler, uv + float2( offset.x,  offset.y)).r;
+    float4 visibility = step(depth - bias, depths);
+    float shadow = dot(visibility, float4(0.25, 0.25, 0.25, 0.25));
+    return lerp(1.0, shadow, inBounds);
 }
 
 VertexShaderOutput BuildMaterialVertex(float4 localPosition, float3 localNormal, float2 textureCoordinate)
@@ -248,6 +202,33 @@ VertexShaderOutput MainVS_Skinned(in VertexShaderInputSkinned input)
     float4 localPosition = mul(float4(input.Position, 1.0), BoneMatrices[positionBoneIndex]);
     float3 localNormal = mul(input.Normal, (float3x3)BoneMatrices[normalBoneIndex]);
     return BuildMaterialVertex(localPosition, localNormal, input.TextureCoordinate);
+}
+#endif
+
+VertexShaderOutputFast BuildMaterialVertexFast(float4 localPosition, float3 localNormal, float2 textureCoordinate)
+{
+    VertexShaderOutputFast output = (VertexShaderOutputFast)0;
+    float4 worldPosition = mul(localPosition, World);
+    output.Position = mul(localPosition, WorldViewProjection);
+    output.WorldPosition = worldPosition.xyz;
+    output.Normal = normalize(mul(localNormal, (float3x3)World));
+    output.TextureCoordinate = textureCoordinate;
+    return output;
+}
+
+VertexShaderOutputFast MainVS_Fast(in VertexShaderInput input)
+{
+    return BuildMaterialVertexFast(input.Position, input.Normal, input.TextureCoordinate);
+}
+
+#if !OPENGL
+VertexShaderOutputFast MainVS_FastSkinned(in VertexShaderInputSkinned input)
+{
+    int positionBoneIndex = min(max((int)input.BoneIndices.x, 0), 255);
+    int normalBoneIndex = min(max((int)input.BoneIndices.y, 0), 255);
+    float4 localPosition = mul(float4(input.Position, 1.0), BoneMatrices[positionBoneIndex]);
+    float3 localNormal = mul(input.Normal, (float3x3)BoneMatrices[normalBoneIndex]);
+    return BuildMaterialVertexFast(localPosition, localNormal, input.TextureCoordinate);
 }
 #endif
 
@@ -352,6 +333,60 @@ float4 RenderHighLevelArmor(
     return float4(result, diffuseSample.a * Alpha);
 }
 
+float4 MainPS_UpgradeFast(VertexShaderOutputFast input) : COLOR
+{
+    float4 color = tex2D(DiffuseSampler, input.TextureCoordinate);
+    if (color.a < 0.1)
+        discard;
+
+    float itemOptions = max(0.0, (float)ItemOptions);
+    float itemLevel = itemOptions - floor(itemOptions * (1.0 / 16.0)) * 16.0;
+    float3 normal = normalize(input.Normal);
+    color.rgb *= max(0.1, dot(normal, -LightDirection));
+
+    float3 effectColor = GlowColor * GlowIntensityScale;
+    float brightness;
+    float ghostIntensity;
+    if (itemLevel < 9.0)
+    {
+        brightness = 1.6 + (itemLevel - 8.0) * 0.2;
+        ghostIntensity = 0.30;
+    }
+    else if (itemLevel < 10.0)
+    {
+        brightness = 1.8 + (itemLevel - 9.0) * 0.2;
+        ghostIntensity = 0.8;
+    }
+    else
+    {
+        brightness = 1.8 + (itemLevel - 10.0) * 0.2;
+        ghostIntensity = 0.7 + itemLevel * (1.0 / 30.0);
+    }
+
+    float subtlePulse = (1.0 + sin(Time * 0.8)) * 0.03 + 0.97;
+    float shimmer = (1.0 + sin(Time * 8.0 + normal.x * 12.0)) * 0.15 + 0.85;
+    float2 uv = input.TextureCoordinate;
+    float4 ghost1 = tex2D(DiffuseSampler, uv + float2(sin(Time * 0.8) * 0.035, cos(Time * 0.7) * 0.035) * ghostIntensity);
+    float4 ghost2 = tex2D(DiffuseSampler, uv + float2(sin(Time * 1.0 + 2.1) * 0.025, cos(Time * 0.9 + 1.8) * 0.025) * ghostIntensity);
+    float4 ghost3 = tex2D(DiffuseSampler, uv + float2(sin(Time * 1.2 + 4.2) * 0.02, cos(Time * 1.1 + 3.7) * 0.02) * ghostIntensity);
+    float4 ghost4 = tex2D(DiffuseSampler, uv + float2(sin(Time * 0.6 + 1.1) * 0.015, cos(Time * 1.3 + 2.3) * 0.015) * ghostIntensity);
+
+    color.rgb = color.rgb * (effectColor * 0.8) * brightness * subtlePulse;
+    color.rgb += ghost1.rgb * (0.8 * ghostIntensity) * shimmer * GlowIntensityScale;
+    color.rgb += ghost2.rgb * (0.6 * ghostIntensity) * shimmer * GlowIntensityScale;
+    color.rgb += ghost3.rgb * (0.5 * ghostIntensity) * shimmer * GlowIntensityScale;
+    color.rgb += ghost4.rgb * (0.4 * ghostIntensity) * shimmer * GlowIntensityScale;
+
+    float level10Mask = step(10.0, itemLevel);
+    float extraGlow = (itemLevel - 9.0) * 0.1;
+    float glowEffect = (1.0 + sin(Time)) * 0.03 + 0.2;
+    color.rgb += effectColor * glowEffect * extraGlow * level10Mask;
+
+    float shadowTerm = SampleShadow(input.WorldPosition, normal);
+    color.rgb *= lerp(1.0 - ShadowStrength, 1.0, shadowTerm);
+    return color;
+}
+
 float4 MainPS(VertexShaderOutput input) : COLOR
 {
     float4 color = tex2D(DiffuseSampler, input.TextureCoordinate);
@@ -361,7 +396,6 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     
     float itemOptions = max(0.0, (float)ItemOptions);
     float itemLevel = itemOptions - floor(itemOptions * (1.0 / 16.0)) * 16.0;
-    bool isExcellent = itemOptions >= 16.0;
     
     float3 normal = normalize(input.Normal);
 
@@ -384,8 +418,6 @@ float4 MainPS(VertexShaderOutput input) : COLOR
         color.rgb *= lightIntensity;
     }
     
-    float waveBase = frac(Time * 0.001) * 10000.0 * 0.0001;
-    float3 view = normalize(input.ViewDirection) + normal + float3(10000.5, 10000.5, 10000.5);
     
     float3 effectColor = GlowColor * GlowIntensityScale;
     float brightness = 1.0;
@@ -418,24 +450,6 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     float subtlePulse = (1.0 + sin(Time * 0.8)) * 0.03 + 0.97;
     float shimmer = (1.0 + sin(Time * 8.0 + normal.x * 12.0)) * 0.15 + 0.85;
     
-    // Main ghosting offsets
-    float2 ghostOffset1 = float2(sin(Time * 0.8) * 0.035, cos(Time * 0.7) * 0.035) * ghostIntensity;
-    float2 ghostOffset2 = float2(sin(Time * 1.0 + 2.1) * 0.025, cos(Time * 0.9 + 1.8) * 0.025) * ghostIntensity;
-    float2 ghostOffset3 = float2(sin(Time * 1.2 + 4.2) * 0.02, cos(Time * 1.1 + 3.7) * 0.02) * ghostIntensity;
-    float2 ghostOffset4 = float2(sin(Time * 0.6 + 1.1) * 0.015, cos(Time * 1.3 + 2.3) * 0.015) * ghostIntensity;
-    
-    // Ancient offsets
-    float2 ancientOffset1 = float2(sin(Time * 0.5) * 0.02, cos(Time * 0.4) * 0.02);
-    float2 ancientOffset2 = float2(sin(Time * 0.7 + 1.0) * 0.015, cos(Time * 0.6 + 1.5) * 0.015);
-    
-    // Excellent offsets - more layers for richer effect
-    float2 excellentOffset1 = float2(sin(Time * 0.6) * 0.03, cos(Time * 0.5) * 0.03);
-    float2 excellentOffset2 = float2(sin(Time * 0.8 + 1.2) * 0.025, cos(Time * 0.7 + 1.8) * 0.025);
-    float2 excellentOffset3 = float2(sin(Time * 1.0 + 2.4) * 0.02, cos(Time * 0.9 + 2.6) * 0.02);
-    float2 excellentOffset4 = float2(sin(Time * 0.5 + 3.6) * 0.015, cos(Time * 1.1 + 3.2) * 0.015);
-    float2 excellentOffset5 = float2(sin(Time * 0.7 + 4.8) * 0.035, cos(Time * 0.6 + 4.4) * 0.035);
-    float2 excellentOffset6 = float2(sin(Time * 0.9 + 6.0) * 0.028, cos(Time * 0.8 + 5.5) * 0.028);
-    
     // Material flags are uniform for a draw call. Conditional sampling removes
     // up to twelve unnecessary diffuse fetches from ordinary/non-special items.
     float4 ghost1 = 0.0;
@@ -447,6 +461,10 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     bool applyHighLevelLevelGlow = useHighLevelArmor && IsExcellent == false;
     if ((useHighLevelArmor == false || applyHighLevelLevelGlow == true) && itemLevel >= 7.0)
     {
+        float2 ghostOffset1 = float2(sin(Time * 0.8) * 0.035, cos(Time * 0.7) * 0.035) * ghostIntensity;
+        float2 ghostOffset2 = float2(sin(Time * 1.0 + 2.1) * 0.025, cos(Time * 0.9 + 1.8) * 0.025) * ghostIntensity;
+        float2 ghostOffset3 = float2(sin(Time * 1.2 + 4.2) * 0.02, cos(Time * 1.1 + 3.7) * 0.02) * ghostIntensity;
+        float2 ghostOffset4 = float2(sin(Time * 0.6 + 1.1) * 0.015, cos(Time * 1.3 + 2.3) * 0.015) * ghostIntensity;
         ghost1 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset1);
         ghost2 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset2);
         ghost3 = tex2D(DiffuseSampler, input.TextureCoordinate + ghostOffset3);
@@ -457,6 +475,8 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     float4 ancientGhost2 = 0.0;
     if (IsAncient == true)
     {
+        float2 ancientOffset1 = float2(sin(Time * 0.5) * 0.02, cos(Time * 0.4) * 0.02);
+        float2 ancientOffset2 = float2(sin(Time * 0.7 + 1.0) * 0.015, cos(Time * 0.6 + 1.5) * 0.015);
         ancientGhost1 = tex2D(DiffuseSampler, input.TextureCoordinate + ancientOffset1);
         ancientGhost2 = tex2D(DiffuseSampler, input.TextureCoordinate + ancientOffset2);
     }
@@ -469,6 +489,12 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     float4 excellentGhost6 = 0.0;
     if (IsExcellent == true)
     {
+        float2 excellentOffset1 = float2(sin(Time * 0.6) * 0.03, cos(Time * 0.5) * 0.03);
+        float2 excellentOffset2 = float2(sin(Time * 0.8 + 1.2) * 0.025, cos(Time * 0.7 + 1.8) * 0.025);
+        float2 excellentOffset3 = float2(sin(Time * 1.0 + 2.4) * 0.02, cos(Time * 0.9 + 2.6) * 0.02);
+        float2 excellentOffset4 = float2(sin(Time * 0.5 + 3.6) * 0.015, cos(Time * 1.1 + 3.2) * 0.015);
+        float2 excellentOffset5 = float2(sin(Time * 0.7 + 4.8) * 0.035, cos(Time * 0.6 + 4.4) * 0.035);
+        float2 excellentOffset6 = float2(sin(Time * 0.9 + 6.0) * 0.028, cos(Time * 0.8 + 5.5) * 0.028);
         excellentGhost1 = tex2D(DiffuseSampler, input.TextureCoordinate + excellentOffset1);
         excellentGhost2 = tex2D(DiffuseSampler, input.TextureCoordinate + excellentOffset2);
         excellentGhost3 = tex2D(DiffuseSampler, input.TextureCoordinate + excellentOffset3);
@@ -477,7 +503,6 @@ float4 MainPS(VertexShaderOutput input) : COLOR
         excellentGhost6 = tex2D(DiffuseSampler, input.TextureCoordinate + excellentOffset6);
     }
     
-    float levelMask = step(7.0, itemLevel);
     
     if (useHighLevelArmor == false)
     {
@@ -517,13 +542,15 @@ float4 MainPS(VertexShaderOutput input) : COLOR
         color.rgb += effectColor * glowEffect * extraGlow * level10Mask * levelGlowScale;
     }
     
-    // Ancient item effect - fast blue sweep with pause
-    float ancientEnabled = IsAncient ? 1.0 : 0.0;
+    // Ancient is uniform for the draw call. Keep all sweep ALU out of ordinary items.
+    if (IsAncient == true)
+    {
+        // Ancient item effect - fast blue sweep with pause
+        float ancientEnabled = 1.0;
     float3 ancientColor = float3(0.3, 0.5, 1.0); // More blue color
 
     // Cycle with pause: sweep takes 12% of cycle, pause is 88%
     float cycleSpeed = 0.1;
-    float cycleDuration = 1.0 / cycleSpeed;
     float sweepPortion = 0.15; // Sweep happens in first 12% of cycle, very long pause after
 
     float cycleProgress = frac(Time * cycleSpeed); // 0 to 1 over cycle
@@ -554,11 +581,14 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     // Subtle base blue glow (always present)
     float baseGlow = sin(Time * 0.8) * 0.08 + 0.15;
     float baseGlowIntensity = (itemLevel >= 9) ? 0.5 : 0.25;
-    color.rgb += color.rgb * ancientColor * baseGlow * baseGlowIntensity * ancientEnabled;
+        color.rgb += color.rgb * ancientColor * baseGlow * baseGlowIntensity * ancientEnabled;
+    }
 
-    // ==================== EXCELLENT SWEEP PULSE EFFECT ====================
+    if (IsExcellent == true)
+    {
+        // ==================== EXCELLENT SWEEP PULSE EFFECT ====================
     // Similar to Ancient sweep but with semi-transparent violet color (only for +7+)
-    float excellentSweepEnabled = (IsExcellent && itemLevel >= 7) ? 1.0 : 0.0;
+    float excellentSweepEnabled = itemLevel >= 7 ? 1.0 : 0.0;
     float3 excellentSweepColor = float3(0.5, 0.3, 0.7); // Semi-transparent violet (less white, more violet)
     
     // Cycle with pause: sweep takes 15% of cycle, pause is 85%
@@ -596,7 +626,7 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     color.rgb += color.rgb * excellentSweepColor * exBaseGlow * exBaseGlowIntensity * excellentSweepEnabled;
     
     // ==================== ENHANCED EXCELLENT EFFECT ====================
-        float excellentEnabled = IsExcellent ? 1.0 : 0.0;
+        float excellentEnabled = 1.0;
         
         // 1. Fresnel/Rim lighting effect - glowing edges
         float3 viewDir = normalize(input.ViewDirection);
@@ -645,7 +675,6 @@ float4 MainPS(VertexShaderOutput input) : COLOR
         // 6. Color wave effect - colors flowing across the surface
         float colorWave1 = sin(Time * 0.6 + input.TextureCoordinate.x * 4.0) * 0.5 + 0.5;
         float colorWave2 = sin(Time * 0.5 + input.TextureCoordinate.y * 3.0 + 1.0) * 0.5 + 0.5;
-        float colorWave3 = sin(Time * 0.7 + (input.TextureCoordinate.x + input.TextureCoordinate.y) * 2.5) * 0.5 + 0.5;
         
         // Blend rainbow colors based on waves
         float3 waveColor = rainbow1 * colorWave1 + rainbow2 * colorWave2 + rainbow3 * (1.0 - colorWave1 * colorWave2);
@@ -675,16 +704,37 @@ float4 MainPS(VertexShaderOutput input) : COLOR
         
         // Brightness boost for excellent items
         color.rgb *= lerp(1.0, 1.4, excellentEnabled);
+    }
 
-        if (useHighLevelArmor == false)
-        {
-            float shadowTerm = SampleShadow(input.WorldPosition, normal);
-            float shadowMix = lerp(1.0 - ShadowStrength, 1.0, shadowTerm);
-            color.rgb *= shadowMix;
-        }
+    if (useHighLevelArmor == false)
+    {
+        float shadowTerm = SampleShadow(input.WorldPosition, normal);
+        float shadowMix = lerp(1.0 - ShadowStrength, 1.0, shadowTerm);
+        color.rgb *= shadowMix;
+    }
 
-        return color;
+    return color;
 }
+
+technique BasicColorDrawing_UpgradeFast
+{
+    pass P0
+    {
+        VertexShader = compile VS_SHADERMODEL MainVS_Fast();
+        PixelShader = compile PS_SHADERMODEL MainPS_UpgradeFast();
+    }
+}
+
+#if !OPENGL
+technique BasicColorDrawing_UpgradeFast_Skinned
+{
+    pass P0
+    {
+        VertexShader = compile VS_SHADERMODEL MainVS_FastSkinned();
+        PixelShader = compile PS_SHADERMODEL MainPS_UpgradeFast();
+    }
+}
+#endif
 
 technique BasicColorDrawing
 {

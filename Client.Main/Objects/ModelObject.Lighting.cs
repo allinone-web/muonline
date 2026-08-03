@@ -23,8 +23,6 @@ namespace Client.Main.Objects
                 CrowdBonePaletteTexture = effect.Parameters["CrowdBonePaletteTexture"];
                 CrowdBonePaletteRowCount = effect.Parameters["CrowdBonePaletteRowCount"];
                 World = effect.Parameters["World"];
-                View = effect.Parameters["View"];
-                Projection = effect.Parameters["Projection"];
                 WorldViewProjection = effect.Parameters["WorldViewProjection"];
                 ViewProjection = effect.Parameters["ViewProjection"];
                 EyePosition = effect.Parameters["EyePosition"];
@@ -37,7 +35,6 @@ namespace Client.Main.Objects
                 TerrainDynamicIntensityScale = effect.Parameters["TerrainDynamicIntensityScale"];
                 AmbientLight = effect.Parameters["AmbientLight"];
                 DebugLightingAreas = effect.Parameters["DebugLightingAreas"];
-                TerrainLight = effect.Parameters["TerrainLight"];
                 DiffuseTexture = effect.Parameters["DiffuseTexture"];
                 Chrome02Texture = effect.Parameters["Chrome02Texture"];
                 Shiny01Texture = effect.Parameters["Shiny01Texture"];
@@ -69,8 +66,6 @@ namespace Client.Main.Objects
             public EffectParameter CrowdBonePaletteTexture { get; }
             public EffectParameter CrowdBonePaletteRowCount { get; }
             public EffectParameter World { get; }
-            public EffectParameter View { get; }
-            public EffectParameter Projection { get; }
             public EffectParameter WorldViewProjection { get; }
             public EffectParameter ViewProjection { get; }
             public EffectParameter EyePosition { get; }
@@ -83,7 +78,6 @@ namespace Client.Main.Objects
             public EffectParameter TerrainDynamicIntensityScale { get; }
             public EffectParameter AmbientLight { get; }
             public EffectParameter DebugLightingAreas { get; }
-            public EffectParameter TerrainLight { get; }
             public EffectParameter DiffuseTexture { get; }
             public EffectParameter Chrome02Texture { get; }
             public EffectParameter Shiny01Texture { get; }
@@ -228,15 +222,34 @@ namespace Client.Main.Objects
                 return;
 
             ModelEffectBindings bindings = GetModelEffectBindings(effect);
-            var dynamicLightingTechnique = bindings.GetTechnique("DynamicLighting");
+            Vector3 worldTranslation = WorldPosition.Translation;
+            bool useVertexLighting = ShouldUseVertexDynamicLighting(worldTranslation);
+
+            EffectTechnique pixelTechnique = bindings.GetTechnique("DynamicLighting");
+            EffectTechnique vertexTechnique = useVertexLighting
+                ? bindings.GetTechnique("DynamicLighting_VertexLit")
+                : null;
+            EffectTechnique dynamicLightingTechnique = vertexTechnique ?? pixelTechnique;
             if (dynamicLightingTechnique == null)
                 return;
 
-            var skinnedTechnique = useGpuSkinning ? bindings.GetTechnique("DynamicLighting_Skinned") : null;
+            EffectTechnique skinnedTechnique = null;
+            if (useGpuSkinning)
+            {
+                skinnedTechnique = useVertexLighting
+                    ? bindings.GetTechnique("DynamicLighting_Skinned_VertexLit")
+                    : null;
+                skinnedTechnique ??= bindings.GetTechnique("DynamicLighting_Skinned");
+            }
+
             bool usingSkinnedTechnique = skinnedTechnique != null &&
                                          TryUploadGpuSkinBoneMatrices(effect, bindings, requiredBoneCount);
 
             effect.CurrentTechnique = usingSkinnedTechnique ? skinnedTechnique : dynamicLightingTechnique;
+            EffectTechnique sunOnlyTechnique = bindings.GetTechnique("DynamicLighting_SunOnly");
+            EffectTechnique skinnedSunOnlyTechnique = usingSkinnedTechnique
+                ? bindings.GetTechnique("DynamicLighting_Skinned_SunOnly")
+                : null;
             GraphicsManager.Instance.ShadowMapRenderer?.ApplyShadowParameters(effect);
 
             var camera = Camera.Instance;
@@ -244,10 +257,7 @@ namespace Client.Main.Objects
                 return;
 
             bindings.World?.SetValue(WorldPosition);
-            bindings.View?.SetValue(camera.View);
-            bindings.Projection?.SetValue(camera.Projection);
-            bindings.WorldViewProjection?.SetValue(WorldPosition * camera.View * camera.Projection);
-            bindings.EyePosition?.SetValue(camera.Position);
+            bindings.WorldViewProjection?.SetValue(WorldPosition * camera.ViewProjection);
 
             Vector3 sunDir = GraphicsManager.Instance.ShadowMapRenderer?.LightDirection ?? Constants.SUN_DIRECTION;
             if (sunDir.LengthSquared() < 0.0001f)
@@ -271,18 +281,14 @@ namespace Client.Main.Objects
             bindings.AmbientLight?.SetValue(_ambientLightVector * SunCycleManager.AmbientMultiplier);
             bindings.DebugLightingAreas?.SetValue(Constants.DEBUG_LIGHTING_AREAS ? 1.0f : 0.0f);
 
-            Vector3 worldTranslation = WorldPosition.Translation;
-            Vector3 terrainLight = Vector3.One;
-            if (LightEnabled && World?.Terrain != null)
-                terrainLight = World.Terrain.EvaluateTerrainLight(worldTranslation.X, worldTranslation.Y);
-            // EvaluateTerrainLight is already normalized to 0..1. Dynamic lights
-            // are uploaded separately below and must not be baked into this value.
-            terrainLight = Vector3.Clamp(terrainLight, Vector3.Zero, Vector3.One);
-            bindings.TerrainLight?.SetValue(terrainLight);
-
             if (!Constants.ENABLE_DYNAMIC_LIGHTS)
             {
                 _dynamicLightUploader.Clear(effect);
+                SelectSunOnlyTechnique(
+                    effect,
+                    usingSkinnedTechnique,
+                    sunOnlyTechnique,
+                    skinnedSunOnlyTechnique);
                 return;
             }
 
@@ -291,13 +297,18 @@ namespace Client.Main.Objects
             if (visibleLights == null || visibleLights.Count == 0)
             {
                 _dynamicLightUploader.Clear(effect);
+                SelectSunOnlyTechnique(
+                    effect,
+                    usingSkinnedTechnique,
+                    sunOnlyTechnique,
+                    skinnedSunOnlyTechnique);
                 return;
             }
 
             int maxLights = ResolveDynamicObjectLightBudget(worldTranslation);
             var focus = new Vector2(worldTranslation.X, worldTranslation.Y);
             float focusRadius = ResolveDynamicObjectLightFocusRadius();
-            _dynamicLightUploader.Upload(
+            int uploadedLightCount = _dynamicLightUploader.Upload(
                 effect,
                 visibleLights,
                 focus,
@@ -305,6 +316,49 @@ namespace Client.Main.Objects
                 focusRadius,
                 terrain.VisibleLightsVersion,
                 cacheCellSize: 96f);
+            if (uploadedLightCount == 0)
+            {
+                SelectSunOnlyTechnique(
+                    effect,
+                    usingSkinnedTechnique,
+                    sunOnlyTechnique,
+                    skinnedSunOnlyTechnique);
+            }
+        }
+
+        private static void SelectSunOnlyTechnique(
+            Effect effect,
+            bool usingSkinnedTechnique,
+            EffectTechnique sunOnlyTechnique,
+            EffectTechnique skinnedSunOnlyTechnique)
+        {
+            EffectTechnique selected = usingSkinnedTechnique
+                ? skinnedSunOnlyTechnique
+                : sunOnlyTechnique;
+            if (selected != null)
+                effect.CurrentTechnique = selected;
+        }
+
+        private bool ShouldUseVertexDynamicLighting(Vector3 worldTranslation)
+        {
+            if (!Constants.ENABLE_DISTANCE_VERTEX_LIGHTING)
+                return false;
+
+            // Keep the local player and directly interacted actors on per-pixel lighting.
+            if ((this is WalkerObject walker && walker.IsMainWalker) || IsMouseHover)
+                return false;
+
+            if (LowQuality)
+                return true;
+
+            Camera camera = Camera.Instance;
+            if (camera == null)
+                return false;
+
+            float threshold = MathF.Max(256f, Constants.DYNAMIC_LIGHT_VERTEX_DISTANCE);
+            float dx = camera.Position.X - worldTranslation.X;
+            float dy = camera.Position.Y - worldTranslation.Y;
+            return dx * dx + dy * dy >= threshold * threshold;
         }
 
         private int ResolveDynamicObjectLightBudget(Vector3 worldTranslation)

@@ -50,6 +50,12 @@ float4 PS_FXAA(VS_OUT IN) : SV_Target
     float lumaMin = min(lumaM, min(min(lumaNW,lumaNE), min(lumaSW,lumaSE)));
     float lumaMax = max(lumaM, max(max(lumaNW,lumaNE), max(lumaSW,lumaSE)));
 
+    // Standard FXAA contrast rejection. Flat pixels stop after the initial five
+    // samples instead of paying for the four directional refinement samples.
+    float lumaRange = lumaMax - lumaMin;
+    if (lumaRange < max(0.0312, lumaMax * 0.125))
+        return float4(rgbM, 1.0);
+
     float2 dir;
     dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));
     dir.y =  ((lumaNW + lumaSW) - (lumaNE + lumaSE));
@@ -119,6 +125,12 @@ float4 PS_FXAA(VS_OUT IN) : COLOR0
 
     float lumaMin = min(lumaM, min(min(lumaNW,lumaNE), min(lumaSW,lumaSE)));
     float lumaMax = max(lumaM, max(max(lumaNW,lumaNE), max(lumaSW,lumaSE)));
+
+    // Standard FXAA contrast rejection. Flat pixels stop after the initial five
+    // samples instead of paying for the four directional refinement samples.
+    float lumaRange = lumaMax - lumaMin;
+    if (lumaRange < max(0.0312, lumaMax * 0.125))
+        return float4(rgbM, 1.0);
 
     float2 dir;
     dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));

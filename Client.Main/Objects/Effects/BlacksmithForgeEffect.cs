@@ -521,7 +521,7 @@ namespace Client.Main.Objects.Effects
         {
             var camera = Camera.Instance;
             var viewport = GraphicsDevice.Viewport;
-            Matrix viewProjection = camera.View * camera.Projection;
+            Matrix viewProjection = camera.ViewProjection;
             Vector4 clip = Vector4.Transform(worldPosition, viewProjection);
             if (clip.W <= 0.001f)
                 return;

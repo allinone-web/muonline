@@ -380,7 +380,7 @@ namespace Client.Main.Objects.Effects
             if (spriteBatch == null)
                 return;
 
-            var viewProj = camera.View * camera.Projection;
+            var viewProj = camera.ViewProjection;
             var vp = gd.Viewport;
 
             // Project both eyes to screen

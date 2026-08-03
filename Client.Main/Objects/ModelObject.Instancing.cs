@@ -326,6 +326,8 @@ namespace Client.Main.Objects
         private static bool _walkerCrowdInstancingFailed;
         private static Effect _cachedStaticMapInstancingEffect;
         private static EffectTechnique _cachedStaticMapInstancingTechnique;
+        private static EffectTechnique _cachedStaticMapVertexLitInstancingTechnique;
+        private static EffectTechnique _cachedStaticMapSunOnlyInstancingTechnique;
         private static EffectTechnique _cachedStaticMapShadowInstancingTechnique;
         private static readonly Matrix _identity = Matrix.Identity;
 
@@ -462,7 +464,10 @@ namespace Client.Main.Objects
 
             var graphicsManager = GraphicsManager.Instance;
             var effect = graphicsManager.DynamicLightingEffect;
-            if (effect == null || _cachedStaticMapInstancingTechnique == null)
+            EffectTechnique staticMapTechnique = Constants.ENABLE_STATIC_MAP_VERTEX_LIGHTING
+                ? _cachedStaticMapVertexLitInstancingTechnique ?? _cachedStaticMapInstancingTechnique
+                : _cachedStaticMapInstancingTechnique;
+            if (effect == null || staticMapTechnique == null)
             {
                 ClearStaticMapInstancingQueues();
                 return false;
@@ -477,7 +482,11 @@ namespace Client.Main.Objects
 
             try
             {
-                PrepareStaticMapInstancingEffect(effect, world);
+                PrepareStaticMapInstancingEffect(
+                    effect,
+                    world,
+                    staticMapTechnique,
+                    _cachedStaticMapSunOnlyInstancingTechnique);
 
                 gd.BlendState = BlendState.Opaque;
                 gd.SamplerStates[0] = GraphicsManager.GetQualityLinearSamplerState();
@@ -718,7 +727,14 @@ namespace Client.Main.Objects
 
             try
             {
-                PrepareStaticMapInstancingEffect(effect, world);
+                EffectTechnique crowdTechnique = Constants.ENABLE_CROWD_VERTEX_LIGHTING
+                    ? _cachedStaticMapVertexLitInstancingTechnique ?? _cachedStaticMapInstancingTechnique
+                    : _cachedStaticMapInstancingTechnique;
+                PrepareStaticMapInstancingEffect(
+                    effect,
+                    world,
+                    crowdTechnique,
+                    _cachedStaticMapSunOnlyInstancingTechnique);
 
                 gd.BlendState = BlendState.Opaque;
                 gd.SamplerStates[0] = GraphicsManager.GetQualityLinearSamplerState();
@@ -915,10 +931,14 @@ namespace Client.Main.Objects
             {
                 _cachedStaticMapInstancingEffect = effect;
                 _cachedStaticMapInstancingTechnique = TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced");
+                _cachedStaticMapVertexLitInstancingTechnique = TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced_VertexLit");
+                _cachedStaticMapSunOnlyInstancingTechnique = TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced_SunOnly");
                 _cachedStaticMapShadowInstancingTechnique = TryGetTechnique(effect, "ShadowCaster_SkinnedInstanced");
             }
 
-            return _cachedStaticMapInstancingTechnique != null;
+            return Constants.ENABLE_STATIC_MAP_VERTEX_LIGHTING
+                ? _cachedStaticMapVertexLitInstancingTechnique != null || _cachedStaticMapInstancingTechnique != null
+                : _cachedStaticMapInstancingTechnique != null;
         }
 
         private static bool IsStaticMapShadowInstancingSupported()
@@ -939,6 +959,8 @@ namespace Client.Main.Objects
             {
                 _cachedStaticMapInstancingEffect = effect;
                 _cachedStaticMapInstancingTechnique = TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced");
+                _cachedStaticMapVertexLitInstancingTechnique = TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced_VertexLit");
+                _cachedStaticMapSunOnlyInstancingTechnique = TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced_SunOnly");
                 _cachedStaticMapShadowInstancingTechnique = TryGetTechnique(effect, "ShadowCaster_SkinnedInstanced");
             }
 
@@ -963,10 +985,14 @@ namespace Client.Main.Objects
             {
                 _cachedStaticMapInstancingEffect = effect;
                 _cachedStaticMapInstancingTechnique = TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced");
+                _cachedStaticMapVertexLitInstancingTechnique = TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced_VertexLit");
+                _cachedStaticMapSunOnlyInstancingTechnique = TryGetTechnique(effect, "DynamicLighting_SkinnedInstanced_SunOnly");
                 _cachedStaticMapShadowInstancingTechnique = TryGetTechnique(effect, "ShadowCaster_SkinnedInstanced");
             }
 
-            return _cachedStaticMapInstancingTechnique != null;
+            return Constants.ENABLE_CROWD_VERTEX_LIGHTING
+                ? _cachedStaticMapVertexLitInstancingTechnique != null || _cachedStaticMapInstancingTechnique != null
+                : _cachedStaticMapInstancingTechnique != null;
         }
 
         private StaticMapInstancingQueueResult TryQueueStaticMapObjectForInstancing()
@@ -1664,7 +1690,8 @@ namespace Client.Main.Objects
         private static void PrepareStaticMapInstancingEffect(
             Effect effect,
             WorldControl world,
-            EffectTechnique technique = null)
+            EffectTechnique technique = null,
+            EffectTechnique sunOnlyTechnique = null)
         {
             EffectTechnique selectedTechnique = technique ?? _cachedStaticMapInstancingTechnique;
             if (effect == null || selectedTechnique == null)
@@ -1677,11 +1704,7 @@ namespace Client.Main.Objects
                 return;
 
             ModelEffectBindings bindings = GetModelEffectBindings(effect);
-            bindings.World?.SetValue(_identity);
-            bindings.View?.SetValue(camera.View);
-            bindings.Projection?.SetValue(camera.Projection);
-            bindings.WorldViewProjection?.SetValue(camera.View * camera.Projection);
-            bindings.EyePosition?.SetValue(camera.Position);
+            bindings.ViewProjection?.SetValue(camera.ViewProjection);
             bindings.Alpha?.SetValue(1f);
             bindings.TextureCoordinateOffset?.SetValue(Vector2.Zero);
             bindings.TerrainDynamicIntensityScale?.SetValue(1.5f);
@@ -1700,23 +1723,25 @@ namespace Client.Main.Objects
             bindings.AmbientLight?.SetValue(_ambientLightVector * SunCycleManager.AmbientMultiplier);
 
             GraphicsManager.Instance.ShadowMapRenderer?.ApplyShadowParameters(effect);
-            UploadStaticMapInstancingDynamicLights(effect, world);
+            int activeLightCount = UploadStaticMapInstancingDynamicLights(effect, world);
+            if (activeLightCount == 0 && sunOnlyTechnique != null)
+                effect.CurrentTechnique = sunOnlyTechnique;
         }
 
-        private static void UploadStaticMapInstancingDynamicLights(Effect effect, WorldControl world)
+        private static int UploadStaticMapInstancingDynamicLights(Effect effect, WorldControl world)
         {
             var terrain = world?.Terrain;
             if (!Constants.ENABLE_DYNAMIC_LIGHTS || terrain == null)
             {
                 _staticInstancingLightUploader.Clear(effect);
-                return;
+                return 0;
             }
 
             var visibleLights = terrain.VisibleLights;
             if (visibleLights == null || visibleLights.Count == 0)
             {
                 _staticInstancingLightUploader.Clear(effect);
-                return;
+                return 0;
             }
 
             int maxLights = Math.Min(
@@ -1728,7 +1753,7 @@ namespace Client.Main.Objects
                 : Vector2.Zero;
             float focusRadius = ResolveStaticMapInstancingLightCoverageRadius();
 
-            _staticInstancingLightUploader.Upload(
+            return _staticInstancingLightUploader.Upload(
                 effect,
                 visibleLights,
                 focus,

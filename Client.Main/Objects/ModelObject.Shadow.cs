@@ -348,44 +348,36 @@ namespace Client.Main.Objects
                     float scaleZ = MathF.Max(45f, localDepth * 0.55f);
 
                     Matrix blobWorld = Matrix.CreateScale(scaleX, scaleZ, 1f) * shadowWorld;
+                    Matrix viewProjection = view * projection;
 
-                    bindings.ViewProjection?.SetValue(view * projection);
                     bindings.ShadowTint?.SetValue(new Vector4(0f, 0f, 0f, shadowOpacity));
                     bindings.ShadowTexture?.SetValue(blobTexture);
 
                     if (TryPrepareTerrainConformedBlobShadow(blobWorld, out VertexPositionTexture[] conformedBlobVertices))
                     {
-                        bindings.World?.SetValue(Matrix.Identity);
-
-                        foreach (var pass in effect.CurrentTechnique.Passes)
-                        {
-                            pass.Apply();
-                            GraphicsDevice.DrawUserIndexedPrimitives(
-                                PrimitiveType.TriangleList,
-                                conformedBlobVertices,
-                                0,
-                                BlobShadowGridTemplate.Length,
-                                BlobShadowGridIndices,
-                                0,
-                                BlobShadowGridIndices.Length / 3);
-                        }
+                        bindings.WorldViewProjection?.SetValue(viewProjection);
+                        effect.CurrentTechnique.Passes[0].Apply();
+                        GraphicsDevice.DrawUserIndexedPrimitives(
+                            PrimitiveType.TriangleList,
+                            conformedBlobVertices,
+                            0,
+                            BlobShadowGridTemplate.Length,
+                            BlobShadowGridIndices,
+                            0,
+                            BlobShadowGridIndices.Length / 3);
                     }
                     else
                     {
-                        bindings.World?.SetValue(blobWorld);
-
-                        foreach (var pass in effect.CurrentTechnique.Passes)
-                        {
-                            pass.Apply();
-                            GraphicsDevice.DrawUserIndexedPrimitives(
-                                PrimitiveType.TriangleList,
-                                BlobShadowVertices,
-                                0,
-                                BlobShadowVertices.Length,
-                                BlobShadowIndices,
-                                0,
-                                2);
-                        }
+                        bindings.WorldViewProjection?.SetValue(blobWorld * viewProjection);
+                        effect.CurrentTechnique.Passes[0].Apply();
+                        GraphicsDevice.DrawUserIndexedPrimitives(
+                            PrimitiveType.TriangleList,
+                            BlobShadowVertices,
+                            0,
+                            BlobShadowVertices.Length,
+                            BlobShadowIndices,
+                            0,
+                            2);
                     }
                 }
                 finally
@@ -446,7 +438,7 @@ namespace Client.Main.Objects
 
                 try
                 {
-                    bindings.ViewProjection?.SetValue(view * projection);
+                    Matrix viewProjection = view * projection;
                     bindings.ShadowTint?.SetValue(new Vector4(0f, 0f, 0f, shadowOpacity));
                     bindings.ShadowTexture?.SetValue(_meshes[mesh].Texture);
 
@@ -460,19 +452,15 @@ namespace Client.Main.Objects
                         out IndexBuffer conformedIndexBuffer,
                         out int conformedPrimitiveCount))
                     {
-                        bindings.World?.SetValue(Matrix.Identity);
-
-                        foreach (var pass in effect.CurrentTechnique.Passes)
-                        {
-                            pass.Apply();
-                            GraphicsDevice.SetVertexBuffer(conformedVertexBuffer);
-                            GraphicsDevice.Indices = conformedIndexBuffer;
-                            GraphicsDevice.DrawIndexedPrimitives(
-                                PrimitiveType.TriangleList,
-                                0,
-                                0,
-                                conformedPrimitiveCount);
-                        }
+                        bindings.WorldViewProjection?.SetValue(viewProjection);
+                        effect.CurrentTechnique.Passes[0].Apply();
+                        GraphicsDevice.SetVertexBuffer(conformedVertexBuffer);
+                        GraphicsDevice.Indices = conformedIndexBuffer;
+                        GraphicsDevice.DrawIndexedPrimitives(
+                            PrimitiveType.TriangleList,
+                            0,
+                            0,
+                            conformedPrimitiveCount);
 
                         return;
                     }
@@ -483,20 +471,16 @@ namespace Client.Main.Objects
                     if (vertexBuffer == null || indexBuffer == null)
                         return;
 
-                    bindings.World?.SetValue(shadowWorld);
+                    bindings.WorldViewProjection?.SetValue(shadowWorld * viewProjection);
                     int primitiveCount = indexBuffer.IndexCount / 3;
-
-                    foreach (var pass in effect.CurrentTechnique.Passes)
-                    {
-                        pass.Apply();
-                        GraphicsDevice.SetVertexBuffer(vertexBuffer);
-                        GraphicsDevice.Indices = indexBuffer;
-                        GraphicsDevice.DrawIndexedPrimitives(
-                            PrimitiveType.TriangleList,
-                            0,
-                            0,
-                            primitiveCount);
-                    }
+                    effect.CurrentTechnique.Passes[0].Apply();
+                    GraphicsDevice.SetVertexBuffer(vertexBuffer);
+                    GraphicsDevice.Indices = indexBuffer;
+                    GraphicsDevice.DrawIndexedPrimitives(
+                        PrimitiveType.TriangleList,
+                        0,
+                        0,
+                        primitiveCount);
                 }
                 finally
                 {
@@ -1283,15 +1267,12 @@ namespace Client.Main.Objects
                                 gd.RasterizerState = isTwoSided ? _cullNone : _cullClockwise;
                                 bindings.DiffuseTexture?.SetValue(tex);
 
-                                foreach (var pass in shadowEffect.CurrentTechnique.Passes)
-                                {
-                                    pass.Apply();
-                                    gd.SetVertexBuffer(vb);
-                                    gd.Indices = ib;
-                                    gd.DrawIndexedPrimitives(
-                                        PrimitiveType.TriangleList,
-                                        0, 0, ib.IndexCount / 3);
-                                }
+                                shadowEffect.CurrentTechnique.Passes[0].Apply();
+                                gd.SetVertexBuffer(vb);
+                                gd.Indices = ib;
+                                gd.DrawIndexedPrimitives(
+                                    PrimitiveType.TriangleList,
+                                    0, 0, ib.IndexCount / 3);
 
                                 drawnMeshCount++;
                             }

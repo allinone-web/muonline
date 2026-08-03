@@ -1047,10 +1047,7 @@ namespace Client.Main.Controls.Terrain
 
             Matrix world = Matrix.Identity;
             effect.Parameters["World"]?.SetValue(world);
-            effect.Parameters["View"]?.SetValue(Camera.Instance.View);
-            effect.Parameters["Projection"]?.SetValue(Camera.Instance.Projection);
-            effect.Parameters["WorldViewProjection"]?.SetValue(world * Camera.Instance.View * Camera.Instance.Projection);
-            effect.Parameters["EyePosition"]?.SetValue(Camera.Instance.Position);
+            effect.Parameters["WorldViewProjection"]?.SetValue(world * Camera.Instance.ViewProjection);
             // Use terrain-specific technique, with a reduced variant for integrated GPUs.
             string preferredTechnique = Constants.OPTIMIZE_FOR_INTEGRATED_GPU
                 ? "DynamicLighting_Terrain_Low"

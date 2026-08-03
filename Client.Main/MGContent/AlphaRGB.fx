@@ -29,10 +29,7 @@ float4 PS_Main(VS_OUT pin) : SV_Target
 {
     float4 col = TextureSampler.Sample(PointClamp, pin.Tex);
 
-    // Promedio simple (corrige el dot inválido)
-    float lum = (col.r + col.g + col.b) / 3.0;
-
-    float a = saturate(lum / 0.25);
+    float a = saturate(dot(col.rgb, float3(1.3333333, 1.3333333, 1.3333333)));
     return float4(col.rgb, a);
 }
 
@@ -64,10 +61,7 @@ float4 PS_Main(VS_OUT pin) : COLOR0
 {
     float4 col = tex2D(TextureSampler, pin.Tex);
 
-    // Promedio simple
-    float lum = (col.r + col.g + col.b) / 3.0;
-
-    float a = saturate(lum / 0.25);
+    float a = saturate(dot(col.rgb, float3(1.3333333, 1.3333333, 1.3333333)));
     return float4(col.rgb, a);
 }
 

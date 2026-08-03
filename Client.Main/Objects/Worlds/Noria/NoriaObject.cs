@@ -616,7 +616,7 @@ namespace Client.Main.Objects.Worlds.Noria
             Vector3 midpoint = (particle.PreviousPosition + particle.Position) * 0.5f;
             Vector4 midpointClip = Vector4.Transform(
                 midpoint,
-                Camera.Instance.View * Camera.Instance.Projection);
+                Camera.Instance.ViewProjection);
             if (midpointClip.W <= 0.001f)
                 return;
 

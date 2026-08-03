@@ -10,9 +10,8 @@
 
 // Transformation matrices
 float4x4 World;
-float4x4 View;
-float4x4 Projection;
 float4x4 WorldViewProjection; // Includes World * View * Projection
+float4x4 ViewProjection;      // Shared by instanced paths whose World varies per instance
 #if !OPENGL
 float4x4 BoneMatrices[256];
 // Multi-pose crowd skinning stores one palette per texture row.
@@ -22,7 +21,6 @@ Texture2D CrowdBonePaletteTexture;
 float CrowdBonePaletteRowCount = 1.0;
 #endif
 
-float3 EyePosition;
 
 // Texture
 texture DiffuseTexture;
@@ -70,14 +68,12 @@ sampler2D ShadowSampler = sampler_state
 #endif
 float4 LightPosInvRadius[MAX_LIGHTS];   // xyz = position, w = inverse radius
 float4 LightColorIntensity[MAX_LIGHTS]; // rgb = color, w = intensity
+int ActiveLightCount = 0;               // exact count uploaded by CPU; avoids scanning empty slots
 
 float DebugLightingAreas = 0.0;
-float UseVertexColorLighting = 0.0;
-float TerrainLightingPass = 0.0;
 float TerrainDynamicIntensityScale = 1.5;
 float GlobalLightMultiplier = 1.0; 
 
-float3 TerrainLight = float3(1.0, 1.0, 1.0);
 
 float2 TerrainUvScale = float2(0.0, 0.0);      
 float UseProceduralTerrainUV = 0.0;            
@@ -161,13 +157,17 @@ float3 CalculateTerrainLighting(float3 worldPos, float3 normal)
 {
     float3 dynamicLight = float3(0, 0, 0);
 
+    int lightCount = min(max(ActiveLightCount, 0), TERRAIN_MAX_LIGHTS);
 #if OPENGL
     [unroll(MAX_LIGHTS)]
-#else
-    [loop]
-#endif
     for (int i = 0; i < TERRAIN_MAX_LIGHTS; i++)
     {
+        if (i >= lightCount) break;
+#else
+    [loop]
+    for (int i = 0; i < lightCount; i++)
+    {
+#endif
         float intensity = LightColorIntensity[i].w;
         if (intensity <= 0.0) continue;
 
@@ -199,10 +199,17 @@ float3 CalculateTerrainLightingLow(float3 worldPos, float3 normal)
 {
     float3 dynamicLight = float3(0, 0, 0);
 
-    // [unroll] is safe here because max iterations is strictly 8. Eliminates loop overhead completely.
+    int lightCount = min(max(ActiveLightCount, 0), TERRAIN_LOW_MAX_LIGHTS);
+#if OPENGL
     [unroll(TERRAIN_LOW_MAX_LIGHTS)]
     for (int i = 0; i < TERRAIN_LOW_MAX_LIGHTS; i++)
     {
+        if (i >= lightCount) break;
+#else
+    [loop]
+    for (int i = 0; i < lightCount; i++)
+    {
+#endif
         float intensity = LightColorIntensity[i].w;
         if (intensity <= 0.0) continue;
 
@@ -229,13 +236,17 @@ float3 CalculateDynamicLighting(float3 worldPos, float3 normal)
 {
     float3 dynamicLight = float3(0, 0, 0);
 
+    int lightCount = min(max(ActiveLightCount, 0), MAX_LIGHTS);
 #if OPENGL
     [unroll(MAX_LIGHTS)]
-#else
-    [loop]
-#endif
     for (int i = 0; i < MAX_LIGHTS; i++)
     {
+        if (i >= lightCount) break;
+#else
+    [loop]
+    for (int i = 0; i < lightCount; i++)
+    {
+#endif
         float intensity = LightColorIntensity[i].w;
         if (intensity <= 0.0) continue;
 
@@ -317,6 +328,20 @@ PixelInput VS_Objects(VertexInput input)
     return output;
 }
 
+PixelInput VS_ObjectsVertexLit(VertexInput input)
+{
+    PixelInput output;
+    float4 worldPos = mul(float4(input.Position, 1.0), World);
+    float3 worldNormal = normalize(mul(input.Normal, (float3x3)World));
+    output.WorldPos = worldPos.xyz;
+    output.Position = mul(float4(input.Position, 1.0), WorldViewProjection);
+    output.Normal = worldNormal;
+    output.TexCoord = input.TexCoord + TextureCoordinateOffset;
+    output.Color = input.Color;
+    output.DynamicLight = CalculateDynamicLighting(worldPos.xyz, worldNormal);
+    return output;
+}
+
 #if !OPENGL
 PixelInput VS_ObjectsSkinned(VertexInputSkinned input)
 {
@@ -337,6 +362,24 @@ PixelInput VS_ObjectsSkinned(VertexInputSkinned input)
     return output;
 }
 
+PixelInput VS_ObjectsSkinnedVertexLit(VertexInputSkinned input)
+{
+    PixelInput output;
+    int positionBoneIndex = min(max((int)input.BoneIndices.x, 0), 255);
+    int normalBoneIndex = min(max((int)input.BoneIndices.y, 0), 255);
+    float4 localPos = mul(float4(input.Position, 1.0), BoneMatrices[positionBoneIndex]);
+    float3 localNormal = mul(input.Normal, (float3x3)BoneMatrices[normalBoneIndex]);
+    float4 worldPos = mul(localPos, World);
+    float3 worldNormal = normalize(mul(localNormal, (float3x3)World));
+    output.WorldPos = worldPos.xyz;
+    output.Position = mul(localPos, WorldViewProjection);
+    output.Normal = worldNormal;
+    output.TexCoord = input.TexCoord + TextureCoordinateOffset;
+    output.Color = input.Color;
+    output.DynamicLight = CalculateDynamicLighting(worldPos.xyz, worldNormal);
+    return output;
+}
+
 PixelInput VS_ObjectsSkinnedInstanced(VertexInputSkinnedInstanced input)
 {
     PixelInput output;
@@ -347,15 +390,36 @@ PixelInput VS_ObjectsSkinnedInstanced(VertexInputSkinnedInstanced input)
     float4 worldPos = mul(localPos, instanceWorld);
     
     output.WorldPos = worldPos.xyz;
-    // ALU TRICK: Vector * Matrix is faster than Matrix * Matrix.
-    // mul(mul(worldPos, View), Projection) takes 8 operations instead of 20!
-    output.Position = mul(mul(worldPos, View), Projection);
+    output.Position = mul(worldPos, ViewProjection);
     
     float3 localNormal = mul(input.Normal, (float3x3)BoneMatrices[normalBoneIndex]);
     output.Normal = normalize(mul(localNormal, (float3x3)instanceWorld));
     output.TexCoord = input.TexCoord + TextureCoordinateOffset;
     output.Color = input.Color * input.InstanceColor;
     output.DynamicLight = float3(0, 0, 0);
+    return output;
+}
+
+// Static map geometry trades per-pixel dynamic-light evaluation for per-vertex
+// evaluation. This preserves light selection and attenuation while reducing the
+// dominant shader cost on large opaque buildings and repeated decorations.
+PixelInput VS_ObjectsSkinnedInstancedVertexLit(VertexInputSkinnedInstanced input)
+{
+    PixelInput output;
+    int positionBoneIndex = min(max((int)input.BoneIndices.x, 0), 255);
+    int normalBoneIndex = min(max((int)input.BoneIndices.y, 0), 255);
+    float4x4 instanceWorld = float4x4(input.InstWorld0, input.InstWorld1, input.InstWorld2, input.InstWorld3);
+    float4 localPos = mul(float4(input.Position, 1.0), BoneMatrices[positionBoneIndex]);
+    float4 worldPos = mul(localPos, instanceWorld);
+    float3 localNormal = mul(input.Normal, (float3x3)BoneMatrices[normalBoneIndex]);
+    float3 worldNormal = normalize(mul(localNormal, (float3x3)instanceWorld));
+
+    output.WorldPos = worldPos.xyz;
+    output.Position = mul(worldPos, ViewProjection);
+    output.Normal = worldNormal;
+    output.TexCoord = input.TexCoord + TextureCoordinateOffset;
+    output.Color = input.Color * input.InstanceColor;
+    output.DynamicLight = CalculateDynamicLighting(worldPos.xyz, worldNormal);
     return output;
 }
 
@@ -392,12 +456,40 @@ PixelInput VS_ObjectsSkinnedMultiPoseInstanced(VertexInputSkinnedMultiPoseInstan
     float4 worldPos = mul(localPos, instanceWorld);
 
     output.WorldPos = worldPos.xyz;
-    output.Position = mul(worldPos, View);
-    output.Position = mul(output.Position, Projection);
+    output.Position = mul(worldPos, ViewProjection);
     output.Normal = normalize(mul(localNormal, (float3x3)instanceWorld));
     output.TexCoord = input.TexCoord + TextureCoordinateOffset;
     output.Color = input.Color * input.InstanceColor;
     output.DynamicLight = float3(0, 0, 0);
+    return output;
+}
+
+PixelInput VS_ObjectsSkinnedMultiPoseInstancedVertexLit(VertexInputSkinnedMultiPoseInstanced input)
+{
+    PixelInput output;
+    int positionBoneIndex = min(max((int)input.BoneIndices.x, 0), 255);
+    int normalBoneIndex = min(max((int)input.BoneIndices.y, 0), 255);
+    int paletteRow = (int)(input.PaletteData.x + 0.5);
+
+    float4x4 positionBone = LoadCrowdBoneMatrix(positionBoneIndex, paletteRow);
+    float3 localNormal = mul(input.Normal, (float3x3)positionBone);
+    if (normalBoneIndex != positionBoneIndex)
+    {
+        float4x4 normalBone = LoadCrowdBoneMatrix(normalBoneIndex, paletteRow);
+        localNormal = mul(input.Normal, (float3x3)normalBone);
+    }
+
+    float4x4 instanceWorld = float4x4(input.InstWorld0, input.InstWorld1, input.InstWorld2, input.InstWorld3);
+    float4 localPos = mul(float4(input.Position, 1.0), positionBone);
+    float4 worldPos = mul(localPos, instanceWorld);
+    float3 worldNormal = normalize(mul(localNormal, (float3x3)instanceWorld));
+
+    output.WorldPos = worldPos.xyz;
+    output.Position = mul(worldPos, ViewProjection);
+    output.Normal = worldNormal;
+    output.TexCoord = input.TexCoord + TextureCoordinateOffset;
+    output.Color = input.Color * input.InstanceColor;
+    output.DynamicLight = CalculateDynamicLighting(worldPos.xyz, worldNormal);
     return output;
 }
 
@@ -436,7 +528,7 @@ float SampleShadow(float3 worldPos, float3 normal)
     s.w = tex2D(ShadowSampler, uv + float2( off.x,  off.y)).r;
     
     float4 shadows = step(depth - bias, s);
-    return (shadows.x + shadows.y + shadows.z + shadows.w) * 0.25;
+    return dot(shadows, float4(0.25, 0.25, 0.25, 0.25));
 }
 
 // ============================================================================
@@ -480,36 +572,39 @@ float4 PS_Highlight(PixelInput input) : SV_Target
     return float4(HighlightColor * textureAlpha, textureAlpha * Alpha);
 }
 
-float4 PS_Objects(PixelInput input) : SV_Target
+float4 ShadeObjectPixel(PixelInput input, float3 normal, float3 dynamicLight)
 {
     float4 texColor = tex2D(SamplerState0, input.TexCoord);
     float finalAlpha = texColor.a * Alpha * input.Color.a;
-    
-    // EXTREME OPTIMIZATION: Early clip!
     clip(finalAlpha - 0.01);
 
-    float3 normal = PrepareNormal(input.Normal);
-
-    float3 sunDir = normalize(SunDirection);
+    float3 sunDir = SunDirection;
     float ndotlRaw = dot(normal, -sunDir);
-    float ndotl = saturate(ndotlRaw) + saturate(-ndotlRaw) * 0.35; 
-    
+    float ndotl = saturate(ndotlRaw) + saturate(-ndotlRaw) * 0.35;
+
     float shadowFactor = saturate(lerp(1.0 - ShadowStrength, 1.0, ndotl));
     float3 sunLight = SunColor * ndotl * SunStrength;
-    float3 baseLight = AmbientLight * shadowFactor + sunLight;
-
-    float3 dynamicLight = CalculateDynamicLighting(input.WorldPos, normal);
-    float3 finalLight = baseLight + dynamicLight * TerrainDynamicIntensityScale;
+    float3 finalLight = AmbientLight * shadowFactor + sunLight +
+                        dynamicLight * TerrainDynamicIntensityScale;
 
     float isDebugPixel = DebugLightingAreas * step(0.01, dot(dynamicLight, dynamicLight));
-
     float shadowTerm = SampleShadow(input.WorldPos, normal);
     float shadowMix = lerp(1.0 - ShadowStrength, 1.0, shadowTerm);
     finalLight *= lerp(1.0, shadowMix, ShadowsEnabled);
 
     float3 finalColor = lerp(texColor.rgb * finalLight, float3(0, 0, 0), isDebugPixel);
-
     return float4(finalColor, finalAlpha);
+}
+
+float4 PS_Objects(PixelInput input) : SV_Target
+{
+    float3 normal = PrepareNormal(input.Normal);
+    return ShadeObjectPixel(input, normal, CalculateDynamicLighting(input.WorldPos, normal));
+}
+
+float4 PS_ObjectsVertexLit(PixelInput input) : SV_Target
+{
+    return ShadeObjectPixel(input, PrepareNormal(input.Normal), input.DynamicLight);
 }
 
 // ============================================================================
@@ -525,6 +620,24 @@ technique DynamicLighting
     }
 }
 
+technique DynamicLighting_VertexLit
+{
+    pass Pass1
+    {
+        VertexShader = compile VS_SHADERMODEL VS_ObjectsVertexLit();
+        PixelShader = compile PS_SHADERMODEL PS_ObjectsVertexLit();
+    }
+}
+
+technique DynamicLighting_SunOnly
+{
+    pass Pass1
+    {
+        VertexShader = compile VS_SHADERMODEL VS_Objects();
+        PixelShader = compile PS_SHADERMODEL PS_ObjectsVertexLit();
+    }
+}
+
 #if !OPENGL
 technique DynamicLighting_Skinned
 {
@@ -532,6 +645,24 @@ technique DynamicLighting_Skinned
     {
         VertexShader = compile VS_SHADERMODEL VS_ObjectsSkinned();
         PixelShader = compile PS_SHADERMODEL PS_Objects();
+    }
+}
+
+technique DynamicLighting_Skinned_VertexLit
+{
+    pass Pass1
+    {
+        VertexShader = compile VS_SHADERMODEL VS_ObjectsSkinnedVertexLit();
+        PixelShader = compile PS_SHADERMODEL PS_ObjectsVertexLit();
+    }
+}
+
+technique DynamicLighting_Skinned_SunOnly
+{
+    pass Pass1
+    {
+        VertexShader = compile VS_SHADERMODEL VS_ObjectsSkinned();
+        PixelShader = compile PS_SHADERMODEL PS_ObjectsVertexLit();
     }
 }
 
@@ -544,12 +675,48 @@ technique DynamicLighting_SkinnedInstanced
     }
 }
 
+technique DynamicLighting_SkinnedInstanced_VertexLit
+{
+    pass Pass1
+    {
+        VertexShader = compile VS_SHADERMODEL VS_ObjectsSkinnedInstancedVertexLit();
+        PixelShader = compile PS_SHADERMODEL PS_ObjectsVertexLit();
+    }
+}
+
+technique DynamicLighting_SkinnedInstanced_SunOnly
+{
+    pass Pass1
+    {
+        VertexShader = compile VS_SHADERMODEL VS_ObjectsSkinnedInstanced();
+        PixelShader = compile PS_SHADERMODEL PS_ObjectsVertexLit();
+    }
+}
+
 technique DynamicLighting_SkinnedMultiPoseInstanced
 {
     pass Pass1
     {
         VertexShader = compile VS_SHADERMODEL VS_ObjectsSkinnedMultiPoseInstanced();
         PixelShader = compile PS_SHADERMODEL PS_Objects();
+    }
+}
+
+technique DynamicLighting_SkinnedMultiPoseInstanced_VertexLit
+{
+    pass Pass1
+    {
+        VertexShader = compile VS_SHADERMODEL VS_ObjectsSkinnedMultiPoseInstancedVertexLit();
+        PixelShader = compile PS_SHADERMODEL PS_ObjectsVertexLit();
+    }
+}
+
+technique DynamicLighting_SkinnedMultiPoseInstanced_SunOnly
+{
+    pass Pass1
+    {
+        VertexShader = compile VS_SHADERMODEL VS_ObjectsSkinnedMultiPoseInstanced();
+        PixelShader = compile PS_SHADERMODEL PS_ObjectsVertexLit();
     }
 }
 

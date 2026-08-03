@@ -1,4 +1,4 @@
-﻿#if OPENGL
+#if OPENGL
     #define SV_POSITION POSITION
     #define VS_SHADERMODEL vs_3_0
     #define PS_SHADERMODEL ps_3_0
@@ -14,17 +14,12 @@ static const float GlowIntensityScale = 0.80; // Tone down glow on DirectX
 #endif
 
 float4x4 World;
-float4x4 View;
-float4x4 Projection;
 float4x4 WorldViewProjection;
 #if !OPENGL
 float4x4 BoneMatrices[256];
 #endif
 
-float3 EyePosition;
 float3 LightDirection = float3(0.707, -0.707, 0);
-float4 AmbientColor = float4(0.3, 0.3, 0.3, 1.0);
-float4 DiffuseColor = float4(1.0, 1.0, 1.0, 1.0);
 
 texture DiffuseTexture;
 sampler2D DiffuseSampler = sampler_state
@@ -86,34 +81,14 @@ struct VertexShaderOutput
     float3 WorldPosition : TEXCOORD0;
     float3 Normal : TEXCOORD1;
     float2 TextureCoordinate : TEXCOORD2;
-    float3 ViewDirection : TEXCOORD3;
 };
 
-float GetRandom(float2 coords)
-{
-    return frac(sin(dot(coords, float2(12.9898, 78.233))) * 43758.5453);
-}
 
-float Noise2(float2 coords)
-{
-    float2 texSize = float2(1.0, 1.0);
-    float2 pc = coords * texSize;
-    float2 base = floor(pc);
-    float s1 = GetRandom((base + float2(0.0, 0.0)) / texSize);
-    float s2 = GetRandom((base + float2(1.0, 0.0)) / texSize);
-    float s3 = GetRandom((base + float2(0.0, 1.0)) / texSize);
-    float s4 = GetRandom((base + float2(1.0, 1.0)) / texSize);
-    float2 f = smoothstep(0.0, 1.0, frac(pc));
-    float px1 = lerp(s1, s2, f.x);
-    float px2 = lerp(s3, s4, f.x);
-    float result = lerp(px1, px2, f.y);
-    return result;
-}
 
 float SampleShadow(float3 worldPos, float3 normal)
 {
     // ShadowsEnabled is uniform for the whole draw call, so this branch avoids
-    // all nine shadow-map samples when shadows are disabled.
+    // all four shadow-map samples when shadows are disabled.
     if (ShadowsEnabled < 0.5)
         return 1.0;
 
@@ -129,20 +104,15 @@ float SampleShadow(float3 worldPos, float3 normal)
     float ndotl = saturate(dot(normal, -LightDirection));
     float bias = ShadowBias + ShadowNormalBias * (1.0 - ndotl);
 
-    float shadow = 0.0;
-    [unroll]
-    for (int x = -1; x <= 1; x++)
-    {
-        [unroll]
-        for (int y = -1; y <= 1; y++)
-        {
-            float2 offset = float2(x, y) * ShadowMapTexelSize;
-            float sampleDepth = tex2D(ShadowSampler, uv + offset).r;
-            shadow += step(depth - bias, sampleDepth);
-        }
-    }
-
-    return lerp(1.0, shadow / 9.0, inBounds);
+    float2 offset = ShadowMapTexelSize * 0.5;
+    float4 depths;
+    depths.x = tex2D(ShadowSampler, uv + float2(-offset.x, -offset.y)).r;
+    depths.y = tex2D(ShadowSampler, uv + float2( offset.x, -offset.y)).r;
+    depths.z = tex2D(ShadowSampler, uv + float2(-offset.x,  offset.y)).r;
+    depths.w = tex2D(ShadowSampler, uv + float2( offset.x,  offset.y)).r;
+    float4 visibility = step(depth - bias, depths);
+    float shadow = dot(visibility, float4(0.25, 0.25, 0.25, 0.25));
+    return lerp(1.0, shadow, inBounds);
 }
 
 VertexShaderOutput BuildMaterialVertex(float4 localPosition, float3 localNormal, float2 textureCoordinate)
@@ -154,7 +124,6 @@ VertexShaderOutput BuildMaterialVertex(float4 localPosition, float3 localNormal,
     output.WorldPosition = worldPosition.xyz;
     output.Normal = normalize(mul(localNormal, (float3x3)World));
     output.TextureCoordinate = textureCoordinate;
-    output.ViewDirection = normalize(EyePosition - worldPosition.xyz);
     return output;
 }
 
@@ -173,6 +142,20 @@ VertexShaderOutput MainVS_Skinned(in VertexShaderInputSkinned input)
     return BuildMaterialVertex(localPosition, localNormal, input.TextureCoordinate);
 }
 #endif
+
+float4 MainPS_Basic(VertexShaderOutput input) : COLOR
+{
+    float4 color = tex2D(DiffuseSampler, input.TextureCoordinate);
+    if (color.a < 0.1)
+        discard;
+
+    float3 normal = normalize(input.Normal);
+    color.rgb *= max(0.1, dot(normal, -LightDirection));
+    float shadowTerm = SampleShadow(input.WorldPosition, normal);
+    color.rgb *= lerp(1.0 - ShadowStrength, 1.0, shadowTerm);
+    color.a *= Alpha;
+    return color;
+}
 
 float4 MainPS(VertexShaderOutput input) : COLOR
 {
@@ -230,6 +213,26 @@ float4 MainPS(VertexShaderOutput input) : COLOR
     
     return color;
 }
+
+technique MonsterMaterialDrawing_Basic
+{
+    pass P0
+    {
+        VertexShader = compile VS_SHADERMODEL MainVS();
+        PixelShader = compile PS_SHADERMODEL MainPS_Basic();
+    }
+}
+
+#if !OPENGL
+technique MonsterMaterialDrawing_Basic_Skinned
+{
+    pass P0
+    {
+        VertexShader = compile VS_SHADERMODEL MainVS_Skinned();
+        PixelShader = compile PS_SHADERMODEL MainPS_Basic();
+    }
+}
+#endif
 
 technique MonsterMaterialDrawing
 {

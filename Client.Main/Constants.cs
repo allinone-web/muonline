@@ -77,6 +77,11 @@ namespace Client.Main
         public static bool ENABLE_STATIC_MAP_UPDATE_SKIP;
         public static bool ENABLE_STATIC_MAP_INSTANCE_UPLOAD_CACHE;
         public static bool ENABLE_STATIC_MAP_SHADOW_INSTANCING;
+        public static bool ENABLE_STATIC_MAP_VERTEX_LIGHTING;
+        public static bool ENABLE_DISTANCE_VERTEX_LIGHTING;
+        public static bool ENABLE_CROWD_VERTEX_LIGHTING;
+        public static float DYNAMIC_LIGHT_VERTEX_DISTANCE;
+        public static bool ENABLE_FAST_MATERIAL_SHADERS;
         public static bool ENABLE_WALKER_CROWD_INSTANCING;
         public static bool ENABLE_CROWD_SPATIAL_CULLING;
         public static bool ENABLE_ANIMATION_THROTTLING;
@@ -248,6 +253,11 @@ namespace Client.Main
             ENABLE_STATIC_MAP_UPDATE_SKIP = true;
             ENABLE_STATIC_MAP_INSTANCE_UPLOAD_CACHE = true;
             ENABLE_STATIC_MAP_SHADOW_INSTANCING = true;
+            ENABLE_STATIC_MAP_VERTEX_LIGHTING = true;
+            ENABLE_DISTANCE_VERTEX_LIGHTING = true;
+            ENABLE_CROWD_VERTEX_LIGHTING = true;
+            DYNAMIC_LIGHT_VERTEX_DISTANCE = 1600f;
+            ENABLE_FAST_MATERIAL_SHADERS = true;
             ENABLE_WALKER_CROWD_INSTANCING = true;
             ENABLE_CROWD_SPATIAL_CULLING = true;
             ENABLE_ANIMATION_THROTTLING = true;

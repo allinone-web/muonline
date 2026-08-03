@@ -96,7 +96,7 @@ namespace Client.Main.Objects.Effects.Particles
             if (device == null || spriteBatch == null)
                 return;
 
-            _viewProjection = camera.View * camera.Projection;
+            _viewProjection = camera.ViewProjection;
             _cameraPosition = camera.Position;
 
             if (!SpriteBatchScope.BatchIsBegun)

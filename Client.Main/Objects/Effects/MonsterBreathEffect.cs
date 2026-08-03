@@ -187,7 +187,7 @@ namespace Client.Main.Objects.Effects
                 return;
             }
 
-            var viewProj = camera.View * camera.Projection;
+            var viewProj = camera.ViewProjection;
             var vp = gd.Viewport;
             float maxDistSq = MaxDistance * MaxDistance;
 

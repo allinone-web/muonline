@@ -113,6 +113,8 @@ namespace Client.Main.Graphics
 
         public Matrix View { get; private set; }
         public Matrix Projection { get; private set; }
+        /// <summary>Cached render View * Projection matrix. Updated only when either source matrix changes.</summary>
+        public Matrix ViewProjection { get; private set; }
         public BoundingFrustum Frustum => _frustum;
         /// <summary>Changes whenever the rendered view/projection changes, including screen shake.</summary>
         public ulong StateVersion { get; private set; }
@@ -206,6 +208,7 @@ namespace Client.Main.Graphics
                 _viewNear,
                 _viewFar + Constants.MAX_CAMERA_DISTANCE
             );
+            ViewProjection = View * Projection;
 
             UpdateFrustum();
             unchecked
@@ -240,6 +243,7 @@ namespace Client.Main.Graphics
             View = renderPosition == basePosition
                 ? stableView
                 : CreateViewMatrix(renderPosition, renderTarget);
+            ViewProjection = View * Projection;
 
             if (updateCulling)
             {

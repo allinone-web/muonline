@@ -58,10 +58,12 @@ namespace Client.Main.Graphics
             {
                 LightPosInvRadius = effect.Parameters["LightPosInvRadius"];
                 LightColorIntensity = effect.Parameters["LightColorIntensity"];
+                ActiveLightCount = effect.Parameters["ActiveLightCount"];
             }
 
             public EffectParameter LightPosInvRadius { get; }
             public EffectParameter LightColorIntensity { get; }
+            public EffectParameter ActiveLightCount { get; }
             public long LastSelectionToken = long.MinValue;
 
             public int ResolveCapacity(int fallbackCapacity)
@@ -107,11 +109,10 @@ namespace Client.Main.Graphics
 
             int capacity = ResolveEffectCapacity(effect, _fallbackCapacity);
             EnsureCapacity(capacity);
-            ClearBuffers(capacity);
 
             if (lights == null || lights.Count == 0 || maxLights <= 0)
             {
-                ApplyToEffect(effect, capacity, selectionToken: 0);
+                ApplyToEffect(effect, selectionToken: 0, activeLightCount: 0);
                 return 0;
             }
 
@@ -159,7 +160,7 @@ namespace Client.Main.Graphics
                 _lightColorIntensity[i] = new Vector4(light.Color, intensity);
             }
 
-            ApplyToEffect(effect, capacity, selectionToken);
+            ApplyToEffect(effect, selectionToken, selectedCount);
             return selectedCount;
         }
 
@@ -168,10 +169,7 @@ namespace Client.Main.Graphics
             if (effect == null)
                 return;
 
-            int capacity = ResolveEffectCapacity(effect, _fallbackCapacity);
-            EnsureCapacity(capacity);
-            ClearBuffers(capacity);
-            ApplyToEffect(effect, capacity, selectionToken: 0);
+            ApplyToEffect(effect, selectionToken: 0, activeLightCount: 0);
         }
 
         private SelectionCacheEntry GetOrCreateCachedSelection(
@@ -340,12 +338,6 @@ namespace Client.Main.Graphics
             }
         }
 
-        private void ClearBuffers(int capacity)
-        {
-            Array.Clear(_lightPosInvRadius, 0, capacity);
-            Array.Clear(_lightColorIntensity, 0, capacity);
-        }
-
         private static bool IsFinite(in Vector3 value)
         {
             return !(float.IsNaN(value.X) || float.IsInfinity(value.X) ||
@@ -461,17 +453,26 @@ namespace Client.Main.Graphics
             }
         }
 
-        private void ApplyToEffect(Effect effect, int capacity, long selectionToken)
+        private void ApplyToEffect(Effect effect, long selectionToken, int activeLightCount)
         {
-            if (effect == null || capacity <= 0)
+            if (effect == null)
                 return;
 
             EffectBindings bindings = GetBindings(effect);
             if (selectionToken != long.MinValue && bindings.LastSelectionToken == selectionToken)
                 return;
 
-            bindings.LightPosInvRadius?.SetValue(_lightPosInvRadius);
-            bindings.LightColorIntensity?.SetValue(_lightColorIntensity);
+            int safeCount = Math.Max(0, activeLightCount);
+            bindings.ActiveLightCount?.SetValue(safeCount);
+
+            // The shader reads only [0, ActiveLightCount). Do not clear or re-upload the
+            // unused tail of the fixed-size arrays; zero-light draws need only one integer.
+            if (safeCount > 0)
+            {
+                bindings.LightPosInvRadius?.SetValue(_lightPosInvRadius);
+                bindings.LightColorIntensity?.SetValue(_lightColorIntensity);
+            }
+
             bindings.LastSelectionToken = selectionToken;
         }
     }

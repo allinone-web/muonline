@@ -187,6 +187,8 @@ namespace Client.Main.Objects
 
         private static Effect _cachedWalkerCrowdMultiPoseEffect;
         private static EffectTechnique _cachedWalkerCrowdMultiPoseTechnique;
+        private static EffectTechnique _cachedWalkerCrowdMultiPoseVertexLitTechnique;
+        private static EffectTechnique _cachedWalkerCrowdMultiPoseSunOnlyTechnique;
         private static readonly ConditionalWeakTable<Matrix[], PackedImmutableCrowdPose>
             _packedImmutableCrowdPoses = new();
         private static readonly WalkerCrowdPaletteTextureSlot[] _walkerCrowdPaletteTextureRing =
@@ -328,10 +330,19 @@ namespace Client.Main.Objects
                 _cachedWalkerCrowdMultiPoseTechnique = TryGetTechnique(
                     effect,
                     "DynamicLighting_SkinnedMultiPoseInstanced");
+                _cachedWalkerCrowdMultiPoseVertexLitTechnique = TryGetTechnique(
+                    effect,
+                    "DynamicLighting_SkinnedMultiPoseInstanced_VertexLit");
+                _cachedWalkerCrowdMultiPoseSunOnlyTechnique = TryGetTechnique(
+                    effect,
+                    "DynamicLighting_SkinnedMultiPoseInstanced_SunOnly");
             }
 
             ModelEffectBindings bindings = GetModelEffectBindings(effect);
-            return _cachedWalkerCrowdMultiPoseTechnique != null &&
+            EffectTechnique selectedTechnique = Constants.ENABLE_CROWD_VERTEX_LIGHTING
+                ? _cachedWalkerCrowdMultiPoseVertexLitTechnique ?? _cachedWalkerCrowdMultiPoseTechnique
+                : _cachedWalkerCrowdMultiPoseTechnique;
+            return selectedTechnique != null &&
                    bindings?.CrowdBonePaletteTexture != null &&
                    bindings.CrowdBonePaletteRowCount != null;
         }
@@ -541,8 +552,10 @@ namespace Client.Main.Objects
             GraphicsDevice gd = graphicsManager.GraphicsDevice;
             ModelEffectBindings bindings = GetModelEffectBindings(effect);
 
-            if (effect == null || gd == null || bindings == null ||
-                _cachedWalkerCrowdMultiPoseTechnique == null)
+            EffectTechnique crowdTechnique = Constants.ENABLE_CROWD_VERTEX_LIGHTING
+                ? _cachedWalkerCrowdMultiPoseVertexLitTechnique ?? _cachedWalkerCrowdMultiPoseTechnique
+                : _cachedWalkerCrowdMultiPoseTechnique;
+            if (effect == null || gd == null || bindings == null || crowdTechnique == null)
             {
                 ClearWalkerCrowdMultiPoseQueues();
                 return;
@@ -559,7 +572,11 @@ namespace Client.Main.Objects
                 if (poseCount <= 0 || !UploadWalkerCrowdBonePalette(gd, poseCount))
                     throw new InvalidOperationException("Unable to upload the multi-pose crowd bone palette.");
 
-                PrepareStaticMapInstancingEffect(effect, world, _cachedWalkerCrowdMultiPoseTechnique);
+                PrepareStaticMapInstancingEffect(
+                    effect,
+                    world,
+                    crowdTechnique,
+                    _cachedWalkerCrowdMultiPoseSunOnlyTechnique);
                 bindings.CrowdBonePaletteTexture.SetValue(_walkerCrowdActiveBonePaletteTexture);
                 bindings.CrowdBonePaletteRowCount.SetValue((float)poseCount);
 

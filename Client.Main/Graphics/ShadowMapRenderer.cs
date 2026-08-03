@@ -37,6 +37,7 @@ namespace Client.Main.Graphics
         private ulong _currentCasterSignature;
         private ulong _renderedCasterSignature = ulong.MaxValue;
         private bool _casterSelectionValid;
+        private long _shadowParameterVersion = 1;
 
 
         private sealed class ShadowEffectBindings
@@ -63,6 +64,8 @@ namespace Client.Main.Graphics
             public EffectParameter SunDirection { get; }
             public EffectParameter ShadowsEnabled { get; }
             public EffectParameter ShadowMap { get; }
+            public long LastAppliedVersion = long.MinValue;
+            public bool LastAppliedEnabled;
 
             private static EffectTechnique FindTechnique(Effect effect, string name)
             {
@@ -154,6 +157,7 @@ namespace Client.Main.Graphics
                     0,
                     RenderTargetUsage.DiscardContents);
             }
+            unchecked { _shadowParameterVersion++; }
             _renderedCasters.Clear();
             _forceRender = true; // make sure the new target is populated before reuse
         }
@@ -477,13 +481,20 @@ namespace Client.Main.Graphics
             return hash * prime;
         }
 
-        public void ApplyShadowParameters(Effect effect)
+        public void ApplyShadowParameters(Effect effect, bool force = false)
         {
             if (effect == null)
                 return;
 
             bool enabled = IsReady && _shadowMap != null && _shadowCasterSupported;
             ShadowEffectBindings bindings = _effectBindings.GetValue(effect, static value => new ShadowEffectBindings(value));
+            if (!force &&
+                bindings.LastAppliedVersion == _shadowParameterVersion &&
+                bindings.LastAppliedEnabled == enabled)
+            {
+                return;
+            }
+
             bindings.ShadowsEnabled?.SetValue(enabled ? 1.0f : 0.0f);
             bindings.ShadowMap?.SetValue(enabled ? _shadowMap : null);
             bindings.LightViewProjection?.SetValue(LightViewProjection);
@@ -494,6 +505,8 @@ namespace Client.Main.Graphics
             bindings.ShadowNormalBias?.SetValue(Constants.SHADOW_NORMAL_BIAS);
             // Shader expects SunDirection as light->world; it internally negates it to get the vector toward the light.
             bindings.SunDirection?.SetValue(LightDirection);
+            bindings.LastAppliedVersion = _shadowParameterVersion;
+            bindings.LastAppliedEnabled = enabled;
         }
 
         private float ComputeShadowDistance(Camera camera)
@@ -579,6 +592,7 @@ namespace Client.Main.Graphics
             LightView = Matrix.CreateLookAt(lightPos, snappedFocus, up);
             LightProjection = Matrix.CreateOrthographic(orthoSize, orthoSize, nearPlane, farPlane);
             LightViewProjection = LightView * LightProjection;
+            unchecked { _shadowParameterVersion++; }
 
             _lastShadowDistance = shadowDistance;
         }
