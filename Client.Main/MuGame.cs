@@ -13,6 +13,7 @@ using Client.Main.Objects;
 using Client.Main.Scenes;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
@@ -483,29 +484,40 @@ namespace Client.Main
         {
             (string configDirectory, string configFileName) = ResolveSettingsFileLocation();
             ConfigDirectory = configDirectory;
-            AppConfiguration = new ConfigurationBuilder()
+            var configurationBuilder = new ConfigurationBuilder()
                 .SetBasePath(ConfigDirectory)
+#if PERFORMANCE_RELEASE
+                .AddJsonFile(configFileName, optional: false, reloadOnChange: false)
+                .AddJsonFile(LocalSettingsFileName, optional: true, reloadOnChange: false)
+                .AddJsonFile("appsettings.performance.json", optional: true, reloadOnChange: false);
+#else
                 .AddJsonFile(configFileName, optional: false, reloadOnChange: true)
-                .AddJsonFile(LocalSettingsFileName, optional: true, reloadOnChange: true)
-                .Build();
+                .AddJsonFile(LocalSettingsFileName, optional: true, reloadOnChange: true);
+#endif
+            AppConfiguration = configurationBuilder.Build();
 
             // --- Logging Setup ---
+#if PERFORMANCE_RELEASE
+            // The maximum-performance build intentionally removes providers and configuration
+            // reload watchers. Error handling remains active, but disabled log calls terminate at
+            // the singleton null logger without console/file I/O or provider fan-out.
+            AppLoggerFactory = NullLoggerFactory.Instance;
+#else
             AppLoggerFactory = LoggerFactory.Create(builder =>
             {
                 builder.ClearProviders();
-                // Configure logging based on appsettings.json
                 builder.AddConfiguration(AppConfiguration.GetSection("Logging"));
 
                 bool enableSimpleConsole = AppConfiguration.GetValue("Logging:SimpleConsole:Enabled", false);
                 if (enableSimpleConsole)
                 {
-                    // Console logging is intentionally opt-in to avoid runtime I/O overhead in gameplay hot paths.
                     builder.AddSimpleConsole(options =>
                     {
                         AppConfiguration.GetSection("Logging:SimpleConsole").Bind(options);
                     });
                 }
             });
+#endif
 
             _logger = AppLoggerFactory.CreateLogger<MuGame>();
             _mainThreadDispatcher.SetLogger(_logger);
@@ -535,6 +547,9 @@ namespace Client.Main
             _taskScheduler = new Controllers.TaskScheduler(AppLoggerFactory, _mainThreadDispatcher);
             bootLogger.LogInformation("✅ TaskScheduler initialized.");
 
+#if PERFORMANCE_RELEASE
+            _telemetryPublisher = null;
+#else
             var diagnosticsOptions = AppConfiguration.GetSection("Diagnostics").Get<TelemetryPublisherOptions>()
                 ?? new TelemetryPublisherOptions();
             if (OperatingSystem.IsAndroid() || OperatingSystem.IsIOS())
@@ -553,6 +568,7 @@ namespace Client.Main
                 _telemetryPublisher = null;
                 bootLogger.LogInformation("Diagnostics telemetry is disabled.");
             }
+#endif
 
             IsMouseVisible = false; // Keep this if you want a custom cursor
 
@@ -633,8 +649,12 @@ namespace Client.Main
 
         protected override void Update(GameTime gameTime)
         {
+#if PERFORMANCE_RELEASE
+            _detailedPassProfilingThisFrame = false;
+#else
             _frameProfiler.BeginUpdate(FrameIndex + 1L);
             _detailedPassProfilingThisFrame = ShouldCollectDetailedPassTimings();
+#endif
             UpdatePassProfiler.BeginFrame(_detailedPassProfilingThisFrame);
 
             long dispatcherStarted = UpdatePassProfiler.Start();
@@ -700,14 +720,21 @@ namespace Client.Main
             }
             finally
             {
+#if PERFORMANCE_RELEASE
+                UpdatePassProfiler.EndFrame(0d);
+#else
                 _frameProfiler.EndUpdate();
                 UpdatePassProfiler.EndFrame(_frameProfiler.Current.UpdateMs);
+#endif
             }
         }
 
 
         private bool ShouldCollectDetailedPassTimings()
         {
+#if PERFORMANCE_RELEASE
+            return false;
+#else
             if (ActiveScene?.DebugPanel?.Visible == true)
                 return true;
 
@@ -718,6 +745,7 @@ namespace Client.Main
                 return true;
 
             return FrameIndex % PassiveDetailedProfileIntervalFrames == 0;
+#endif
         }
 
         private void ProcessMainThreadActions()
@@ -772,8 +800,10 @@ namespace Client.Main
 
         protected override void Draw(GameTime gameTime)
         {
+#if !PERFORMANCE_RELEASE
             bool publishTelemetry = _telemetryPublisher?.TryBeginSnapshot() == true;
             _frameProfiler.BeginDraw();
+#endif
 
             // Section profilers are sampled during normal gameplay and become continuous
             // whenever diagnostics are visible/connected or the previous frame was slow.
@@ -856,11 +886,13 @@ namespace Client.Main
                 }
 
                 _currentDrawPhase = "Idle";
+#if !PERFORMANCE_RELEASE
                 _frameProfiler.EndDraw();
                 PublishSlowCpuFrameEvent();
                 PublishHighAllocationFrameEvent();
                 if (publishTelemetry)
                     _telemetryPublisher?.PublishSnapshot(this);
+#endif
             }
         }
 

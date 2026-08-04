@@ -16,13 +16,13 @@
 #begin AlphaRGB.fx
 /importer:EffectImporter
 /processor:EffectProcessor
-/processorParam:DebugMode=Auto
+/processorParam:DebugMode=Optimize
 /build:AlphaRGB.fx
 
 #begin GammaCorrection.fx
 /importer:EffectImporter
 /processor:EffectProcessor
-/processorParam:DebugMode=Auto
+/processorParam:DebugMode=Optimize
 /build:GammaCorrection.fx
 
 #begin Arial.spritefont
@@ -47,13 +47,13 @@
 #begin FXAA.fx
 /importer:EffectImporter
 /processor:EffectProcessor
-/processorParam:DebugMode=Auto
+/processorParam:DebugMode=Optimize
 /build:FXAA.fx
 
 #begin Shadow.fx
 /importer:EffectImporter
 /processor:EffectProcessor
-/processorParam:DebugMode=Auto
+/processorParam:DebugMode=Optimize
 /build:Shadow.fx
 
 #begin Background.png
@@ -74,17 +74,17 @@
 #begin ItemMaterial.fx
 /importer:EffectImporter
 /processor:EffectProcessor
-/processorParam:DebugMode=Auto
+/processorParam:DebugMode=Optimize
 /build:ItemMaterial.fx
 
 #begin MonsterMaterial.fx
 /importer:EffectImporter
 /processor:EffectProcessor
-/processorParam:DebugMode=Auto
+/processorParam:DebugMode=Optimize
 /build:MonsterMaterial.fx
 
 #begin DynamicLighting.fx
 /importer:EffectImporter
 /processor:EffectProcessor
-/processorParam:DebugMode=Auto
+/processorParam:DebugMode=Optimize
 /build:DynamicLighting.fx

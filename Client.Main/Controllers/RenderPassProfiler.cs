@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 
 namespace Client.Main.Controllers;
 
@@ -37,6 +38,43 @@ public static class RenderPassProfiler
         int PreviewCacheMisses,
         int PreviewBudgetSkips);
 
+#if PERFORMANCE_RELEASE
+    public static bool Enabled => false;
+    public static Snapshot Current => default;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void BeginFrame(bool enabled) { }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static PassToken Start() => default;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddSceneDraw(PassToken token) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddSceneAfter(PassToken token) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddPostProcess(PassToken token) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddFrameworkDraw(PassToken token) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddShadow(PassToken token) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddWorldBase(PassToken token) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddWorldObjects(PassToken token) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddTerrainOpaque(PassToken token) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddTerrainAfter(PassToken token) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void RecordPreviewCacheHit() { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void RecordPreviewCacheMiss() { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void RecordPreviewBudgetSkip() { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddPreviewRender(PassToken token) { }
+#else
     private static double _sceneDrawMs;
     private static double _sceneDrawAllocatedKb;
     private static double _sceneAfterMs;
@@ -137,32 +175,15 @@ public static class RenderPassProfiler
             allocatedKb += allocated / 1024d;
     }
 
-    public static void AddSceneDraw(PassToken token) =>
-        Measure(token, ref _sceneDrawMs, ref _sceneDrawAllocatedKb);
-
-    public static void AddSceneAfter(PassToken token) =>
-        Measure(token, ref _sceneAfterMs, ref _sceneAfterAllocatedKb);
-
-    public static void AddPostProcess(PassToken token) =>
-        Measure(token, ref _postProcessMs, ref _postProcessAllocatedKb);
-
-    public static void AddFrameworkDraw(PassToken token) =>
-        Measure(token, ref _frameworkDrawMs, ref _frameworkDrawAllocatedKb);
-
-    public static void AddShadow(PassToken token) =>
-        Measure(token, ref _shadowMs, ref _shadowAllocatedKb);
-
-    public static void AddWorldBase(PassToken token) =>
-        Measure(token, ref _worldBaseMs, ref _worldBaseAllocatedKb);
-
-    public static void AddWorldObjects(PassToken token) =>
-        Measure(token, ref _worldObjectsMs, ref _worldObjectsAllocatedKb);
-
-    public static void AddTerrainOpaque(PassToken token) =>
-        Measure(token, ref _terrainOpaqueMs, ref _terrainOpaqueAllocatedKb);
-
-    public static void AddTerrainAfter(PassToken token) =>
-        Measure(token, ref _terrainAfterMs, ref _terrainAfterAllocatedKb);
+    public static void AddSceneDraw(PassToken token) => Measure(token, ref _sceneDrawMs, ref _sceneDrawAllocatedKb);
+    public static void AddSceneAfter(PassToken token) => Measure(token, ref _sceneAfterMs, ref _sceneAfterAllocatedKb);
+    public static void AddPostProcess(PassToken token) => Measure(token, ref _postProcessMs, ref _postProcessAllocatedKb);
+    public static void AddFrameworkDraw(PassToken token) => Measure(token, ref _frameworkDrawMs, ref _frameworkDrawAllocatedKb);
+    public static void AddShadow(PassToken token) => Measure(token, ref _shadowMs, ref _shadowAllocatedKb);
+    public static void AddWorldBase(PassToken token) => Measure(token, ref _worldBaseMs, ref _worldBaseAllocatedKb);
+    public static void AddWorldObjects(PassToken token) => Measure(token, ref _worldObjectsMs, ref _worldObjectsAllocatedKb);
+    public static void AddTerrainOpaque(PassToken token) => Measure(token, ref _terrainOpaqueMs, ref _terrainOpaqueAllocatedKb);
+    public static void AddTerrainAfter(PassToken token) => Measure(token, ref _terrainAfterMs, ref _terrainAfterAllocatedKb);
 
     public static void RecordPreviewCacheHit()
     {
@@ -190,4 +211,5 @@ public static class RenderPassProfiler
         Measure(token, ref _previewMs, ref _previewAllocatedKb);
         _previewRenders++;
     }
+#endif
 }

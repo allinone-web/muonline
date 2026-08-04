@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Client.Main.Controllers;
@@ -40,6 +41,64 @@ public static class UpdatePassProfiler
         string SceneExceptionType,
         string SceneExceptionMessage);
 
+#if PERFORMANCE_RELEASE
+    public static Snapshot Current => default;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void BeginFrame(bool enabled = true) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static long Start() => 0L;
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddDispatcher(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddGlobal(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddScene(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddFramework(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddSceneException(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddSceneInput(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddSceneControlTree(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddScenePost(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddWorldBase(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddWorldInitialization(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddWorldVisibility(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddWorldCull(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddWorldHover(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddGameBuffs(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddGameNotifications(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddGameScopePump(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddGameInteraction(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddGamePlayerMenu(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddGameSkillUpdate(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddGameAttackInput(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddGameRightClickSkill(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddGameHotkeys(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void AddGameHousekeeping(long started) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void RecordSceneException(Exception exception, long frameIndex) { }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EndFrame(double measuredUpdateMs) { }
+#else
     private static bool _enabled;
     private static double _dispatcherMs;
     private static double _globalMs;
@@ -184,4 +243,5 @@ public static class UpdatePassProfiler
             ? 0d
             : Stopwatch.GetElapsedTime(started).TotalMilliseconds;
     }
+#endif
 }

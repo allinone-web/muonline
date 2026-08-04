@@ -1,0 +1,38 @@
+<Project>
+  <PropertyGroup>
+    <Deterministic>true</Deterministic>
+    <PerformanceRelease Condition="'$(PerformanceRelease)' == '' AND '$(Configuration)' == 'Release'">true</PerformanceRelease>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <Optimize>true</Optimize>
+    <CheckForOverflowUnderflow>false</CheckForOverflowUnderflow>
+  </PropertyGroup>
+
+  <!--
+    Maximum-runtime-performance profile. It is enabled by default for Release and can be
+    disabled for a diagnostic Release build with -p:PerformanceRelease=false.
+  -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release' AND '$(PerformanceRelease)' == 'true'">
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    <TieredCompilation>true</TieredCompilation>
+    <TieredPGO>true</TieredPGO>
+    <TieredCompilationQuickJit>true</TieredCompilationQuickJit>
+    <TieredCompilationQuickJitForLoops>false</TieredCompilationQuickJitForLoops>
+
+    <!-- A latency-sensitive desktop game benefits from concurrent workstation GC. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <GarbageCollectionAdaptationMode>1</GarbageCollectionAdaptationMode>
+    <RetainVMGarbageCollection>true</RetainVMGarbageCollection>
+
+    <!-- Reflection-driven registries and dynamic world construction make trimming/AOT unsafe. -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishAot>false</PublishAot>
+
+    <DefineConstants>$(DefineConstants);PERFORMANCE_RELEASE</DefineConstants>
+  </PropertyGroup>
+</Project>

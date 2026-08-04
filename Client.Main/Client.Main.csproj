@@ -40,13 +40,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Client.Data\Client.Data.csproj" />
-    <ProjectReference Include="..\Client.Telemetry\Client.Telemetry.csproj" />
+    <ProjectReference Include="..\Client.Data\Client.Data.csproj" AdditionalProperties="PerformanceRelease=$(PerformanceRelease)" />
+    <ProjectReference Include="..\Client.Telemetry\Client.Telemetry.csproj" AdditionalProperties="PerformanceRelease=$(PerformanceRelease)" />
   </ItemGroup>
 
   <ItemGroup>
     <None Update="appsettings.json">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>
   </ItemGroup>
 </Project>

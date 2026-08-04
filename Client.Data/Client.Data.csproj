@@ -10,10 +10,6 @@
     <UseSharedCompilation>false</UseSharedCompilation>
   </PropertyGroup>
 
-  <!-- Enable AOT only for platforms that support it (not iOS simulator) -->
-  <PropertyGroup Condition="'$(RuntimeIdentifier)' != 'iossimulator-x64' AND '$(RuntimeIdentifier)' != 'iossimulator-arm64' AND '$(TargetFramework)' != 'net10.0-ios'">
-    <PublishAot>true</PublishAot>
-  </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="BCnEncoder.Net" Version="2.2.1" />

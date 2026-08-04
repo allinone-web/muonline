@@ -254,11 +254,23 @@ Build outputs are placed in `bin/Release/` directories.
 
 #### Windows
 
-```bash
-# DirectX 11 (Recommended for modern hardware)
-dotnet publish ./MuWinDX/MuWinDX.csproj -c Release -r win-x64 -o publish-dx -p:MonoGameFramework=MonoGame.Framework.WindowsDX
+For the maximum-performance DirectX build, use the validated publish script:
 
-# OpenGL (Better hardware compatibility)
+```powershell
+./publish-release-performance.ps1
+```
+
+The script publishes a self-contained `win-x64` folder build with ReadyToRun, tiered compilation, dynamic PGO, optimized shaders, disabled runtime diagnostics, and a SHA-256 manifest. It also validates the generated runtime configuration before creating the archive.
+
+A diagnostic Release build can be produced without the compile-time performance profile:
+
+```powershell
+dotnet publish ./MuWinDX/MuWinDX.csproj -c Release -r win-x64 -p:PerformanceRelease=false
+```
+
+OpenGL remains available as the compatibility backend:
+
+```bash
 dotnet publish ./MuWinGL/MuWinGL.csproj -c Release -r win-x64 -o publish-gl -p:MonoGameFramework=MonoGame.Framework.DesktopGL
 ```
 
