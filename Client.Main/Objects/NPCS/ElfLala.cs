@@ -1,4 +1,4 @@
-﻿using Client.Main.Content;
+using Client.Main.Content;
 using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Controls.UI.Game;
@@ -16,6 +16,8 @@ namespace Client.Main.Objects.NPCS
     [NpcInfo(242, "Elf Lala")]
     public class ElfLala : NPCObject
     {
+        private static readonly DepthStencilState WingDepthReadState = DepthStencilState.DepthRead;
+
         public override async Task Load()
         {
             ExtraHeight = 90f;
@@ -53,18 +55,15 @@ namespace Client.Main.Objects.NPCS
             {
                 var gd = GraphicsDevice;
                 var originalDepth = gd.DepthStencilState;
-                var noWriteDepth = new DepthStencilState
+                gd.DepthStencilState = WingDepthReadState;
+                try
                 {
-                    DepthBufferEnable = true,
-                    DepthBufferWriteEnable = false
-                };
-                gd.DepthStencilState = noWriteDepth;
-
-                // Call base implementation
-                base.DrawMesh(mesh);
-
-                // Restore original state
-                gd.DepthStencilState = originalDepth;
+                    base.DrawMesh(mesh);
+                }
+                finally
+                {
+                    gd.DepthStencilState = originalDepth;
+                }
             }
             else
             {

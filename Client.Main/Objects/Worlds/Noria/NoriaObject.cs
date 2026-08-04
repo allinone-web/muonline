@@ -685,20 +685,13 @@ namespace Client.Main.Objects.Worlds.Noria
                 Matrix.Identity);
             if (projected.Z < 0f || projected.Z > 1f)
                 return;
-
-            Matrix inverseView = Matrix.Invert(Camera.Instance.View);
-            Vector3 viewPosition = Vector3.Transform(position, Camera.Instance.View);
             Vector3 projectedWidth = GraphicsDevice.Viewport.Project(
-                Vector3.Transform(
-                    viewPosition + new Vector3(texture.Width * scale.X, 0f, 0f),
-                    inverseView),
+                position + Camera.Instance.Right * (texture.Width * scale.X),
                 Camera.Instance.Projection,
                 Camera.Instance.View,
                 Matrix.Identity);
             Vector3 projectedHeight = GraphicsDevice.Viewport.Project(
-                Vector3.Transform(
-                    viewPosition + new Vector3(0f, texture.Height * scale.Y, 0f),
-                    inverseView),
+                position + Camera.Instance.Up * (texture.Height * scale.Y),
                 Camera.Instance.Projection,
                 Camera.Instance.View,
                 Matrix.Identity);

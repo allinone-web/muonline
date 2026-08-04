@@ -47,8 +47,8 @@ namespace Client.Main.Objects.Worlds.Icarus
             new short[MaxBolts * (MaxBoltPoints - 1) * 6];
         private readonly VertexPositionColorTexture[] _billboardVertices =
             new VertexPositionColorTexture[Math.Max(MaxCloudFlashes, MaxUnderCloudLights) * 4];
-        private readonly short[] _billboardIndices =
-            new short[Math.Max(MaxCloudFlashes, MaxUnderCloudLights) * 6];
+        private static readonly short[] BillboardIndices =
+            QuadIndexCache.Get(Math.Max(MaxCloudFlashes, MaxUnderCloudLights));
 
         private readonly DynamicLight _globalFlashLight;
         private BasicEffect _effect;
@@ -73,8 +73,6 @@ namespace Client.Main.Objects.Worlds.Icarus
 
             for (int i = 0; i < _bolts.Length; i++)
                 _bolts[i] = new LightningBolt();
-
-            BuildStaticIndices(_billboardIndices, Math.Max(MaxCloudFlashes, MaxUnderCloudLights));
 
             _flashCloud = new IcarusFlashCloudObject();
             Children.Add(_flashCloud);
@@ -489,9 +487,8 @@ namespace Client.Main.Objects.Worlds.Icarus
                 return;
 
             int quadCount = 0;
-            Matrix inverseView = Matrix.Invert(Camera.Instance.View);
-            Vector3 cameraRight = inverseView.Right;
-            Vector3 cameraUp = inverseView.Up;
+            Vector3 cameraRight = Camera.Instance.Right;
+            Vector3 cameraUp = Camera.Instance.Up;
 
             for (int i = 0; i < _cloudFlashes.Length; i++)
             {
@@ -518,9 +515,8 @@ namespace Client.Main.Objects.Worlds.Icarus
                 return;
 
             int quadCount = 0;
-            Matrix inverseView = Matrix.Invert(Camera.Instance.View);
-            Vector3 cameraRight = inverseView.Right;
-            Vector3 cameraUp = inverseView.Up;
+            Vector3 cameraRight = Camera.Instance.Right;
+            Vector3 cameraUp = Camera.Instance.Up;
 
             for (int i = 0; i < _underCloudLights.Length; i++)
             {
@@ -552,18 +548,15 @@ namespace Client.Main.Objects.Worlds.Icarus
                 return;
 
             _effect.Texture = texture;
-            foreach (EffectPass pass in _effect.CurrentTechnique.Passes)
-            {
-                pass.Apply();
-                GraphicsDevice.DrawUserIndexedPrimitives(
-                    PrimitiveType.TriangleList,
-                    _billboardVertices,
-                    0,
-                    quadCount * 4,
-                    _billboardIndices,
-                    0,
-                    quadCount * 2);
-            }
+            _effect.CurrentTechnique.Passes[0].Apply();
+            GraphicsDevice.DrawUserIndexedPrimitives(
+                PrimitiveType.TriangleList,
+                _billboardVertices,
+                0,
+                quadCount * 4,
+                BillboardIndices,
+                0,
+                quadCount * 2);
         }
 
         private void DrawLightningBolts()
@@ -588,18 +581,15 @@ namespace Client.Main.Objects.Worlds.Icarus
                 return;
 
             _effect.Texture = _jointThunderTexture;
-            foreach (EffectPass pass in _effect.CurrentTechnique.Passes)
-            {
-                pass.Apply();
-                GraphicsDevice.DrawUserIndexedPrimitives(
-                    PrimitiveType.TriangleList,
-                    _boltVertices,
-                    0,
-                    vertexCount,
-                    _boltIndices,
-                    0,
-                    indexCount / 3);
-            }
+            _effect.CurrentTechnique.Passes[0].Apply();
+            GraphicsDevice.DrawUserIndexedPrimitives(
+                PrimitiveType.TriangleList,
+                _boltVertices,
+                0,
+                vertexCount,
+                _boltIndices,
+                0,
+                indexCount / 3);
         }
 
         private void AppendBoltGeometry(LightningBolt bolt, ref int vertexCount, ref int indexCount)
@@ -622,7 +612,7 @@ namespace Client.Main.Objects.Worlds.Icarus
                 Vector3 viewDirection = cameraPosition - current;
                 Vector3 side = Vector3.Cross(tangent, viewDirection);
                 if (side.LengthSquared() < 0.0001f)
-                    side = Matrix.Invert(Camera.Instance.View).Right;
+                    side = Camera.Instance.Right;
                 else
                     side.Normalize();
 
@@ -673,21 +663,6 @@ namespace Client.Main.Objects.Worlds.Icarus
                 center + right + up, color, new Vector2(1f, 0f));
             _billboardVertices[vertex + 3] = new VertexPositionColorTexture(
                 center - right + up, color, new Vector2(0f, 0f));
-        }
-
-        private static void BuildStaticIndices(short[] indices, int quadCapacity)
-        {
-            for (int i = 0; i < quadCapacity; i++)
-            {
-                int vertex = i * 4;
-                int index = i * 6;
-                indices[index] = checked((short)vertex);
-                indices[index + 1] = checked((short)(vertex + 1));
-                indices[index + 2] = checked((short)(vertex + 2));
-                indices[index + 3] = checked((short)vertex);
-                indices[index + 4] = checked((short)(vertex + 2));
-                indices[index + 5] = checked((short)(vertex + 3));
-            }
         }
 
         private static Vector3 RotateAroundZ(Vector3 value, float degrees)

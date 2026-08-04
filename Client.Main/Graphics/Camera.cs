@@ -1,4 +1,4 @@
-﻿using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework;
 using System;
 using System.Diagnostics;
 using System.Threading;
@@ -112,6 +112,9 @@ namespace Client.Main.Graphics
         }
 
         public Matrix View { get; private set; }
+        /// <summary>World-space camera basis shared by billboard and camera-facing effects.</summary>
+        public Vector3 Right { get; private set; } = Vector3.UnitX;
+        public Vector3 Up { get; private set; } = Vector3.UnitZ;
         public Matrix Projection { get; private set; }
         /// <summary>Cached render View * Projection matrix. Updated only when either source matrix changes.</summary>
         public Matrix ViewProjection { get; private set; }
@@ -223,7 +226,7 @@ namespace Client.Main.Graphics
         {
             Vector3 basePosition = _position;
             Vector3 baseTarget = _target;
-            Matrix stableView = CreateViewMatrix(basePosition, baseTarget);
+            Matrix stableView = CreateViewMatrix(basePosition, baseTarget, out Vector3 cameraRight, out Vector3 cameraUp);
 
             Vector3 renderPosition = basePosition;
             Vector3 renderTarget = baseTarget;
@@ -242,7 +245,9 @@ namespace Client.Main.Graphics
 
             View = renderPosition == basePosition
                 ? stableView
-                : CreateViewMatrix(renderPosition, renderTarget);
+                : CreateViewMatrix(renderPosition, renderTarget, out cameraRight, out cameraUp);
+            Right = cameraRight;
+            Up = cameraUp;
             ViewProjection = View * Projection;
 
             if (updateCulling)
@@ -256,7 +261,11 @@ namespace Client.Main.Graphics
             unchecked { StateVersion++; }
         }
 
-        private static Matrix CreateViewMatrix(Vector3 position, Vector3 target)
+        private static Matrix CreateViewMatrix(
+            Vector3 position,
+            Vector3 target,
+            out Vector3 right,
+            out Vector3 up)
         {
             Vector3 direction = target - position;
             if (direction.LengthSquared() < 1e-8f)
@@ -264,13 +273,13 @@ namespace Client.Main.Graphics
             else
                 direction.Normalize();
 
-            Vector3 right = Vector3.Cross(direction, Vector3.UnitZ);
+            right = Vector3.Cross(direction, Vector3.UnitZ);
             if (right.LengthSquared() < 1e-8f)
                 right = Vector3.UnitX;
             else
                 right.Normalize();
 
-            Vector3 up = Vector3.Cross(right, direction);
+            up = Vector3.Cross(right, direction);
             return Matrix.CreateLookAt(position, target, up);
         }
 

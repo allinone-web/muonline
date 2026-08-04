@@ -49,9 +49,9 @@ namespace Client.Main.Graphics
         private const int MaxSelectionCacheEntries = 2048;
         private const int SelectionCacheMaxIdleFrames = 180;
         private static readonly Dictionary<SelectionCacheKey, SelectionCacheEntry> _selectionCache = new(512);
-        private static readonly object _selectionCacheLock = new();
         private static int _selectionCacheListId;
         private static int _selectionCacheVersion;
+        private static readonly List<SelectionCacheKey> _staleSelectionKeys = new(64);
         private sealed class EffectBindings
         {
             public EffectBindings(Effect effect)
@@ -120,7 +120,10 @@ namespace Client.Main.Graphics
             int selectedCount;
             long selectionToken = long.MinValue;
 
-            if (lightsVersion > 0 && cacheCellSize > 0f && float.IsFinite(cacheCellSize))
+            // GPU effect updates are submitted from the game/render thread. Keep the shared
+            // spatial selection cache single-threaded and bypass it for any unexpected worker
+            // call instead of paying a monitor enter for every rendered model.
+            if (MuGame.IsMainThread && lightsVersion > 0 && cacheCellSize > 0f && float.IsFinite(cacheCellSize))
             {
                 SelectionCacheEntry cached = GetOrCreateCachedSelection(
                     lights,
@@ -188,14 +191,11 @@ namespace Client.Main.Graphics
             var key = new SelectionCacheKey(listId, lightsVersion, cellX, cellY, radiusBucket);
             int frame = MuGame.FrameIndex;
 
-            lock (_selectionCacheLock)
+            EnsureSelectionCacheGeneration(listId, lightsVersion);
+            if (_selectionCache.TryGetValue(key, out var cached))
             {
-                EnsureSelectionCacheGenerationNoLock(listId, lightsVersion);
-                if (_selectionCache.TryGetValue(key, out var cached))
-                {
-                    cached.LastFrame = frame;
-                    return cached;
-                }
+                cached.LastFrame = frame;
+                return cached;
             }
 
             float expandedRadius = radiusBucket * safeCellSize;
@@ -230,20 +230,10 @@ namespace Client.Main.Graphics
                 LastFrame = frame
             };
 
-            lock (_selectionCacheLock)
-            {
-                EnsureSelectionCacheGenerationNoLock(listId, lightsVersion);
-                if (_selectionCache.TryGetValue(key, out var raced))
-                {
-                    raced.LastFrame = frame;
-                    ArrayPool<int>.Shared.Return(candidates, clearArray: false);
-                    return raced;
-                }
-
-                _selectionCache[key] = created;
-                PruneSelectionCacheNoLock(frame);
-                return created;
-            }
+            // No second lookup is needed: only the main/render thread can enter the cache.
+            _selectionCache[key] = created;
+            PruneSelectionCache(frame);
+            return created;
         }
 
         private static long CalculateSelectionToken(
@@ -270,7 +260,7 @@ namespace Client.Main.Graphics
             }
         }
 
-        private static void EnsureSelectionCacheGenerationNoLock(int listId, int version)
+        private static void EnsureSelectionCacheGeneration(int listId, int version)
         {
             if (_selectionCacheListId == listId && _selectionCacheVersion == version)
                 return;
@@ -283,25 +273,25 @@ namespace Client.Main.Graphics
             _selectionCacheVersion = version;
         }
 
-        private static void PruneSelectionCacheNoLock(int frame)
+        private static void PruneSelectionCache(int frame)
         {
             if (_selectionCache.Count <= MaxSelectionCacheEntries && frame % 120 != 0)
                 return;
 
-            var stale = new List<SelectionCacheKey>(64);
+            _staleSelectionKeys.Clear();
             foreach (var pair in _selectionCache)
             {
-                if (_selectionCache.Count - stale.Count <= MaxSelectionCacheEntries &&
+                if (_selectionCache.Count - _staleSelectionKeys.Count <= MaxSelectionCacheEntries &&
                     frame - pair.Value.LastFrame <= SelectionCacheMaxIdleFrames)
                 {
                     continue;
                 }
-                stale.Add(pair.Key);
+                _staleSelectionKeys.Add(pair.Key);
             }
 
-            for (int i = 0; i < stale.Count; i++)
+            for (int i = 0; i < _staleSelectionKeys.Count; i++)
             {
-                SelectionCacheKey key = stale[i];
+                SelectionCacheKey key = _staleSelectionKeys[i];
                 if (_selectionCache.Remove(key, out var removed))
                     ArrayPool<int>.Shared.Return(removed.CandidateIndices, clearArray: false);
             }

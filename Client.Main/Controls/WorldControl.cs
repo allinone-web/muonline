@@ -58,6 +58,30 @@ namespace Client.Main.Controls
         }
     }
 
+    sealed class SourceParticleBatchComparer : IComparer<SourceParticleSystem>
+    {
+        public static readonly SourceParticleBatchComparer Instance = new();
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public int Compare(SourceParticleSystem a, SourceParticleSystem b)
+        {
+            if (ReferenceEquals(a, b)) return 0;
+            if (a is null) return -1;
+            if (b is null) return 1;
+
+            int comparison = a.ParticleBatchBlendKey.CompareTo(b.ParticleBatchBlendKey);
+            if (comparison != 0) return comparison;
+
+            comparison = a.ParticleBatchTextureKey.CompareTo(b.ParticleBatchTextureKey);
+            if (comparison != 0) return comparison;
+
+            comparison = a.NetworkId.CompareTo(b.NetworkId);
+            return comparison != 0
+                ? comparison
+                : RuntimeHelpers.GetHashCode(a).CompareTo(RuntimeHelpers.GetHashCode(b));
+        }
+    }
+
     sealed class WorldObjectOpaqueBatchComparer : IComparer<WorldObject>
     {
         public static readonly WorldObjectOpaqueBatchComparer Instance = new();
@@ -145,6 +169,7 @@ namespace Client.Main.Controls
 
         private readonly List<WorldObject> _solidBehind = [];
         private readonly List<WorldObject> _transparentObjects = [];
+        private readonly List<SourceParticleSystem> _dedicatedParticleSystems = [];
         private readonly List<ModelObject> _dedicatedStaticMapObjects = [];
         private readonly List<ModelObject> _queuedDedicatedStaticMapObjects = [];
         private readonly List<ModelObject> _queuedCrowdSidePasses = [];
@@ -865,9 +890,8 @@ namespace Client.Main.Controls
             return !hasNoMove;
         }
 
-        private void OnObjectAdded(object sender, ChildrenEventArgs<WorldObject> e)
+        private void OnObjectAdded(WorldObject worldObject)
         {
-            WorldObject worldObject = e.Control;
 
             // NPC roots are world-local. A stale asynchronous spawn or a retained scene
             // reference must never attach an NPC created for another WorldControl instance
@@ -899,11 +923,11 @@ namespace Client.Main.Controls
 
             worldObject.World = this;
             worldObject.HiddenChanged += Object_HiddenChanged;
-            e.Control.PositionChanged += Object_PositionChanged;
-            e.Control.StatusChanged += Object_StatusChanged;
+            worldObject.PositionChanged += Object_PositionChanged;
+            worldObject.StatusChanged += Object_StatusChanged;
 
-            TrackObjectType(e.Control);
-            if (e.Control is WalkerObject walker &&
+            TrackObjectType(worldObject);
+            if (worldObject is WalkerObject walker &&
                 walker.NetworkId != 0 &&
                 walker.NetworkId != 0xFFFF)
             {
@@ -924,11 +948,11 @@ namespace Client.Main.Controls
                 WalkerObjectsById[walker.NetworkId] = walker; // Always update/add
             }
 
-            RegisterSpatialObject(e.Control);
-            _positionDirtyObjects.Add(e.Control);
+            RegisterSpatialObject(worldObject);
+            _positionDirtyObjects.Add(worldObject);
             MarkWorldGeometryChanged();
-            if (e.Control.Status == GameControlStatus.NonInitialized)
-                EnqueueObjectInitialization(e.Control);
+            if (worldObject.Status == GameControlStatus.NonInitialized)
+                EnqueueObjectInitialization(worldObject);
         }
 
         private void Object_HiddenChanged(object sender, EventArgs e)
@@ -945,10 +969,10 @@ namespace Client.Main.Controls
             MarkWorldGeometryChanged();
         }
 
-        private void OnObjectRemoved(object sender, ChildrenEventArgs<WorldObject> e)
+        private void OnObjectRemoved(WorldObject worldObject)
         {
-            UntrackObjectType(e.Control);
-            if (e.Control is WalkerObject walker &&
+            UntrackObjectType(worldObject);
+            if (worldObject is WalkerObject walker &&
                 walker.NetworkId != 0 &&
                 walker.NetworkId != 0xFFFF)
             {
@@ -967,17 +991,17 @@ namespace Client.Main.Controls
                 }
             }
 
-            e.Control.HiddenChanged -= Object_HiddenChanged;
-            e.Control.PositionChanged -= Object_PositionChanged;
-            e.Control.StatusChanged -= Object_StatusChanged;
+            worldObject.HiddenChanged -= Object_HiddenChanged;
+            worldObject.PositionChanged -= Object_PositionChanged;
+            worldObject.StatusChanged -= Object_StatusChanged;
 
-            RemoveVisibleObject(e.Control);
-            _positionDirtyObjects.Remove(e.Control);
-            _spatialDirtyObjects.Remove(e.Control);
-            _queuedForInitialization.Remove(e.Control);
-            _initializationHiddenStates.TryRemove(e.Control, out _);
-            _renderFaults.Remove(e.Control);
-            UnregisterSpatialObject(e.Control);
+            RemoveVisibleObject(worldObject);
+            _positionDirtyObjects.Remove(worldObject);
+            _spatialDirtyObjects.Remove(worldObject);
+            _queuedForInitialization.Remove(worldObject);
+            _initializationHiddenStates.TryRemove(worldObject, out _);
+            _renderFaults.Remove(worldObject);
+            UnregisterSpatialObject(worldObject);
             MarkWorldGeometryChanged();
         }
 
@@ -1157,6 +1181,7 @@ namespace Client.Main.Controls
             _renderCounter = 0;
             _solidBehind.Clear();
             _transparentObjects.Clear();
+            _dedicatedParticleSystems.Clear();
             _dedicatedStaticMapObjects.Clear();
             _queuedDedicatedStaticMapObjects.Clear();
 
@@ -1168,6 +1193,26 @@ namespace Client.Main.Controls
 
                 if (!obj.Visible || IsExternallyRenderedObject(obj))
                     continue;
+
+                // Non-transparent additive particle systems do not write depth and their
+                // color accumulation is order-independent. Pull them out of depth buckets so
+                // all opaque models can finish first, then submit the particles through a
+                // small number of texture-sorted SpriteBatch groups before transparent meshes.
+                if (obj is SourceParticleSystem sourceParticles)
+                {
+                    if (!sourceParticles.HasActiveParticles)
+                    {
+                        sourceParticles.RenderOrder = ++_renderCounter;
+                        FrameMetrics.InactiveParticleSystemsSkipped++;
+                        continue;
+                    }
+
+                    if (sourceParticles.CanUseDedicatedWorldBatch)
+                    {
+                        _dedicatedParticleSystems.Add(sourceParticles);
+                        continue;
+                    }
+                }
 
                 if (obj is ModelObject staticMapModel &&
                     staticMapModel.CanUseDedicatedStaticMapRenderQueue())
@@ -1195,6 +1240,7 @@ namespace Client.Main.Controls
             FrameMetrics.SolidBehindObjects = _solidBehind.Count;
             FrameMetrics.SolidInFrontObjects = 0;
             FrameMetrics.TransparentObjects = _transparentObjects.Count;
+            FrameMetrics.DedicatedParticleSystems = _dedicatedParticleSystems.Count;
             FrameMetrics.DedicatedStaticMapObjects = _dedicatedStaticMapObjects.Count;
 
             if (_solidBehind.Count > 1)
@@ -1210,6 +1256,7 @@ namespace Client.Main.Controls
 
             DrawDedicatedStaticMapObjects(time);
             DrawListWithSpriteBatchGrouping(_solidBehind, DepthStateDefault, time);
+            DrawDedicatedParticleSystems(time);
             DrawListWithSpriteBatchGrouping(_transparentObjects, DepthStateDepthRead, time);
 
             // Draw post-pass (DrawAfter)
@@ -1248,6 +1295,78 @@ namespace Client.Main.Controls
             }
 
             LogRenderMetricsIfEnabled();
+        }
+
+        private void DrawDedicatedParticleSystems(GameTime time)
+        {
+            int count = _dedicatedParticleSystems.Count;
+            if (count == 0)
+                return;
+
+            if (count > 1)
+                _dedicatedParticleSystems.Sort(SourceParticleBatchComparer.Instance);
+
+            Camera camera = Camera.Instance;
+            GraphicsDevice graphicsDevice = GraphicsManager.Instance.GraphicsDevice;
+            SpriteBatch spriteBatch = GraphicsManager.Instance.Sprite;
+            if (camera == null || graphicsDevice == null || spriteBatch == null)
+                return;
+
+            SourceParticleSystem.RenderContext context =
+                SourceParticleSystem.CreateRenderContext(camera, graphicsDevice.Viewport);
+            SpriteBatchScope? scope = null;
+            BlendState currentBlend = null;
+
+            for (int i = 0; i < count; i++)
+            {
+                SourceParticleSystem particles = _dedicatedParticleSystems[i];
+                if (particles == null || ShouldSkipRender(particles))
+                {
+                    if (particles != null)
+                        particles.RenderOrder = ++_renderCounter;
+                    continue;
+                }
+
+                BlendState blend = particles.ParticleBatchBlendState;
+                if (scope == null || !ReferenceEquals(currentBlend, blend))
+                {
+                    CloseSpriteScopeSafely(ref scope, "Draw.ParticleBatchStateChange");
+                    scope = new SpriteBatchScope(
+                        spriteBatch,
+                        SpriteSortMode.Texture,
+                        blend,
+                        SamplerState.LinearClamp,
+                        DepthStencilState.DepthRead,
+                        RasterizerState.CullNone);
+                    currentBlend = blend;
+                    FrameMetrics.ParticleBatchBegins++;
+                }
+
+                try
+                {
+                    int drawn = particles.DrawIntoActiveBatch(context);
+                    if (drawn < 0)
+                    {
+                        FrameMetrics.ParticleSystemsCulled++;
+                    }
+                    else
+                    {
+                        FrameMetrics.ParticleSprites += drawn;
+                        ClearRenderFault(particles, "Draw.ParticleBatch");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    CloseSpriteScopeSafely(ref scope, "Draw.ParticleBatchRecovery");
+                    currentBlend = null;
+                    RecordRenderFailure(particles, "Draw.ParticleBatch", ex);
+                }
+
+                particles.RenderOrder = ++_renderCounter;
+                FrameMetrics.SpriteBatchObjects++;
+            }
+
+            CloseSpriteScopeSafely(ref scope, "Draw.ParticleBatchEnd");
         }
 
         private void DrawDedicatedStaticMapObjects(GameTime time)
@@ -1329,7 +1448,7 @@ namespace Client.Main.Controls
 
             _lastRenderMetricsLogFrame = frame;
             _logger?.LogInformation(
-                "World perf W:{WorldIndex} Cull:{CullMode} C:{CullCandidates} V:{Visible} Ms:{CullMs:F2} Lists:{Behind}/{Front}/{Transparent} StaticBatch:{StaticBatch} DrawObj S:{SpriteObjects} M:{ModelObjects} UpdateSkip:{StaticUpdateSkips} AfterSkip:{DrawAfterSkips} Anim U:{AnimUpdates} Skip:{AnimSkips} LQ:{LowQuality}",
+                "World perf W:{WorldIndex} Cull:{CullMode} C:{CullCandidates} V:{Visible} Ms:{CullMs:F2} Lists:{Behind}/{Front}/{Transparent} StaticBatch:{StaticBatch} Particles:{ParticleSystems}/{ParticleSprites}/B{ParticleBegins}/C{ParticleCulled}/I{ParticleInactive} DrawObj S:{SpriteObjects} M:{ModelObjects} UpdateSkip:{StaticUpdateSkips} AfterSkip:{DrawAfterSkips} Anim U:{AnimUpdates} Skip:{AnimSkips} LQ:{LowQuality}",
                 WorldIndex,
                 LastCullWasRebuild ? "R" : "I",
                 FrameMetrics.CullCandidates,
@@ -1339,6 +1458,11 @@ namespace Client.Main.Controls
                 FrameMetrics.SolidInFrontObjects,
                 FrameMetrics.TransparentObjects,
                 FrameMetrics.DedicatedStaticMapObjects,
+                FrameMetrics.DedicatedParticleSystems,
+                FrameMetrics.ParticleSprites,
+                FrameMetrics.ParticleBatchBegins,
+                FrameMetrics.ParticleSystemsCulled,
+                FrameMetrics.InactiveParticleSystemsSkipped,
                 FrameMetrics.SpriteBatchObjects,
                 FrameMetrics.ModelObjects,
                 FrameMetrics.StaticMapUpdateSkips,

@@ -157,6 +157,11 @@ public sealed record WorldTelemetry
     public int SpriteObjects { get; init; }
     public int TransparentObjects { get; init; }
     public int DedicatedStaticMapObjects { get; init; }
+    public int DedicatedParticleSystems { get; init; }
+    public int ParticleSprites { get; init; }
+    public int ParticleBatchBegins { get; init; }
+    public int ParticleSystemsCulled { get; init; }
+    public int InactiveParticleSystemsSkipped { get; init; }
     public int StaticMapUpdateSkips { get; init; }
     public int DrawAfterSkips { get; init; }
     public int AnimationUpdates { get; init; }

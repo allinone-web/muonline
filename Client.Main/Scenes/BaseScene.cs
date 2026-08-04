@@ -260,8 +260,10 @@ namespace Client.Main.Scenes
             var prevUiMouse = MuGame.Instance.PrevUiMouseState;
             Point uiMousePosition = uiMouse.Position;
 
-            var topmostUiControl = FindTopmostUiControlAtPoint(uiMousePosition, interactiveOnly: false);
-            var topmostInteractiveForScroll = FindTopmostUiControlAtPoint(uiMousePosition, interactiveOnly: true);
+            FindTopmostUiControlsAtPoint(
+                uiMousePosition,
+                out GameControl topmostUiControl,
+                out GameControl topmostInteractiveForScroll);
 
             MouseHoverControl = topmostUiControl; // general hover (tooltips, visual effects)
             MouseControl = topmostInteractiveForScroll; // target for scroll dispatch
@@ -423,54 +425,58 @@ namespace Client.Main.Scenes
             IsKeyboardEscapeConsumedThisFrame = true;
         }
 
-        private GameControl FindTopmostUiControlAtPoint(Point mousePosition, bool interactiveOnly)
+        private void FindTopmostUiControlsAtPoint(
+            Point mousePosition,
+            out GameControl topmostControl,
+            out GameControl topmostInteractiveControl)
         {
+            topmostControl = null;
+            topmostInteractiveControl = null;
+
             var controls = Controls.GetSnapshotArray();
             for (int i = controls.Length - 1; i >= 0; i--)
             {
-                var hit = FindTopmostUiControlAtPointRecursive(controls[i], mousePosition, interactiveOnly);
-                if (hit != null)
-                {
-                    return hit;
-                }
-            }
+                FindTopmostUiControlsAtPointRecursive(
+                    controls[i],
+                    mousePosition,
+                    ref topmostControl,
+                    ref topmostInteractiveControl);
 
-            return null;
+                if (topmostControl != null && topmostInteractiveControl != null)
+                    return;
+            }
         }
 
-        private GameControl FindTopmostUiControlAtPointRecursive(GameControl control, Point mousePosition, bool interactiveOnly)
+        private void FindTopmostUiControlsAtPointRecursive(
+            GameControl control,
+            Point mousePosition,
+            ref GameControl topmostControl,
+            ref GameControl topmostInteractiveControl)
         {
             if (control == null || !control.Visible || ReferenceEquals(control, World) || ReferenceEquals(control, Cursor))
-            {
-                return null;
-            }
+                return;
 
             var children = control.Controls.GetSnapshotArray();
             for (int i = children.Length - 1; i >= 0; i--)
             {
-                var childHit = FindTopmostUiControlAtPointRecursive(children[i], mousePosition, interactiveOnly);
-                if (childHit != null)
-                {
-                    return childHit;
-                }
+                FindTopmostUiControlsAtPointRecursive(
+                    children[i],
+                    mousePosition,
+                    ref topmostControl,
+                    ref topmostInteractiveControl);
+
+                if (topmostControl != null && topmostInteractiveControl != null)
+                    return;
             }
 
-            if (control is not UIControl)
-            {
-                return null;
-            }
+            if (control is not UIControl || !IsPointInsideControl(control, mousePosition))
+                return;
 
-            if (!IsPointInsideControl(control, mousePosition))
-            {
-                return null;
-            }
+            if (topmostControl == null && ShouldUiControlCapturePointer(control, interactiveOnly: false))
+                topmostControl = control;
 
-            if (ShouldUiControlCapturePointer(control, interactiveOnly))
-            {
-                return control;
-            }
-
-            return null;
+            if (topmostInteractiveControl == null && control.Interactive)
+                topmostInteractiveControl = control;
         }
 
         private static bool IsPointInsideControl(GameControl control, Point point)

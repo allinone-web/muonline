@@ -82,6 +82,7 @@ namespace Client.Main
         public static bool ENABLE_CROWD_VERTEX_LIGHTING;
         public static float DYNAMIC_LIGHT_VERTEX_DISTANCE;
         public static bool ENABLE_FAST_MATERIAL_SHADERS;
+        public static bool ENABLE_PARTICLE_BATCHING;
         public static bool ENABLE_WALKER_CROWD_INSTANCING;
         public static bool ENABLE_CROWD_SPATIAL_CULLING;
         public static bool ENABLE_ANIMATION_THROTTLING;
@@ -258,6 +259,7 @@ namespace Client.Main
             ENABLE_CROWD_VERTEX_LIGHTING = true;
             DYNAMIC_LIGHT_VERTEX_DISTANCE = 1600f;
             ENABLE_FAST_MATERIAL_SHADERS = true;
+            ENABLE_PARTICLE_BATCHING = true;
             ENABLE_WALKER_CROWD_INSTANCING = true;
             ENABLE_CROWD_SPATIAL_CULLING = true;
             ENABLE_ANIMATION_THROTTLING = true;

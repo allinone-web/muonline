@@ -150,7 +150,7 @@ namespace Client.Main.Objects.Worlds.Icarus
         private Texture2D _cloudLightTexture;
         private Vector3 _wind = new Vector3(16.0f, 8.0f, 0);
         private VertexPositionColorTexture[] _vertices;
-        private short[] _indices;
+        private short[] _indices = Array.Empty<short>();
         private BasicEffect _effect;
         private bool _initialized = false;
 
@@ -198,21 +198,7 @@ namespace Client.Main.Objects.Worlds.Icarus
 
             // Initialize particle rendering
             _vertices = new VertexPositionColorTexture[_maxParticles * 4];
-            _indices = new short[_maxParticles * 6];
-
-            // Setup indices for quads
-            for (int i = 0; i < _maxParticles; i++)
-            {
-                int vertexIndex = i * 4;
-                int indexIndex = i * 6;
-
-                _indices[indexIndex] = (short)vertexIndex;
-                _indices[indexIndex + 1] = (short)(vertexIndex + 1);
-                _indices[indexIndex + 2] = (short)(vertexIndex + 2);
-                _indices[indexIndex + 3] = (short)vertexIndex;
-                _indices[indexIndex + 4] = (short)(vertexIndex + 2);
-                _indices[indexIndex + 5] = (short)(vertexIndex + 3);
-            }
+            _indices = QuadIndexCache.Get(_maxParticles);
 
             // Create effect for particle rendering
             _effect = new BasicEffect(MuGame.Instance.GraphicsDevice)
@@ -481,20 +467,16 @@ namespace Client.Main.Objects.Worlds.Icarus
 
             if (particleCount > 0)
             {
-                // Draw particles
-                foreach (var pass in _effect.CurrentTechnique.Passes)
-                {
-                    pass.Apply();
-                    graphicsDevice.DrawUserIndexedPrimitives(
-                        PrimitiveType.TriangleList,
-                        _vertices,
-                        0,
-                        particleCount * 4,
-                        _indices,
-                        0,
-                        particleCount * 2
-                    );
-                }
+                // BasicEffect has one pass. Submit the full cloud layer directly.
+                _effect.CurrentTechnique.Passes[0].Apply();
+                graphicsDevice.DrawUserIndexedPrimitives(
+                    PrimitiveType.TriangleList,
+                    _vertices,
+                    0,
+                    particleCount * 4,
+                    _indices,
+                    0,
+                    particleCount * 2);
             }
 
             // Restore render state

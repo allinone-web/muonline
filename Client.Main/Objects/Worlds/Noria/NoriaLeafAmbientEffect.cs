@@ -112,19 +112,7 @@ namespace Client.Main.Objects.Worlds.Noria
             _texture = TextureLoader.Instance.GetTexture2D(_texturePath) ?? GraphicsManager.Instance.Pixel;
 
             _vertices = new VertexPositionColorTexture[_maxParticles * 4];
-            _indices = new short[_maxParticles * 6];
-
-            for (int i = 0; i < _maxParticles; i++)
-            {
-                int v = i * 4;
-                int idx = i * 6;
-                _indices[idx] = (short)v;
-                _indices[idx + 1] = (short)(v + 1);
-                _indices[idx + 2] = (short)(v + 2);
-                _indices[idx + 3] = (short)v;
-                _indices[idx + 4] = (short)(v + 2);
-                _indices[idx + 5] = (short)(v + 3);
-            }
+            _indices = QuadIndexCache.Get(_maxParticles);
 
             await base.LoadContent();
         }

@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Runtime.CompilerServices;
 using Client.Main.Controllers;
 using Client.Main.Graphics;
 using Client.Main.Helpers;
@@ -11,8 +12,83 @@ namespace Client.Main.Objects.Effects.Particles
 {
     public abstract class SourceParticleSystem : EffectObject
     {
-        private Matrix _viewProjection;
-        private Vector3 _cameraPosition;
+        private const float ActiveBoundsPadding = 300f;
+
+        private BoundingBox _activeParticleBounds;
+        private bool _hasActiveParticleBounds;
+
+
+        internal readonly struct RenderContext
+        {
+            public RenderContext(Viewport viewport, Matrix viewProjection, Vector3 cameraPosition, Vector3 cameraForward, BoundingFrustum frustum)
+            {
+                Viewport = viewport;
+                ViewProjection = viewProjection;
+                CameraPosition = cameraPosition;
+                CameraForward = cameraForward;
+                Frustum = frustum;
+            }
+
+            public Viewport Viewport { get; }
+            public Matrix ViewProjection { get; }
+            public Vector3 CameraPosition { get; }
+            public Vector3 CameraForward { get; }
+            public BoundingFrustum Frustum { get; }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static RenderContext CreateRenderContext(Camera camera, Viewport viewport)
+        {
+            Vector3 direction = camera.Target - camera.Position;
+            float lengthSquared = direction.LengthSquared();
+            Vector3 forward = lengthSquared > 0.000001f
+                ? direction * (1f / MathF.Sqrt(lengthSquared))
+                : Vector3.UnitY;
+
+            return new RenderContext(
+                viewport,
+                camera.ViewProjection,
+                camera.Position,
+                forward,
+                camera.Frustum);
+        }
+
+        internal int ParticleBatchBlendKey
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => RuntimeHelpers.GetHashCode(BlendState ?? Microsoft.Xna.Framework.Graphics.BlendState.Additive);
+        }
+
+        internal int ParticleBatchTextureKey
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get
+            {
+                Texture2D texture = ParticleTexture;
+                return texture == null ? 0 : RuntimeHelpers.GetHashCode(texture);
+            }
+        }
+
+        internal BlendState ParticleBatchBlendState =>
+            BlendState ?? Microsoft.Xna.Framework.Graphics.BlendState.Additive;
+
+        internal bool CanUseDedicatedWorldBatch
+        {
+            get
+            {
+                if (!Constants.ENABLE_PARTICLE_BATCHING ||
+                    IsTransparent ||
+                    Status != GameControlStatus.Ready)
+                {
+                    return false;
+                }
+
+                BlendState blend = ParticleBatchBlendState;
+                return blend.ColorBlendFunction == BlendFunction.Add &&
+                       blend.ColorDestinationBlend == Blend.One &&
+                       blend.ColorSourceBlend is Blend.One or Blend.SourceAlpha or Blend.SourceColor or Blend.InverseSourceAlpha;
+            }
+        }
 
         protected SourceParticleSystem(int capacity)
         {
@@ -27,6 +103,7 @@ namespace Client.Main.Objects.Effects.Particles
 
         protected SourceParticle[] Particles { get; }
         protected int ActiveCount { get; private set; }
+        internal bool HasActiveParticles => ActiveCount > 0;
 
         public float MaxDistance { get; set; } = 1500f;
         public float ReferenceDistance { get; set; } = 800f;
@@ -69,6 +146,7 @@ namespace Client.Main.Objects.Effects.Particles
             };
 
             OnParticleCreated(ref particle);
+            ExpandActiveBounds(particle.Position);
             return index;
         }
 
@@ -84,36 +162,52 @@ namespace Client.Main.Objects.Effects.Particles
 
         public override void Draw(GameTime gameTime)
         {
-            if (ActiveCount == 0 || ParticleTexture == null || Status != GameControlStatus.Ready)
+            if (ActiveCount == 0 || Status != GameControlStatus.Ready)
                 return;
 
-            var camera = Camera.Instance;
+            Camera camera = Camera.Instance;
             if (camera == null)
                 return;
 
-            var device = GraphicsManager.Instance.GraphicsDevice;
-            var spriteBatch = GraphicsManager.Instance.Sprite;
+            GraphicsDevice device = GraphicsManager.Instance.GraphicsDevice;
+            SpriteBatch spriteBatch = GraphicsManager.Instance.Sprite;
             if (device == null || spriteBatch == null)
                 return;
 
-            _viewProjection = camera.ViewProjection;
-            _cameraPosition = camera.Position;
-
+            RenderContext context = CreateRenderContext(camera, device.Viewport);
             if (!SpriteBatchScope.BatchIsBegun)
             {
                 using var scope = new SpriteBatchScope(
                     spriteBatch,
                     SpriteSortMode.Deferred,
-                    this.BlendState ?? Microsoft.Xna.Framework.Graphics.BlendState.Additive,
+                    ParticleBatchBlendState,
                     SamplerState.LinearClamp,
                     DepthStencilState.DepthRead,
                     RasterizerState.CullNone);
-                DrawParticles(device.Viewport, camera);
+                DrawIntoActiveBatch(context);
             }
             else
             {
-                DrawParticles(device.Viewport, camera);
+                DrawIntoActiveBatch(context);
             }
+        }
+
+        internal int DrawIntoActiveBatch(in RenderContext context)
+        {
+            if (ActiveCount == 0 || Status != GameControlStatus.Ready)
+                return 0;
+
+            Texture2D texture = ParticleTexture;
+            if (texture == null || texture.IsDisposed)
+                return 0;
+
+            if (_hasActiveParticleBounds &&
+                context.Frustum.Contains(_activeParticleBounds) == ContainmentType.Disjoint)
+            {
+                return -1;
+            }
+
+            return DrawParticles(context, texture);
         }
 
         public override float Depth => Position.Y + Position.Z;
@@ -151,8 +245,28 @@ namespace Client.Main.Objects.Effects.Particles
         protected float RandomRange(float min, float max) =>
             min + (float)MuGame.Random.NextDouble() * (max - min);
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExpandActiveBounds(Vector3 position)
+        {
+            Vector3 padding = new(ActiveBoundsPadding);
+            Vector3 particleMin = position - padding;
+            Vector3 particleMax = position + padding;
+            if (!_hasActiveParticleBounds)
+            {
+                _activeParticleBounds = new BoundingBox(particleMin, particleMax);
+                _hasActiveParticleBounds = true;
+                return;
+            }
+
+            _activeParticleBounds = new BoundingBox(
+                Vector3.Min(_activeParticleBounds.Min, particleMin),
+                Vector3.Max(_activeParticleBounds.Max, particleMax));
+        }
+
         protected void UpdateParticles(float dt)
         {
+            Vector3 min = new(float.PositiveInfinity);
+            Vector3 max = new(float.NegativeInfinity);
             int i = 0;
             while (i < ActiveCount)
             {
@@ -166,20 +280,36 @@ namespace Client.Main.Objects.Effects.Particles
                 }
 
                 UpdateLiveParticle(ref particle, dt);
+                min = Vector3.Min(min, particle.Position);
+                max = Vector3.Max(max, particle.Position);
                 i++;
+            }
+
+            _hasActiveParticleBounds = ActiveCount > 0;
+            if (_hasActiveParticleBounds)
+            {
+                Vector3 padding = new(ActiveBoundsPadding);
+                _activeParticleBounds = new BoundingBox(min - padding, max + padding);
             }
         }
 
-        private void DrawParticles(Viewport viewport, Camera camera)
+        private int DrawParticles(in RenderContext context, Texture2D texture)
         {
-            Texture2D texture = ParticleTexture!;
-            Vector3 forward = Vector3.Normalize(camera.Target - _cameraPosition);
+            Viewport viewport = context.Viewport;
+            Vector3 cameraPosition = context.CameraPosition;
+            Vector3 forward = context.CameraForward;
+            Matrix viewProjection = context.ViewProjection;
+            Vector2 textureCenter = ParticleTextureCenter;
             float maxDistanceSq = MaxDistance * MaxDistance;
+            float inverseMaxDistanceSq = maxDistanceSq > 0.0001f ? 1f / maxDistanceSq : 0f;
+            float referenceDistance = ReferenceDistance;
+            float renderScale = Constants.RENDER_SCALE;
+            int drawn = 0;
 
             for (int i = 0; i < ActiveCount; i++)
             {
                 ref readonly SourceParticle particle = ref Particles[i];
-                Vector3 toParticle = particle.Position - _cameraPosition;
+                Vector3 toParticle = particle.Position - cameraPosition;
                 if (Vector3.Dot(toParticle, forward) < 0f)
                     continue;
 
@@ -187,7 +317,7 @@ namespace Client.Main.Objects.Effects.Particles
                 if (distanceSq > maxDistanceSq)
                     continue;
 
-                Vector4 clipPosition = Vector4.Transform(particle.Position, _viewProjection);
+                Vector4 clipPosition = Vector4.Transform(particle.Position, viewProjection);
                 if (clipPosition.W <= 0.001f)
                     continue;
 
@@ -199,15 +329,15 @@ namespace Client.Main.Objects.Effects.Particles
                 if (depth < 0f || depth > 1f ||
                     screenX < -100f || screenX > viewport.Width + 100f ||
                     screenY < -100f || screenY > viewport.Height + 100f)
+                {
                     continue;
+                }
 
                 float lifeRatio = particle.MaxLifeTime > 0f
                     ? MathHelper.Clamp(particle.LifeTime / particle.MaxLifeTime, 0f, 1f)
                     : 1f;
-                float distanceScale = MathHelper.Lerp(1f, MinDistanceScale, distanceSq / maxDistanceSq);
-                float perspectiveScale = clipPosition.W > 0.001f
-                    ? MathF.Max(0.1f, ReferenceDistance / clipPosition.W) * Constants.RENDER_SCALE
-                    : 1f;
+                float distanceScale = MathHelper.Lerp(1f, MinDistanceScale, distanceSq * inverseMaxDistanceSq);
+                float perspectiveScale = MathF.Max(0.1f, referenceDistance * invW) * renderScale;
 
                 GraphicsManager.Instance.Sprite.Draw(
                     texture,
@@ -215,11 +345,14 @@ namespace Client.Main.Objects.Effects.Particles
                     GetParticleSourceRectangle(texture, particle),
                     GetParticleColor(particle, lifeRatio),
                     GetParticleRotation(particle),
-                    ParticleTextureCenter,
+                    textureCenter,
                     GetParticleScale(particle, lifeRatio, distanceScale, perspectiveScale),
                     SpriteEffects.None,
                     depth);
+                drawn++;
             }
+
+            return drawn;
         }
 
         private void RemoveAt(int index)

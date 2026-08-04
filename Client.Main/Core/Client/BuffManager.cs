@@ -69,6 +69,8 @@ namespace Client.Main.Core.Client
     {
         private readonly ILogger<BuffManager> _logger;
         private readonly Dictionary<(ushort PlayerId, BuffEffectId EffectId), ActiveBuffState> _states = new();
+        private readonly List<(ushort PlayerId, BuffEffectId EffectId)> _expiredScratch = new(8);
+        private long _nextExpirationUtcTicks = long.MaxValue;
 
         public event EventHandler<BuffStateChangedEventArgs>? BuffStateChanged;
 
@@ -88,14 +90,20 @@ namespace Client.Main.Core.Client
                 var definition = BuffDefinitionRegistry.Get(typedEffectId);
                 var activatedAt = DateTime.UtcNow;
 
+                DateTime? expiresAt = definition.Duration.HasValue
+                    ? activatedAt + definition.Duration.Value
+                    : null;
                 _states[key] = new ActiveBuffState
                 {
                     IsActive = true,
                     ActivatedAt = activatedAt,
                     RawEffectId = effectId,
                     Definition = definition,
-                    ExpiresAt = definition.Duration.HasValue ? activatedAt + definition.Duration.Value : null,
+                    ExpiresAt = expiresAt,
                 };
+
+                if (expiresAt.HasValue && expiresAt.Value.Ticks < _nextExpirationUtcTicks)
+                    _nextExpirationUtcTicks = expiresAt.Value.Ticks;
 
                 _logger.LogDebug("Buff activated: Player={PlayerId}, Effect={EffectId}", playerId & 0x7FFF, effectId);
 
@@ -108,6 +116,8 @@ namespace Client.Main.Core.Client
             if (_states.TryGetValue(key, out var existing) && existing.IsActive)
             {
                 existing.IsActive = false;
+                if (existing.ExpiresAt.HasValue && existing.ExpiresAt.Value.Ticks <= _nextExpirationUtcTicks)
+                    _nextExpirationUtcTicks = 0L;
                 _logger.LogDebug("Buff deactivated: Player={PlayerId}, Effect={EffectId}", playerId & 0x7FFF, effectId);
                 RaiseBuffChanged(playerId, typedEffectId, isActive: false);
             }
@@ -115,27 +125,38 @@ namespace Client.Main.Core.Client
 
         public void Update()
         {
-            if (_states.Count == 0)
+            long nextExpiration = _nextExpirationUtcTicks;
+            if (nextExpiration == long.MaxValue)
                 return;
 
-            DateTime now = DateTime.UtcNow;
-            List<(ushort PlayerId, BuffEffectId EffectId)>? expired = null;
+            long nowTicks = DateTime.UtcNow.Ticks;
+            if (nextExpiration > nowTicks)
+                return;
+
+            _expiredScratch.Clear();
+            long followingExpiration = long.MaxValue;
 
             foreach (var kv in _states)
             {
                 var state = kv.Value;
-                if (!state.IsActive || !state.ExpiresAt.HasValue || state.ExpiresAt.Value > now)
+                if (!state.IsActive || !state.ExpiresAt.HasValue)
                     continue;
 
-                expired ??= new List<(ushort PlayerId, BuffEffectId EffectId)>();
-                expired.Add(kv.Key);
+                long expiresAtTicks = state.ExpiresAt.Value.Ticks;
+                if (expiresAtTicks <= nowTicks)
+                {
+                    _expiredScratch.Add(kv.Key);
+                }
+                else if (expiresAtTicks < followingExpiration)
+                {
+                    followingExpiration = expiresAtTicks;
+                }
             }
 
-            if (expired == null)
-                return;
-
-            foreach (var key in expired)
+            _nextExpirationUtcTicks = followingExpiration;
+            for (int i = 0; i < _expiredScratch.Count; i++)
             {
+                var key = _expiredScratch[i];
                 if (!_states.TryGetValue(key, out var state) || !state.IsActive)
                     continue;
 
@@ -184,6 +205,7 @@ namespace Client.Main.Core.Client
             if (changed == null)
                 return;
 
+            _nextExpirationUtcTicks = 0L;
             foreach (var effectId in changed)
                 RaiseBuffChanged(playerId, effectId, isActive: false);
         }

@@ -131,8 +131,11 @@ namespace Client.Main
         private int _lastHighAllocationEventFrame = -1000;
         private const double SlowCpuFrameEventThresholdMs = 25d;
         private const double HighAllocationFrameThresholdKb = 256d;
+        private const int PassiveDetailedProfileIntervalFrames = 15;
+        private const double DetailedProfileContinuationThresholdMs = 16.0d;
         private static readonly Color FallbackClearColor = new(12, 12, 20);
         private string _currentDrawPhase = "Idle";
+        private bool _detailedPassProfilingThisFrame;
 
         // Public Instance Properties
         public BaseScene ActiveScene { get; private set; }
@@ -631,7 +634,8 @@ namespace Client.Main
         protected override void Update(GameTime gameTime)
         {
             _frameProfiler.BeginUpdate(FrameIndex + 1L);
-            UpdatePassProfiler.BeginFrame(enabled: true);
+            _detailedPassProfilingThisFrame = ShouldCollectDetailedPassTimings();
+            UpdatePassProfiler.BeginFrame(_detailedPassProfilingThisFrame);
 
             long dispatcherStarted = UpdatePassProfiler.Start();
             UPSCounter.Instance.CalcUPS(gameTime);
@@ -701,6 +705,21 @@ namespace Client.Main
             }
         }
 
+
+        private bool ShouldCollectDetailedPassTimings()
+        {
+            if (ActiveScene?.DebugPanel?.Visible == true)
+                return true;
+
+            if (_telemetryPublisher is { Enabled: true, IsConnected: true })
+                return true;
+
+            if (_frameProfiler.Current.CpuFrameMs >= DetailedProfileContinuationThresholdMs)
+                return true;
+
+            return FrameIndex % PassiveDetailedProfileIntervalFrames == 0;
+        }
+
         private void ProcessMainThreadActions()
         {
             _taskScheduler?.BeginFrame();
@@ -756,9 +775,10 @@ namespace Client.Main
             bool publishTelemetry = _telemetryPublisher?.TryBeginSnapshot() == true;
             _frameProfiler.BeginDraw();
 
-            // Keep pass timings current on every frame. The additional Stopwatch reads are
-            // negligible compared with rendering and make slow-frame events self-contained.
-            RenderPassProfiler.BeginFrame(enabled: true);
+            // Section profilers are sampled during normal gameplay and become continuous
+            // whenever diagnostics are visible/connected or the previous frame was slow.
+            // The overall FrameProfiler remains active every frame.
+            RenderPassProfiler.BeginFrame(_detailedPassProfilingThisFrame);
             _currentDrawPhase = "Frame.Begin";
             try
             {

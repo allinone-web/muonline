@@ -87,7 +87,7 @@ namespace Client.Main.Objects.Pets
         private readonly SparkParticle[] _sparks = new SparkParticle[MaxSparks];
         private readonly VertexPositionColorTexture[] _billboardVertices =
             new VertexPositionColorTexture[MaxBillboardQuads * 4];
-        private readonly short[] _billboardIndices = new short[MaxBillboardQuads * 6];
+        private static readonly short[] BillboardIndices = QuadIndexCache.Get(MaxBillboardQuads);
 
         private FlyingHelperKind _kind = FlyingHelperKind.None;
         private int _modelRequestVersion;
@@ -168,7 +168,6 @@ namespace Client.Main.Objects.Pets
                 new Vector3(-80f, -80f, -80f),
                 new Vector3(80f, 80f, 120f));
 
-            BuildStaticIndices();
         }
 
         public void SetDarkRavenCommand(DarkRavenCommandMode mode, ushort targetId)
@@ -1328,9 +1327,8 @@ namespace Client.Main.Objects.Pets
             if (_lightTexture == null || _lightTexture.IsDisposed)
                 return;
 
-            Matrix inverseView = Matrix.Invert(Camera.Instance.View);
-            Vector3 cameraRight = inverseView.Right;
-            Vector3 cameraUp = inverseView.Up;
+            Vector3 cameraRight = Camera.Instance.Right;
+            Vector3 cameraUp = Camera.Instance.Up;
             float luminosity = 0.70f + _random.NextSingle() * 0.30f;
             Vector3 light = new(
                 luminosity * 0.5f,
@@ -1359,9 +1357,8 @@ namespace Client.Main.Objects.Pets
             if (_sparkTexture == null || _sparkTexture.IsDisposed)
                 return;
 
-            Matrix inverseView = Matrix.Invert(Camera.Instance.View);
-            Vector3 cameraRight = inverseView.Right;
-            Vector3 cameraUp = inverseView.Up;
+            Vector3 cameraRight = Camera.Instance.Right;
+            Vector3 cameraUp = Camera.Instance.Up;
             float interpolation = MathHelper.Clamp(_legacyAccumulator / LegacyStepSeconds, 0f, 1f);
             int quadCount = 0;
 
@@ -1392,9 +1389,8 @@ namespace Client.Main.Objects.Pets
             if (_lightTexture == null || _lightTexture.IsDisposed)
                 return;
 
-            Matrix inverseView = Matrix.Invert(Camera.Instance.View);
-            Vector3 cameraRight = inverseView.Right;
-            Vector3 cameraUp = inverseView.Up;
+            Vector3 cameraRight = Camera.Instance.Right;
+            Vector3 cameraUp = Camera.Instance.Up;
             float interpolation = MathHelper.Clamp(_legacyAccumulator / LegacyStepSeconds, 0f, 1f);
             int quadCount = 0;
 
@@ -1424,18 +1420,15 @@ namespace Client.Main.Objects.Pets
                 return;
 
             _billboardEffect.Texture = texture;
-            foreach (EffectPass pass in _billboardEffect.CurrentTechnique.Passes)
-            {
-                pass.Apply();
-                GraphicsDevice.DrawUserIndexedPrimitives(
-                    PrimitiveType.TriangleList,
-                    _billboardVertices,
-                    0,
-                    quadCount * 4,
-                    _billboardIndices,
-                    0,
-                    quadCount * 2);
-            }
+            _billboardEffect.CurrentTechnique.Passes[0].Apply();
+            GraphicsDevice.DrawUserIndexedPrimitives(
+                PrimitiveType.TriangleList,
+                _billboardVertices,
+                0,
+                quadCount * 4,
+                BillboardIndices,
+                0,
+                quadCount * 2);
         }
 
         private void WriteBillboardQuad(
@@ -1454,21 +1447,6 @@ namespace Client.Main.Objects.Pets
                 center + right + up, color, new Vector2(1f, 0f));
             _billboardVertices[vertex + 3] = new VertexPositionColorTexture(
                 center - right + up, color, new Vector2(0f, 0f));
-        }
-
-        private void BuildStaticIndices()
-        {
-            for (int i = 0; i < MaxBillboardQuads; i++)
-            {
-                int vertex = i * 4;
-                int index = i * 6;
-                _billboardIndices[index] = checked((short)vertex);
-                _billboardIndices[index + 1] = checked((short)(vertex + 1));
-                _billboardIndices[index + 2] = checked((short)(vertex + 2));
-                _billboardIndices[index + 3] = checked((short)vertex);
-                _billboardIndices[index + 4] = checked((short)(vertex + 2));
-                _billboardIndices[index + 5] = checked((short)(vertex + 3));
-            }
         }
 
         private void ClearSparks()

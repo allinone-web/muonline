@@ -70,11 +70,12 @@ namespace Client.Main.Objects
             0, 4, 1, 5, 2, 6, 3, 7
         };
 
-        // Reusable vertices for 3D bbox (avoid per-frame allocations)
-        private readonly VertexPositionColor[] _bboxVerts = new VertexPositionColor[8];
-        // Reusable bbox corners buffer to avoid allocations in UpdateWorldBoundingBox
-        private readonly Vector3[] _bboxCorners = new Vector3[8];
-        private readonly StringBuilder _bboxInfoBuilder = new(256);
+        // Debug-only buffers are allocated lazily. Most world objects never render debug
+        // bounds, so allocating these arrays and a StringBuilder per placement wastes several
+        // megabytes on object-heavy maps and increases map-load GC pressure.
+        private VertexPositionColor[] _debugBoundingBoxVertices;
+        private Vector3[] _debugBoundingBoxCorners;
+        private StringBuilder _debugBoundingBoxInfoBuilder;
 
         private readonly int _updateOffset; // Unique offset for each object to stagger updates
 
@@ -180,15 +181,15 @@ namespace Client.Main.Objects
             Click?.Invoke(this, EventArgs.Empty);
         }
 
-        private void Children_ControlAdded(object sender, ChildrenEventArgs<WorldObject> e)
+        private void Children_ControlAdded(WorldObject child)
         {
-            e.Control.World = World;
+            child.World = World;
 
             // Walker roots enable shadows in the base constructor before their modular body
             // parts are attached. Propagate that already-established contract to animated or
             // bone-linked model children as they are added; otherwise only an occasional helm
             // or root mesh can enter the shadow-map pass.
-            if (this is ModelObject parentModel && e.Control is ModelObject childModel)
+            if (this is ModelObject parentModel && child is ModelObject childModel)
             {
                 bool isDirectModularActorPart = parentModel is PlayerObject || parentModel is NPCObject;
                 if (isDirectModularActorPart || childModel.LinkParentAnimation || childModel.ParentBoneLink >= 0)
@@ -578,10 +579,12 @@ namespace Client.Main.Objects
 
             GraphicsDevice.DepthStencilState = DepthStencilState.Default;
 
-            BoundingBoxWorld.GetCorners(_bboxCorners);
+            Vector3[] corners = _debugBoundingBoxCorners ??= new Vector3[8];
+            VertexPositionColor[] vertices = _debugBoundingBoxVertices ??= new VertexPositionColor[8];
+            BoundingBoxWorld.GetCorners(corners);
 
             for (int i = 0; i < 8; i++)
-                _bboxVerts[i] = new VertexPositionColor(_bboxCorners[i], BoundingBoxColor);
+                vertices[i] = new VertexPositionColor(corners[i], BoundingBoxColor);
 
             GraphicsManager.Instance.BoundingBoxEffect3D.View = Camera.Instance.View;
             GraphicsManager.Instance.BoundingBoxEffect3D.Projection = Camera.Instance.Projection;
@@ -592,7 +595,7 @@ namespace Client.Main.Objects
                 pass.Apply();
                 GraphicsDevice.DrawUserIndexedPrimitives(
                     PrimitiveType.LineList,
-                    _bboxVerts, 0, 8,
+                    vertices, 0, 8,
                     BoundingBoxIndices, 0, BoundingBoxIndices.Length / 2);
             }
 
@@ -605,16 +608,17 @@ namespace Client.Main.Objects
                 return;
 
             // Build the info string and compute positions as before...
-            _bboxInfoBuilder.Clear();
-            _bboxInfoBuilder.AppendLine(GetType().Name);
-            _bboxInfoBuilder.Append("Type ID: ").AppendLine(Type.ToString());
-            _bboxInfoBuilder.Append("Alpha: ").AppendLine(TotalAlpha.ToString());
-            _bboxInfoBuilder.Append("X: ").Append(Position.X).Append(" Y: ").Append(Position.Y)
-                  .Append(" Z: ").AppendLine(Position.Z.ToString());
-            _bboxInfoBuilder.Append("Depth: ").AppendLine(Depth.ToString());
-            _bboxInfoBuilder.Append("Render order: ").AppendLine(RenderOrder.ToString());
-            _bboxInfoBuilder.Append("DepthStencilState: ").Append(DepthState.Name);
-            string objectInfo = _bboxInfoBuilder.ToString();
+            StringBuilder builder = _debugBoundingBoxInfoBuilder ??= new StringBuilder(256);
+            builder.Clear();
+            builder.AppendLine(GetType().Name);
+            builder.Append("Type ID: ").AppendLine(Type.ToString());
+            builder.Append("Alpha: ").AppendLine(TotalAlpha.ToString());
+            builder.Append("X: ").Append(Position.X).Append(" Y: ").Append(Position.Y)
+                   .Append(" Z: ").AppendLine(Position.Z.ToString());
+            builder.Append("Depth: ").AppendLine(Depth.ToString());
+            builder.Append("Render order: ").AppendLine(RenderOrder.ToString());
+            builder.Append("DepthStencilState: ").Append(DepthState.Name);
+            string objectInfo = builder.ToString();
 
             float scaleFactor = DebugFontSize / Constants.BASE_FONT_SIZE * Constants.RENDER_SCALE;
             Vector2 textSize = _font.MeasureString(objectInfo) * scaleFactor;
@@ -699,21 +703,31 @@ namespace Client.Main.Objects
 
         protected virtual void UpdateWorldBoundingBox()
         {
-            Matrix worldPos = WorldPosition;
-            var min = BoundingBoxLocal.Min;
-            var max = BoundingBoxLocal.Max;
+            Matrix world = WorldPosition;
+            Vector3 min = BoundingBoxLocal.Min;
+            Vector3 max = BoundingBoxLocal.Max;
 
-            // Write corners directly into the reusable buffer(avoids GetCorners allocation)
-            _bboxCorners[0] = Vector3.Transform(new Vector3(min.X, min.Y, min.Z), worldPos);
-            _bboxCorners[1] = Vector3.Transform(new Vector3(max.X, min.Y, min.Z), worldPos);
-            _bboxCorners[2] = Vector3.Transform(new Vector3(max.X, max.Y, min.Z), worldPos);
-            _bboxCorners[3] = Vector3.Transform(new Vector3(min.X, max.Y, min.Z), worldPos);
-            _bboxCorners[4] = Vector3.Transform(new Vector3(min.X, min.Y, max.Z), worldPos);
-            _bboxCorners[5] = Vector3.Transform(new Vector3(max.X, min.Y, max.Z), worldPos);
-            _bboxCorners[6] = Vector3.Transform(new Vector3(max.X, max.Y, max.Z), worldPos);
-            _bboxCorners[7] = Vector3.Transform(new Vector3(min.X, max.Y, max.Z), worldPos);
+            // Transform an AABB through an affine matrix by transforming its center and
+            // projecting its half-extents through the absolute 3x3 matrix. This is exactly
+            // equivalent to transforming all eight corners, but requires one Vector3
+            // transform instead of eight and no per-object corner buffer.
+            Vector3 localCenter = (min + max) * 0.5f;
+            Vector3 localExtents = (max - min) * 0.5f;
+            Vector3 worldCenter = Vector3.Transform(localCenter, world);
+            Vector3 worldExtents = new(
+                MathF.Abs(world.M11) * localExtents.X +
+                MathF.Abs(world.M21) * localExtents.Y +
+                MathF.Abs(world.M31) * localExtents.Z,
+                MathF.Abs(world.M12) * localExtents.X +
+                MathF.Abs(world.M22) * localExtents.Y +
+                MathF.Abs(world.M32) * localExtents.Z,
+                MathF.Abs(world.M13) * localExtents.X +
+                MathF.Abs(world.M23) * localExtents.Y +
+                MathF.Abs(world.M33) * localExtents.Z);
 
-            BoundingBoxWorld = BoundingBox.CreateFromPoints(_bboxCorners);
+            BoundingBoxWorld = new BoundingBox(
+                worldCenter - worldExtents,
+                worldCenter + worldExtents);
         }
 
         public virtual ushort NetworkId { get; protected set; }

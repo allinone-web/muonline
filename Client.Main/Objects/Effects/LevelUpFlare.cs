@@ -458,9 +458,8 @@ namespace Client.Main.Objects.Effects
             Vector3 color,
             float alpha)
         {
-            Matrix inverseView = Matrix.Invert(Camera.Instance.View);
-            Vector3 right = inverseView.Right;
-            Vector3 up = inverseView.Up;
+            Vector3 right = Camera.Instance.Right;
+            Vector3 up = Camera.Instance.Up;
             Vector3 rightOffset = right * halfSize;
             Vector3 upOffset = up * halfSize;
             Color tint = ToColor(color * alpha);

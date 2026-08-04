@@ -60,7 +60,7 @@ namespace Client.Main.Objects.Effects
         private const float RiseSpeedMax = 108f;
 
         private readonly VertexPositionColorTexture[] _vertices = new VertexPositionColorTexture[MaxQuads * 4];
-        private readonly short[] _indices = new short[MaxQuads * 6];
+        private static readonly short[] QuadIndices = QuadIndexCache.Get(MaxQuads);
 
         private readonly FireParticle[] _particles = new FireParticle[MaxParticles];
         private int _particleCount;
@@ -139,7 +139,7 @@ namespace Client.Main.Objects.Effects
             {
                 int quads = Math.Max(1, initialQuads);
                 Vertices = new VertexPositionColorTexture[quads * 4];
-                Indices = new short[quads * 6];
+                Indices = QuadIndexCache.Get(quads);
             }
 
             public bool HasGeometry => IndexCount > 0;
@@ -159,7 +159,11 @@ namespace Client.Main.Objects.Effects
                     Array.Resize(ref Vertices, Math.Max(vertexCount, Vertices.Length * 2));
 
                 if (Indices.Length < indexCount)
-                    Array.Resize(ref Indices, Math.Max(indexCount, Indices.Length * 2));
+                {
+                    int currentQuads = Math.Max(1, Indices.Length / 6);
+                    int requiredQuads = (indexCount + 5) / 6;
+                    Indices = QuadIndexCache.Get(Math.Max(requiredQuads, currentQuads * 2));
+                }
             }
 
             public void Clear()
@@ -194,7 +198,6 @@ namespace Client.Main.Objects.Effects
                 Intensity = 0f
             };
 
-            InitializeIndices();
         }
 
         public void SetActive(bool active)
@@ -478,19 +481,16 @@ namespace Client.Main.Objects.Effects
                 return;
 
             effect.Texture = batch.Texture;
-            foreach (var pass in effect.CurrentTechnique.Passes)
-            {
-                pass.Apply();
-                gd.DrawUserIndexedPrimitives(
-                    PrimitiveType.TriangleList,
-                    batch.Vertices,
-                    0,
-                    batch.VertexCount,
-                    batch.Indices,
-                    0,
-                    batch.IndexCount / 3);
-                _batchDrawCallsThisFrame++;
-            }
+            effect.CurrentTechnique.Passes[0].Apply();
+            gd.DrawUserIndexedPrimitives(
+                PrimitiveType.TriangleList,
+                batch.Vertices,
+                0,
+                batch.VertexCount,
+                batch.Indices,
+                0,
+                batch.IndexCount / 3);
+            _batchDrawCallsThisFrame++;
         }
 
         private static void ClearBatches()
@@ -566,40 +566,31 @@ namespace Client.Main.Objects.Effects
             if (primaryCount > 0)
             {
                 effect.Texture = _primaryTexture;
-                foreach (var pass in effect.CurrentTechnique.Passes)
-                {
-                    pass.Apply();
-                    gd.DrawUserIndexedPrimitives(
-                        PrimitiveType.TriangleList,
-                        _vertices, 0, totalQuads * 4,
-                        _indices, 0, primaryCount * 2);
-                }
+                effect.CurrentTechnique.Passes[0].Apply();
+                gd.DrawUserIndexedPrimitives(
+                    PrimitiveType.TriangleList,
+                    _vertices, 0, totalQuads * 4,
+                    QuadIndices, 0, primaryCount * 2);
             }
 
             if (secondaryCount > 0)
             {
                 effect.Texture = _secondaryTexture;
-                foreach (var pass in effect.CurrentTechnique.Passes)
-                {
-                    pass.Apply();
-                    gd.DrawUserIndexedPrimitives(
-                        PrimitiveType.TriangleList,
-                        _vertices, 0, totalQuads * 4,
-                        _indices, secondaryStart * 6, secondaryCount * 2);
-                }
+                effect.CurrentTechnique.Passes[0].Apply();
+                gd.DrawUserIndexedPrimitives(
+                    PrimitiveType.TriangleList,
+                    _vertices, 0, totalQuads * 4,
+                    QuadIndices, secondaryStart * 6, secondaryCount * 2);
             }
 
             if (glowCount > 0)
             {
                 effect.Texture = _glowTexture;
-                foreach (var pass in effect.CurrentTechnique.Passes)
-                {
-                    pass.Apply();
-                    gd.DrawUserIndexedPrimitives(
-                        PrimitiveType.TriangleList,
-                        _vertices, 0, totalQuads * 4,
-                        _indices, glowStart * 6, glowCount * 2);
-                }
+                effect.CurrentTechnique.Passes[0].Apply();
+                gd.DrawUserIndexedPrimitives(
+                    PrimitiveType.TriangleList,
+                    _vertices, 0, totalQuads * 4,
+                    QuadIndices, glowStart * 6, glowCount * 2);
             }
 
             effect.TextureEnabled = prevTexEnabled;
@@ -689,27 +680,20 @@ namespace Client.Main.Objects.Effects
             batch.EnsureCapacity(requiredVertices, requiredIndices);
 
             Matrix world = WorldPosition;
+            int destinationVertex = batch.VertexCount;
             for (int q = 0; q < quadCount; q++)
             {
                 int sourceVertex = (startQuad + q) * 4;
-                short baseIndex = (short)batch.VertexCount;
-
                 for (int i = 0; i < 4; i++)
                 {
                     var vertex = _vertices[sourceVertex + i];
                     vertex.Position = Vector3.Transform(vertex.Position, world);
-                    batch.Vertices[batch.VertexCount + i] = vertex;
+                    batch.Vertices[destinationVertex++] = vertex;
                 }
-
-                batch.VertexCount += 4;
-
-                batch.Indices[batch.IndexCount++] = baseIndex;
-                batch.Indices[batch.IndexCount++] = (short)(baseIndex + 1);
-                batch.Indices[batch.IndexCount++] = (short)(baseIndex + 2);
-                batch.Indices[batch.IndexCount++] = baseIndex;
-                batch.Indices[batch.IndexCount++] = (short)(baseIndex + 2);
-                batch.Indices[batch.IndexCount++] = (short)(baseIndex + 3);
             }
+
+            batch.VertexCount = destinationVertex;
+            batch.IndexCount += quadCount * 6;
         }
 
         private void BuildParticles(Vector3 sharedRight, Vector3 sharedUp, Vector3 selfOcclusionOffset, byte variant, int stride, ref int quadIndex)
@@ -1054,21 +1038,6 @@ namespace Client.Main.Objects.Effects
                 worldPosition.X >= minXY && worldPosition.X <= maxXY &&
                 worldPosition.Y >= minXY && worldPosition.Y <= maxXY &&
                 worldPosition.Z >= WorldMinZ && worldPosition.Z <= WorldMaxZ;
-        }
-
-        private void InitializeIndices()
-        {
-            for (int i = 0; i < MaxQuads; i++)
-            {
-                int vi = i * 4;
-                int ii = i * 6;
-                _indices[ii] = (short)vi;
-                _indices[ii + 1] = (short)(vi + 1);
-                _indices[ii + 2] = (short)(vi + 2);
-                _indices[ii + 3] = (short)vi;
-                _indices[ii + 4] = (short)(vi + 2);
-                _indices[ii + 5] = (short)(vi + 3);
-            }
         }
 
         private static float RandomRange(float min, float max)

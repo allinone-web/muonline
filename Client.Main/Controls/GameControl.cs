@@ -32,6 +32,13 @@ namespace Client.Main.Controls
         private bool _visible = true;
         private bool _layoutDirty = true;
         private bool _isCurrentlyPressedByMouse = false;
+        private Point _cachedDisplayPosition;
+        private Point _cachedDisplaySize;
+        private Rectangle _cachedDisplayRectangle;
+        private int _displayRevision = 1;
+        private int _cachedDisplayRevision;
+        private int _cachedParentDisplayGeneration = -1;
+        private int _displayGeneration;
         private static readonly ILogger _logger = Microsoft.Extensions.Logging.LoggerFactory.Create(builder => { }).CreateLogger<GameControl>();
 
         // Properties
@@ -184,12 +191,32 @@ namespace Client.Main.Controls
                 MarkLayoutDirty();
             }
         }
-        public virtual Point DisplayPosition => new(
-            (Parent?.DisplayRectangle.X ?? 0) + X + Margin.Left - Margin.Right + Offset.X,
-            (Parent?.DisplayRectangle.Y ?? 0) + Y + Margin.Top - Margin.Bottom + Offset.Y
-        );
-        public virtual Point DisplaySize => new((int)(ViewSize.X * Scale), (int)(ViewSize.Y * Scale));
-        public virtual Rectangle DisplayRectangle => new(DisplayPosition, DisplaySize);
+        public virtual Point DisplayPosition
+        {
+            get
+            {
+                EnsureDisplayCache();
+                return _cachedDisplayPosition;
+            }
+        }
+
+        public virtual Point DisplaySize
+        {
+            get
+            {
+                EnsureDisplayCache();
+                return _cachedDisplaySize;
+            }
+        }
+
+        public virtual Rectangle DisplayRectangle
+        {
+            get
+            {
+                EnsureDisplayCache();
+                return _cachedDisplayRectangle;
+            }
+        }
         public bool Visible
         {
             get => _visible;
@@ -476,7 +503,7 @@ namespace Client.Main.Controls
         }
 
         // Protected Methods
-        private void OnChildCollectionChanged(object sender, ChildrenEventArgs<GameControl> e)
+        private void OnChildCollectionChanged(GameControl child)
         {
             MarkLayoutDirty();
         }
@@ -514,6 +541,7 @@ namespace Client.Main.Controls
                 if (_viewSize != requiredSize)
                 {
                     _viewSize = requiredSize;
+                    InvalidateDisplayCache();
                     OnScreenSizeChanged();
                 }
             }
@@ -527,16 +555,68 @@ namespace Client.Main.Controls
         protected void MarkLayoutDirty()
         {
             _layoutDirty = true;
+            InvalidateDisplayCache();
 
             if (Parent != null)
+            {
                 Parent._layoutDirty = true;
+                Parent.InvalidateDisplayCache();
+            }
 
             if (Controls == null)
                 return;
 
             var controls = Controls.GetSnapshotArray();
             for (int i = 0; i < controls.Length; i++)
+            {
                 controls[i]._layoutDirty = true;
+                controls[i].InvalidateDisplayCache();
+            }
+        }
+
+        private void InvalidateDisplayCache()
+        {
+            unchecked
+            {
+                _displayRevision++;
+                if (_displayRevision == 0)
+                    _displayRevision = 1;
+            }
+        }
+
+        private void EnsureDisplayCache()
+        {
+            Rectangle parentRectangle = default;
+            int parentGeneration = 0;
+            if (Parent != null)
+            {
+                Parent.EnsureDisplayCache();
+                parentRectangle = Parent._cachedDisplayRectangle;
+                parentGeneration = Parent._displayGeneration;
+            }
+
+            if (_cachedDisplayRevision == _displayRevision &&
+                _cachedParentDisplayGeneration == parentGeneration)
+            {
+                return;
+            }
+
+            _cachedDisplayPosition = new Point(
+                parentRectangle.X + _x + _margin.Left - _margin.Right + _offset.X,
+                parentRectangle.Y + _y + _margin.Top - _margin.Bottom + _offset.Y);
+            _cachedDisplaySize = new Point(
+                (int)(_viewSize.X * _scale),
+                (int)(_viewSize.Y * _scale));
+            _cachedDisplayRectangle = new Rectangle(_cachedDisplayPosition, _cachedDisplaySize);
+            _cachedDisplayRevision = _displayRevision;
+            _cachedParentDisplayGeneration = parentGeneration;
+
+            unchecked
+            {
+                _displayGeneration++;
+                if (_displayGeneration == 0)
+                    _displayGeneration = 1;
+            }
         }
 
         protected virtual void AlignControl()
@@ -601,7 +681,10 @@ namespace Client.Main.Controls
 
             var controls = Controls.GetSnapshotArray();
             for (int i = 0; i < controls.Length; i++)
+            {
                 controls[i]._layoutDirty = true;
+                controls[i].InvalidateDisplayCache();
+            }
 
             SizeChanged?.Invoke(this, EventArgs.Empty);
         }

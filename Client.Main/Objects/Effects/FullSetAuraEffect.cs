@@ -47,23 +47,25 @@ namespace Client.Main.Objects.Effects
         };
 
         private static readonly float[] TorsoScales = { 0.54f, 0.72f, 0.90f };
-        private readonly TorsoParticle[] _torsoParticles = new TorsoParticle[MaxTorsoParticles];
-        private readonly OrbitParticle[] _orbitParticles = new OrbitParticle[MaxOrbitParticles];
-        private readonly OrbitTrail[] _trails = new OrbitTrail[MaxTrails];
 
-        private readonly VertexPositionColorTexture[] _billboardVertices =
-            new VertexPositionColorTexture[MaxBillboardQuads * 4];
-        private readonly short[] _billboardIndices = new short[MaxBillboardQuads * 6];
-        private readonly VertexPositionColorTexture[] _trailVertices =
-            new VertexPositionColorTexture[MaxTrails * MaxTrailRenderPoints * 2];
-        private readonly short[] _trailIndices =
-            new short[MaxTrails * (MaxTrailRenderPoints - 1) * 6];
+        // Every PlayerObject owns this controller, but only a small subset of players has a
+        // complete +9 or higher set. Allocate the large transient simulation and geometry
+        // buffers only when the aura becomes active for the first time.
+        private TorsoParticle[] _torsoParticles;
+        private OrbitParticle[] _orbitParticles;
+        private OrbitTrail[] _trails;
+        private VertexPositionColorTexture[] _billboardVertices;
+        private static readonly short[] BillboardIndices = QuadIndexCache.Get(MaxBillboardQuads);
+        private VertexPositionColorTexture[] _trailVertices;
+        private short[] _trailIndices;
 
         private BasicEffect _effect;
         private Texture2D _lightTexture;
         private Texture2D _flareTexture;
         private bool _ownsLightTexture;
         private bool _ownsFlareTexture;
+        private Task _texturePreparationTask;
+        private volatile bool _disposed;
         private float _legacyAccumulator;
         private int _activeSetIndex = -1;
         private int _auraTier;
@@ -85,38 +87,10 @@ namespace Client.Main.Objects.Effects
             BlendState = Blendings.OneOneAdditive;
             DepthState = DepthStencilState.DepthRead;
 
-            for (int i = 0; i < _trails.Length; i++)
-                _trails[i] = new OrbitTrail();
-
-            BuildStaticIndices(_billboardIndices, MaxBillboardQuads);
+            Hidden = true;
         }
 
-        public override async Task LoadContent()
-        {
-            await base.LoadContent();
-
-            _lightTexture = await PrepareTexture(LightTexturePath);
-            if (_lightTexture == null)
-            {
-                _lightTexture = CreateRadialTexture(GraphicsDevice, 64, 2.4f);
-                _ownsLightTexture = true;
-            }
-
-            _flareTexture = await PrepareTexture(FlareTexturePath);
-            if (_flareTexture == null)
-            {
-                _flareTexture = CreateRadialTexture(GraphicsDevice, 64, 1.45f);
-                _ownsFlareTexture = true;
-            }
-
-            _effect = new BasicEffect(GraphicsDevice)
-            {
-                VertexColorEnabled = true,
-                TextureEnabled = true,
-                LightingEnabled = false,
-                World = Matrix.Identity
-            };
-        }
+        public override Task LoadContent() => base.LoadContent();
 
         public override void Update(GameTime gameTime)
         {
@@ -195,6 +169,9 @@ namespace Client.Main.Objects.Effects
                 return false;
             }
 
+            EnsureTransientBuffers();
+            EnsureTexturePreparationStarted();
+
             int tier = minimumLevel >= 13 ? 13 : minimumLevel >= 11 ? 11 : 9;
             if (_activeSetIndex != setIndex || _auraTier != tier)
             {
@@ -208,6 +185,74 @@ namespace Client.Main.Objects.Effects
 
             Hidden = false;
             return true;
+        }
+
+        private void EnsureTexturePreparationStarted()
+        {
+            // TextureLoader already deduplicates the underlying assets. Deferring these two
+            // awaits still removes them from every remote-player initialization path, which
+            // reduces warp/spawn fan-out when almost all players have no qualifying full set.
+            _texturePreparationTask ??= PrepareTexturesAsync();
+        }
+
+        private async Task PrepareTexturesAsync()
+        {
+            Task<Texture2D> lightTask = PrepareTexture(LightTexturePath);
+            Task<Texture2D> flareTask = PrepareTexture(FlareTexturePath);
+            await Task.WhenAll(lightTask, flareTask).ConfigureAwait(false);
+
+            if (_disposed)
+                return;
+
+            _lightTexture = lightTask.Result;
+            _flareTexture = flareTask.Result;
+        }
+
+        private void EnsureFallbackTextures()
+        {
+            // Fallback Texture2D creation must remain on the graphics thread. The asynchronous
+            // preparation method only resolves cached assets and never creates GPU resources.
+            if (_lightTexture == null || _lightTexture.IsDisposed)
+            {
+                _lightTexture = CreateRadialTexture(GraphicsDevice, 64, 2.4f);
+                _ownsLightTexture = true;
+            }
+
+            if (_flareTexture == null || _flareTexture.IsDisposed)
+            {
+                _flareTexture = CreateRadialTexture(GraphicsDevice, 64, 1.45f);
+                _ownsFlareTexture = true;
+            }
+        }
+
+        private void EnsureTransientBuffers()
+        {
+            if (_torsoParticles != null)
+                return;
+
+            _torsoParticles = new TorsoParticle[MaxTorsoParticles];
+            _orbitParticles = new OrbitParticle[MaxOrbitParticles];
+            _trails = new OrbitTrail[MaxTrails];
+            for (int i = 0; i < _trails.Length; i++)
+                _trails[i] = new OrbitTrail();
+
+            _billboardVertices = new VertexPositionColorTexture[MaxBillboardQuads * 4];
+            _trailVertices = new VertexPositionColorTexture[MaxTrails * MaxTrailRenderPoints * 2];
+            _trailIndices = new short[MaxTrails * (MaxTrailRenderPoints - 1) * 6];
+        }
+
+        private void EnsureRenderEffect()
+        {
+            if (_effect != null && !_effect.IsDisposed)
+                return;
+
+            _effect = new BasicEffect(GraphicsDevice)
+            {
+                VertexColorEnabled = true,
+                TextureEnabled = true,
+                LightingEnabled = false,
+                World = Matrix.Identity
+            };
         }
 
         private static bool AcceptPart(ModelObject part, ref int setIndex, ref int minimumLevel)
@@ -444,8 +489,16 @@ namespace Client.Main.Objects.Effects
         {
             base.DrawAfter(gameTime);
 
-            if (!Visible || _effect == null || _activeSetIndex < 0 || Parent is not PlayerObject player)
+            if (!Visible || _activeSetIndex < 0 || Parent is not PlayerObject player)
                 return;
+
+            EnsureTransientBuffers();
+            EnsureTexturePreparationStarted();
+            if (_texturePreparationTask is { IsCompleted: false })
+                return;
+
+            EnsureFallbackTextures();
+            EnsureRenderEffect();
 
             float parentAlpha = MathHelper.Clamp(player.TotalAlpha, 0f, 1f);
             if (parentAlpha <= 0.05f)
@@ -485,9 +538,8 @@ namespace Client.Main.Objects.Effects
             if (_lightTexture == null || _lightTexture.IsDisposed)
                 return;
 
-            Matrix inverseView = Matrix.Invert(Camera.Instance.View);
-            Vector3 cameraRight = inverseView.Right;
-            Vector3 cameraUp = inverseView.Up;
+            Vector3 cameraRight = Camera.Instance.Right;
+            Vector3 cameraUp = Camera.Instance.Up;
             int quadCount = 0;
 
             // The original suppresses these six lights while cloaked. Alpha is the reliable
@@ -620,9 +672,8 @@ namespace Client.Main.Objects.Effects
             if (_flareTexture == null || _flareTexture.IsDisposed)
                 return;
 
-            Matrix inverseView = Matrix.Invert(Camera.Instance.View);
-            Vector3 cameraRight = inverseView.Right;
-            Vector3 cameraUp = inverseView.Up;
+            Vector3 cameraRight = Camera.Instance.Right;
+            Vector3 cameraUp = Camera.Instance.Up;
             Vector3 center = player.WorldPosition.Translation;
             int quadCount = 0;
 
@@ -664,8 +715,7 @@ namespace Client.Main.Objects.Effects
             int vertexCount = 0;
             int indexCount = 0;
             Vector3 cameraPosition = Camera.Instance.Position;
-            Matrix inverseView = Matrix.Invert(Camera.Instance.View);
-            Vector3 cameraRight = inverseView.Right;
+            Vector3 cameraRight = Camera.Instance.Right;
 
             for (int trailIndex = 0; trailIndex < _trails.Length; trailIndex++)
             {
@@ -737,18 +787,15 @@ namespace Client.Main.Objects.Effects
                 return;
 
             _effect.Texture = _flareTexture;
-            foreach (EffectPass pass in _effect.CurrentTechnique.Passes)
-            {
-                pass.Apply();
-                GraphicsDevice.DrawUserIndexedPrimitives(
-                    PrimitiveType.TriangleList,
-                    _trailVertices,
-                    0,
-                    vertexCount,
-                    _trailIndices,
-                    0,
-                    indexCount / 3);
-            }
+            _effect.CurrentTechnique.Passes[0].Apply();
+            GraphicsDevice.DrawUserIndexedPrimitives(
+                PrimitiveType.TriangleList,
+                _trailVertices,
+                0,
+                vertexCount,
+                _trailIndices,
+                0,
+                indexCount / 3);
         }
 
         private void DrawBillboardBatch(Texture2D texture, int quadCount)
@@ -757,18 +804,15 @@ namespace Client.Main.Objects.Effects
                 return;
 
             _effect.Texture = texture;
-            foreach (EffectPass pass in _effect.CurrentTechnique.Passes)
-            {
-                pass.Apply();
-                GraphicsDevice.DrawUserIndexedPrimitives(
-                    PrimitiveType.TriangleList,
-                    _billboardVertices,
-                    0,
-                    quadCount * 4,
-                    _billboardIndices,
-                    0,
-                    quadCount * 2);
-            }
+            _effect.CurrentTechnique.Passes[0].Apply();
+            GraphicsDevice.DrawUserIndexedPrimitives(
+                PrimitiveType.TriangleList,
+                _billboardVertices,
+                0,
+                quadCount * 4,
+                BillboardIndices,
+                0,
+                quadCount * 2);
         }
 
         private void WriteBillboardQuad(
@@ -787,21 +831,6 @@ namespace Client.Main.Objects.Effects
                 center + right + up, color, new Vector2(1f, 0f));
             _billboardVertices[vertex + 3] = new VertexPositionColorTexture(
                 center - right + up, color, new Vector2(0f, 0f));
-        }
-
-        private static void BuildStaticIndices(short[] indices, int quadCapacity)
-        {
-            for (int i = 0; i < quadCapacity; i++)
-            {
-                int vertex = i * 4;
-                int index = i * 6;
-                indices[index] = checked((short)vertex);
-                indices[index + 1] = checked((short)(vertex + 1));
-                indices[index + 2] = checked((short)(vertex + 2));
-                indices[index + 3] = checked((short)vertex);
-                indices[index + 4] = checked((short)(vertex + 2));
-                indices[index + 5] = checked((short)(vertex + 3));
-            }
         }
 
         private OrbitTrail GetTrailSlot()
@@ -877,10 +906,16 @@ namespace Client.Main.Objects.Effects
 
         private void ClearTransientEffects()
         {
-            Array.Clear(_torsoParticles, 0, _torsoParticles.Length);
-            Array.Clear(_orbitParticles, 0, _orbitParticles.Length);
-            for (int i = 0; i < _trails.Length; i++)
-                _trails[i].Reset();
+            if (_torsoParticles != null)
+                Array.Clear(_torsoParticles, 0, _torsoParticles.Length);
+            if (_orbitParticles != null)
+                Array.Clear(_orbitParticles, 0, _orbitParticles.Length);
+            if (_trails != null)
+            {
+                for (int i = 0; i < _trails.Length; i++)
+                    _trails[i].Reset();
+            }
+
             _legacyAccumulator = 0f;
             _renderInterpolation = 0f;
         }
@@ -1027,6 +1062,7 @@ namespace Client.Main.Objects.Effects
 
         public override void Dispose()
         {
+            _disposed = true;
             _effect?.Dispose();
             _effect = null;
             if (_ownsLightTexture)

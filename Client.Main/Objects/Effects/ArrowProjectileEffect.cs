@@ -61,7 +61,7 @@ namespace Client.Main.Objects.Effects
         private readonly DynamicLight[] _lights = new DynamicLight[MaxProjectiles];
         private readonly VertexPositionColorTexture[] _vertices =
             new VertexPositionColorTexture[MaxBillboardQuads * 4];
-        private readonly short[] _indices = new short[MaxBillboardQuads * 6];
+        private static readonly short[] Indices = QuadIndexCache.Get(MaxBillboardQuads);
 
         private ProjectileModelRenderer? _modelRenderer;
         private Texture2D? _fireTexture;
@@ -210,7 +210,6 @@ namespace Client.Main.Objects.Effects
                 new Vector3(-2600f, -2600f, -600f),
                 new Vector3(2600f, 2600f, 1600f));
 
-            BuildStaticIndices();
         }
 
         public override async Task LoadContent()
@@ -923,7 +922,7 @@ namespace Client.Main.Objects.Effects
                     _vertices,
                     0,
                     quadCount * 4,
-                    _indices,
+                    Indices,
                     0,
                     quadCount * 2);
             }
@@ -971,7 +970,7 @@ namespace Client.Main.Objects.Effects
                     _vertices,
                     0,
                     quadCount * 4,
-                    _indices,
+                    Indices,
                     0,
                     quadCount * 2);
             }
@@ -986,20 +985,7 @@ namespace Client.Main.Objects.Effects
             _vertices[v + 3] = new VertexPositionColorTexture(position - right + up, color, new Vector2(0f, 0f));
         }
 
-        private void BuildStaticIndices()
-        {
-            for (int quad = 0; quad < MaxBillboardQuads; quad++)
-            {
-                int vertex = quad * 4;
-                int index = quad * 6;
-                _indices[index] = (short)vertex;
-                _indices[index + 1] = (short)(vertex + 1);
-                _indices[index + 2] = (short)(vertex + 2);
-                _indices[index + 3] = (short)vertex;
-                _indices[index + 4] = (short)(vertex + 2);
-                _indices[index + 5] = (short)(vertex + 3);
-            }
-        }
+
 
         private Vector3 ResolveStartPosition()
         {

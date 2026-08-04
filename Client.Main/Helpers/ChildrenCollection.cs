@@ -9,16 +9,6 @@ namespace Client.Main.Helpers
         T Parent { get; set; }
     }
 
-    public class ChildrenEventArgs<T> where T : class, IChildItem<T>
-    {
-        public T Control { get; }
-
-        public ChildrenEventArgs(T control)
-        {
-            Control = control;
-        }
-    }
-
     public class ChildrenCollection<T> : ICollection<T> where T : class, IChildItem<T>
     {
         private List<T> _controls = new List<T>();
@@ -31,8 +21,8 @@ namespace Client.Main.Helpers
         public int Count => Volatile.Read(ref _count);
         public bool IsReadOnly => false;
 
-        public event EventHandler<ChildrenEventArgs<T>> ControlAdded;
-        public event EventHandler<ChildrenEventArgs<T>> ControlRemoved;
+        public event Action<T> ControlAdded;
+        public event Action<T> ControlRemoved;
 
         internal ChildrenCollection(T parent)
         {
@@ -47,13 +37,7 @@ namespace Client.Main.Helpers
 
         public T this[int index]
         {
-            get
-            {
-                lock (_lock)
-                {
-                    return _controls[index];
-                }
-            }
+            get => GetSnapshotArray()[index];
             set => throw new NotImplementedException("Not implemented set index in ChildrenCollection");
         }
 
@@ -102,7 +86,7 @@ namespace Client.Main.Helpers
                 InvalidateSnapshot();
                 Volatile.Write(ref _count, _controls.Count);
             }
-            ControlAdded?.Invoke(this, new ChildrenEventArgs<T>(control));
+            ControlAdded?.Invoke(control);
         }
 
         internal void Add(object value)
@@ -133,7 +117,7 @@ namespace Client.Main.Helpers
             if (removed)
             {
                 control.Parent = null;
-                ControlRemoved?.Invoke(this, new ChildrenEventArgs<T>(control));
+                ControlRemoved?.Invoke(control);
             }
             return removed;
         }
@@ -148,15 +132,13 @@ namespace Client.Main.Helpers
                 Volatile.Write(ref _count, _controls.Count);
             }
 
-            ControlAdded?.Invoke(this, new ChildrenEventArgs<T>(control));
+            ControlAdded?.Invoke(control);
         }
 
         public T[] ToArray()
         {
-            lock (_lock)
-            {
-                return _controls.ToArray();
-            }
+            T[] snapshot = GetSnapshotArray();
+            return snapshot.Length == 0 ? Array.Empty<T>() : (T[])snapshot.Clone();
         }
 
         public Enumerator GetEnumerator() => new(GetSnapshotArray());
@@ -200,10 +182,8 @@ namespace Client.Main.Helpers
 
         public void CopyTo(T[] array, int arrayIndex)
         {
-            lock (_lock)
-            {
-                _controls.CopyTo(array, arrayIndex);
-            }
+            T[] snapshot = GetSnapshotArray();
+            Array.Copy(snapshot, 0, array, arrayIndex, snapshot.Length);
         }
 
         public bool Remove(T control)
@@ -222,7 +202,7 @@ namespace Client.Main.Helpers
             if (removed)
             {
                 control.Parent = null;
-                ControlRemoved?.Invoke(this, new ChildrenEventArgs<T>(control));
+                ControlRemoved?.Invoke(control);
             }
 
             return removed;
@@ -240,7 +220,7 @@ namespace Client.Main.Helpers
             }
 
             control.Parent = null;
-            ControlRemoved?.Invoke(this, new ChildrenEventArgs<T>(control));
+            ControlRemoved?.Invoke(control);
         }
 
         public void Clear()
@@ -257,7 +237,7 @@ namespace Client.Main.Helpers
             foreach (var control in controls)
             {
                 control.Parent = null;
-                ControlRemoved?.Invoke(this, new ChildrenEventArgs<T>(control));
+                ControlRemoved?.Invoke(control);
             }
         }
 

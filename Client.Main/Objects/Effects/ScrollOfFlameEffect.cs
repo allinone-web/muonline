@@ -65,17 +65,16 @@ namespace Client.Main.Objects.Effects
         private Texture2D? _flameTexture;
         private readonly FlameParticle[] _particles = new FlameParticle[MaxFlameParticles];
         private int _particleCount;
+        private int _lateWorldDrawFrame = -1;
 
         private readonly VertexPositionColorTexture[] _terrainVertices =
             new VertexPositionColorTexture[MaxTerrainQuads * 4];
-        private readonly short[] _terrainIndices = new short[MaxTerrainQuads * 6];
+        private static readonly short[] QuadIndices = QuadIndexCache.Get(MaxFlameParticles);
         private int _terrainQuadCount;
-        private int _terrainVertexCount;
         private bool _terrainMeshBuilt;
 
         private readonly VertexPositionColorTexture[] _particleVertices =
             new VertexPositionColorTexture[MaxFlameParticles * 4];
-        private readonly short[] _particleIndices = new short[MaxFlameParticles * 6];
 
         private struct FlameParticle
         {
@@ -121,22 +120,6 @@ namespace Client.Main.Objects.Effects
                 Radius = Constants.TERRAIN_SCALE * 3f,
                 Intensity = 1f
             };
-            InitializeParticleIndices();
-        }
-
-        private void InitializeParticleIndices()
-        {
-            for (int i = 0; i < MaxFlameParticles; i++)
-            {
-                int vertex = i * 4;
-                int index = i * 6;
-                _particleIndices[index] = (short)vertex;
-                _particleIndices[index + 1] = (short)(vertex + 1);
-                _particleIndices[index + 2] = (short)(vertex + 2);
-                _particleIndices[index + 3] = (short)vertex;
-                _particleIndices[index + 4] = (short)(vertex + 2);
-                _particleIndices[index + 5] = (short)(vertex + 3);
-            }
         }
 
         public override async Task LoadContent()
@@ -184,8 +167,12 @@ namespace Client.Main.Objects.Effects
             if (!Visible || _flameTexture == null)
                 return;
 
-            if (!LateWorldDrawQueue.Contains(this))
+            int frame = MuGame.FrameIndex;
+            if (_lateWorldDrawFrame != frame)
+            {
+                _lateWorldDrawFrame = frame;
                 LateWorldDrawQueue.Add(this);
+            }
         }
 
         public static void FlushLateWorldDraws(WorldControl world)
@@ -282,20 +269,14 @@ namespace Client.Main.Objects.Effects
                 BuildTerrainMesh();
 
             int terrainQuads = 0;
+            Vector3 terrainDiffuse = Vector3.One;
             if (_time < _effectLifetime)
             {
                 float luminosity = (MuGame.Random.Next(4) + 8) * 0.1f;
-                Color terrainColor = new Color(luminosity, luminosity, luminosity, 1f);
-
-                if (_terrainMeshBuilt)
-                {
-                    SetTerrainColor(terrainColor);
-                    terrainQuads = _terrainQuadCount;
-                }
-                else
-                {
-                    terrainQuads = BuildFallbackTerrainMesh(terrainColor);
-                }
+                terrainDiffuse = new Vector3(luminosity);
+                terrainQuads = _terrainMeshBuilt
+                    ? _terrainQuadCount
+                    : BuildFallbackTerrainMesh();
             }
 
             int particleQuads = BuildParticleVertices(camera);
@@ -312,6 +293,7 @@ namespace Client.Main.Objects.Effects
             Matrix previousWorld = effect.World;
             Matrix previousView = effect.View;
             Matrix previousProjection = effect.Projection;
+            Vector3 previousDiffuseColor = effect.DiffuseColor;
 
             try
             {
@@ -328,10 +310,13 @@ namespace Client.Main.Objects.Effects
                 effect.View = camera.View;
                 effect.Projection = camera.Projection;
 
+                effect.DiffuseColor = terrainDiffuse;
                 DrawQuads(device, effect, _terrainVertices, terrainQuads * 4,
-                    _terrainIndices, terrainQuads * 6);
+                    QuadIndices, terrainQuads * 6);
+
+                effect.DiffuseColor = Vector3.One;
                 DrawQuads(device, effect, _particleVertices, particleQuads * 4,
-                    _particleIndices, particleQuads * 6);
+                    QuadIndices, particleQuads * 6);
             }
             finally
             {
@@ -342,6 +327,7 @@ namespace Client.Main.Objects.Effects
                 effect.World = previousWorld;
                 effect.View = previousView;
                 effect.Projection = previousProjection;
+                effect.DiffuseColor = previousDiffuseColor;
 
                 device.BlendState = previousBlend;
                 device.DepthStencilState = previousDepth;
@@ -435,19 +421,11 @@ namespace Client.Main.Objects.Effects
                     _terrainVertices[vertex + 3] = new VertexPositionColorTexture(
                         TerrainVertex(terrain, worldX, worldY + Constants.TERRAIN_SCALE), Color.White, uv01);
 
-                    int index = quad * 6;
-                    _terrainIndices[index] = (short)vertex;
-                    _terrainIndices[index + 1] = (short)(vertex + 1);
-                    _terrainIndices[index + 2] = (short)(vertex + 2);
-                    _terrainIndices[index + 3] = (short)vertex;
-                    _terrainIndices[index + 4] = (short)(vertex + 2);
-                    _terrainIndices[index + 5] = (short)(vertex + 3);
                     quad++;
                 }
             }
 
             _terrainQuadCount = quad;
-            _terrainVertexCount = quad * 4;
             _terrainMeshBuilt = true;
         }
 
@@ -469,35 +447,19 @@ namespace Client.Main.Objects.Effects
                 (x * sin + y * cos) + 0.5f);
         }
 
-        private int BuildFallbackTerrainMesh(Color color)
+        private int BuildFallbackTerrainMesh()
         {
             const float halfSize = Constants.TERRAIN_SCALE;
             float z = _center.Z + TerrainHeightOffset;
             _terrainVertices[0] = new VertexPositionColorTexture(
-                new Vector3(_center.X - halfSize, _center.Y - halfSize, z), color, new Vector2(0f, 0f));
+                new Vector3(_center.X - halfSize, _center.Y - halfSize, z), Color.White, new Vector2(0f, 0f));
             _terrainVertices[1] = new VertexPositionColorTexture(
-                new Vector3(_center.X + halfSize, _center.Y - halfSize, z), color, new Vector2(1f, 0f));
+                new Vector3(_center.X + halfSize, _center.Y - halfSize, z), Color.White, new Vector2(1f, 0f));
             _terrainVertices[2] = new VertexPositionColorTexture(
-                new Vector3(_center.X + halfSize, _center.Y + halfSize, z), color, new Vector2(1f, 1f));
+                new Vector3(_center.X + halfSize, _center.Y + halfSize, z), Color.White, new Vector2(1f, 1f));
             _terrainVertices[3] = new VertexPositionColorTexture(
-                new Vector3(_center.X - halfSize, _center.Y + halfSize, z), color, new Vector2(0f, 1f));
-            _terrainIndices[0] = 0;
-            _terrainIndices[1] = 1;
-            _terrainIndices[2] = 2;
-            _terrainIndices[3] = 0;
-            _terrainIndices[4] = 2;
-            _terrainIndices[5] = 3;
+                new Vector3(_center.X - halfSize, _center.Y + halfSize, z), Color.White, new Vector2(0f, 1f));
             return 1;
-        }
-
-        private void SetTerrainColor(Color color)
-        {
-            for (int i = 0; i < _terrainVertexCount; i++)
-            {
-                VertexPositionColorTexture vertex = _terrainVertices[i];
-                _terrainVertices[i] = new VertexPositionColorTexture(
-                    vertex.Position, color, vertex.TextureCoordinate);
-            }
         }
 
         private int BuildParticleVertices(Camera camera)
@@ -505,19 +467,8 @@ namespace Client.Main.Objects.Effects
             if (_flameTexture == null)
                 return 0;
 
-            Vector3 direction = camera.Target - camera.Position;
-            if (direction.LengthSquared() < 0.0001f)
-                direction = Vector3.UnitY;
-            else
-                direction.Normalize();
-
-            Vector3 right = Vector3.Cross(direction, Vector3.UnitZ);
-            if (right.LengthSquared() < 0.0001f)
-                right = Vector3.UnitX;
-            else
-                right.Normalize();
-
-            Vector3 up = Vector3.Cross(right, direction);
+            Vector3 right = camera.Right;
+            Vector3 up = camera.Up;
             int quad = 0;
 
             for (int i = 0; i < _particleCount && quad < MaxFlameParticles; i++)
@@ -538,13 +489,6 @@ namespace Client.Main.Objects.Effects
                 _particleVertices[vertex + 3] = new VertexPositionColorTexture(
                     particle.Position - halfRight + halfUp, Color.White, new Vector2(0f, 0f));
 
-                int index = quad * 6;
-                _particleIndices[index] = (short)vertex;
-                _particleIndices[index + 1] = (short)(vertex + 1);
-                _particleIndices[index + 2] = (short)(vertex + 2);
-                _particleIndices[index + 3] = (short)vertex;
-                _particleIndices[index + 4] = (short)(vertex + 2);
-                _particleIndices[index + 5] = (short)(vertex + 3);
                 quad++;
             }
 
@@ -562,10 +506,9 @@ namespace Client.Main.Objects.Effects
             if (vertexCount == 0 || indexCount == 0)
                 return;
 
-            foreach (EffectPass pass in effect.CurrentTechnique.Passes)
-            {
-                pass.Apply();
-                device.DrawUserIndexedPrimitives(
+            EffectPass pass = effect.CurrentTechnique.Passes[0];
+            pass.Apply();
+            device.DrawUserIndexedPrimitives(
                     PrimitiveType.TriangleList,
                     vertices,
                     0,
@@ -573,7 +516,6 @@ namespace Client.Main.Objects.Effects
                     indices,
                     0,
                     indexCount / 3);
-            }
         }
 
         private void UpdateDamage()

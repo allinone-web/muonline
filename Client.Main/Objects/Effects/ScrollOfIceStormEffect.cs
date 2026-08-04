@@ -43,7 +43,7 @@ namespace Client.Main.Objects.Effects
         private readonly BillboardParticle[] _particles = new BillboardParticle[MaxParticles];
         private readonly VertexPositionColorTexture[] _vertices =
             new VertexPositionColorTexture[MaxBillboardQuads * 4];
-        private readonly short[] _indices = new short[MaxBillboardQuads * 6];
+        private static readonly short[] Indices = QuadIndexCache.Get(MaxBillboardQuads);
 
         private Vector3 _center;
         private string _blizzardPath = DefaultBlizzardPath;
@@ -77,7 +77,6 @@ namespace Client.Main.Objects.Effects
                 new Vector3(-520f, -420f, -120f),
                 new Vector3(520f, 420f, 1180f));
 
-            BuildStaticIndices();
         }
 
         public override async Task LoadContent()
@@ -434,9 +433,8 @@ namespace Client.Main.Objects.Effects
             Texture2D texture,
             BlendState blendState)
         {
-            Matrix inverseView = Matrix.Invert(Camera.Instance.View);
-            Vector3 cameraRight = inverseView.Right;
-            Vector3 cameraUp = inverseView.Up;
+            Vector3 cameraRight = Camera.Instance.Right;
+            Vector3 cameraUp = Camera.Instance.Up;
             int quadCount = 0;
 
             for (int i = 0; i < _particleCount && quadCount < MaxBillboardQuads; i++)
@@ -476,9 +474,8 @@ namespace Client.Main.Objects.Effects
 
         private void DrawShardCores(BasicEffect effect, Texture2D texture, bool strongCore)
         {
-            Matrix inverseView = Matrix.Invert(Camera.Instance.View);
-            Vector3 cameraRight = inverseView.Right;
-            Vector3 cameraUp = inverseView.Up;
+            Vector3 cameraRight = Camera.Instance.Right;
+            Vector3 cameraUp = Camera.Instance.Up;
             int quadCount = 0;
 
             for (int i = 0; i < _shards.Length && quadCount < MaxBillboardQuads; i++)
@@ -532,7 +529,7 @@ namespace Client.Main.Objects.Effects
                     _vertices,
                     0,
                     quadCount * 4,
-                    _indices,
+                    Indices,
                     0,
                     quadCount * 2);
             }
@@ -564,20 +561,7 @@ namespace Client.Main.Objects.Effects
                 new Vector2(0f, 0f));
         }
 
-        private void BuildStaticIndices()
-        {
-            for (int quad = 0; quad < MaxBillboardQuads; quad++)
-            {
-                int vertex = quad * 4;
-                int index = quad * 6;
-                _indices[index] = (short)vertex;
-                _indices[index + 1] = (short)(vertex + 1);
-                _indices[index + 2] = (short)(vertex + 2);
-                _indices[index + 3] = (short)vertex;
-                _indices[index + 4] = (short)(vertex + 2);
-                _indices[index + 5] = (short)(vertex + 3);
-            }
-        }
+
 
         private static async Task<Texture2D?> PrepareFirstTexture(params string[] candidates)
         {

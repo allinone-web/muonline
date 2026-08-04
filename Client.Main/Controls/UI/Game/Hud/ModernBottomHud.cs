@@ -848,20 +848,15 @@ namespace Client.Main.Controls.UI.Game.Hud
                 return;
             }
 
-            var infos = new CompanionLifeInfo[2];
             int count = 0;
             for (int i = 0; i < _companionInfos.Length; i++)
             {
                 if (_companionInfos[i].HasValue)
-                {
-                    infos[count++] = _companionInfos[i]!.Value;
-                }
+                    count++;
             }
 
             if (count == 0)
-            {
                 return;
-            }
 
             int barHeight = 13;
             int barGap = 6;
@@ -869,11 +864,16 @@ namespace Client.Main.Controls.UI.Game.Hud
             int totalWidth = (count * barWidth) + ((count - 1) * barGap);
             int startX = _panelRect.Center.X - (totalWidth / 2);
             int y = _panelRect.Y + 4;
+            int drawn = 0;
 
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < _companionInfos.Length; i++)
             {
-                var rect = new Rectangle(startX + i * (barWidth + barGap), y, barWidth, barHeight);
-                DrawCompanionLifeBar(sb, pixel, rect, infos[i]);
+                if (!_companionInfos[i].HasValue)
+                    continue;
+
+                var rect = new Rectangle(startX + drawn * (barWidth + barGap), y, barWidth, barHeight);
+                DrawCompanionLifeBar(sb, pixel, rect, _companionInfos[i]!.Value);
+                drawn++;
             }
         }
 

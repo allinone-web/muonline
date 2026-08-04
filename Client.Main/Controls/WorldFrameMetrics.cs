@@ -13,6 +13,11 @@ namespace Client.Main.Controls
         public int SolidInFrontObjects { get; internal set; }
         public int TransparentObjects { get; internal set; }
         public int SpriteBatchObjects { get; internal set; }
+        public int DedicatedParticleSystems { get; internal set; }
+        public int ParticleSprites { get; internal set; }
+        public int ParticleBatchBegins { get; internal set; }
+        public int ParticleSystemsCulled { get; internal set; }
+        public int InactiveParticleSystemsSkipped { get; internal set; }
         public int ModelObjects { get; internal set; }
         public int DedicatedStaticMapObjects { get; internal set; }
         public int StaticMapUpdateSkips { get; internal set; }
@@ -43,6 +48,11 @@ namespace Client.Main.Controls
             SolidInFrontObjects = 0;
             TransparentObjects = 0;
             SpriteBatchObjects = 0;
+            DedicatedParticleSystems = 0;
+            ParticleSprites = 0;
+            ParticleBatchBegins = 0;
+            ParticleSystemsCulled = 0;
+            InactiveParticleSystemsSkipped = 0;
             ModelObjects = 0;
             DedicatedStaticMapObjects = 0;
             StaticMapUpdateSkips = 0;

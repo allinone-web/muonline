@@ -546,7 +546,7 @@ namespace Client.Main.Objects.Effects
 
             private readonly Particle[] _particles = new Particle[MaxParticles];
             private readonly VertexPositionColorTexture[] _verts = new VertexPositionColorTexture[MaxParticles * 4];
-            private readonly short[] _idx = new short[MaxParticles * 6];
+            private static readonly short[] Indices = QuadIndexCache.Get(MaxParticles);
             private int _count;
             private float _spawnTimer, _time;
             private bool _emitting = true;
@@ -561,7 +561,6 @@ namespace Client.Main.Objects.Effects
                 DepthState = DepthStencilState.DepthRead;
                 // Covers entire meteor trajectory
                 BoundingBoxLocal = new BoundingBox(new Vector3(-5000f), new Vector3(5000f));
-                InitIdx();
             }
 
             public void StopEmitting() => _emitting = false;
@@ -708,7 +707,7 @@ namespace Client.Main.Objects.Effects
                     foreach (var pass in fx.CurrentTechnique.Passes)
                     {
                         pass.Apply();
-                        gd.DrawUserIndexedPrimitives(PrimitiveType.TriangleList, _verts, 0, q * 4, _idx, 0, q * 2);
+                        gd.DrawUserIndexedPrimitives(PrimitiveType.TriangleList, _verts, 0, q * 4, Indices, 0, q * 2);
                     }
                 }
 
@@ -718,15 +717,7 @@ namespace Client.Main.Objects.Effects
                 gd.RasterizerState = prevRaster; gd.SamplerStates[0] = prevSamp;
             }
 
-            private void InitIdx()
-            {
-                for (int i = 0; i < MaxParticles; i++)
-                {
-                    int vi = i * 4, ii = i * 6;
-                    _idx[ii] = (short)vi; _idx[ii + 1] = (short)(vi + 1); _idx[ii + 2] = (short)(vi + 2);
-                    _idx[ii + 3] = (short)vi; _idx[ii + 4] = (short)(vi + 2); _idx[ii + 5] = (short)(vi + 3);
-                }
-            }
+
 
             private void RemoveSelf() { World?.RemoveObject(this); Dispose(); }
             private static float Rnd(float a, float b) => (float)(MuGame.Random.NextDouble() * (b - a) + a);

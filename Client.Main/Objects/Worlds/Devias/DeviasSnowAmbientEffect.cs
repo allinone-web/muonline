@@ -45,7 +45,7 @@ namespace Client.Main.Objects.Worlds.Devias
         private readonly string[] _texturePaths;
         private Texture2D[] _textures;
         private VertexPositionColorTexture[][] _verticesPerTexture;
-        private short[][] _indicesPerTexture;
+        private short[] _indices;
         private int[] _renderCounts;
 
         private readonly List<SnowParticle> _particles = new();
@@ -139,7 +139,7 @@ namespace Client.Main.Objects.Worlds.Devias
         {
             _textures = new Texture2D[_texturePaths.Length];
             _verticesPerTexture = new VertexPositionColorTexture[_texturePaths.Length][];
-            _indicesPerTexture = new short[_texturePaths.Length][];
+            _indices = QuadIndexCache.Get(_maxParticles);
             _renderCounts = new int[_texturePaths.Length];
 
             for (int i = 0; i < _texturePaths.Length; i++)
@@ -149,21 +149,7 @@ namespace Client.Main.Objects.Worlds.Devias
                 var rawTexture = TextureLoader.Instance.GetTexture2D(path) ?? GraphicsManager.Instance.Pixel;
                 _textures[i] = CreateMaskedTexture(rawTexture);
 
-                var vertices = new VertexPositionColorTexture[_maxParticles * 4];
-                var indices = new short[_maxParticles * 6];
-                for (int p = 0; p < _maxParticles; p++)
-                {
-                    int vOffset = p * 4;
-                    int iOffset = p * 6;
-                    indices[iOffset] = (short)vOffset;
-                    indices[iOffset + 1] = (short)(vOffset + 1);
-                    indices[iOffset + 2] = (short)(vOffset + 2);
-                    indices[iOffset + 3] = (short)vOffset;
-                    indices[iOffset + 4] = (short)(vOffset + 2);
-                    indices[iOffset + 5] = (short)(vOffset + 3);
-                }
-                _verticesPerTexture[i] = vertices;
-                _indicesPerTexture[i] = indices;
+                _verticesPerTexture[i] = new VertexPositionColorTexture[_maxParticles * 4];
             }
 
             await base.LoadContent();
@@ -356,7 +342,7 @@ namespace Client.Main.Objects.Worlds.Devias
                         _verticesPerTexture[t],
                         0,
                         count * 4,
-                        _indicesPerTexture[t],
+                        _indices,
                         0,
                         count * 2);
                 }

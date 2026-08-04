@@ -58,7 +58,7 @@ namespace Client.Main.Objects.Worlds.Icarus
 
         private readonly VertexPositionColorTexture[] _vertices =
             new VertexPositionColorTexture[PatchCount * VerticesPerPatch];
-        private readonly short[] _indices = new short[PatchCount * IndicesPerPatch];
+        private static readonly short[] Indices = QuadIndexCache.Get(PatchCount);
         private readonly Vector4[] _patchBaseColors = new Vector4[PatchCount];
         private readonly float[] _patchPulsePhases = new float[PatchCount];
         private readonly int[] _anchorCellX = new int[LayerCount];
@@ -83,7 +83,6 @@ namespace Client.Main.Objects.Worlds.Icarus
 
             Array.Fill(_anchorCellX, int.MinValue);
             Array.Fill(_anchorCellY, int.MinValue);
-            InitializeIndices();
         }
 
         public override async Task Load()
@@ -169,18 +168,15 @@ namespace Client.Main.Objects.Worlds.Icarus
                         drift.Y,
                         verticalOffset);
 
-                    foreach (EffectPass pass in _effect.CurrentTechnique.Passes)
-                    {
-                        pass.Apply();
-                        GraphicsDevice.DrawUserIndexedPrimitives(
-                            PrimitiveType.TriangleList,
-                            _vertices,
-                            0,
-                            _vertices.Length,
-                            _indices,
-                            layer * IndicesPerLayer,
-                            PatchesPerLayer * 2);
-                    }
+                    _effect.CurrentTechnique.Passes[0].Apply();
+                    GraphicsDevice.DrawUserIndexedPrimitives(
+                        PrimitiveType.TriangleList,
+                        _vertices,
+                        0,
+                        _vertices.Length,
+                        Indices,
+                        layer * IndicesPerLayer,
+                        PatchesPerLayer * 2);
                 }
             }
             finally
@@ -199,22 +195,6 @@ namespace Client.Main.Objects.Worlds.Icarus
             _effect = null;
             _cloudTexture = null; // Owned by TextureLoader.
             base.Dispose();
-        }
-
-        private void InitializeIndices()
-        {
-            for (int patch = 0; patch < PatchCount; patch++)
-            {
-                int vertex = patch * VerticesPerPatch;
-                int index = patch * IndicesPerPatch;
-
-                _indices[index] = (short)vertex;
-                _indices[index + 1] = (short)(vertex + 1);
-                _indices[index + 2] = (short)(vertex + 2);
-                _indices[index + 3] = (short)vertex;
-                _indices[index + 4] = (short)(vertex + 2);
-                _indices[index + 5] = (short)(vertex + 3);
-            }
         }
 
         private void UpdateAnchors(bool force)

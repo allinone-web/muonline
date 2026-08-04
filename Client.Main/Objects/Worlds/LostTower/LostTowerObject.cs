@@ -345,19 +345,13 @@ namespace Client.Main.Objects.Worlds.LostTower
             // bitmap's pixel dimensions. Project those camera-space offsets
             // instead of using a distance heuristic; the latter changes the
             // effect size and position with camera zoom/FOV.
-            Matrix inverseView = Matrix.Invert(Camera.Instance.View);
-            Vector3 viewPosition = Vector3.Transform(position, Camera.Instance.View);
             Vector3 projectedWidth = GraphicsDevice.Viewport.Project(
-                Vector3.Transform(
-                    viewPosition + new Vector3(texture.Width * scale, 0f, 0f),
-                    inverseView),
+                position + Camera.Instance.Right * (texture.Width * scale),
                 Camera.Instance.Projection,
                 Camera.Instance.View,
                 Matrix.Identity);
             Vector3 projectedHeight = GraphicsDevice.Viewport.Project(
-                Vector3.Transform(
-                    viewPosition + new Vector3(0f, texture.Height * scale, 0f),
-                    inverseView),
+                position + Camera.Instance.Up * (texture.Height * scale),
                 Camera.Instance.Projection,
                 Camera.Instance.View,
                 Matrix.Identity);

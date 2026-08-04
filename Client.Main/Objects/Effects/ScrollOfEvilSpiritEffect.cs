@@ -130,20 +130,7 @@ namespace Client.Main.Objects.Effects
             int maxSpirits = SpiritCount * 2;
             int maxQuads = maxSpirits * MaxTailCapacity * 2;  // 2 quads per segment (cross shape)
             _vertices = new VertexPositionColorTexture[maxQuads * 4];
-            _indices = new short[maxQuads * 6];
-
-            // Pre-build indices
-            for (int i = 0; i < maxQuads; i++)
-            {
-                int vi = i * 4;
-                int ii = i * 6;
-                _indices[ii + 0] = (short)(vi + 0);
-                _indices[ii + 1] = (short)(vi + 1);
-                _indices[ii + 2] = (short)(vi + 2);
-                _indices[ii + 3] = (short)(vi + 0);
-                _indices[ii + 4] = (short)(vi + 2);
-                _indices[ii + 5] = (short)(vi + 3);
-            }
+            _indices = QuadIndexCache.Get(maxQuads);
         }
 
         private void InitializeSpirits()

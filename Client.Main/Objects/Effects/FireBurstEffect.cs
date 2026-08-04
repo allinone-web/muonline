@@ -47,7 +47,7 @@ namespace Client.Main.Objects.Effects
         private readonly CastFlashState[] _castFlashes = new CastFlashState[2];
         private readonly VertexPositionColorTexture[] _billboardVertices =
             new VertexPositionColorTexture[MaxBillboardQuads * 4];
-        private readonly short[] _billboardIndices = new short[MaxBillboardQuads * 6];
+        private static readonly short[] BillboardIndices = QuadIndexCache.Get(MaxBillboardQuads);
 
         private SharedModelRenderer? _streamRenderer;
         private SharedModelRenderer? _trailRenderer;
@@ -118,7 +118,6 @@ namespace Client.Main.Objects.Effects
                 new Vector3(-1800f, -1800f, -500f),
                 new Vector3(1800f, 1800f, 900f));
 
-            BuildStaticIndices();
         }
 
         public override async Task LoadContent()
@@ -561,9 +560,8 @@ namespace Client.Main.Objects.Effects
             if (_fireTexture == null || _fireTexture.IsDisposed || _billboardEffect == null)
                 return;
 
-            Matrix inverseView = Matrix.Invert(Camera.Instance.View);
-            Vector3 cameraRight = inverseView.Right;
-            Vector3 cameraUp = inverseView.Up;
+            Vector3 cameraRight = Camera.Instance.Right;
+            Vector3 cameraUp = Camera.Instance.Up;
             int quadCount = 0;
 
             for (int i = 0; i < _trailSegments.Length && quadCount < MaxBillboardQuads; i++)
@@ -622,7 +620,7 @@ namespace Client.Main.Objects.Effects
                         _billboardVertices,
                         0,
                         quadCount * 4,
-                        _billboardIndices,
+                        BillboardIndices,
                         0,
                         quadCount * 2);
                 }
@@ -662,20 +660,7 @@ namespace Client.Main.Objects.Effects
                 new Vector2(0f, 0f));
         }
 
-        private void BuildStaticIndices()
-        {
-            for (int i = 0; i < MaxBillboardQuads; i++)
-            {
-                int vertex = i * 4;
-                int index = i * 6;
-                _billboardIndices[index] = checked((short)vertex);
-                _billboardIndices[index + 1] = checked((short)(vertex + 1));
-                _billboardIndices[index + 2] = checked((short)(vertex + 2));
-                _billboardIndices[index + 3] = checked((short)vertex);
-                _billboardIndices[index + 4] = checked((short)(vertex + 2));
-                _billboardIndices[index + 5] = checked((short)(vertex + 3));
-            }
-        }
+
 
         private bool HasActiveContent()
         {

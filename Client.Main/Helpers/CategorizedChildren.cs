@@ -1,8 +1,6 @@
 ﻿#nullable enable
 using System;
 using System.Collections.Generic;
-using System.Text;
-using static MUnique.OpenMU.Network.Packets.ClientToServer.LahapJewelMixRequest;
 
 namespace Client.Main.Helpers
 {
@@ -41,11 +39,12 @@ namespace Client.Main.Helpers
             foreach (var cat in _rules.Keys)
                 _cache.TryAdd(cat, new List<TItem>(16));
 
-            _children.ControlAdded += (_, e) => { Hook(e.Control); _dirty = true; };
-            _children.ControlRemoved += (_, e) => { Unhook(e.Control); _dirty = true; };
+            _children.ControlAdded += item => { Hook(item); _dirty = true; };
+            _children.ControlRemoved += item => { Unhook(item); _dirty = true; };
 
-            for (int i = 0; i < _children.Count; i++)
-                Hook(_children[i]);
+            var initialChildren = _children.GetSnapshotArray();
+            for (int i = 0; i < initialChildren.Length; i++)
+                Hook(initialChildren[i]);
         }
 
         public IReadOnlyList<TItem> Get(TCategory category)
@@ -85,12 +84,15 @@ namespace Client.Main.Helpers
 
             foreach (var kv in _cache) kv.Value.Clear();
 
-            for (int i = 0; i < _children.Count; i++)
+            var children = _children.GetSnapshotArray();
+            for (int i = 0; i < children.Length; i++)
             {
-                var item = _children[i];
+                var item = children[i];
                 foreach (var kv in _rules)
+                {
                     if (kv.Value.Predicate(item))
                         _cache[kv.Key].Add(item);
+                }
             }
 
             _dirty = false;
