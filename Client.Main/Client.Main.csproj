@@ -40,8 +40,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Client.Data\Client.Data.csproj" AdditionalProperties="PerformanceRelease=$(PerformanceRelease)" />
-    <ProjectReference Include="..\Client.Telemetry\Client.Telemetry.csproj" AdditionalProperties="PerformanceRelease=$(PerformanceRelease)" />
+    <ProjectReference Include="..\Client.Data\Client.Data.csproj" />
+    <ProjectReference Include="..\Client.Telemetry\Client.Telemetry.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -51,3 +51,4 @@
     </None>
   </ItemGroup>
 </Project>
+

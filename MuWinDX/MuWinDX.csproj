@@ -47,7 +47,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Client.Main\Client.Main.csproj"
-                      AdditionalProperties="MonoGameFramework=MonoGame.Framework.WindowsDX;PerformanceRelease=$(PerformanceRelease)" />
+                      AdditionalProperties="MonoGameFramework=MonoGame.Framework.WindowsDX" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(Configuration)' == 'Release' AND '$(PerformanceRelease)' == 'true'">
