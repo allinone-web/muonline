@@ -257,7 +257,7 @@ Build outputs are placed in `bin/Release/` directories.
 For the maximum-performance DirectX build, use the validated publish script:
 
 ```powershell
-./publish-release-performance.ps1
+./scripts/publish/windows-performance.ps1
 ```
 
 The script publishes a self-contained `win-x64` folder build with ReadyToRun, tiered compilation, dynamic PGO, optimized shaders, disabled runtime diagnostics, and a SHA-256 manifest. It also validates the generated runtime configuration before creating the archive.

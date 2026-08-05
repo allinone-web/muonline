@@ -17,7 +17,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $project = Join-Path $repoRoot "MuAndroid/MuAndroid.csproj"
 $output = Join-Path $repoRoot $OutputDirectory
 $archive = Join-Path $repoRoot "muonline-android.zip"

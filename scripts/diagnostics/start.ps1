@@ -4,7 +4,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $project = Join-Path $root 'MuDiagnostics.Web\MuDiagnostics.Web.csproj'
 
 if (-not $NoBuild) {

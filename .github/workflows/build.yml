@@ -59,7 +59,7 @@ jobs:
       - name: Publish ${{ matrix.name }} build
         shell: pwsh
         run: >
-          ./publish-windows-ci.ps1
+          ./scripts/publish/windows-ci.ps1
           -Backend "${{ matrix.backend }}"
           -OutputDirectory "publish-${{ matrix.backend }}"
 
@@ -130,7 +130,7 @@ jobs:
       - name: Publish ARM64 performance APK
         shell: pwsh
         run: >
-          ./publish-android-performance.ps1
+          ./scripts/publish/android-performance.ps1
           -Mode FullAot
           -PackageFormats apk
           -RuntimeIdentifier android-arm64

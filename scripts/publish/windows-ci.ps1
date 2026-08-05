@@ -9,7 +9,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 $normalizedBackend = if ($Backend -eq "DirectX") { "DirectX11" } else { $Backend }
 $settings = switch ($normalizedBackend) {
