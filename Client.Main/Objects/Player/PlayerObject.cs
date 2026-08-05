@@ -2911,9 +2911,15 @@ namespace Client.Main.Objects.Player
             float dist = Vector2.Distance(Location, RestPlaceTarget.Value);
             if (dist < 0.1f && !IsMoving && !IsOneShotPlaying)
             {
+                // Noria's type-38 rest place uses the original Healing action
+                // (the levitating meditation animation), not the regular Pose.
                 var restAction = world.WorldIndex == 4
-                    ? PlayerAction.PlayerPoseMale1
-                    : PlayerAction.PlayerPoseMale1;
+                    ? (PlayerActionMapper.IsCharacterFemale(CharacterClass)
+                        ? PlayerAction.PlayerHealingFemale1
+                        : PlayerAction.PlayerHealing1)
+                    : (PlayerActionMapper.IsCharacterFemale(CharacterClass)
+                        ? PlayerAction.PlayerPoseFemale1
+                        : PlayerAction.PlayerPoseMale1);
 
                 if (CurrentAction != restAction)
                 {

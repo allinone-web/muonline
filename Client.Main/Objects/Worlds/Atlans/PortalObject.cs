@@ -3,12 +3,22 @@ using Client.Main.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using System;
 using System.Threading.Tasks;
 
 namespace Client.Main.Objects.Worlds.Atlans
 {
     public class PortalObject : ModelObject
     {
+        // SourceMain sets Velocity to 0.05 on a 25 Hz update loop.
+        private const float PortalAnimationFramesPerSecond = 0.05f * 25f;
+
+        protected override bool AllowMapObjectInstancing => false;
+        protected override bool RequiresPerFrameAnimation => true;
+        protected override bool PreserveBlendMeshesInLowQuality => true;
+
+        public override bool IsStaticForCaching => false;
+
         public override async Task Load()
         {
             var idx = (Type + 1).ToString().PadLeft(2, '0');
@@ -18,23 +28,71 @@ namespace Client.Main.Objects.Worlds.Atlans
             LightEnabled = true;
             IsTransparent = true;
             Model = await BMDLoader.Instance.Prepare($"Object8/Object{idx}.bmd");
+            RemoveDuplicateTerminalFrame();
 
-            // Ensure smooth continuous animation for portal
             CurrentAction = 0;
-            AnimationSpeed = 2.0f; // Consistent animation speed
-            ContinuousAnimation = true; // Enable continuous looping
+            AnimationSpeed = PortalAnimationFramesPerSecond;
+            ContinuousAnimation = true;
 
             await base.Load();
         }
 
         public override void Update(GameTime gameTime)
         {
+            if (Status == GameControlStatus.Ready)
+            {
+                float worldTimeMilliseconds = (float)gameTime.TotalGameTime.TotalMilliseconds;
+                BlendMeshLight = MathF.Sin(worldTimeMilliseconds * 0.004f) * 0.3f + 0.5f;
+            }
+
             base.Update(gameTime);
         }
 
         public override void Draw(GameTime gameTime)
         {
             base.Draw(gameTime);
+        }
+
+        private void RemoveDuplicateTerminalFrame()
+        {
+            var action = Model?.Actions is { Length: > 0 } actions ? actions[0] : null;
+            if (action == null || action.NumAnimationKeys <= 1 || Model?.Bones == null)
+                return;
+
+            int lastFrame = action.NumAnimationKeys - 1;
+            bool hasBoneData = false;
+            foreach (var bone in Model.Bones)
+            {
+                if (bone?.Matrixes is not { Length: > 0 } matrices)
+                    continue;
+
+                var matrix = matrices[0];
+                if (matrix.Position == null || matrix.Rotation == null ||
+                    matrix.Position.Length <= lastFrame || matrix.Rotation.Length <= lastFrame)
+                {
+                    continue;
+                }
+
+                hasBoneData = true;
+                if (!AreEqual(matrix.Position[0], matrix.Position[lastFrame]) ||
+                    !AreEqual(matrix.Rotation[0], matrix.Rotation[lastFrame]))
+                {
+                    return;
+                }
+            }
+
+            // Object41 stores the first pose again as the terminal key. The animation
+            // sampler loops with modulo NumAnimationKeys, so retaining that key creates
+            // one full interval with no rotation at the loop boundary.
+            if (hasBoneData)
+                action.NumAnimationKeys = lastFrame;
+        }
+
+        private static bool AreEqual(System.Numerics.Vector3 first, System.Numerics.Vector3 second)
+        {
+            return MathF.Abs(first.X - second.X) < 0.0001f &&
+                   MathF.Abs(first.Y - second.Y) < 0.0001f &&
+                   MathF.Abs(first.Z - second.Z) < 0.0001f;
         }
     }
 }
