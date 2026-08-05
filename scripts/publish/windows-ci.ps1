@@ -56,6 +56,7 @@ Write-Host "Restoring $normalizedBackend project graph..."
 Invoke-DotNet -Arguments @(
     "restore", $settings.Project,
     "-r", $RuntimeIdentifier,
+    "-p:Configuration=$Configuration",
     "-p:MonoGameFramework=$($settings.Framework)",
     "-p:MonoGamePlatform=$($settings.Platform)",
     "-p:RestoreMonoGameTools=false"
