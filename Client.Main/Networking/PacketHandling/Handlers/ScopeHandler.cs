@@ -1993,9 +1993,15 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 uint amount = drop.Amount;
                 byte x = drop.PositionX;
                 byte y = drop.PositionY;
+                bool isFreshDrop = drop.IsFreshDrop;
 
                 _scopeManager.AddOrUpdateMoneyInScope(masked, raw, x, y, amount);
                 _logger.LogDebug("💰 MoneyDroppedExtended: ID={Id:X4}, Amount={Amount}, Pos=({X},{Y})", masked, amount, x, y);
+                EnqueueDroppedItemProcessing(
+                    new MoneyScopeObject(masked, raw, x, y, amount),
+                    masked,
+                    "Sound/pDropMoney.wav",
+                    isFreshDrop);
             }
             catch (Exception ex)
             {
@@ -2523,9 +2529,13 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             return Task.CompletedTask;
         }
 
-        private void EnqueueDroppedItemProcessing(ScopeObject dropObj, ushort maskedId, string soundPath)
+        private void EnqueueDroppedItemProcessing(
+            ScopeObject dropObj,
+            ushort maskedId,
+            string soundPath,
+            bool isFreshDrop = true)
         {
-            _droppedItemQueue.Enqueue(new DroppedItemWorkItem(dropObj, maskedId, soundPath));
+            _droppedItemQueue.Enqueue(new DroppedItemWorkItem(dropObj, maskedId, soundPath, isFreshDrop));
             TryStartDroppedItemWorker();
         }
 
@@ -2545,7 +2555,11 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 {
                     try
                     {
-                        await ProcessDroppedItemAsync(workItem.DropObject, workItem.MaskedId, workItem.SoundPath);
+                        await ProcessDroppedItemAsync(
+                            workItem.DropObject,
+                            workItem.MaskedId,
+                            workItem.SoundPath,
+                            workItem.IsFreshDrop);
                     }
                     catch (Exception ex)
                     {
@@ -2561,7 +2575,11 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             }
         }
 
-        private async Task ProcessDroppedItemAsync(ScopeObject dropObj, ushort maskedId, string soundPath)
+        private async Task ProcessDroppedItemAsync(
+            ScopeObject dropObj,
+            ushort maskedId,
+            string soundPath,
+            bool isFreshDrop)
         {
             // Create the pooled object on the main thread, then keep it unpublished until
             // CPU decoding, GPU upload and terrain placement have all completed.
@@ -2570,7 +2588,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
 
             MuGame.ScheduleOnMainThread(() =>
             {
-                ProcessDroppedItemOnMainThread(dropObj, maskedId, soundPath, tcs);
+                ProcessDroppedItemOnMainThread(dropObj, maskedId, soundPath, isFreshDrop, tcs);
             });
 
             await tcs.Task;
@@ -2580,6 +2598,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             ScopeObject dropObj,
             ushort maskedId,
             string soundPath,
+            bool isFreshDrop,
             TaskCompletionSource<bool> tcs)
         {
             try
@@ -2599,7 +2618,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     _characterState.Id,
                     _networkManager.GetCharacterService(),
                     _loggerFactory.CreateLogger<DroppedItemObject>(),
-                    isFreshDrop: true);
+                    isFreshDrop);
                 obj.World = world;
                 obj.Hidden = true;
                 int loadGeneration = obj.LoadGeneration;

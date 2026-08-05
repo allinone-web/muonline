@@ -10,16 +10,22 @@ namespace Client.Main.Networking.PacketHandling.Handlers
 
         private readonly struct DroppedItemWorkItem
         {
-            public DroppedItemWorkItem(ScopeObject dropObj, ushort maskedId, string soundPath)
+            public DroppedItemWorkItem(
+                ScopeObject dropObj,
+                ushort maskedId,
+                string soundPath,
+                bool isFreshDrop)
             {
                 DropObject = dropObj;
                 MaskedId = maskedId;
                 SoundPath = soundPath;
+                IsFreshDrop = isFreshDrop;
             }
 
             public ScopeObject DropObject { get; }
             public ushort MaskedId { get; }
             public string SoundPath { get; }
+            public bool IsFreshDrop { get; }
         }
     }
 }
