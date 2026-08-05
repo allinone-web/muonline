@@ -1,6 +1,7 @@
 using Client.Main.Controls;
 using Client.Main.Scenes;
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Input;
 using System;
 using System.Collections.Generic;
 
@@ -39,6 +40,17 @@ namespace Client.Main.Objects
             WorldObject bestObject = null;
             float bestDistance = float.MaxValue;
 
+            // SourceMain5.2 gives dropped items priority while Alt is held. This allows
+            // the item under the cursor to be selected even when a character or NPC
+            // intersects the same mouse ray first.
+            if (IsAltPressed() && TrySelectAltDroppedItem(objects, mouseRay, out bestObject))
+            {
+                bestObject.IsMouseHover = true;
+                scene.MouseHoverObject = bestObject;
+                _previousHovered = bestObject;
+                return;
+            }
+
             // Keep the current target responsive even when the round-robin cursor is
             // currently scanning another section of a large crowd.
             if (_previousHovered != null &&
@@ -73,6 +85,34 @@ namespace Client.Main.Objects
             bestObject.IsMouseHover = true;
             scene.MouseHoverObject = bestObject;
             _previousHovered = bestObject;
+        }
+
+        private static bool IsAltPressed()
+        {
+            if (MuGame.Instance == null)
+                return false;
+
+            KeyboardState keyboard = MuGame.Instance.Keyboard;
+            return keyboard.IsKeyDown(Keys.LeftAlt) || keyboard.IsKeyDown(Keys.RightAlt);
+        }
+
+        private static bool TrySelectAltDroppedItem(
+            IReadOnlyList<WorldObject> objects,
+            Ray mouseRay,
+            out WorldObject selectedItem)
+        {
+            selectedItem = null;
+            float bestDistance = float.MaxValue;
+
+            for (int i = 0; i < objects.Count; i++)
+            {
+                if (objects[i] is not DroppedItemObject item || !item.Visible)
+                    continue;
+
+                TrySelectCandidate(item, mouseRay, ref selectedItem, ref bestDistance);
+            }
+
+            return selectedItem != null;
         }
 
         private static void ClearPreviousHover()
