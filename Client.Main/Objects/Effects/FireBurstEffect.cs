@@ -146,15 +146,21 @@ namespace Client.Main.Objects.Effects
                 hiddenMesh: -1,
                 blendMesh: -2);
 
-            await LoadRenderer(_streamRenderer);
-            await LoadRenderer(_trailRenderer);
-            await LoadRenderer(_castFlashRenderer);
+            if (!await LoadRenderer(_streamRenderer) ||
+                !await LoadRenderer(_trailRenderer) ||
+                !await LoadRenderer(_castFlashRenderer))
+            {
+                return;
+            }
 
             _fireTexture = await PrepareFirstTexture(
                 "Effect/fire02.jpg",
                 "Effect/Fire02.jpg",
                 "Effect/fire02.OZJ",
                 "Effect/Fire02.OZJ");
+
+            if (_disposed || World == null)
+                return;
 
             _billboardEffect = new BasicEffect(GraphicsDevice)
             {
@@ -166,10 +172,15 @@ namespace Client.Main.Objects.Effects
             };
         }
 
-        private async Task LoadRenderer(SharedModelRenderer renderer)
+        private async Task<bool> LoadRenderer(SharedModelRenderer? renderer)
         {
-            renderer.World = World;
+            if (_disposed || renderer == null || World == null)
+                return false;
+
+            WorldControl world = World;
+            renderer.World = world;
             await renderer.Load();
+            return !_disposed && ReferenceEquals(World, world);
         }
 
         public override void Update(GameTime gameTime)
