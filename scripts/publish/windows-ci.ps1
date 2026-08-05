@@ -38,7 +38,8 @@ $projectDirectory = Split-Path -Parent $settings.Project
 $toolManifest = Join-Path $projectDirectory ".config/dotnet-tools.json"
 
 function Invoke-DotNet {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
     & dotnet @Arguments
     if ($LASTEXITCODE -ne 0) {
         throw "dotnet $($Arguments -join ' ') failed with exit code $LASTEXITCODE."
@@ -46,24 +47,31 @@ function Invoke-DotNet {
 }
 
 Write-Host "Restoring MonoGame tools for $normalizedBackend..."
-Invoke-DotNet tool restore --tool-manifest $toolManifest
+Invoke-DotNet -Arguments @(
+    "tool", "restore",
+    "--tool-manifest", $toolManifest
+)
 
 Write-Host "Restoring $normalizedBackend project graph..."
-Invoke-DotNet restore $settings.Project `
-    -r $RuntimeIdentifier `
-    -p:MonoGameFramework=$($settings.Framework) `
-    -p:MonoGamePlatform=$($settings.Platform) `
-    -p:RestoreMonoGameTools=false
+Invoke-DotNet -Arguments @(
+    "restore", $settings.Project,
+    "-r", $RuntimeIdentifier,
+    "-p:MonoGameFramework=$($settings.Framework)",
+    "-p:MonoGamePlatform=$($settings.Platform)",
+    "-p:RestoreMonoGameTools=false"
+)
 
 Write-Host "Publishing $normalizedBackend performance release..."
-Invoke-DotNet publish $settings.Project `
-    -c $Configuration `
-    -r $RuntimeIdentifier `
-    -o $OutputDirectory `
-    --no-restore `
-    --disable-build-servers `
-    -p:MonoGameFramework=$($settings.Framework) `
-    -p:MonoGamePlatform=$($settings.Platform) `
-    -p:RestoreMonoGameTools=false
+Invoke-DotNet -Arguments @(
+    "publish", $settings.Project,
+    "-c", $Configuration,
+    "-r", $RuntimeIdentifier,
+    "-o", $OutputDirectory,
+    "--no-restore",
+    "--disable-build-servers",
+    "-p:MonoGameFramework=$($settings.Framework)",
+    "-p:MonoGamePlatform=$($settings.Platform)",
+    "-p:RestoreMonoGameTools=false"
+)
 
 Write-Host "Published $normalizedBackend to $OutputDirectory"
