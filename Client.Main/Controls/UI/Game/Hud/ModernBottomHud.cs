@@ -1168,6 +1168,55 @@ namespace Client.Main.Controls.UI.Game.Hud
                 drawW,
                 drawH);
             sb.Draw(tex, iconDest, frame.SourceRectangle, Color.White);
+
+            DrawSkillCooldownOverlay(sb, iconDest, skill);
+            DrawSkillCooldownTimer(sb, iconDest, skill);
+        }
+
+        private void DrawSkillCooldownOverlay(SpriteBatch spriteBatch, Rectangle iconRect, SkillEntryState skill)
+        {
+            var pixel = GraphicsManager.Instance.Pixel;
+            if (pixel == null)
+                return;
+
+            double now = MuGame.Instance?.GameTime?.TotalGameTime.TotalMilliseconds ?? Environment.TickCount64;
+            float ratio = SkillCooldownTracker.GetCooldownRatio(skill.SkillId, now);
+            if (ratio <= 0f)
+                return;
+
+            int overlayHeight = Math.Max(1, (int)(iconRect.Height * ratio));
+            var overlayRect = new Rectangle(iconRect.X, iconRect.Y, iconRect.Width, overlayHeight);
+
+            spriteBatch.Draw(pixel, overlayRect, new Color(0, 0, 0, 160) * Alpha);
+            spriteBatch.Draw(
+                pixel,
+                new Rectangle(overlayRect.X, overlayRect.Y + overlayHeight - 1, overlayRect.Width, 1),
+                ModernHudTheme.Accent * 0.5f * Alpha);
+        }
+
+        private void DrawSkillCooldownTimer(SpriteBatch spriteBatch, Rectangle iconRect, SkillEntryState skill)
+        {
+            if (_font == null)
+                return;
+
+            double now = MuGame.Instance?.GameTime?.TotalGameTime.TotalMilliseconds ?? Environment.TickCount64;
+            int remainingMs = SkillCooldownTracker.GetRemainingMs(skill.SkillId, now);
+            if (remainingMs <= 0)
+                return;
+
+            string timerText = remainingMs >= 1000
+                ? $"{(remainingMs + 999) / 1000}"
+                : $"{(remainingMs + 99) / 100f:F1}";
+
+            const float textScale = 0.6f;
+            Vector2 textSize = _font.MeasureString(timerText) * textScale;
+            float tx = iconRect.X + (iconRect.Width - textSize.X) * 0.5f;
+            float ty = iconRect.Y + (iconRect.Height - textSize.Y) * 0.5f;
+
+            spriteBatch.DrawString(_font, timerText, new Vector2(tx + 1f, ty + 1f),
+                Color.Black * 0.85f * Alpha, 0f, Vector2.Zero, textScale, SpriteEffects.None, 0f);
+            spriteBatch.DrawString(_font, timerText, new Vector2(tx, ty),
+                ModernHudTheme.TextWhite * Alpha, 0f, Vector2.Zero, textScale, SpriteEffects.None, 0f);
         }
 
         private void DrawInterfaceButtons(SpriteBatch sb, Texture2D pixel)
