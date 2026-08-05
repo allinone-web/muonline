@@ -41,6 +41,13 @@ namespace Client.Main.Objects.Effects
         private const int MaxSparks = 24;
 
         private readonly WalkerObject _caster;
+        private readonly bool _includeTail;
+        private readonly bool _includeImpactSparks;
+        private readonly bool _includeWave;
+        private readonly bool _playImpactSound;
+        private readonly bool _playTailSound;
+        private readonly bool _playSecondarySound;
+        private readonly int? _subTypeOverride;
         private readonly string[] _earthQuakePaths = new string[9];
         private bool _earthQuakePathsResolved;
 
@@ -258,9 +265,25 @@ namespace Client.Main.Objects.Effects
             }
         }
 
-        public RagefulBlowEffect(WalkerObject caster, Vector3? targetPosition)
+        public RagefulBlowEffect(
+            WalkerObject caster,
+            Vector3? targetPosition,
+            bool includeTail = true,
+            bool includeImpactSparks = true,
+            bool includeWave = true,
+            bool playImpactSound = true,
+            bool playTailSound = true,
+            bool playSecondarySound = true,
+            int? subTypeOverride = null)
         {
             _caster = caster ?? throw new ArgumentNullException(nameof(caster));
+            _includeTail = includeTail;
+            _includeImpactSparks = includeImpactSparks;
+            _includeWave = includeWave;
+            _playImpactSound = playImpactSound;
+            _playTailSound = playTailSound;
+            _playSecondarySound = playSecondarySound;
+            _subTypeOverride = subTypeOverride;
 
             IsTransparent = true;
             AffectedByTransparency = true;
@@ -289,13 +312,20 @@ namespace Client.Main.Objects.Effects
             await ResolveEarthQuakePaths();
 
             _ = await TextureLoader.Instance.Prepare(ExplosionTexturePath);
-            _ = await TextureLoader.Instance.Prepare(JointSparkTexturePath);
-            _ = await TextureLoader.Instance.Prepare(SparkTexturePath);
+            if (_includeImpactSparks)
+            {
+                _ = await TextureLoader.Instance.Prepare(JointSparkTexturePath);
+                _ = await TextureLoader.Instance.Prepare(SparkTexturePath);
+            }
 
             _spriteBatch = GraphicsManager.Instance.Sprite;
             _explosionTexture = TextureLoader.Instance.GetTexture2D(ExplosionTexturePath) ?? GraphicsManager.Instance.Pixel;
-            _jointSparkTexture = TextureLoader.Instance.GetTexture2D(JointSparkTexturePath) ?? GraphicsManager.Instance.Pixel;
-            _sparkTexture = TextureLoader.Instance.GetTexture2D(SparkTexturePath) ?? GraphicsManager.Instance.Pixel;
+            _jointSparkTexture = _includeImpactSparks
+                ? TextureLoader.Instance.GetTexture2D(JointSparkTexturePath) ?? GraphicsManager.Instance.Pixel
+                : GraphicsManager.Instance.Pixel;
+            _sparkTexture = _includeImpactSparks
+                ? TextureLoader.Instance.GetTexture2D(SparkTexturePath) ?? GraphicsManager.Instance.Pixel
+                : GraphicsManager.Instance.Pixel;
             _texturesLoaded = true;
 
             if (World?.Terrain != null && !_lightsAdded)
@@ -332,7 +362,8 @@ namespace Client.Main.Objects.Effects
             if (lifeInt == 13 && !_tailSpawned)
             {
                 _tailSpawned = true;
-                SpawnTailBursts();
+                if (_includeTail)
+                    SpawnTailBursts();
             }
 
             if (lifeInt == 10 && !_secondaryBurstSpawned)
@@ -395,7 +426,7 @@ namespace Client.Main.Objects.Effects
             _headAngleDeg.Z += 180f;
 
             _gravity = 50f;
-            _subType = MuGame.Random.Next(100);
+            _subType = _subTypeOverride ?? MuGame.Random.Next(100);
 
             _startPosition = _caster.WorldPosition.Translation;
             _position = _startPosition;
@@ -406,7 +437,8 @@ namespace Client.Main.Objects.Effects
         {
             _impactTriggered = true;
 
-            SoundController.Instance.PlayBuffer(SoundStrike1);
+            if (_playImpactSound)
+                SoundController.Instance.PlayBuffer(SoundStrike1);
 
             Vector3 p = new Vector3(-25f, -80f, 0f);
             Matrix matrix = MathUtils.AngleMatrix(_ownerAngleDeg);
@@ -448,6 +480,9 @@ namespace Client.Main.Objects.Effects
                 LifeFrames = ExplosionLifeFrames,
                 Scale = 0.5f
             };
+
+            if (!_includeImpactSparks)
+                return;
 
             for (int j = 0; j < 8; j++)
             {
@@ -514,11 +549,14 @@ namespace Client.Main.Objects.Effects
         {
             Vector3 wavePos = _startPosition;
             wavePos.Z -= 15f * FPSCounter.Instance.FPS_ANIMATION_FACTOR;
-            AddModel(new RagefulWaveEffect(WaveModelPath, 15f)
+            if (_includeWave)
             {
-                Position = wavePos,
-                Angle = Vector3.Zero
-            });
+                AddModel(new RagefulWaveEffect(WaveModelPath, 15f)
+                {
+                    Position = wavePos,
+                    Angle = Vector3.Zero
+                });
+            }
 
             Vector3 quakePos = _startPosition;
             quakePos.Z -= 27f;
@@ -607,7 +645,8 @@ namespace Client.Main.Objects.Effects
                 count++;
             }
 
-            SoundController.Instance.PlayBuffer(SoundStrike3);
+            if (_playSecondarySound)
+                SoundController.Instance.PlayBuffer(SoundStrike3);
             _lifeTimeFrames = 0f;
         }
 
@@ -643,7 +682,8 @@ namespace Client.Main.Objects.Effects
                 });
             }
 
-            SoundController.Instance.PlayBuffer(SoundStrike2);
+            if (_playTailSound)
+                SoundController.Instance.PlayBuffer(SoundStrike2);
         }
 
         private RagefulEarthQuakeEffect CreateEarthQuakeModel(int variant, Vector3 position, float scale, float angleZDeg = 0f)

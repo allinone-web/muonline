@@ -143,6 +143,13 @@ namespace Client.Data.BMD
             { 305, SkillType.Area },   // Ice Up IV
             { 306, SkillType.Area },   // Ice Up V
 
+            // Earthquake master variants (Earth Shake I-V)
+            { 515, SkillType.Area },
+            { 516, SkillType.Area },
+            { 517, SkillType.Area },
+            { 518, SkillType.Area },
+            { 519, SkillType.Area },
+
             // ID 495: Earth Prison
             { 495, SkillType.Area },   // Earth Prison
 
@@ -233,6 +240,12 @@ namespace Client.Data.BMD
             Add(65, 71);    // Electric Spike → PlayerSkillVitality
             Add(56, 146);   // Power Slash → PlayerAttackTwoHandSwordTwo
             Add(57, 65);    // Spiral Slash → PlayerAttackSkillWheel
+            Add(62, 87);    // Earthquake → PlayerAttackDarkhorse
+            Add(515, 87);   // Earth Shake I → PlayerAttackDarkhorse
+            Add(516, 87);   // Earth Shake II → PlayerAttackDarkhorse
+            Add(517, 87);   // Earth Shake III → PlayerAttackDarkhorse
+            Add(518, 87);   // Earth Shake IV → PlayerAttackDarkhorse
+            Add(519, 87);   // Earth Shake V → PlayerAttackDarkhorse
 
             // ELF SKILLS
             Add(234, 246);  // Recovery → PlayerRecoverSkill
@@ -327,6 +340,11 @@ namespace Client.Data.BMD
 
             // DARK LORD SKILLS
             map[62] = "Sound/sDarkEarthQuake.wav";       // Earthshake (ID 62)
+            map[515] = map[62];                            // Earth Shake I
+            map[516] = map[62];                            // Earth Shake II
+            map[517] = map[62];                            // Earth Shake III
+            map[518] = map[62];                            // Earth Shake IV
+            map[519] = map[62];                            // Earth Shake V
             map[61] = "Sound/eFirebust.wav";             // Fire Burst (ID 61)
             map[508] = "Sound/eFirebust.wav";            // Fire Burst Strength
             map[514] = "Sound/eFirebust.wav";            // Fire Burst Mastery
