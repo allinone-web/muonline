@@ -110,16 +110,21 @@ namespace Client.Main.Controls
 
             CalculateMouseTilePos();
 
-            MonsterObject hoveredMonster = Scene.MouseHoverObject as MonsterObject;
-
             // Handle click‐to‐move with a simple cooldown
             if (!Scene.IsMouseInputConsumedThisFrame && // check if UI already handled the click
                 (Scene.MouseControl == this || Scene.MouseControl == World) && // ensure this world or its base is the target
                 MuGame.Instance.Mouse.LeftButton == ButtonState.Pressed &&
                 _cursorNextMoveTime <= 0f)
             {
+                MonsterObject hoveredMonster = Walker is PlayerObject && !WorldHoverSystem.IsAltPressed()
+                    ? WorldHoverSystem.FindBestLiveMonster(
+                        VisibleObjects,
+                        MuGame.Instance.MouseRay,
+                        this)
+                    : null;
+
                 // If an NPC is under the cursor, consume click and don't trigger move
-                if (Scene.MouseHoverObject is NPCObject)
+                if (Scene.MouseHoverObject is NPCObject && hoveredMonster == null)
                 {
                     if (Scene is Client.Main.Scenes.BaseScene bs)
                         bs.SetMouseInputConsumed();
@@ -357,6 +362,7 @@ namespace Client.Main.Controls
             {
                 var m = monsters[i];
                 if (m != null &&
+                    !m.IsDead &&
                     m.Location.X == tileX &&
                     m.Location.Y == tileY)
                 {

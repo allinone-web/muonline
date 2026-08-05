@@ -1,4 +1,5 @@
 using Client.Main.Controls;
+using Client.Main.Objects.Player;
 using Client.Main.Scenes;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
@@ -43,7 +44,7 @@ namespace Client.Main.Objects
             // SourceMain5.2 gives dropped items priority while Alt is held. This allows
             // the item under the cursor to be selected even when a character or NPC
             // intersects the same mouse ray first.
-            if (IsAltPressed() && TrySelectAltDroppedItem(objects, mouseRay, out bestObject))
+            if (IsAltPressed() && TrySelectAltDroppedItem(objects, mouseRay, scene, out bestObject))
             {
                 bestObject.IsMouseHover = true;
                 scene.MouseHoverObject = bestObject;
@@ -56,13 +57,14 @@ namespace Client.Main.Objects
             if (_previousHovered != null &&
                 _previousHovered.Visible &&
                 ReferenceEquals(_previousHovered.World, scene.World))
-                TrySelectCandidate(_previousHovered, mouseRay, ref bestObject, ref bestDistance);
+                TrySelectCandidate(_previousHovered, mouseRay, scene, ref bestObject, ref bestDistance);
 
             ScanCategory(
                 objects,
                 walkers: true,
                 WalkerChecksPerFrame,
                 mouseRay,
+                scene,
                 ref _walkerScanOffset,
                 ref bestObject,
                 ref bestDistance);
@@ -72,6 +74,7 @@ namespace Client.Main.Objects
                 walkers: false,
                 OtherChecksPerFrame,
                 mouseRay,
+                scene,
                 ref _otherScanOffset,
                 ref bestObject,
                 ref bestDistance);
@@ -87,7 +90,7 @@ namespace Client.Main.Objects
             _previousHovered = bestObject;
         }
 
-        private static bool IsAltPressed()
+        internal static bool IsAltPressed()
         {
             if (MuGame.Instance == null)
                 return false;
@@ -99,6 +102,7 @@ namespace Client.Main.Objects
         private static bool TrySelectAltDroppedItem(
             IReadOnlyList<WorldObject> objects,
             Ray mouseRay,
+            BaseScene scene,
             out WorldObject selectedItem)
         {
             selectedItem = null;
@@ -109,7 +113,7 @@ namespace Client.Main.Objects
                 if (objects[i] is not DroppedItemObject item || !item.Visible)
                     continue;
 
-                TrySelectCandidate(item, mouseRay, ref selectedItem, ref bestDistance);
+                TrySelectCandidate(item, mouseRay, scene, ref selectedItem, ref bestDistance);
             }
 
             return selectedItem != null;
@@ -126,6 +130,7 @@ namespace Client.Main.Objects
             bool walkers,
             int budget,
             Ray mouseRay,
+            BaseScene scene,
             ref int scanOffset,
             ref WorldObject bestObject,
             ref float bestDistance)
@@ -155,7 +160,7 @@ namespace Client.Main.Objects
                     continue;
 
                 checkedCandidates++;
-                TrySelectCandidate(obj, mouseRay, ref bestObject, ref bestDistance);
+                TrySelectCandidate(obj, mouseRay, scene, ref bestObject, ref bestDistance);
             }
 
             scanOffset = (start + Math.Max(1, visited)) % count;
@@ -164,21 +169,90 @@ namespace Client.Main.Objects
         private static void TrySelectCandidate(
             WorldObject obj,
             Ray mouseRay,
+            BaseScene scene,
             ref WorldObject bestObject,
             ref float bestDistance)
         {
-            float? intersectionDistance = mouseRay.Intersects(obj.BoundingBoxWorld);
-            bool containsOrigin = obj.BoundingBoxWorld.Contains(mouseRay.Position) == ContainmentType.Contains;
-
-            if (!intersectionDistance.HasValue && !containsOrigin)
+            if (!CanSelectCandidate(obj, scene) ||
+                !TryGetIntersectionDistance(obj, mouseRay, out float distance))
                 return;
 
-            float distance = containsOrigin ? 0f : intersectionDistance.Value;
             if (distance >= bestDistance)
                 return;
 
             bestDistance = distance;
             bestObject = obj;
+        }
+
+        /// <summary>
+        /// Finds the nearest live monster under the cursor ray. Attack targeting must
+        /// scan the complete visible snapshot instead of trusting the round-robin hover
+        /// result, because a player or a fading corpse may intersect the ray first.
+        /// </summary>
+        internal static MonsterObject FindBestLiveMonster(
+            IReadOnlyList<WorldObject> objects,
+            Ray mouseRay,
+            WorldControl world)
+        {
+            if (objects == null || world == null)
+                return null;
+
+            MonsterObject bestMonster = null;
+            float bestDistance = float.MaxValue;
+
+            for (int i = 0; i < objects.Count; i++)
+            {
+                if (objects[i] is not MonsterObject monster ||
+                    monster.IsDead ||
+                    !monster.Visible ||
+                    !ReferenceEquals(monster.World, world) ||
+                    !TryGetIntersectionDistance(monster, mouseRay, out float distance))
+                    continue;
+
+                if (distance >= bestDistance)
+                    continue;
+
+                bestDistance = distance;
+                bestMonster = monster;
+            }
+
+            return bestMonster;
+        }
+
+        private static bool CanSelectCandidate(WorldObject obj, BaseScene scene)
+        {
+            if (obj == null)
+                return false;
+
+            if (obj is MonsterObject monster && monster.IsDead)
+                return false;
+
+            if (obj is PlayerObject player && player.IsDead)
+                return false;
+
+            if (scene?.World is WalkableWorldControl world &&
+                ReferenceEquals(obj, world.Walker))
+                return false;
+
+            return true;
+        }
+
+        private static bool TryGetIntersectionDistance(
+            WorldObject obj,
+            Ray mouseRay,
+            out float distance)
+        {
+            float? intersectionDistance = mouseRay.Intersects(obj.BoundingBoxWorld);
+            bool containsOrigin = obj.BoundingBoxWorld.Contains(mouseRay.Position) == ContainmentType.Contains;
+
+            if (!intersectionDistance.HasValue && !containsOrigin)
+            {
+                distance = float.MaxValue;
+                return false;
+            }
+
+            distance = containsOrigin ? 0f : intersectionDistance.Value;
+            return true;
         }
     }
 }

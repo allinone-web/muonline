@@ -404,6 +404,16 @@ namespace Client.Main.Scenes
 
         private WalkerObject GetHoveredSkillTarget()
         {
+            if (_scene.World != null)
+            {
+                MonsterObject targetedMonster = WorldHoverSystem.FindBestLiveMonster(
+                    _scene.World.VisibleObjects,
+                    MuGame.Instance.MouseRay,
+                    _scene.World);
+                if (targetedMonster != null)
+                    return targetedMonster;
+            }
+
             if (_scene.MouseHoverObject is MonsterObject monster)
             {
                 if (!monster.IsDead && monster.World == _scene.World)

@@ -744,17 +744,21 @@ namespace Client.Main.Scenes
             long attackInputStarted = UpdatePassProfiler.Start();
             // Handle attack clicks on monsters with proper validation
             if (!IsMouseInputConsumedThisFrame &&
-                MouseHoverObject is MonsterObject targetMonster &&
+                !WorldHoverSystem.IsAltPressed() &&
                 MuGame.Instance.Mouse.LeftButton == ButtonState.Pressed &&
                 MuGame.Instance.PrevMouseState.LeftButton == ButtonState.Released) // Fresh press
             {
-                if (Hero != null &&
+                MonsterObject hoveredAttackMonster = WorldHoverSystem.FindBestLiveMonster(
+                    World.VisibleObjects,
+                    MuGame.Instance.MouseRay,
+                    World);
+
+                if (hoveredAttackMonster != null &&
+                    Hero != null &&
                     !Hero.IsDead && // Don't attack if player is dead
-                    !targetMonster.IsDead &&
-                    targetMonster.World == World && // Ensure same world
-                    Vector2.Distance(Hero.Location, targetMonster.Location) <= Hero.GetAttackRangeTiles()) // Check range
+                    Vector2.Distance(Hero.Location, hoveredAttackMonster.Location) <= Hero.GetAttackRangeTiles()) // Check range
                 {
-                    Hero.Attack(targetMonster);
+                    Hero.Attack(hoveredAttackMonster);
                     SetMouseInputConsumed(); // Consume the click
                 }
             }
