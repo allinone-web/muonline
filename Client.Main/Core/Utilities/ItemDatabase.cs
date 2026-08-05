@@ -274,6 +274,26 @@ namespace Client.Main.Core.Utilities
             return (byte)(itemData[5] >> 4);
         }
 
+        public static bool IsJewelItem(ReadOnlySpan<byte> itemData)
+        {
+            return TryGetItemGroupAndNumber(itemData, out var group, out var number)
+                && IsJewelItem(group, number);
+        }
+
+        public static bool IsJewelItem(byte group, short number)
+        {
+            return (group == 12 && number == 15) ||
+                   (group == 14 && number is 13 or 14 or 16 or 22 or 31 or 41 or 42 or 43 or 44);
+        }
+
+        public static bool IsGemstone(byte group, short number) => group == 14 && number == 41;
+
+        public static bool IsStandardJewel(byte group, short number)
+        {
+            return (group == 12 && number == 15) ||
+                   (group == 14 && number is 13 or 14 or 16 or 22 or 31);
+        }
+
         public static string GetItemName(byte group, short id) =>
             GetItemDefinition(group, id)?.Name;
 

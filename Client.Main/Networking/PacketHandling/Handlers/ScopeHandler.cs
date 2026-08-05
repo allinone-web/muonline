@@ -1795,6 +1795,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
 
                     ushort rawId = System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(packet.Span.Slice(offset, 2));
                     ushort maskedId = (ushort)(rawId & 0x7FFF);
+                    bool isFreshDrop = (rawId & 0x8000) != 0;
                     byte x = packet.Span[offset + 2];
                     byte y = packet.Span[offset + 3];
                     int itemDataOffset = offset + 4;
@@ -1825,7 +1826,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                         dropObj = new MoneyScopeObject(maskedId, rawId, x, y, amount);
                         _scopeManager.AddOrUpdateMoneyInScope(maskedId, rawId, x, y, amount);
                         _logger.LogDebug("Dropped Money: Amount={Amount}, ID={Id:X4}", amount, maskedId);
-                        EnqueueDroppedItemProcessing(dropObj, maskedId, "Sound/pDropMoney.wav");
+                        EnqueueDroppedItemProcessing(dropObj, maskedId, "Sound/pDropMoney.wav", isFreshDrop);
                     }
                     else
                     {
@@ -1834,12 +1835,13 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                         _scopeManager.AddOrUpdateItemInScope(maskedId, rawId, x, y, dataCopy);
                         _logger.LogDebug("Dropped Item: ID={Id:X4}, DataLen={Len}", maskedId, data.Length);
 
-                        string itemName = ItemDatabase.GetItemName(dataCopy) ?? string.Empty;
-                        string soundPath = itemName.StartsWith("Jewel", StringComparison.OrdinalIgnoreCase)
-                            ? "Sound/eGem.wav"
-                            : "Sound/pDropItem.wav";
+                        string soundPath = ItemDatabase.IsGemstone(group, number)
+                            ? "Sound/Jewel_Sound.wav"
+                            : ItemDatabase.IsStandardJewel(group, number)
+                                ? "Sound/eGem.wav"
+                                : "Sound/pDropItem.wav";
 
-                        EnqueueDroppedItemProcessing(dropObj, maskedId, soundPath);
+                        EnqueueDroppedItemProcessing(dropObj, maskedId, soundPath, isFreshDrop);
                     }
                 }
             }
@@ -1879,10 +1881,12 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                             dropObj = new ItemScopeObject(maskedId, rawId, x, y, data);
                             _scopeManager.AddOrUpdateItemInScope(maskedId, rawId, x, y, data);
                             _logger.LogDebug("Dropped Item (0.75): ID={Id:X4}, DataLen={Len}", maskedId, dataLen075);
-                            string itemName = ItemDatabase.GetItemName(data) ?? string.Empty;
-                            string soundPath = itemName.StartsWith("Jewel", StringComparison.OrdinalIgnoreCase)
-                                ? "Sound/eGem.wav"
-                                : "Sound/pDropItem.wav";
+                            ItemDatabase.TryGetItemGroupAndNumber(data, out byte group, out short number);
+                            string soundPath = ItemDatabase.IsGemstone(group, number)
+                                ? "Sound/Jewel_Sound.wav"
+                                : ItemDatabase.IsStandardJewel(group, number)
+                                    ? "Sound/eGem.wav"
+                                    : "Sound/pDropItem.wav";
 
                             EnqueueDroppedItemProcessing(dropObj, maskedId, soundPath);
                         }
@@ -2690,10 +2694,13 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                             world.FindDroppedItemById(maskedId) == obj)
                         {
                             obj.Hidden = false;
-                            SoundController.Instance.PlayBufferWithAttenuation(
-                                soundPath,
-                                obj.Position,
-                                world.Walker?.Position ?? obj.Position);
+                            if (isFreshDrop)
+                            {
+                                SoundController.Instance.PlayBufferWithAttenuation(
+                                    soundPath,
+                                    obj.Position,
+                                    world.Walker?.Position ?? obj.Position);
+                            }
 
                             _logger.LogDebug(
                                 "Spawned dropped item ({DisplayName}) at {PosX},{PosY},{PosZ}. RawId: {RawId:X4}, MaskedId: {MaskedId:X4}",

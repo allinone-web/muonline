@@ -996,7 +996,8 @@ namespace Client.Main.Scenes
             return Task.WhenAll(
                 SoundController.Instance.PreloadSoundAsync("Sound/pDropItem.wav"),
                 SoundController.Instance.PreloadSoundAsync("Sound/pDropMoney.wav"),
-                SoundController.Instance.PreloadSoundAsync("Sound/mGem.wav"),
+                SoundController.Instance.PreloadSoundAsync("Sound/eGem.wav"),
+                SoundController.Instance.PreloadSoundAsync("Sound/Jewel_Sound.wav"),
                 SoundController.Instance.PreloadSoundAsync("Sound/pGetItem.wav"),
                 SoundController.Instance.PreloadSoundAsync("Sound/pWalk(Grass).wav"),
                 SoundController.Instance.PreloadSoundAsync("Sound/pWalk(Snow).wav"),

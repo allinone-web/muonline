@@ -719,14 +719,34 @@ _modelObj = model;
 
         private Color GetLabelColor(ScopeObject s, ItemDatabase.ItemDetails details)
         {
-            if (details.IsAncient) return new Color(0, 255, 128);
-            if (details.IsExcellent) return new Color(128, 255, 128);
-            if (details.Level >= 7) return Color.Gold;
-            if (details.HasBlueOptions) return new Color(130, 180, 255);
-            if (details.Level >= 3) return new Color(255, 165, 0);
-            if (details.Level >= 1) return Color.White;
-            if (s is MoneyScopeObject) return Color.Gold;
-            return Color.Gray;
+            if (s is MoneyScopeObject)
+                return new Color(255, 204, 26);
+
+            if (s is ItemScopeObject item && ItemDatabase.IsJewelItem(item.ItemData.Span))
+                return new Color(255, 204, 26);
+
+            if (details.IsAncient)
+                return new Color(0, 255, 0);
+
+            if (details.IsExcellent)
+                return new Color(26, 255, 128);
+
+            if (details.Level >= 7)
+                return new Color(255, 204, 26);
+
+            if (details.HasBlueOptions)
+                return new Color(102, 179, 255);
+
+            if (details.Level == 0)
+                return new Color(179, 179, 179);
+
+            if (details.Level < 3)
+                return new Color(230, 230, 230);
+
+            if (details.Level < 5)
+                return new Color(255, 128, 51);
+
+            return new Color(102, 179, 255);
         }
 
         public override void DrawHoverName()
