@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using Client.Data.BMD;
+using Client.Main.Data;
 using Microsoft.Extensions.Logging;
 
 namespace Client.Main.Core.Utilities
@@ -29,9 +30,9 @@ namespace Client.Main.Core.Utilities
         /// </summary>
         private static async Task<Dictionary<int, SkillBMD>> InitializeSkillData()
         {
-            var skillPath = Path.Combine(Constants.DataPath, "Local", "skill.bmd");
             var reader = new SkillBMDReader();
-            var skills = await reader.Load(skillPath);
+            using var stream = EmbeddedS6Data.Open("skill_eng.bmd");
+            var skills = await reader.Load(stream);
             _logger?.LogInformation($"Loaded {skills.Count} skills from skill_eng.bmd");
             return skills;
         }

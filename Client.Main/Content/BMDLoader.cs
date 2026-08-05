@@ -1,4 +1,5 @@
 using Client.Data.BMD;
+using Client.Main.Data;
 using Client.Main.Graphics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Xna.Framework;
@@ -430,8 +431,16 @@ namespace Client.Main.Content
         {
             lock (_bmds)
             {
-                // Use original path as cache key for embedded resources
-                string cacheKey = path;
+                string normalizedPath = path.Replace('\\', '/');
+                if (normalizedPath.Equals("Player/Player.bmd", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (_bmds.TryGetValue(normalizedPath, out Task<BMD> embeddedModelTask))
+                        return embeddedModelTask;
+
+                    embeddedModelTask = LoadEmbeddedPlayerAsync(normalizedPath, textureFolder);
+                    _bmds.Add(normalizedPath, embeddedModelTask);
+                    return embeddedModelTask;
+                }
 
                 path = GetActualPath(Path.Combine(Constants.DataPath, path));
                 if (_bmds.TryGetValue(path, out Task<BMD> modelTask))
@@ -445,6 +454,9 @@ namespace Client.Main.Content
 
         public Task<bool> AssestExist(string path)
         {
+            if (path.Replace('\\', '/').Equals("Player/Player.bmd", StringComparison.OrdinalIgnoreCase))
+                return Task.FromResult(true);
+
             string finalPath = Path.Combine(Constants.DataPath, path);
             return Task.FromResult(File.Exists(finalPath));
         }
@@ -507,6 +519,48 @@ namespace Client.Main.Content
             catch (Exception e)
             {
                 Console.WriteLine($"Failed to load asset {path}: {e.Message}");
+                return null;
+            }
+        }
+
+        private async Task<BMD> LoadEmbeddedPlayerAsync(string path, string textureFolder)
+        {
+            try
+            {
+                using var stream = EmbeddedS6Data.Open("player.bmd");
+                var asset = await _reader.Load(stream);
+
+                if (_blendingConfig.TryGetValue(path, out var meshConfig))
+                {
+                    for (int i = 0; i < asset.Meshes.Length; i++)
+                    {
+                        if (meshConfig.TryGetValue(i, out var blendMode))
+                            asset.Meshes[i].BlendingMode = blendMode;
+                    }
+                }
+
+                var texturePathMap = new Dictionary<string, string>();
+                lock (_texturePathMap)
+                    _texturePathMap.Add(asset, texturePathMap);
+
+                var dir = !string.IsNullOrEmpty(textureFolder)
+                    ? textureFolder
+                    : Path.GetDirectoryName(path.Replace('/', Path.DirectorySeparatorChar));
+
+                var tasks = new List<Task>();
+                foreach (var mesh in asset.Meshes)
+                {
+                    var fullPath = Path.Combine(dir, mesh.TexturePath);
+                    if (texturePathMap.TryAdd(mesh.TexturePath.ToLowerInvariant(), fullPath))
+                        tasks.Add(TextureLoader.Instance.Prepare(fullPath));
+                }
+
+                await Task.WhenAll(tasks);
+                return asset;
+            }
+            catch (Exception e)
+            {
+                _logger?.LogError(e, "Failed to load embedded player model");
                 return null;
             }
         }

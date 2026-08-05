@@ -66,6 +66,11 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Controls\UI\Game\Layouts\*.json" />
+    <EmbeddedResource Include="Data\S6\item.bmd" />
+    <EmbeddedResource Include="Data\S6\mix.bmd" />
+    <EmbeddedResource Include="Data\S6\movereq_eng.bmd" />
+    <EmbeddedResource Include="Data\S6\player.bmd" />
+    <EmbeddedResource Include="Data\S6\skill_eng.bmd" />
     <EmbeddedResource Include="Data\bmd_blending_config.json" />
   </ItemGroup>
 

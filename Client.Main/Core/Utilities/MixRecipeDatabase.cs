@@ -6,6 +6,7 @@ using System.Reflection;
 using Client.Data;
 using Client.Main;
 using Client.Main.Controls.UI.Game.Inventory;
+using Client.Main.Data;
 using Microsoft.Extensions.Logging;
 
 namespace Client.Main.Core.Utilities
@@ -189,8 +190,7 @@ namespace Client.Main.Core.Utilities
 
             try
             {
-                var mixPath = Path.Combine(Constants.DataPath, "Local", "mix.bmd");
-                using var stream = File.OpenRead(mixPath);
+                using var stream = EmbeddedS6Data.Open("mix.bmd");
 
                 using var br = new BinaryReader(stream);
 

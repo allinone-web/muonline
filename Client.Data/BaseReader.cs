@@ -12,6 +12,13 @@
             return Read(buffer);
         }
 
+        public async Task<T> Load(Stream stream)
+        {
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+            return Read(buffer.ToArray());
+        }
+
         protected abstract T Read(byte[] buffer);
     }
 }

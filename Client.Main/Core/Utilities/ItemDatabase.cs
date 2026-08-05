@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Threading.Tasks;
 using Client.Data.BMD;
 using Client.Main.Controls.UI.Game.Inventory;
+using Client.Main.Data;
 using Microsoft.Extensions.Logging;
 using System.Text;
 using System.Threading;
@@ -40,9 +41,8 @@ namespace Client.Main.Core.Utilities
             {
                 var reader = new ItemBMDReader();
 
-                var itemsPath = Path.Combine(Constants.DataPath, "Local", "item.bmd");
-
-                var items = await reader.Load(itemsPath).ConfigureAwait(false);
+                using var stream = EmbeddedS6Data.Open("item.bmd");
+                var items = await reader.Load(stream).ConfigureAwait(false);
 
                 foreach (var item in items)
                 {

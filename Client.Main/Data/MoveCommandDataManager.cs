@@ -68,9 +68,8 @@ namespace Client.Main.Data
 
             try
             {
-                var movereqPath = Path.Combine(Constants.DataPath, "Local", "movereq.bmd");
-                using var fileStream = new FileStream(movereqPath, FileMode.Open, FileAccess.Read);
-                var records = LoadMovereqRecords(fileStream);
+                using var stream = EmbeddedS6Data.Open("movereq_eng.bmd");
+                var records = LoadMovereqRecords(stream);
                 moveCommands = BuildMoveCommandInfos(records);
                 return moveCommands.Count > 0;
             }
