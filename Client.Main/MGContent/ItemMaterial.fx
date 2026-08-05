@@ -1,10 +1,19 @@
-#if OPENGL
+#if SM6
+    #define VS_SHADERMODEL vs_6_0
+    #define PS_SHADERMODEL ps_6_0
+#elif OPENGL
     #define SV_POSITION POSITION
     #define VS_SHADERMODEL vs_3_0
     #define PS_SHADERMODEL ps_3_0
 #else
     #define VS_SHADERMODEL vs_5_0
     #define PS_SHADERMODEL ps_5_0
+#endif
+
+#if SM6
+    #define UNIFORM_DEFAULT(type, name, value) type name
+#else
+    #define UNIFORM_DEFAULT(type, name, value) type name = value
 #endif
 
 #if OPENGL
@@ -20,10 +29,51 @@ float4x4 BoneMatrices[256];
 #endif
 
 float3 EyePosition;
-float3 LightDirection = float3(0.707, -0.707, 0);
+UNIFORM_DEFAULT(float3, LightDirection, float3(0.707, -0.707, 0));
 
-texture DiffuseTexture;
-sampler2D DiffuseSampler = sampler_state
+#if SM6
+Texture2D DiffuseTexture : register(t0);
+SamplerState DiffuseSampler : register(s0)
+{
+    Filter = Point;
+    AddressU = Wrap;
+    AddressV = Wrap;
+};
+
+Texture2D Chrome02Texture : register(t1);
+SamplerState Chrome02Sampler : register(s1)
+{
+    Filter = Point;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+Texture2D Shiny01Texture : register(t2);
+SamplerState Shiny01Sampler : register(s2)
+{
+    Filter = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+Texture2D Chrome01Texture : register(t3);
+SamplerState Chrome01Sampler : register(s3)
+{
+    Filter = Linear;
+    AddressU = Wrap;
+    AddressV = Wrap;
+};
+
+Texture2D ShadowMap : register(t4);
+SamplerState ShadowSampler : register(s4)
+{
+    Filter = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+#else
+Texture2D DiffuseTexture;
+sampler DiffuseSampler = sampler_state
 {
     Texture = <DiffuseTexture>;
     MinFilter = Point;
@@ -33,8 +83,8 @@ sampler2D DiffuseSampler = sampler_state
     AddressV = Wrap;
 };
 
-texture Chrome02Texture;
-sampler2D Chrome02Sampler = sampler_state
+Texture2D Chrome02Texture;
+sampler Chrome02Sampler = sampler_state
 {
     Texture = <Chrome02Texture>;
     MinFilter = Point;
@@ -44,8 +94,8 @@ sampler2D Chrome02Sampler = sampler_state
     AddressV = Clamp;
 };
 
-texture Shiny01Texture;
-sampler2D Shiny01Sampler = sampler_state
+Texture2D Shiny01Texture;
+sampler Shiny01Sampler = sampler_state
 {
     Texture = <Shiny01Texture>;
     MinFilter = Linear;
@@ -55,8 +105,8 @@ sampler2D Shiny01Sampler = sampler_state
     AddressV = Clamp;
 };
 
-texture Chrome01Texture;
-sampler2D Chrome01Sampler = sampler_state
+Texture2D Chrome01Texture;
+sampler Chrome01Sampler = sampler_state
 {
     Texture = <Chrome01Texture>;
     MinFilter = Linear;
@@ -66,8 +116,8 @@ sampler2D Chrome01Sampler = sampler_state
     AddressV = Wrap;
 };
 
-texture ShadowMap;
-sampler2D ShadowSampler = sampler_state
+Texture2D ShadowMap;
+sampler ShadowSampler = sampler_state
 {
     Texture = <ShadowMap>;
     MinFilter = Linear;
@@ -76,22 +126,35 @@ sampler2D ShadowSampler = sampler_state
     AddressU = Clamp;
     AddressV = Clamp;
 };
+#endif
 
-int ItemOptions = 0;
-int ItemMaterialGroup = -1;
-int ItemMaterialIndex = -1;
-float HighLevelTexturesAvailable = 0.0;
-float Time = 0;
-float Alpha = 1.0;
-float3 GlowColor = float3(0.6, 0.5, 0.0);
-bool IsAncient = false;
-bool IsExcellent = false;
+#if SM6
+float4 SampleDiffuseSampler(float2 uv) { return DiffuseTexture.Sample(DiffuseSampler, uv); }
+float4 SampleChrome02Sampler(float2 uv) { return Chrome02Texture.Sample(Chrome02Sampler, uv); }
+float4 SampleShiny01Sampler(float2 uv) { return Shiny01Texture.Sample(Shiny01Sampler, uv); }
+float4 SampleChrome01Sampler(float2 uv) { return Chrome01Texture.Sample(Chrome01Sampler, uv); }
+float4 SampleShadowSampler(float2 uv) { return ShadowMap.Sample(ShadowSampler, uv); }
+#define tex2D(s, uv) Sample##s(uv)
+#define PS_COLOR SV_Target
+#else
+#define PS_COLOR COLOR
+#endif
+
+UNIFORM_DEFAULT(int, ItemOptions, 0);
+UNIFORM_DEFAULT(int, ItemMaterialGroup, -1);
+UNIFORM_DEFAULT(int, ItemMaterialIndex, -1);
+UNIFORM_DEFAULT(float, HighLevelTexturesAvailable, 0.0);
+UNIFORM_DEFAULT(float, Time, 0);
+UNIFORM_DEFAULT(float, Alpha, 1.0);
+UNIFORM_DEFAULT(float3, GlowColor, float3(0.6, 0.5, 0.0));
+UNIFORM_DEFAULT(bool, IsAncient, false);
+UNIFORM_DEFAULT(bool, IsExcellent, false);
 float4x4 LightViewProjection;
-float2 ShadowMapTexelSize = float2(1.0 / 2048.0, 1.0 / 2048.0);
-float ShadowBias = 0.0015;
-float ShadowNormalBias = 0.0025;
-float ShadowsEnabled = 0.0; // OpenGL compatible: use 0.0/1.0 instead of bool
-float ShadowStrength = 0.5;
+UNIFORM_DEFAULT(float2, ShadowMapTexelSize, float2(1.0 / 2048.0, 1.0 / 2048.0));
+UNIFORM_DEFAULT(float, ShadowBias, 0.0015);
+UNIFORM_DEFAULT(float, ShadowNormalBias, 0.0025);
+UNIFORM_DEFAULT(float, ShadowsEnabled, 0.0); // OpenGL compatible: use 0.0/1.0 instead of bool
+UNIFORM_DEFAULT(float, ShadowStrength, 0.5);
 
 struct VertexShaderInput
 {
@@ -333,7 +396,7 @@ float4 RenderHighLevelArmor(
     return float4(result, diffuseSample.a * Alpha);
 }
 
-float4 MainPS_UpgradeFast(VertexShaderOutputFast input) : COLOR
+float4 MainPS_UpgradeFast(VertexShaderOutputFast input) : PS_COLOR
 {
     float4 color = tex2D(DiffuseSampler, input.TextureCoordinate);
     if (color.a < 0.1)
@@ -387,7 +450,7 @@ float4 MainPS_UpgradeFast(VertexShaderOutputFast input) : COLOR
     return color;
 }
 
-float4 MainPS(VertexShaderOutput input) : COLOR
+float4 MainPS(VertexShaderOutput input) : PS_COLOR
 {
     float4 color = tex2D(DiffuseSampler, input.TextureCoordinate);
     

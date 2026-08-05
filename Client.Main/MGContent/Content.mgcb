@@ -66,10 +66,10 @@
 /processor:TextureProcessor
 /build:Bubbles.png
 
-#begin WaterSplashParticle.webp
+#begin WaterSplashParticle.png
 /importer:TextureImporter
 /processor:TextureProcessor
-/build:WaterSplashParticle.webp
+/build:WaterSplashParticle.png;WaterSplashParticle
 
 #begin ItemMaterial.fx
 /importer:EffectImporter

@@ -4,7 +4,7 @@
 
 float4x4 WorldViewProjection;
 
-#if SM4
+#if SM4 || SM6
 // -------------------- DX11 / WindowsDX --------------------
 Texture2D TextureSampler : register(t0);
 SamplerState PointClamp : register(s0)
@@ -33,18 +33,26 @@ float4 PS_Main(VS_OUT pin) : SV_Target
     return float4(col.rgb, a);
 }
 
+#if SM6
+    #define ALPHA_VS_MODEL vs_6_0
+    #define ALPHA_PS_MODEL ps_6_0
+#else
+    #define ALPHA_VS_MODEL vs_4_0_level_9_1
+    #define ALPHA_PS_MODEL ps_4_0_level_9_1
+#endif
+
 technique AlphaRGB
 {
     pass P0
     {
-        VertexShader = compile vs_4_0_level_9_1 VS_Main();
-        PixelShader  = compile ps_4_0_level_9_1 PS_Main();
+        VertexShader = compile ALPHA_VS_MODEL VS_Main();
+        PixelShader  = compile ALPHA_PS_MODEL PS_Main();
     }
 }
 
 #else
 // -------------------- OpenGL / DesktopGL (XNA-style) --------------------
-sampler2D TextureSampler : register(s0);
+sampler TextureSampler : register(s0);
 
 struct VS_IN  { float4 Pos:POSITION0; float2 Tex:TEXCOORD0; };
 struct VS_OUT { float4 Pos:POSITION0; float2 Tex:TEXCOORD0; };

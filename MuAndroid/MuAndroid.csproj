@@ -1,10 +1,11 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0-android</TargetFramework>
     <TargetPlatformVersion>36.0</TargetPlatformVersion>
     <SupportedOSPlatformVersion>29</SupportedOSPlatformVersion>
     <ClientMainTargetFramework>net10.0-android</ClientMainTargetFramework>
+    <MonoGameFramework>MonoGame.Framework.Android</MonoGameFramework>
     <NoWarn>$(NoWarn);XA0141;XA4211</NoWarn>
 
     <OutputType>Exe</OutputType>
@@ -14,18 +15,68 @@
 
     <AndroidManifest>AndroidManifest.xml</AndroidManifest>
     <MonoGamePlatform>Android</MonoGamePlatform>
+    <UseSourceGenerators>true</UseSourceGenerators>
 
+    <!-- Keep normal local Release builds configurable. -->
+    <AndroidPerformanceRelease Condition="'$(AndroidPerformanceRelease)' == '' AND '$(Configuration)' == 'Release'">true</AndroidPerformanceRelease>
+    <AndroidFullAot Condition="'$(AndroidFullAot)' == ''">true</AndroidFullAot>
+    <AndroidUseLlvm Condition="'$(AndroidUseLlvm)' == ''">$(AndroidFullAot)</AndroidUseLlvm>
+    <AndroidPackageFormats Condition="'$(AndroidPackageFormats)' == ''">apk</AndroidPackageFormats>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' AND '$(AndroidPerformanceRelease)' == 'true'">android-arm64</RuntimeIdentifier>
+
+    <!-- Release packages must contain assemblies and must never use Fast Deployment. -->
+    <EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>
+    <AcceptAndroidSDKLicenses>true</AcceptAndroidSDKLicenses>
+  </PropertyGroup>
+
+  <!-- Explicit compatibility profile for local troubleshooting and emulator builds. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release' AND '$(AndroidPerformanceRelease)' != 'true'">
     <RunAOTCompilation>false</RunAOTCompilation>
     <EnableLLVM>false</EnableLLVM>
+    <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
 
-    <!-- Disable Fast Deployment for Debug builds -->
-    <EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>
-    <AndroidUseSharedRuntime>false</AndroidUseSharedRuntime>
+  <!--
+    Maximum runtime-performance profile for physical ARM64 devices.
+    Full AOT + LLVM increases build time and package size, but removes JIT work from gameplay.
+  -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release' AND '$(AndroidPerformanceRelease)' == 'true'">
+    <DefineConstants>$(DefineConstants);ANDROID_PERFORMANCE_RELEASE</DefineConstants>
+    <Optimize>true</Optimize>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
 
-    <!-- Accept Android SDK licenses -->
-    <AcceptAndroidSDKLicenses>true</AcceptAndroidSDKLicenses>
+    <RunAOTCompilation>true</RunAOTCompilation>
+    <AndroidEnableProfiledAot Condition="'$(AndroidFullAot)' == 'true'">false</AndroidEnableProfiledAot>
+    <AndroidEnableProfiledAot Condition="'$(AndroidFullAot)' != 'true'">true</AndroidEnableProfiledAot>
+    <AndroidUseDefaultAotProfile>true</AndroidUseDefaultAotProfile>
+    <AndroidAotEnableLazyLoad>true</AndroidAotEnableLazyLoad>
+    <EnableLLVM>$(AndroidUseLlvm)</EnableLLVM>
+    <AndroidEnableMarshalMethods>$(AndroidUseLlvm)</AndroidEnableMarshalMethods>
 
-    <UseSourceGenerators>true</UseSourceGenerators>
+    <!-- AOT requires trimming. SdkOnly protects reflection-driven game assemblies. -->
+    <PublishTrimmed>true</PublishTrimmed>
+    <AndroidLinkMode>SdkOnly</AndroidLinkMode>
+    <AndroidLinkTool>r8</AndroidLinkTool>
+    <AndroidCreateProguardMappingFile>true</AndroidCreateProguardMappingFile>
+
+    <AndroidCreatePackagePerAbi>false</AndroidCreatePackagePerAbi>
+    <AndroidStripNativeLibraries>true</AndroidStripNativeLibraries>
+    <UseInterpreter>false</UseInterpreter>
+
+    <!-- Favor stable frame pacing over peak collector throughput. -->
+    <AndroidEnableSGenConcurrent>true</AndroidEnableSGenConcurrent>
+    <AndroidEnablePreloadAssemblies>false</AndroidEnablePreloadAssemblies>
+
+    <!-- Remove diagnostic runtime components from the shipping package. -->
+    <EnableDiagnostics>false</EnableDiagnostics>
+    <EventSourceSupport>false</EventSourceSupport>
+    <MetricsSupport>false</MetricsSupport>
+
+    <AndroidSdkBuildToolsVersion>36.0.0</AndroidSdkBuildToolsVersion>
+    <JavaMaximumHeapSize>4G</JavaMaximumHeapSize>
+    <JavaOptions>-XX:+UseParallelGC -Dfile.encoding=UTF-8</JavaOptions>
+    <MonoGameMGCBAdditionalArguments>/config:Release</MonoGameMGCBAdditionalArguments>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -43,8 +94,8 @@
   </Target>
 
   <ItemGroup>
-    <PackageReference Include="MonoGame.Content.Builder.Task" Version="3.8.4.1" />
-    <PackageReference Include="MonoGame.Framework.Android" Version="3.8.4.1" />
+    <PackageReference Include="MonoGame.Content.Builder.Task" Version="3.8.5" />
+    <PackageReference Include="MonoGame.Framework.Android" Version="3.8.5" />
   </ItemGroup>
 
   <ItemGroup>
@@ -61,11 +112,29 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Client.Data\Client.Data.csproj" />
-    <ProjectReference Include="..\Client.Main\Client.Main.csproj"/>
+    <ProjectReference Include="..\Client.Main\Client.Main.csproj" />
   </ItemGroup>
 
-  <Target Name="RestoreDotnetTools" BeforeTargets="CollectPackageReferences">
-    <Message Text="Restoring dotnet tools (this might take a while depending on your internet speed and should only happen upon building your project for the first time, or after upgrading MonoGame, or clearing your nuget cache)" Importance="High" />
-    <Exec Command="dotnet tool restore" />
+  <!-- Local-build convenience. CI restores tools once and disables this target. -->
+  <Target Name="RestoreDotnetTools"
+          BeforeTargets="RunContentBuilder"
+          Condition="'$(RestoreMonoGameTools)' != 'false' AND '$(DesignTimeBuild)' != 'true'">
+    <Message Text="Restoring MonoGame tools" Importance="High" />
+    <Exec Command="dotnet tool restore --tool-manifest &quot;$(MSBuildProjectDirectory)\.config\dotnet-tools.json&quot;" />
+  </Target>
+
+  <Target Name="ValidateAndroidPerformanceRelease"
+          BeforeTargets="PrepareForBuild"
+          Condition="'$(Configuration)' == 'Release' AND '$(AndroidPerformanceRelease)' == 'true'">
+    <Error Condition="'$(RuntimeIdentifier)' != 'android-arm64'"
+           Text="AndroidPerformanceRelease requires RuntimeIdentifier=android-arm64." />
+    <Error Condition="$([System.String]::Copy('$(RunAOTCompilation)').ToLowerInvariant()) != 'true'"
+           Text="AndroidPerformanceRelease requires RunAOTCompilation=true." />
+    <Error Condition="$([System.String]::Copy('$(PublishTrimmed)').ToLowerInvariant()) != 'true'"
+           Text="Android AOT requires PublishTrimmed=true." />
+    <Error Condition="'$(AndroidLinkMode)' != 'SdkOnly'"
+           Text="AndroidPerformanceRelease requires AndroidLinkMode=SdkOnly to preserve reflection-driven game code." />
+    <Message Importance="High"
+             Text="Android performance profile: RID=$(RuntimeIdentifier), FullAOT=$(AndroidFullAot), LLVM=$(EnableLLVM), Packages=$(AndroidPackageFormats)" />
   </Target>
 </Project>

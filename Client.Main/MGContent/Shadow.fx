@@ -1,9 +1,13 @@
-#if OPENGL
+#if SM6
+    // WindowsDX12 and DesktopVK use DXC and require Shader Model 6.0.
+    #define VS_SHADERMODEL vs_6_0
+    #define PS_SHADERMODEL ps_6_0
+#elif OPENGL
     // DesktopGL → SM 3.0
     #define VS_SHADERMODEL vs_3_0
     #define PS_SHADERMODEL ps_3_0
 #else
-    // DX
+    // WindowsDX11
     #define VS_SHADERMODEL vs_4_0_level_9_1
     #define PS_SHADERMODEL ps_4_0_level_9_1
 #endif
@@ -11,15 +15,20 @@
 
 float4x4 WorldViewProjection;
 float4   ShadowTint;
-texture  ShadowTexture;
+Texture2D ShadowTexture;
 
-sampler2D ShadowSampler = sampler_state
+sampler ShadowSampler = sampler_state
 {
     Texture   = <ShadowTexture>;
     MinFilter = Linear;
     MagFilter = Linear;
     MipFilter = Linear;
 };
+
+#if SM6
+float4 SampleShadowTexture(float2 uv) { return ShadowTexture.Sample(ShadowSampler, uv); }
+#define tex2D(s, uv) SampleShadowTexture(uv)
+#endif
 
 //---------------- VS -------------------------
 struct VS_IN  { float4 Position : POSITION0; float2 Tex : TEXCOORD0; };

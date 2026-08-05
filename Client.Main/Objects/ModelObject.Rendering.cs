@@ -55,20 +55,23 @@ namespace Client.Main.Objects
             public readonly BlendState BlendState;
             public readonly bool TwoSided;
             public readonly MeshShaderKind ShaderKind;
+            public readonly int DrawOrder;
 
-            public MeshStateKey(Texture2D tex, BlendState blend, bool twoSided, MeshShaderKind shaderKind)
+            public MeshStateKey(Texture2D tex, BlendState blend, bool twoSided, MeshShaderKind shaderKind, int drawOrder)
             {
                 Texture = tex;
                 BlendState = blend;
                 TwoSided = twoSided;
                 ShaderKind = shaderKind;
+                DrawOrder = drawOrder;
             }
 
             public bool Equals(MeshStateKey other) =>
                 ReferenceEquals(Texture, other.Texture) &&
                 ReferenceEquals(BlendState, other.BlendState) &&
                 TwoSided == other.TwoSided &&
-                ShaderKind == other.ShaderKind;
+                ShaderKind == other.ShaderKind &&
+                DrawOrder == other.DrawOrder;
 
             public override bool Equals(object obj) => obj is MeshStateKey o && Equals(o);
 
@@ -81,6 +84,7 @@ namespace Client.Main.Objects
                     h = h * 31 + (BlendState?.GetHashCode() ?? 0);
                     h = h * 31 + (TwoSided ? 1 : 0);
                     h = h * 31 + (int)ShaderKind;
+                    h = h * 31 + DrawOrder;
                     return h;
                 }
             }
@@ -197,7 +201,10 @@ namespace Client.Main.Objects
                     bool twoSided = IsMeshTwoSided(meshIndex, isBlend);
                     BlendState blend = GetMeshBlendState(meshIndex, isBlend);
                     MeshShaderKind shaderKind = DetermineShaderForMesh(meshIndex).Kind;
-                    var key = new MeshStateKey(texture, blend, twoSided, shaderKind);
+                    int drawOrder = shaderKind == MeshShaderKind.AlphaTest && (isRgba || isBlend)
+                        ? meshIndex
+                        : -1;
+                    var key = new MeshStateKey(texture, blend, twoSided, shaderKind, drawOrder);
 
                     if (!target.TryGetValue(key, out List<int> list))
                     {
@@ -403,6 +410,12 @@ namespace Client.Main.Objects
                 return false;
 
             ShaderSelection selection = DetermineShaderForMesh(mesh);
+#if NATIVE_BACKEND
+            // Native SM6 material effects currently lose meshes in their BoneMatrices
+            // techniques. Keep the material pixel shader, but feed it CPU-skinned geometry.
+            if (selection.UseItemMaterial || selection.UseMonsterMaterial)
+                return false;
+#endif
             if (selection.UseItemMaterial)
             {
                 return TryGetTechnique(
@@ -768,6 +781,12 @@ namespace Client.Main.Objects
                         gd.RasterizerState = targetRasterizer;
                     if (effect != null && effect.Texture != stateKey.Texture)
                         effect.Texture = stateKey.Texture;
+                    if (stateKey.ShaderKind == MeshShaderKind.AlphaTest)
+                    {
+                        SamplerState sampler = GraphicsManager.GetQualityLinearWrapSamplerState();
+                        if (!ReferenceEquals(gd.SamplerStates[0], sampler))
+                            gd.SamplerStates[0] = sampler;
+                    }
 
                     // Bind effect once per group
                     if (effect != null)

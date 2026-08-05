@@ -4,7 +4,7 @@
 
 float2 Resolution;
 
-#if SM4
+#if SM4 || SM6
 // -------------------- DX11 / WindowsDX --------------------
 Texture2D SceneTexture : register(t0);
 SamplerState LinearClamp : register(s0)
@@ -77,18 +77,26 @@ float4 PS_FXAA(VS_OUT IN) : SV_Target
     return float4(((lumaB < lumaMin) || (lumaB > lumaMax)) ? rgbA : rgbB, 1);
 }
 
+#if SM6
+    #define FXAA_VS_MODEL vs_6_0
+    #define FXAA_PS_MODEL ps_6_0
+#else
+    #define FXAA_VS_MODEL vs_4_0_level_9_1
+    #define FXAA_PS_MODEL ps_4_0_level_9_1
+#endif
+
 technique FXAA
 {
     pass P0
     {
-        VertexShader = compile vs_4_0_level_9_1 VS_Pass();
-        PixelShader  = compile ps_4_0_level_9_1 PS_FXAA();
+        VertexShader = compile FXAA_VS_MODEL VS_Pass();
+        PixelShader  = compile FXAA_PS_MODEL PS_FXAA();
     }
 }
 
 #else
 // -------------------- OpenGL / DesktopGL (XNA-style) --------------------
-sampler2D SceneTexture : register(s0);
+sampler SceneTexture : register(s0);
 
 #define SAMPLE(uv) tex2D(SceneTexture, (uv))
 

@@ -1,4 +1,7 @@
-#if OPENGL
+#if SM6
+    #define VS_SHADERMODEL vs_6_0
+    #define PS_SHADERMODEL ps_6_0
+#elif OPENGL
     #define SV_POSITION POSITION
     #define VS_SHADERMODEL vs_3_0
     #define PS_SHADERMODEL ps_3_0
@@ -8,13 +11,21 @@
 #endif
 
 Texture2D SpriteTexture;
-sampler2D SpriteTextureSampler = sampler_state
+sampler SpriteTextureSampler = sampler_state
 {
     Texture = <SpriteTexture>;
     Filter = Linear;
     AddressU = Clamp;
     AddressV = Clamp;
 };
+
+#if SM6
+float4 SampleSpriteTexture(float2 uv) { return SpriteTexture.Sample(SpriteTextureSampler, uv); }
+#define tex2D(s, uv) SampleSpriteTexture(uv)
+#define PS_COLOR SV_Target
+#else
+#define PS_COLOR COLOR
+#endif
 
 struct VertexShaderOutput
 {
@@ -23,7 +34,7 @@ struct VertexShaderOutput
     float2 TextureCoordinates : TEXCOORD0;
 };
 
-float4 MainPS(VertexShaderOutput input) : COLOR
+float4 MainPS(VertexShaderOutput input) : PS_COLOR
 {
     float4 color = tex2D(SpriteTextureSampler, input.TextureCoordinates) * input.Color;
     

@@ -1,31 +1,30 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <MonoGamePlatform>Windows</MonoGamePlatform>
-    <TargetFramework>net10.0-windows</TargetFramework>
-    <ClientMainTargetFramework>net10.0-windows</ClientMainTargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
+    <ClientMainTargetFramework>net10.0</ClientMainTargetFramework>
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
     <PlatformTarget>x64</PlatformTarget>
     <Prefer32Bit>false</Prefer32Bit>
     <RollForward>LatestPatch</RollForward>
 
-    <UseWindowsForms>true</UseWindowsForms>
-    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <MonoGamePlatform>DesktopVK</MonoGamePlatform>
+    <!-- MonoGame 3.8.5 parses DesktopVK shader reflection floats using the
+         process culture, while shader-cross emits invariant decimal points. -->
+    <_Command Condition="'$(OS)' == 'Windows_NT'">set &quot;DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1&quot; &amp;&amp; &quot;$(DotnetCommand)&quot; &quot;$(MGCBCommand)&quot;</_Command>
+    <_Command Condition="'$(OS)' != 'Windows_NT'">DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 &quot;$(DotnetCommand)&quot; &quot;$(MGCBCommand)&quot;</_Command>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <ApplicationIcon>Icon.ico</ApplicationIcon>
-    <AssemblyName>MuMono</AssemblyName>
+    <AssemblyName>MuMonoVK</AssemblyName>
     <UseSourceGenerators>true</UseSourceGenerators>
-    <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
+    <DefineConstants>$(DefineConstants);WINDOWS;DESKTOP_VK;NATIVE_BACKEND</DefineConstants>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release' AND '$(PerformanceRelease)' == 'true'">
-    <!-- Folder publish avoids single-file bundle/extraction and compression overhead. -->
     <SelfContained>true</SelfContained>
     <UseAppHost>true</UseAppHost>
     <PublishSingleFile>false</PublishSingleFile>
     <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
 
-    <!-- R2R removes first-use JIT stalls; Tiered PGO replaces hot R2R methods later. -->
     <PublishReadyToRun>true</PublishReadyToRun>
     <PublishReadyToRunComposite>false</PublishReadyToRunComposite>
     <PublishReadyToRunEmitSymbols>false</PublishReadyToRunEmitSymbols>
@@ -42,13 +41,16 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="MonoGame.Framework.WindowsDX" Version="3.8.5" />
+    <PackageReference Include="MonoGame.Framework.Native" Version="3.8.5" />
+    <PackageReference Include="MonoGame.Runtime.Windows.Vulkan" Version="3.8.5" />
+    <PackageReference Include="MonoGame.Runtime.Linux.Vulkan" Version="3.8.5" />
+    <PackageReference Include="MonoGame.Runtime.Mac.Vulkan" Version="3.8.5" />
     <PackageReference Include="MonoGame.Content.Builder.Task" Version="3.8.5" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Client.Main\Client.Main.csproj"
-                      AdditionalProperties="MonoGameFramework=MonoGame.Framework.WindowsDX;TargetFramework=$(ClientMainTargetFramework)" />
+                      AdditionalProperties="MonoGameFramework=MonoGame.Framework.Native;MonoGamePlatform=DesktopVK" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(Configuration)' == 'Release' AND '$(PerformanceRelease)' == 'true'">
@@ -61,18 +63,18 @@
   <Target Name="RestoreDotnetTools"
           BeforeTargets="RunContentBuilder"
           Condition="'$(DesignTimeBuild)' != 'true' AND '$(RestoreMonoGameTools)' != 'false'">
-    <Message Text="Restoring MonoGame tools" Importance="High" />
+    <Message Text="Restoring MonoGame 3.8.5 tools" Importance="High" />
     <Exec WorkingDirectory="$(MSBuildProjectDirectory)" Command="dotnet tool restore" />
   </Target>
 
-  <Target Name="ValidatePerformancePublish"
+  <Target Name="ValidateNativeBackendPublish"
           BeforeTargets="Publish"
           Condition="'$(Configuration)' == 'Release' AND '$(PerformanceRelease)' == 'true'">
     <Error Condition="'$(PublishTrimmed)' == 'true'"
-           Text="Performance Release does not support trimming because runtime reflection is used by scene, world, NPC and skill registries." />
+           Text="Native backend performance builds do not support trimming while reflection-driven registries are used." />
     <Error Condition="'$(PublishAot)' == 'true'"
-           Text="Performance Release does not support NativeAOT until all reflection-driven registries are converted to generated registries." />
+           Text="NativeAOT remains disabled until reflection-driven registries are replaced or fully annotated." />
     <Error Condition="'$(PublishSingleFile)' == 'true'"
-           Text="Performance Release intentionally uses a folder publish. Single-file bundling is a distribution option, not a frame-time optimization." />
+           Text="Native backend performance builds intentionally use folder publish so runtime native libraries stay directly loadable." />
   </Target>
 </Project>

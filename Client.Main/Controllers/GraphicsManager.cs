@@ -88,6 +88,7 @@ namespace Client.Main.Controllers
             ShadowEffect = LoadEffect("Shadow");
             GammaCorrectionEffect = LoadEffect("GammaCorrection");
             ItemMaterialEffect = LoadEffect("ItemMaterial");
+            ItemMaterialEffect?.Parameters["GlowColor"]?.SetValue(new Vector3(0.6f, 0.5f, 0.0f));
             MonsterMaterialEffect = LoadEffect("MonsterMaterial");
             DynamicLightingEffect = LoadEffect("DynamicLighting");
             ShadowMapRenderer = new ShadowMapRenderer(_graphicsDevice);
@@ -196,6 +197,15 @@ namespace Client.Main.Controllers
                 return SamplerState.AnisotropicClamp;
             }
             return SamplerState.LinearClamp;
+        }
+
+        public static SamplerState GetQualityLinearWrapSamplerState()
+        {
+            if (Constants.HIGH_QUALITY_TEXTURES)
+            {
+                return SamplerState.AnisotropicWrap;
+            }
+            return SamplerState.LinearWrap;
         }
 
         public void EnsureRenderTargets(bool requireTempTarget1, bool requireTempTarget2, bool requireRecoveryTarget = false)

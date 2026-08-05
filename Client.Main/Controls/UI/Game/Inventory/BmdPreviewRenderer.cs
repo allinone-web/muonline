@@ -1137,7 +1137,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 gd.BlendState = BlendState.AlphaBlend;
                 gd.DepthStencilState = DepthStencilState.Default;
                 gd.RasterizerState = RasterizerState.CullNone;
-                gd.SamplerStates[0] = GraphicsManager.GetQualityLinearSamplerState();
+                gd.SamplerStates[0] = GraphicsManager.GetQualityLinearWrapSamplerState();
 
                 Matrix view = Matrix.CreateLookAt(new Vector3(0, 0, 40f), Vector3.Zero, Vector3.Up);
                 Matrix projection = Matrix.CreatePerspectiveFieldOfView(

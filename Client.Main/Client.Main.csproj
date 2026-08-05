@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <ClientMainTargetFramework>net10.0</ClientMainTargetFramework>
+    <ClientMainTargetFramework Condition="'$(MonoGameFramework)' == 'MonoGame.Framework.WindowsDX'">net10.0-windows</ClientMainTargetFramework>
     <TargetFramework>$(ClientMainTargetFramework)</TargetFramework>
     <AssemblyName>Client.Main</AssemblyName>
     <RootNamespace>Client.Main</RootNamespace>
@@ -12,6 +13,14 @@
 
   <PropertyGroup Condition="'$(MonoGameFramework)' == 'MonoGame.Framework.WindowsDX'">
     <DefineConstants>$(DefineConstants);WINDOWS_DX</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(MonoGamePlatform)' == 'WindowsDX12'">
+    <DefineConstants>$(DefineConstants);WINDOWS_DX;WINDOWS_DX12;NATIVE_BACKEND</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(MonoGamePlatform)' == 'DesktopVK'">
+    <DefineConstants>$(DefineConstants);DESKTOP_VK;NATIVE_BACKEND</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -29,7 +38,28 @@
     <PackageReference Include="MUnique.OpenMU.Network" Version="0.9.8" />
     <PackageReference Include="MUnique.OpenMU.Network.Packets" Version="0.9.8" ExcludeAssets="contentFiles" />
     <PackageReference Include="NLayer" Version="1.16.0" />
-    <PackageReference Include="MonoGame.Framework.DesktopGL" Version="3.8.4.1">
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-android'">
+    <PackageReference Include="MonoGame.Framework.Android" Version="3.8.5">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' != 'net10.0-android' AND '$(MonoGameFramework)' == 'MonoGame.Framework.Native'">
+    <PackageReference Include="MonoGame.Framework.Native" Version="3.8.5">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' != 'net10.0-android' AND '$(MonoGameFramework)' == 'MonoGame.Framework.WindowsDX'">
+    <PackageReference Include="MonoGame.Framework.WindowsDX" Version="3.8.5">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' != 'net10.0-android' AND '$(MonoGameFramework)' != 'MonoGame.Framework.Native' AND '$(MonoGameFramework)' != 'MonoGame.Framework.WindowsDX'">
+    <PackageReference Include="MonoGame.Framework.DesktopGL" Version="3.8.5">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
   </ItemGroup>
@@ -51,4 +81,3 @@
     </None>
   </ItemGroup>
 </Project>
-

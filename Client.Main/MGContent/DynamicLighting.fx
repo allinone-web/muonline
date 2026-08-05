@@ -1,11 +1,20 @@
 // DynamicLighting.fx - Dynamic lighting shader
 
-#if OPENGL
+#if SM6
+    #define VS_SHADERMODEL vs_6_0
+    #define PS_SHADERMODEL ps_6_0
+#elif OPENGL
     #define VS_SHADERMODEL vs_3_0
     #define PS_SHADERMODEL ps_3_0
 #else
     #define VS_SHADERMODEL vs_5_0
     #define PS_SHADERMODEL ps_5_0
+#endif
+
+#if SM6
+    #define UNIFORM_DEFAULT(type, name, value) type name
+#else
+    #define UNIFORM_DEFAULT(type, name, value) type name = value
 #endif
 
 // Transformation matrices
@@ -18,13 +27,13 @@ float4x4 BoneMatrices[256];
 // The row width is selected per flush (32/64/128/256 bones), and each bone
 // occupies four consecutive float4 texels (one texel per matrix row).
 Texture2D CrowdBonePaletteTexture;
-float CrowdBonePaletteRowCount = 1.0;
+UNIFORM_DEFAULT(float, CrowdBonePaletteRowCount, 1.0);
 #endif
 
 
 // Texture
-texture DiffuseTexture;
-sampler2D SamplerState0 = sampler_state
+Texture2D DiffuseTexture;
+sampler SamplerState0 = sampler_state
 {
     Texture = <DiffuseTexture>;
     AddressU = Wrap;
@@ -35,22 +44,22 @@ sampler2D SamplerState0 = sampler_state
 };
 
 // Lighting parameters  
-float3 AmbientLight = float3(0.8, 0.8, 0.8);
-float Alpha = 1.0;
-float2 TextureCoordinateOffset = float2(0.0, 0.0);
-float3 HighlightColor = float3(1.0, 0.0, 0.0);
-float3 SunDirection = float3(1.0, 0.0, -0.6);
-float3 SunColor = float3(1.0, 0.95, 0.85);
-float SunStrength = 0.8;
-float ShadowStrength = 0.5;
+UNIFORM_DEFAULT(float3, AmbientLight, float3(0.8, 0.8, 0.8));
+UNIFORM_DEFAULT(float, Alpha, 1.0);
+UNIFORM_DEFAULT(float2, TextureCoordinateOffset, float2(0.0, 0.0));
+UNIFORM_DEFAULT(float3, HighlightColor, float3(1.0, 0.0, 0.0));
+UNIFORM_DEFAULT(float3, SunDirection, float3(1.0, 0.0, -0.6));
+UNIFORM_DEFAULT(float3, SunColor, float3(1.0, 0.95, 0.85));
+UNIFORM_DEFAULT(float, SunStrength, 0.8);
+UNIFORM_DEFAULT(float, ShadowStrength, 0.5);
 float4x4 LightViewProjection;
-float2 ShadowMapTexelSize = float2(1.0 / 2048.0, 1.0 / 2048.0);
-float ShadowBias = 0.0015;
-float ShadowNormalBias = 0.0025;
-float ShadowsEnabled = 0.0;
+UNIFORM_DEFAULT(float2, ShadowMapTexelSize, float2(1.0 / 2048.0, 1.0 / 2048.0));
+UNIFORM_DEFAULT(float, ShadowBias, 0.0015);
+UNIFORM_DEFAULT(float, ShadowNormalBias, 0.0025);
+UNIFORM_DEFAULT(float, ShadowsEnabled, 0.0);
 
-texture ShadowMap;
-sampler2D ShadowSampler = sampler_state
+Texture2D ShadowMap;
+sampler ShadowSampler = sampler_state
 {
     Texture = <ShadowMap>;
     AddressU = Clamp;
@@ -60,6 +69,12 @@ sampler2D ShadowSampler = sampler_state
     MipFilter = Point;
 };
 
+#if SM6
+float4 SampleSamplerState0(float2 uv) { return DiffuseTexture.Sample(SamplerState0, uv); }
+float4 SampleShadowSampler(float2 uv) { return ShadowMap.Sample(ShadowSampler, uv); }
+#define tex2D(s, uv) Sample##s(uv)
+#endif
+
 // Dynamic lights
 #if OPENGL
 #define MAX_LIGHTS 8
@@ -68,20 +83,20 @@ sampler2D ShadowSampler = sampler_state
 #endif
 float4 LightPosInvRadius[MAX_LIGHTS];   // xyz = position, w = inverse radius
 float4 LightColorIntensity[MAX_LIGHTS]; // rgb = color, w = intensity
-int ActiveLightCount = 0;               // exact count uploaded by CPU; avoids scanning empty slots
+UNIFORM_DEFAULT(int, ActiveLightCount, 0); // exact count uploaded by CPU; avoids scanning empty slots
 
-float DebugLightingAreas = 0.0;
-float TerrainDynamicIntensityScale = 1.5;
-float GlobalLightMultiplier = 1.0; 
+UNIFORM_DEFAULT(float, DebugLightingAreas, 0.0);
+UNIFORM_DEFAULT(float, TerrainDynamicIntensityScale, 1.5);
+UNIFORM_DEFAULT(float, GlobalLightMultiplier, 1.0);
 
 
-float2 TerrainUvScale = float2(0.0, 0.0);      
-float UseProceduralTerrainUV = 0.0;            
-float IsWaterTexture = 0.0;                    
-float2 WaterFlowDirection = float2(1.0, 0.0);
-float WaterTotal = 0.0;
-float DistortionAmplitude = 0.0;
-float DistortionFrequency = 0.0;
+UNIFORM_DEFAULT(float2, TerrainUvScale, float2(0.0, 0.0));
+UNIFORM_DEFAULT(float, UseProceduralTerrainUV, 0.0);
+UNIFORM_DEFAULT(float, IsWaterTexture, 0.0);
+UNIFORM_DEFAULT(float2, WaterFlowDirection, float2(1.0, 0.0));
+UNIFORM_DEFAULT(float, WaterTotal, 0.0);
+UNIFORM_DEFAULT(float, DistortionAmplitude, 0.0);
+UNIFORM_DEFAULT(float, DistortionFrequency, 0.0);
 
 // Input structures
 struct VertexInput

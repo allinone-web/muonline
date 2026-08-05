@@ -1,10 +1,19 @@
-#if OPENGL
+#if SM6
+    #define VS_SHADERMODEL vs_6_0
+    #define PS_SHADERMODEL ps_6_0
+#elif OPENGL
     #define SV_POSITION POSITION
     #define VS_SHADERMODEL vs_3_0
     #define PS_SHADERMODEL ps_3_0
 #else
     #define VS_SHADERMODEL vs_5_0
     #define PS_SHADERMODEL ps_5_0
+#endif
+
+#if SM6
+    #define UNIFORM_DEFAULT(type, name, value) type name
+#else
+    #define UNIFORM_DEFAULT(type, name, value) type name = value
 #endif
 
 #if OPENGL
@@ -19,10 +28,27 @@ float4x4 WorldViewProjection;
 float4x4 BoneMatrices[256];
 #endif
 
-float3 LightDirection = float3(0.707, -0.707, 0);
+UNIFORM_DEFAULT(float3, LightDirection, float3(0.707, -0.707, 0));
 
-texture DiffuseTexture;
-sampler2D DiffuseSampler = sampler_state
+#if SM6
+Texture2D DiffuseTexture : register(t0);
+SamplerState DiffuseSampler : register(s0)
+{
+    Filter = Point;
+    AddressU = Wrap;
+    AddressV = Wrap;
+};
+
+Texture2D ShadowMap : register(t1);
+SamplerState ShadowSampler : register(s1)
+{
+    Filter = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+#else
+Texture2D DiffuseTexture;
+sampler DiffuseSampler = sampler_state
 {
     Texture = <DiffuseTexture>;
     MinFilter = Point;
@@ -32,8 +58,8 @@ sampler2D DiffuseSampler = sampler_state
     AddressV = Wrap;
 };
 
-texture ShadowMap;
-sampler2D ShadowSampler = sampler_state
+Texture2D ShadowMap;
+sampler ShadowSampler = sampler_state
 {
     Texture = <ShadowMap>;
     MinFilter = Linear;
@@ -42,20 +68,30 @@ sampler2D ShadowSampler = sampler_state
     AddressU = Clamp;
     AddressV = Clamp;
 };
+#endif
+
+#if SM6
+float4 SampleDiffuseSampler(float2 uv) { return DiffuseTexture.Sample(DiffuseSampler, uv); }
+float4 SampleShadowSampler(float2 uv) { return ShadowMap.Sample(ShadowSampler, uv); }
+#define tex2D(s, uv) Sample##s(uv)
+#define PS_COLOR SV_Target
+#else
+#define PS_COLOR COLOR
+#endif
 
 // Monster-specific parameters
-float3 GlowColor = float3(1.0, 0.8, 0.0); // Default gold glow
-float GlowIntensity = 1.0;
-float Time = 0;
-bool EnableGlow = false;
-bool SimpleColorMode = false; // Simple color tinting without ghosting
-float Alpha = 1.0;
+UNIFORM_DEFAULT(float3, GlowColor, float3(1.0, 0.8, 0.0)); // Default gold glow
+UNIFORM_DEFAULT(float, GlowIntensity, 1.0);
+UNIFORM_DEFAULT(float, Time, 0);
+UNIFORM_DEFAULT(bool, EnableGlow, false);
+UNIFORM_DEFAULT(bool, SimpleColorMode, false); // Simple color tinting without ghosting
+UNIFORM_DEFAULT(float, Alpha, 1.0);
 float4x4 LightViewProjection;
-float2 ShadowMapTexelSize = float2(1.0 / 2048.0, 1.0 / 2048.0);
-float ShadowBias = 0.0015;
-float ShadowNormalBias = 0.0025;
-float ShadowsEnabled = 0.0; // OpenGL compatible: use 0.0/1.0 instead of bool
-float ShadowStrength = 0.5;
+UNIFORM_DEFAULT(float2, ShadowMapTexelSize, float2(1.0 / 2048.0, 1.0 / 2048.0));
+UNIFORM_DEFAULT(float, ShadowBias, 0.0015);
+UNIFORM_DEFAULT(float, ShadowNormalBias, 0.0025);
+UNIFORM_DEFAULT(float, ShadowsEnabled, 0.0); // OpenGL compatible: use 0.0/1.0 instead of bool
+UNIFORM_DEFAULT(float, ShadowStrength, 0.5);
 
 struct VertexShaderInput
 {
@@ -143,7 +179,7 @@ VertexShaderOutput MainVS_Skinned(in VertexShaderInputSkinned input)
 }
 #endif
 
-float4 MainPS_Basic(VertexShaderOutput input) : COLOR
+float4 MainPS_Basic(VertexShaderOutput input) : PS_COLOR
 {
     float4 color = tex2D(DiffuseSampler, input.TextureCoordinate);
     if (color.a < 0.1)
@@ -157,7 +193,7 @@ float4 MainPS_Basic(VertexShaderOutput input) : COLOR
     return color;
 }
 
-float4 MainPS(VertexShaderOutput input) : COLOR
+float4 MainPS(VertexShaderOutput input) : PS_COLOR
 {
     float4 color = tex2D(DiffuseSampler, input.TextureCoordinate);
     

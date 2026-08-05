@@ -1,22 +1,21 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <MonoGamePlatform>DesktopGL</MonoGamePlatform>
     <TargetFramework>net10.0</TargetFramework>
+    <ClientMainTargetFramework>net10.0</ClientMainTargetFramework>
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
     <PlatformTarget>x64</PlatformTarget>
     <Prefer32Bit>false</Prefer32Bit>
     <RollForward>LatestPatch</RollForward>
 
+    <MonoGamePlatform>WindowsDX12</MonoGamePlatform>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <ApplicationIcon>Icon.ico</ApplicationIcon>
-    <AssemblyName>MuMono</AssemblyName>
+    <AssemblyName>MuMonoDX12</AssemblyName>
     <UseSourceGenerators>true</UseSourceGenerators>
-    <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
+    <DefineConstants>$(DefineConstants);WINDOWS;WINDOWS_DX12;NATIVE_BACKEND</DefineConstants>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release' AND '$(PerformanceRelease)' == 'true'">
-    <!-- Match the DirectX performance profile without NativeAOT/reflection breakage. -->
     <SelfContained>true</SelfContained>
     <UseAppHost>true</UseAppHost>
     <PublishSingleFile>false</PublishSingleFile>
@@ -38,32 +37,38 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Client.Main\Client.Main.csproj"
-                      AdditionalProperties="MonoGameFramework=MonoGame.Framework.DesktopGL" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="MonoGame.Framework.DesktopGL" Version="3.8.5" />
+    <PackageReference Include="MonoGame.Framework.Native" Version="3.8.5" />
+    <PackageReference Include="MonoGame.Runtime.Windows.DX12" Version="3.8.5" />
     <PackageReference Include="MonoGame.Content.Builder.Task" Version="3.8.5" />
   </ItemGroup>
 
-  <!-- Run tool restore only when the content builder is actually needed.
-       Running it before CollectPackageReferences re-enters the restore graph and can overlap builds. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Client.Main\Client.Main.csproj"
+                      AdditionalProperties="MonoGameFramework=MonoGame.Framework.Native;MonoGamePlatform=WindowsDX12" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Configuration)' == 'Release' AND '$(PerformanceRelease)' == 'true'">
+    <None Include="appsettings.performance.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+  </ItemGroup>
+
   <Target Name="RestoreDotnetTools"
           BeforeTargets="RunContentBuilder"
           Condition="'$(DesignTimeBuild)' != 'true' AND '$(RestoreMonoGameTools)' != 'false'">
-    <Message Text="Restoring MonoGame tools" Importance="High" />
+    <Message Text="Restoring MonoGame 3.8.5 tools" Importance="High" />
     <Exec WorkingDirectory="$(MSBuildProjectDirectory)" Command="dotnet tool restore" />
   </Target>
 
-  <Target Name="ValidatePerformancePublish"
+  <Target Name="ValidateNativeBackendPublish"
           BeforeTargets="Publish"
           Condition="'$(Configuration)' == 'Release' AND '$(PerformanceRelease)' == 'true'">
     <Error Condition="'$(PublishTrimmed)' == 'true'"
-           Text="Performance Release does not support trimming because runtime reflection is used by scene, world, NPC and skill registries." />
+           Text="Native backend performance builds do not support trimming while reflection-driven registries are used." />
     <Error Condition="'$(PublishAot)' == 'true'"
-           Text="Performance Release does not support NativeAOT until all reflection-driven registries are converted to generated registries." />
+           Text="NativeAOT remains disabled until reflection-driven registries are replaced or fully annotated." />
     <Error Condition="'$(PublishSingleFile)' == 'true'"
-           Text="Performance Release intentionally uses a folder publish. Single-file bundling is a distribution option, not a frame-time optimization." />
+           Text="Native backend performance builds intentionally use folder publish so runtime native libraries stay directly loadable." />
   </Target>
 </Project>

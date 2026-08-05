@@ -356,7 +356,7 @@ namespace Client.Main.Objects
             }
         }
 
-        private BlendState _blendMeshState = BlendState.Additive;
+        private BlendState _blendMeshState = Blendings.OneOneAdditive;
         public BlendState BlendMeshState
         {
             get => _blendMeshState;
