@@ -50,6 +50,12 @@ namespace Client.Main.Controls.UI.Game.Map
         public Point GetBuffAnchor(int gap)
         {
             var rect = DisplayRectangle;
+
+            // 手機：這個控制項改放在畫面上緣中央，增益圖示往右排會一路頂到
+            // 右上角的介面按鈕。改為排在它正下方。
+            if (MobileUi.IsMobile)
+                return new Point(rect.X, rect.Bottom + gap);
+
             return new Point(rect.Right + gap, rect.Y);
         }
 
@@ -120,11 +126,22 @@ namespace Client.Main.Controls.UI.Game.Map
             float scaleY = virtualSize.Y / 768f;
             float scale = Math.Clamp(MathF.Min(scaleX, scaleY), 0.82f, 1.35f);
 
-            X = ScaleValue(BaseX, scale);
-            Y = ScaleValue(BaseY, scale);
-
             int width = ScaleValue(BaseWidth, scale);
             int height = ScaleValue(BaseHeight, scale);
+
+            if (MobileUi.IsMobile)
+            {
+                // 手機的左上角讓給 HP/MP（見 ModernBottomHud.RefreshMobileLayout），
+                // 地圖名稱與座標移到上緣中央。
+                X = Math.Max(0, (virtualSize.X - width) / 2);
+                Y = ScaleValue(BaseY, scale) + 4;
+            }
+            else
+            {
+                X = ScaleValue(BaseX, scale);
+                Y = ScaleValue(BaseY, scale);
+            }
+
             ControlSize = new Point(width, height);
             ViewSize = ControlSize;
 

@@ -199,7 +199,15 @@ namespace Client.Main.Scenes
         private readonly TextFieldControl _hostInput;
         private readonly TextFieldControl _portInput;
         private readonly LabelControl _errorLabel;
-        private readonly OkButton _okButton;
+        private readonly Client.Main.Controls.UI.Common.ButtonControl _okButton;
+
+        private static void StyleField(TextFieldControl field)
+        {
+            field.BackgroundColor = Client.Main.Controls.UI.MobileUi.FieldFill * 0.96f;
+            field.BorderColor = Client.Main.Controls.UI.MobileUi.PanelBorder * 0.55f;
+            field.BorderThickness = 2;
+            field.TextColor = Client.Main.Controls.UI.MobileUi.TextPrimary;
+        }
 
         public string Host
         {
@@ -229,16 +237,6 @@ namespace Client.Main.Scenes
                 TextColor = new Color(241, 188, 37)
             });
 
-            Controls.Add(new TextureControl
-            {
-                TexturePath = "Interface/GFx/popup_line_m.ozd",
-                X = 12,
-                Y = 40,
-                AutoViewSize = false,
-                ViewSize = new Point(ControlSize.X - 24, 6),
-                Alpha = 0.9f
-            });
-
             Controls.Add(new LabelControl
             {
                 Text = "Host",
@@ -254,10 +252,11 @@ namespace Client.Main.Scenes
             _hostInput = TextFieldControl.Create();
             _hostInput.X = 110;
             _hostInput.Y = 68;
-            _hostInput.Skin = TextFieldSkin.NineSlice;
+            _hostInput.Skin = TextFieldSkin.Flat;
             _hostInput.ControlSize = new Point(240, 30);
             _hostInput.FontSize = 12f;
             _hostInput.Interactive = true;
+            StyleField(_hostInput);
 
             Controls.Add(_hostInput);
 
@@ -276,10 +275,11 @@ namespace Client.Main.Scenes
             _portInput = TextFieldControl.Create();
             _portInput.X = 110;
             _portInput.Y = 104;
-            _portInput.Skin = TextFieldSkin.NineSlice;
+            _portInput.Skin = TextFieldSkin.Flat;
             _portInput.ControlSize = new Point(120, 30);
             _portInput.FontSize = 12f;
             _portInput.Interactive = true;
+            StyleField(_portInput);
 
             Controls.Add(_portInput);
 
@@ -296,10 +296,23 @@ namespace Client.Main.Scenes
             };
             Controls.Add(_errorLabel);
 
-            _okButton = new OkButton
+            // 用畫的按鈕，不再依賴 Interface/message_ok_b_all.tga 那張 54x30 的貼圖
+            _okButton = new Client.Main.Controls.UI.Common.ButtonControl
             {
+                Text = "OK",
+                FontSize = 13f,
+                AutoViewSize = false,
+                ViewSize = new Point(140, 34),
                 Align = ControlAlign.HorizontalCenter,
-                Y = 170
+                Y = 170,
+                BackgroundColor = new Color(52, 62, 78) * 0.95f,
+                HoverBackgroundColor = new Color(72, 86, 106) * 0.95f,
+                PressedBackgroundColor = new Color(34, 42, 54) * 0.95f,
+                TextColor = Client.Main.Controls.UI.MobileUi.TextPrimary,
+                HoverTextColor = Color.White,
+                Interactive = true,
+                BorderThickness = 1,
+                BorderColor = Client.Main.Controls.UI.MobileUi.PanelBorder * 0.6f
             };
             _okButton.Click += (_, _) => SubmitRequested?.Invoke(this, EventArgs.Empty);
             Controls.Add(_okButton);

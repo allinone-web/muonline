@@ -392,49 +392,15 @@ namespace Client.Main.Scenes
                     return;
                 }
 
-                // Stash pending pickup data before sending request (like DroppedItemObject.OnClick does)
-                characterState.SetPendingPickupRawId(nearestItemRawId.Value);
-
-                if (scopeObject is ItemScopeObject itemScope)
+                // 實際的撿取流程與觸控的撿取清單共用，見 GameScene.PickupItem
+                if (_scene.PickupItem(nearestItemRawId.Value))
                 {
-                    characterState.StashPickedItem(itemScope.ItemData.ToArray());
-                }
-                else if (scopeObject is MoneyScopeObject)
-                {
-                    _logger.LogDebug("Pickup initiated for Zen");
+                    _logger.LogDebug("Pickup requested for {ItemName} (RawId {RawId})", itemName, nearestItemRawId.Value);
                 }
                 else
                 {
-                    _logger.LogWarning("Unknown scope object type for pickup: {Type}", scopeObject.ObjectType);
-                    return;
+                    _chatLog?.AddMessage("System", $"Failed to pick up {itemName}.", MessageType.Error);
                 }
-
-                var characterService = network.GetCharacterService();
-                if (characterService == null)
-                {
-                    _logger.LogWarning("CharacterService is null, cannot send pickup request");
-                    return;
-                }
-
-                // Send pickup request and handle result
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        bool success = await characterService.SendPickupItemRequestAsync(nearestItemRawId.Value, network.TargetVersion);
-                        if (!success)
-                        {
-                            MuGame.ScheduleOnMainThread(() =>
-                            {
-                                _chatLog?.AddMessage("System", $"Failed to pick up {itemName}: not connected to server.", MessageType.Error);
-                            });
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Error during pickup request for RawId {RawId}", nearestItemRawId.Value);
-                    }
-                });
             }
             else
             {

@@ -41,6 +41,12 @@ public class CursorControl : SpriteControl
         CurrentAnimation = DefaultAnimation;
         currentTexturePath = TexturePath;
         currentAnimationState = DefaultAnimation;
+
+        // 手機沒有滑鼠，畫一個游標圖示只是干擾。
+        // 用 Alpha 而不是 Visible —— 這個控制項的 Update 仍要跑，
+        // 有些介面（例如選角的卡片點擊）是讀 Cursor.X/Y 來做命中判斷的。
+        if (Client.Main.Controls.UI.MobileUi.IsMobile)
+            Alpha = 0f;
         restPlaceTypes =
         new Type[]
         {

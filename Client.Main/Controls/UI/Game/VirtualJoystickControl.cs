@@ -40,6 +40,10 @@ namespace Client.Main.Controls.UI.Game
         /// <summary>重新下指令的最短間隔，避免灌爆封包。</summary>
         private const double MinResendSeconds = 0.25;
 
+        /// <summary>未觸控時的提示圈位置（距畫面左緣／下緣，虛擬座標）。</summary>
+        private const float IdleHintX = 172f;
+        private const float IdleHintBottom = 150f;
+
         private bool _active;
         private Vector2 _center;
         private Vector2 _knob;
@@ -49,7 +53,11 @@ namespace Client.Main.Controls.UI.Game
         private Vector2 _lastSentDirection;
         private double _lastSendTime;
 
-        private Texture2D _pixel;
+        /// <summary>
+        /// 判斷某個座標是否被 UI 佔用。搖桿直接讀觸控狀態、不走 UI 的點擊路由，
+        /// 少了這道判斷，按底部的 HUD 按鈕會同時把角色往那個方向指令出去。
+        /// </summary>
+        public Func<Point, bool> IsBlocked { get; set; }
 
         /// <summary>搖桿目前是否有有效輸入。</summary>
         public bool IsActive => _active && _magnitude > DeadZone;
@@ -89,6 +97,9 @@ namespace Client.Main.Controls.UI.Game
             if (!_active)
             {
                 if (!IsInActivationArea(position))
+                    return;
+
+                if (IsBlocked != null && IsBlocked(new Point(mouse.X, mouse.Y)))
                     return;
 
                 _active = true;
@@ -149,11 +160,7 @@ namespace Client.Main.Controls.UI.Game
 
         public override void Draw(GameTime gameTime)
         {
-            if (Status != GameControlStatus.Ready || !Visible || !_active)
-                return;
-
-            _pixel ??= GraphicsManager.Instance.Pixel;
-            if (_pixel == null)
+            if (Status != GameControlStatus.Ready || !Visible)
                 return;
 
             var sb = GraphicsManager.Instance.Sprite;
@@ -171,10 +178,10 @@ namespace Client.Main.Controls.UI.Game
 
             try
             {
-
-            DrawRing(sb, _center, BaseRadius, new Color(255, 255, 255, 46), 3f);
-            DrawDisc(sb, _knob, KnobRadius, new Color(255, 255, 255, 92));
-
+                if (_active)
+                    DrawActiveStick(sb);
+                else
+                    DrawIdleHint(sb);
             }
             finally
             {
@@ -184,41 +191,37 @@ namespace Client.Main.Controls.UI.Game
             base.Draw(gameTime);
         }
 
-        // 沒有現成的圓形貼圖，用細短線段拼出圓環／圓面。
-        // 搖桿只有一個，每幀幾十個 quad 的成本可以忽略。
-        private void DrawRing(SpriteBatch sb, Vector2 center, float radius, Color color, float thickness)
+        private void DrawActiveStick(SpriteBatch sb)
         {
-            const int Segments = 36;
-            for (int i = 0; i < Segments; i++)
+            // 外圈底座
+            MobileUi.DrawDisc(sb, _center, BaseRadius, new Color(12, 14, 20) * 0.28f);
+            MobileUi.DrawRing(sb, _center, BaseRadius, Color.White * 0.28f, 3.5f);
+
+            // 推的方向上加一段較亮的提示，讓玩家確認方向有吃到
+            if (_magnitude > DeadZone)
             {
-                float a0 = MathHelper.TwoPi * i / Segments;
-                float a1 = MathHelper.TwoPi * (i + 1) / Segments;
-                var p0 = center + new Vector2(MathF.Cos(a0), MathF.Sin(a0)) * radius;
-                var p1 = center + new Vector2(MathF.Cos(a1), MathF.Sin(a1)) * radius;
-                DrawLine(sb, p0, p1, color, thickness);
+                var tip = _center + _direction * BaseRadius;
+                MobileUi.DrawGlow(sb, tip, KnobRadius * 0.9f, new Color(120, 190, 255) * (0.22f + 0.25f * _magnitude));
             }
+
+            // 搖桿頭
+            MobileUi.DrawGlow(sb, _knob, KnobRadius * 1.5f, Color.Black * 0.35f);
+            MobileUi.DrawDisc(sb, _knob, KnobRadius, Color.White * 0.55f);
+            MobileUi.DrawRing(sb, _knob, KnobRadius, Color.White * 0.8f, 2.5f);
         }
 
-        private void DrawDisc(SpriteBatch sb, Vector2 center, float radius, Color color)
+        /// <summary>
+        /// 沒有觸控時在左下角畫一個很淡的提示圈。
+        /// 浮動搖桿的缺點是新玩家不知道它在哪，一個常駐的淡圈就解決了，
+        /// 又不會擋住畫面。
+        /// </summary>
+        private static void DrawIdleHint(SpriteBatch sb)
         {
-            const int Rings = 8;
-            for (int r = 0; r < Rings; r++)
-            {
-                float rr = radius * (r + 1) / Rings;
-                DrawRing(sb, center, rr, color, radius / Rings + 1f);
-            }
-        }
+            var size = UiScaler.VirtualSize;
+            var center = new Vector2(IdleHintX, size.Y - IdleHintBottom);
 
-        private void DrawLine(SpriteBatch sb, Vector2 from, Vector2 to, Color color, float thickness)
-        {
-            var delta = to - from;
-            float length = delta.Length();
-            if (length < 0.001f)
-                return;
-
-            float angle = MathF.Atan2(delta.Y, delta.X);
-            sb.Draw(_pixel, from, null, color, angle, Vector2.Zero,
-                    new Vector2(length, thickness), SpriteEffects.None, 0f);
+            MobileUi.DrawRing(sb, center, BaseRadius * 0.85f, Color.White * 0.10f, 2.5f);
+            MobileUi.DrawDisc(sb, center, KnobRadius * 0.62f, Color.White * 0.10f);
         }
     }
 }

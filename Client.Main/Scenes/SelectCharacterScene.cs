@@ -62,14 +62,20 @@ namespace Client.Main.Scenes
             public static readonly Color Danger = new(220, 80, 80);
         }
 
-        private const int PANEL_WIDTH = 340;
-        private const int PANEL_MARGIN = 30;
-        private const int HEADER_HEIGHT = 45;
-        private const int BUTTON_HEIGHT = 36;
-        private const int BUTTON_SPACING = 8;
-        private const int INNER_PADDING = 12;
-        private const int CHAR_CARD_HEIGHT = 65;
-        private const int CHAR_CARD_SPACING = 6;
+        // 手機的版面要放大。原本的尺寸換算到實機大約只有 20 pt 高的按鈕，
+        // 遠低於可以穩定點中的大小（實機截圖確認過偏小）。
+        private static readonly bool s_mobile = Client.Main.Controls.UI.MobileUi.IsMobile;
+
+        private static readonly int PANEL_WIDTH = s_mobile ? 470 : 340;
+        private static readonly int PANEL_MARGIN = s_mobile ? 40 : 30;   // 螢幕圓角，右側再讓開一點
+        private static readonly int HEADER_HEIGHT = s_mobile ? 58 : 45;
+        private static readonly int BUTTON_HEIGHT = s_mobile ? 56 : 36;
+        private static readonly int BUTTON_SPACING = s_mobile ? 10 : 8;
+        private static readonly int INNER_PADDING = s_mobile ? 14 : 12;
+        private static readonly int CHAR_CARD_HEIGHT = s_mobile ? 88 : 65;
+        private static readonly int CHAR_CARD_SPACING = s_mobile ? 8 : 6;
+
+        private static readonly float BUTTON_FONT_SIZE = s_mobile ? 17f : 13f;
 
         // Fields
         private readonly List<(string Name, CharacterClassNumber Class, ushort Level, byte[] Appearance)> _characters;
@@ -230,7 +236,7 @@ namespace Client.Main.Scenes
             return new ButtonControl
             {
                 Text = text,
-                FontSize = 13f,
+                FontSize = BUTTON_FONT_SIZE,
                 AutoViewSize = false,
                 ViewSize = new Point(PANEL_WIDTH - INNER_PADDING * 2, BUTTON_HEIGHT),
                 BackgroundColor = baseColor,
@@ -1055,6 +1061,7 @@ namespace Client.Main.Scenes
         private void OnControllerCharacterClicked(object sender, string characterName)
         {
             _logger.LogInformation("Controller: Character '{Name}' clicked.", characterName);
+
             _currentlySelectedCharacterName = characterName;
 
             // Find index
@@ -1073,6 +1080,14 @@ namespace Client.Main.Scenes
 
         private void OnControllerCharacterDoubleClicked(object sender, string characterName)
         {
+            // 手機只有一條進入遊戲的路徑：選取 → ENTER GAME。
+            // 觸控的「雙擊」既不直覺又容易誤判，直接不接受。
+            if (s_mobile)
+            {
+                _logger.LogDebug("Controller: double click ignored on touch platforms.");
+                return;
+            }
+
             _logger.LogInformation("Controller: Character '{Name}' double-clicked.", characterName);
             CharacterSelected(characterName);
         }
@@ -1193,14 +1208,29 @@ namespace Client.Main.Scenes
             if (_characterCardRects.Count == 0 || !_initialLoadComplete || Cursor == null)
                 return;
 
-            Point mousePos = new Point((int)Cursor.X, (int)Cursor.Y);
+            var mouseState = MuGame.Instance.UiMouseState;
+
+            // 直接讀輸入狀態，不要用 Cursor.X/Y。
+            //
+            // 這個方法是在 base.Update() 之前呼叫的，而 Cursor 是 base.Update() 裡的子控制項
+            // —— 也就是說 Cursor.X/Y 永遠慢一幀。滑鼠上看不出來（游標早就移到定位了），
+            // 但觸控上「按下」和「移到該位置」是同一幀發生的：
+            // 第一次點擊時座標還停在上一次觸控的位置，於是只設到 hover，沒有真正選取；
+            // 要再點第二次才會選中。這就是「要點兩次、而且有深淺兩種選中狀態」的原因。
+            Point mousePos = new Point(mouseState.X, mouseState.Y);
+
             int previousHovered = _hoveredCardIndex;
             _hoveredCardIndex = -1;
 
-            var mouseState = MuGame.Instance.UiMouseState;
             bool mousePressed = mouseState.LeftButton == Microsoft.Xna.Framework.Input.ButtonState.Pressed;
             bool mouseClicked = mousePressed && !_previousMousePressed;
             _previousMousePressed = mousePressed;
+
+            // 手機沒有「游標懸停」這個狀態，同一個介面只該有一種選中樣式。
+            if (s_mobile && !mousePressed)
+            {
+                return;
+            }
 
             // Only check cards if mouse is in the character list area
             if (!_characterListRect.Contains(mousePos))
@@ -1217,7 +1247,9 @@ namespace Client.Main.Scenes
                     {
                                 }
 
-                    // Handle click (on mouse release)
+                    // 點一下 = 選取。進入遊戲一律走 ENTER GAME 按鈕 ——
+                    // 「再點一次同一張卡就進去」看似方便，實際上是誤觸來源：
+                    // 玩家只是想確認選對了人，結果就被送進遊戲了。
                     if (mouseClicked)
                     {
                         SelectCharacterByIndex(i);
@@ -1305,32 +1337,42 @@ namespace Client.Main.Scenes
                 _characterPanelRect.Width,
                 _characterPanelRect.Height - _buttonSectionRect.Height
             );
-            UiDrawHelper.DrawVerticalGradient(sb, panelWithoutButtons, Theme.BgMid, Theme.BgDark);
-            
-            // Outer border (excluding button section - no bottom border, side borders stop at character list)
-            int borderEndY = _characterListRect.Bottom;
-            sb.Draw(pixel, new Rectangle(_characterPanelRect.X - 1, _characterPanelRect.Y - 1, _characterPanelRect.Width + 2, 1), Theme.BorderOuter); // Top border
-            sb.Draw(pixel, new Rectangle(_characterPanelRect.X - 1, _characterPanelRect.Y, 1, borderEndY - _characterPanelRect.Y), Theme.BorderOuter); // Left border (stops at character list)
-            sb.Draw(pixel, new Rectangle(_characterPanelRect.Right, _characterPanelRect.Y, 1, borderEndY - _characterPanelRect.Y), Theme.BorderOuter); // Right border (stops at character list)
-
-            // Header section
             var headerRect = new Rectangle(_characterPanelRect.X, _characterPanelRect.Y, _characterPanelRect.Width, HEADER_HEIGHT);
-            UiDrawHelper.DrawHorizontalGradient(sb, headerRect, Theme.BgLighter, Theme.BgMid);
-            UiDrawHelper.DrawCornerAccents(sb, headerRect, Theme.Accent, 12, 2);
-            
-            // Header separator
-            sb.Draw(pixel, new Rectangle(headerRect.X, headerRect.Bottom - 1, headerRect.Width, 1), Theme.BorderInner);
-            sb.Draw(pixel, new Rectangle(headerRect.X, headerRect.Bottom - 2, headerRect.Width, 1), Theme.Accent * 0.3f);
+            string headerText = "CHARACTERS";
+            float headerScale = s_mobile ? 0.68f : 0.75f;
+
+            if (s_mobile)
+            {
+                // 與登入、選伺服器同一套：半透明深色 + 一條細邊框 + 白灰兩色文字
+                Client.Main.Controls.UI.MobileUi.DrawPanel(sb, panelWithoutButtons, HEADER_HEIGHT);
+            }
+            else
+            {
+                UiDrawHelper.DrawVerticalGradient(sb, panelWithoutButtons, Theme.BgMid, Theme.BgDark);
+
+                // Outer border (excluding button section - no bottom border, side borders stop at character list)
+                int borderEndY = _characterListRect.Bottom;
+                sb.Draw(pixel, new Rectangle(_characterPanelRect.X - 1, _characterPanelRect.Y - 1, _characterPanelRect.Width + 2, 1), Theme.BorderOuter); // Top border
+                sb.Draw(pixel, new Rectangle(_characterPanelRect.X - 1, _characterPanelRect.Y, 1, borderEndY - _characterPanelRect.Y), Theme.BorderOuter); // Left border (stops at character list)
+                sb.Draw(pixel, new Rectangle(_characterPanelRect.Right, _characterPanelRect.Y, 1, borderEndY - _characterPanelRect.Y), Theme.BorderOuter); // Right border (stops at character list)
+
+                UiDrawHelper.DrawHorizontalGradient(sb, headerRect, Theme.BgLighter, Theme.BgMid);
+                UiDrawHelper.DrawCornerAccents(sb, headerRect, Theme.Accent, 12, 2);
+
+                sb.Draw(pixel, new Rectangle(headerRect.X, headerRect.Bottom - 1, headerRect.Width, 1), Theme.BorderInner);
+                sb.Draw(pixel, new Rectangle(headerRect.X, headerRect.Bottom - 2, headerRect.Width, 1), Theme.Accent * 0.3f);
+            }
 
             // Header text
-            string headerText = "CHARACTERS";
-            Vector2 headerTextSize = font.MeasureString(headerText) * 0.75f;
+            Vector2 headerTextSize = font.MeasureString(headerText) * headerScale;
             Vector2 headerTextPos = new Vector2(
                 headerRect.X + (headerRect.Width - headerTextSize.X) / 2,
                 headerRect.Y + (headerRect.Height - headerTextSize.Y) / 2
             );
-            sb.DrawString(font, headerText, headerTextPos + new Vector2(1, 1), Color.Black * 0.7f, 0f, Vector2.Zero, 0.75f, SpriteEffects.None, 0f);
-            sb.DrawString(font, headerText, headerTextPos, Theme.TextGold, 0f, Vector2.Zero, 0.75f, SpriteEffects.None, 0f);
+            sb.DrawString(font, headerText, headerTextPos + new Vector2(1, 1), Color.Black * 0.7f, 0f, Vector2.Zero, headerScale, SpriteEffects.None, 0f);
+            sb.DrawString(font, headerText, headerTextPos,
+                s_mobile ? Client.Main.Controls.UI.MobileUi.TextPrimary : Theme.TextGold,
+                0f, Vector2.Zero, headerScale, SpriteEffects.None, 0f);
 
             // Draw character list separator (top)
             sb.Draw(pixel, new Rectangle(_characterListRect.X, _characterListRect.Y, _characterListRect.Width, 1), Theme.BorderInner);
@@ -1348,11 +1390,14 @@ namespace Client.Main.Scenes
         private void DrawCharacterCard(SpriteBatch sb, Texture2D pixel, SpriteFont font, int index, Rectangle cardRect, (string Name, CharacterClassNumber Class, ushort Level, byte[] Appearance) character)
         {
             bool isSelected = _currentCharacterIndex == index;
-            bool isHovered = _hoveredCardIndex == index;
+
+            // 手機不畫 hover。桌面的「淺色 hover + 深色選中」在觸控上會變成
+            // 同一個畫面同時有兩種選中樣式，玩家分不清哪一個才算數。
+            bool isHovered = !s_mobile && _hoveredCardIndex == index;
 
             // Card background
             Color bgColor = isSelected ? Theme.BgLighter : (isHovered ? Theme.BgMid : Theme.BgDark);
-            sb.Draw(pixel, cardRect, bgColor);
+            sb.Draw(pixel, cardRect, s_mobile ? bgColor * 0.85f : bgColor);
 
             // Card border
             Color borderColor = isSelected ? Theme.Accent : Theme.BorderInner;
@@ -1362,17 +1407,17 @@ namespace Client.Main.Scenes
             sb.Draw(pixel, new Rectangle(cardRect.X, cardRect.Y, borderWidth, cardRect.Height), borderColor);
             sb.Draw(pixel, new Rectangle(cardRect.Right - borderWidth, cardRect.Y, borderWidth, cardRect.Height), borderColor);
 
-            // Character info
-            int textX = cardRect.X + 10;
-            int textY = cardRect.Y + 10;
-            float nameScale = 0.7f;
-            float infoScale = 0.6f;
+            // Character info —— 卡片在手機上放大了，字距與字級要跟著放大
+            int textX = cardRect.X + (s_mobile ? 16 : 10);
+            int textY = cardRect.Y + (s_mobile ? 14 : 10);
+            float nameScale = s_mobile ? 0.86f : 0.7f;
+            float infoScale = s_mobile ? 0.72f : 0.6f;
 
             // Name
             Color nameColor = isSelected ? Theme.TextGold : Theme.TextWhite;
             sb.DrawString(font, character.Name, new Vector2(textX, textY) + new Vector2(1, 1), Color.Black * 0.7f, 0f, Vector2.Zero, nameScale, SpriteEffects.None, 0f);
             sb.DrawString(font, character.Name, new Vector2(textX, textY), nameColor, 0f, Vector2.Zero, nameScale, SpriteEffects.None, 0f);
-            textY += 22;
+            textY += s_mobile ? 30 : 22;
 
             // Class and Level
             string classLevelText = $"{character.Class}  •  Lv.{character.Level}";

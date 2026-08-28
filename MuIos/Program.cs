@@ -38,6 +38,7 @@ namespace MuIos
                 ConfigureDataPath();
                 ConfigureDxtDecompression();
                 ConfigureSafeArea();
+                ConfigureBatteryReadout();
                 // iOS 需要自己的文字輸入實作，否則點了輸入框不會有鍵盤（見 IosTextFieldControl）
                 Client.Main.Controls.UI.TextFieldControl.ControlType = typeof(IosTextFieldControl);
                 RunGame();
@@ -83,6 +84,25 @@ namespace MuIos
             catch (Exception ex)
             {
                 Console.WriteLine($"[MuIos] Failed to read safe area insets: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 讓 HUD 的狀態列讀得到電量。讀電量需要 UIKit，Client.Main 不能直接引用，
+        /// 因此以委派的方式由平台端提供（見 MobileUi.BatteryLevelProvider）。
+        /// </summary>
+        private static void ConfigureBatteryReadout()
+        {
+            try
+            {
+                UIDevice.CurrentDevice.BatteryMonitoringEnabled = true;
+                // BatteryLevel 在讀不到時回傳 -1，正好符合「負數 = 未知」的約定
+                Client.Main.Controls.UI.MobileUi.BatteryLevelProvider =
+                    () => UIDevice.CurrentDevice.BatteryLevel;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[MuIos] Battery monitoring unavailable: {ex.Message}");
             }
         }
 

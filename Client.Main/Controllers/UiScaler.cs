@@ -102,8 +102,13 @@ namespace Client.Main.Controllers
 
         private static void ConfigureUniform()
         {
-            float scaleX = (float)ActualSize.X / VirtualSize.X;
-            float scaleY = (float)ActualSize.Y / VirtualSize.Y;
+            // 扣掉安全區域後才是 UI 真正可用的範圍（iPhone 圓角、動態島、home indicator）。
+            // 桌面上 SafeAreaInsets 為 0，行為與原本完全相同。
+            float usableWidth = MathF.Max(ActualSize.X - SafeAreaInsets.X - SafeAreaInsets.Z, 1f);
+            float usableHeight = MathF.Max(ActualSize.Y - SafeAreaInsets.Y - SafeAreaInsets.W, 1f);
+
+            float scaleX = usableWidth / VirtualSize.X;
+            float scaleY = usableHeight / VirtualSize.Y;
 
             Scale = MathF.Max(Math.Min(scaleX, scaleY), MinScale);
             ScaleX = Scale;
@@ -116,9 +121,10 @@ namespace Client.Main.Controllers
             float scaledWidth = VirtualSize.X * Scale;
             float scaledHeight = VirtualSize.Y * Scale;
 
+            // 先移到安全區域的原點，再把剩餘空間平均分到兩側。
             Offset = new Vector2(
-                MathF.Max(0f, (ActualSize.X - scaledWidth) * 0.5f),
-                MathF.Max(0f, (ActualSize.Y - scaledHeight) * 0.5f));
+                SafeAreaInsets.X + MathF.Max(0f, (usableWidth - scaledWidth) * 0.5f),
+                SafeAreaInsets.Y + MathF.Max(0f, (usableHeight - scaledHeight) * 0.5f));
 
             // Apply render scale to the transform
             float finalScale = Scale * Constants.RENDER_SCALE;

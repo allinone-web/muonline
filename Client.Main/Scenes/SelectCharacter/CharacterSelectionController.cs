@@ -18,6 +18,17 @@ namespace Client.Main.Scenes.SelectCharacter
 {
     public class CharacterSelectionController : IDisposable
     {
+
+        /// <summary>
+        /// 選角展示用角色的模型倍率。手機上 6.5 吋螢幕看角色偏小，
+        /// 放大模型比拉近鏡頭好 —— 鏡頭拉近會把背景一起放大，而背景不需要更大。
+        /// 只影響這個畫面的展示角色。
+        /// </summary>
+        private static float SelectionCharacterScale =>
+            MobileUi.IsMobile
+                ? (MuGame.AppSettings?.Graphics?.Mobile?.SelectCharacterScale ?? 1f)
+                : 1f;
+
         // === Private state ===
         private readonly List<PlayerObject> _characters = new();
         private readonly List<(string Name, CharacterClassNumber Class, ushort Level, byte[] Appearance)> _characterInfos = new();
@@ -93,6 +104,7 @@ namespace Client.Main.Scenes.SelectCharacter
                     World = world,
                     CurrentAction = PlayerAction.PlayerStopMale,
                     Hidden = true,
+                    Scale = SelectionCharacterScale,
                 };
 
                 player.Click += OnPlayerClick;
@@ -171,7 +183,8 @@ namespace Client.Main.Scenes.SelectCharacter
                     Interactive = false,
                     World = world,
                     CurrentAction = PlayerAction.PlayerStopMale,
-                    Hidden = true
+                    Hidden = true,
+                    Scale = SelectionCharacterScale,
                 };
 
                 player.Click += OnPlayerClick;

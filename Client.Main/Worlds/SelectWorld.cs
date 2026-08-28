@@ -33,9 +33,21 @@ namespace Client.Main.Worlds
 
         protected override void ConfigureCameraState(ref CameraState cameraState)
         {
+            float fieldOfView = 29f * Constants.FOV_SCALE;
+
+            // 手機是超寬螢幕：垂直視角固定時，水平方向會多看到很多，角色因此顯得小。
+            // 壓縮垂直視角，把水平取景拉回 16:9 的設計值（見 WideScreenFraming）。
+            if (Client.Main.Controls.UI.MobileUi.IsMobile)
+            {
+                fieldOfView = WideScreenFraming.CompensateVerticalFov(
+                    fieldOfView,
+                    cameraState.AspectRatio,
+                    MuGame.AppSettings?.Graphics?.Mobile?.SelectSceneZoom ?? 1f);
+            }
+
             cameraState = cameraState.With(
                 viewFar: 5500f,
-                fieldOfView: 29f * Constants.FOV_SCALE,
+                fieldOfView: fieldOfView,
                 target: new Vector3(14229.295898f, 12340.358398f, 380f));
         }
 

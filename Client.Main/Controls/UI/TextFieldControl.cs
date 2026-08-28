@@ -15,8 +15,15 @@ namespace Client.Main.Controls.UI
 {
     public enum TextFieldSkin
     {
-        Flat,
-        NineSlice
+        /// <summary>
+        /// 純程式繪製，也是目前唯一的皮膚。
+        ///
+        /// 原本還有一種九宮格貼圖皮膚（Interface/GFx/textbg01-09.ozd），
+        /// 那是為 1024x768 的桌面畫的，在 3x 的手機螢幕上放大必糊，
+        /// 而且與其他已經改成程式繪製的面板風格不一致，已整組移除。
+        /// 見 docs/待清理素材.md。
+        /// </summary>
+        Flat
     }
 
     public class TextFieldControl : UIControl, IUiTexturePreloadable
@@ -43,11 +50,6 @@ namespace Client.Main.Controls.UI
         private const int TextMargin = 5;
         private const int CursorBlinkInterval = 500;
 
-        private Texture2D[] _nineSlice = new Texture2D[9];
-        private static readonly string[] s_nineSliceSuffixes =
-        {
-            "01", "02", "03", "04", "05", "06", "07", "08", "09"
-        };
         private static readonly RasterizerState s_scissorRasterizerState = new()
         {
             ScissorTestEnable = true
@@ -88,26 +90,7 @@ namespace Client.Main.Controls.UI
 
         public IEnumerable<string> GetPreloadTexturePaths()
         {
-            if (Skin != TextFieldSkin.NineSlice)
-                yield break;
-
-            for (int i = 0; i < s_nineSliceSuffixes.Length; i++)
-            {
-                yield return $"Interface/GFx/textbg{s_nineSliceSuffixes[i]}.ozd";
-            }
-        }
-
-        public override async Task Load()
-        {
-            await base.Load();
-
-            if (Skin == TextFieldSkin.NineSlice)
-            {
-                for (int i = 0; i < s_nineSliceSuffixes.Length; i++)
-                {
-                    _nineSlice[i] = await TextureLoader.Instance.PrepareAndGetTexture($"Interface/GFx/textbg{s_nineSliceSuffixes[i]}.ozd");
-                }
-            }
+            yield break;   // 輸入框已無貼圖依賴
         }
 
         public override void OnFocus()
@@ -392,48 +375,26 @@ namespace Client.Main.Controls.UI
             {
                 var spriteBatch = GraphicsManager.Instance.Sprite;
 
-                if (Skin == TextFieldSkin.NineSlice && _nineSlice[0] != null)
-                    DrawNineSliceBackground(spriteBatch);
-                else
-                    DrawFlatBackground(spriteBatch);
+                DrawFlatBackground(spriteBatch);
 
                 DrawTextAndCursor(spriteBatch);
             }
 
-            base.Draw(gameTime);
+            // 這裡刻意<b>不呼叫 base.Draw</b>。
+            //
+            // GameControl.Draw 會再畫一次 DrawBackground() + DrawBorder()，而它是在
+            // 上面的 SpriteBatchScope 關閉<b>之後</b>執行的 —— 等於把背景蓋在剛畫好的
+            // 文字上面。BackgroundColor 是透明時看不出來（舊的 NineSlice 皮膚就是這樣，
+            // 所以一直沒發現），一旦指定了不透明的底色，文字就會被蓋掉 96%，
+            // 看起來像是「白字變成了很暗的灰字」。
+            //
+            // 輸入框沒有子控制項，base.Draw 對它只有這兩件事，直接不呼叫最乾淨。
         }
 
         private void DrawFlatBackground(SpriteBatch spriteBatch)
         {
             DrawBackground();
             DrawBorder();
-        }
-
-        private void DrawNineSliceBackground(SpriteBatch spriteBatch)
-        {
-            var r = DisplayRectangle;
-
-            var TL = _nineSlice[0];
-            var T = _nineSlice[1];
-            var TR = _nineSlice[2];
-            var L = _nineSlice[3];
-            var C = _nineSlice[4];
-            var R = _nineSlice[5];
-            var BL = _nineSlice[6];
-            var B = _nineSlice[7];
-            var BR = _nineSlice[8];
-
-            spriteBatch.Draw(TL, new Rectangle(r.X, r.Y, TL.Width, TL.Height), Color.White);
-            spriteBatch.Draw(TR, new Rectangle(r.Right - TR.Width, r.Y, TR.Width, TR.Height), Color.White);
-            spriteBatch.Draw(BL, new Rectangle(r.X, r.Bottom - BL.Height, BL.Width, BL.Height), Color.White);
-            spriteBatch.Draw(BR, new Rectangle(r.Right - BR.Width, r.Bottom - BR.Height, BR.Width, BR.Height), Color.White);
-
-            spriteBatch.Draw(T, new Rectangle(r.X + TL.Width, r.Y, r.Width - TL.Width - TR.Width, T.Height), Color.White);
-            spriteBatch.Draw(B, new Rectangle(r.X + BL.Width, r.Bottom - B.Height, r.Width - BL.Width - BR.Width, B.Height), Color.White);
-            spriteBatch.Draw(L, new Rectangle(r.X, r.Y + TL.Height, L.Width, r.Height - TL.Height - BL.Height), Color.White);
-            spriteBatch.Draw(R, new Rectangle(r.Right - R.Width, r.Y + TR.Height, R.Width, r.Height - TR.Height - BR.Height), Color.White);
-
-            spriteBatch.Draw(C, new Rectangle(r.X + L.Width, r.Y + T.Height, r.Width - L.Width - R.Width, r.Height - T.Height - B.Height), Color.White);
         }
 
         private void DrawTextAndCursor(SpriteBatch spriteBatch)

@@ -13,7 +13,7 @@ namespace Client.Main.Controls.UI
     {
         private readonly TextureControl _background;
         private readonly LabelControl _label;
-        private readonly OkButton _okButton;
+        private readonly Common.ButtonControl _okButton;
         private static readonly ILogger _logger = MuGame.AppLoggerFactory?.CreateLogger<MessageWindow>();
 
         public string Text
@@ -51,9 +51,20 @@ namespace Client.Main.Controls.UI
             };
             Controls.Add(_label);
 
-            _okButton = new OkButton
+            _okButton = new Common.ButtonControl
             {
-                // Align = ControlAlign.HorizontalCenter // This would also work if X were not manually set
+                Text = "OK",
+                FontSize = 13f,
+                AutoViewSize = false,
+                ViewSize = new Point(140, 34),
+                BackgroundColor = new Color(52, 62, 78) * 0.95f,
+                HoverBackgroundColor = new Color(72, 86, 106) * 0.95f,
+                PressedBackgroundColor = new Color(34, 42, 54) * 0.95f,
+                TextColor = MobileUi.TextPrimary,
+                HoverTextColor = Color.White,
+                Interactive = true,
+                BorderThickness = 1,
+                BorderColor = MobileUi.PanelBorder * 0.6f
             };
             _okButton.Click += (s, e) => Close();
             Controls.Add(_okButton);

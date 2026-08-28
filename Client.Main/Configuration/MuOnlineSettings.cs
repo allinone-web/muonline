@@ -95,6 +95,39 @@ namespace Client.Main.Configuration
         /// 左右留白也順帶避開 iPhone 的圓角。
         /// </summary>
         public bool UniformUiScale { get; set; } = true;
+
+        /// <summary>
+        /// 虛擬畫布的寬度是否跟著螢幕長寬比走。
+        ///
+        /// 手機是超寬螢幕（iPhone Air 的可用區域接近 21:9），用固定的 1280x720
+        /// 等比縮放後左右各留約 260 px 空白，UI 全被擠在中央，四個角落用不到。
+        /// 開啟後高度仍固定為 <see cref="UiVirtualHeight"/>（既有視窗版面依賴 720），
+        /// 寬度由長寬比推算，虛擬畫布正好鋪滿安全區域。
+        /// 關閉則沿用 <see cref="UiVirtualWidth"/>。
+        /// </summary>
+        public bool MatchScreenAspect { get; set; } = true;
+
+        /// <summary>
+        /// 登入與選角畫面的額外拉近倍率，<b>數值越大主體越大</b>。
+        ///
+        /// 這兩個畫面是固定機位的展示鏡頭，在 21:9 的手機上主體偏小。
+        /// 1.0 表示只做長寬比補償（見 <see cref="Graphics.WideScreenFraming"/>），
+        /// 已經約放大 1.2 倍；1.12 再多拉近一點。過大會裁掉畫面上下的景物。
+        /// 只影響登入與選角，遊戲中的鏡頭由 <see cref="CameraDistance"/> 控制。
+        /// </summary>
+        public float MenuSceneZoom { get; set; } = 1.12f;
+
+        /// <summary>
+        /// 選角畫面的拉近倍率。與 <see cref="MenuSceneZoom"/> 分開，因為這兩個畫面
+        /// 想要的東西相反：登入是「整片海景拉近」，選角則希望<b>角色大、背景小</b>。
+        /// 背景由這個值控制（越小背景越小），角色由 <see cref="SelectCharacterScale"/> 控制。
+        /// </summary>
+        public float SelectSceneZoom { get; set; } = 1.0f;
+
+        /// <summary>
+        /// 選角畫面的角色模型放大倍率。只影響選角的展示用角色，不影響遊戲中的角色。
+        /// </summary>
+        public float SelectCharacterScale { get; set; } = 1.15f;
     }
 
     public abstract class LeafEffectSettingsBase
@@ -195,6 +228,13 @@ namespace Client.Main.Configuration
 
     public class MuOnlineSettings
     {
+        /// <summary>
+        /// 每件道具是否只佔背包一格（取代 MU 原本的俄羅斯方塊式格子）。
+        /// <b>必須與伺服器的 OPENMU_SINGLE_SLOT_ITEMS 一致</b> —— 尺寸不走網路協議，
+        /// 只改一邊會讓道具移動被伺服器拒絕、彈回原位。
+        /// </summary>
+        public bool SingleSlotItems { get; set; } = true;
+
         // Connect Server Settings
         public string ConnectServerHost { get; set; } = "127.0.0.1";
         public int ConnectServerPort { get; set; } = 44405;

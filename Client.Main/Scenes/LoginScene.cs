@@ -22,9 +22,16 @@ namespace Client.Main.Scenes
     {
         // Fields
         private LoginDialog _loginDialog;
-        private ServerGroupSelector _nonEventGroup;
-        private ServerGroupSelector _eventGroup;
-        private ServerList _serverList;
+        /// <summary>
+        /// 伺服器清單。
+        ///
+        /// 原本是「先點 Servers / Events 分組牌子，再點 192x26 的細條」那一套 ——
+        /// 分組牌子與細條都是貼圖素材，在手機上小到按不準，而且 Events 分組在 OpenMU
+        /// 上沒有獨立內容，點下去只是同一批伺服器換個名字，純粹造成困惑。
+        /// 現在一律用程式繪製的卡片清單（見 MobileServerListControl）。
+        /// </summary>
+        private MobileServerListControl _serverList;
+
         private LabelControl _statusLabel;
         private ClientConnectionState _previousStateHandled = ClientConnectionState.Initial;
 
@@ -43,13 +50,14 @@ namespace Client.Main.Scenes
                       throw new InvalidOperationException("LoggerFactory not initialized in MuGame");
             _logger.LogInformation("LoginScene constructor called.");
 
+            // 手機：連線狀態是除錯資訊，移到左下角並縮小，畫面上緣留給遊戲本身
             _statusLabel = new LabelControl
             {
                 Text = "Status: Initializing...",
                 X = 10,
-                Y = 10,
-                FontSize = 14,
-                TextColor = Color.Yellow,
+                Y = MobileUi.IsMobile ? UiScaler.VirtualSize.Y - 26 : 10,
+                FontSize = MobileUi.IsMobile ? 10 : 14,
+                TextColor = MobileUi.IsMobile ? new Color(200, 200, 120) * 0.75f : Color.Yellow,
                 Visible = true // Status label usually always visible
             };
             Controls.Add(_statusLabel);
@@ -62,9 +70,7 @@ namespace Client.Main.Scenes
             _loginDialog.LoginAttempt += LoginDialog_LoginAttempt;
             Controls.Add(_loginDialog);
 
-            // Server selection UI elements are initialized later in InitializeServerSelectionUI
-            _nonEventGroup = null;
-            _eventGroup = null;
+            // Server selection UI is initialized later in InitializeServerSelectionUI
             _serverList = null;
         }
 
@@ -186,34 +192,8 @@ namespace Client.Main.Scenes
             if (_uiInitialized) return;
             _logger.LogInformation("Initializing Server Selection UI...");
 
-            _nonEventGroup = new ServerGroupSelector(false)
-            {
-                Align = ControlAlign.HorizontalCenter | ControlAlign.VerticalCenter,
-                Margin = new Margin { Left = -220 },
-                Visible = true // Initial visibility handled by HandleConnectionStateChange
-            };
-            for (byte i = 0; i < 1; i++) _nonEventGroup.AddServer(i, $"Servers");
-
-            _eventGroup = new ServerGroupSelector(true)
-            {
-                Align = ControlAlign.HorizontalCenter | ControlAlign.VerticalCenter,
-                Margin = new Margin { Right = -220 },
-                Visible = true // Initial visibility handled by HandleConnectionStateChange
-            };
-            for (byte i = 0; i < 1; i++) _eventGroup.AddServer(i, $"Events");
-
-            _serverList = new ServerList
-            {
-                Align = ControlAlign.VerticalCenter | ControlAlign.HorizontalCenter,
-                Visible = false // Initial visibility handled by HandleConnectionStateChange
-            };
-
-            _nonEventGroup.SelectedIndexChanged += NonEventGroup_SelectedIndexChanged;
-            _eventGroup.SelectedIndexChanged += EventGroup_SelectedIndexChanged;
+            _serverList = new MobileServerListControl();
             _serverList.ServerClick += ServerList_ServerClick;
-
-            Controls.Add(_nonEventGroup);
-            Controls.Add(_eventGroup);
             Controls.Add(_serverList);
 
             _uiInitialized = true;
@@ -339,27 +319,22 @@ namespace Client.Main.Scenes
 
         private void UpdateUIVisibility(bool showServerSelectionUi, bool showLoginDialog, bool hideAll)
         {
-            if (_nonEventGroup != null) _nonEventGroup.Visible = showServerSelectionUi && !hideAll;
-            if (_eventGroup != null) _eventGroup.Visible = showServerSelectionUi && !hideAll;
             if (_loginDialog != null) _loginDialog.Visible = showLoginDialog && !hideAll;
 
+            // 收到伺服器就直接顯示，不需要「先選分組」
             if (_serverList != null)
-            {
-                bool groupSelected = (_nonEventGroup?.ActiveIndex != -1) || (_eventGroup?.ActiveIndex != -1);
-                _serverList.Visible = showServerSelectionUi && groupSelected &&
-                                      _serverList.Controls.Count > 0 && !hideAll;
-            }
+                _serverList.Visible = showServerSelectionUi && !hideAll;
         }
 
         private void ResetServerSelectionUI()
         {
             if (_uiInitialized)
             {
-                if (_nonEventGroup != null) Controls.Remove(_nonEventGroup);
-                if (_eventGroup != null) Controls.Remove(_eventGroup);
-                if (_serverList != null) Controls.Remove(_serverList);
-                _nonEventGroup = null;
-                _eventGroup = null;
+                if (_serverList != null)
+                {
+                    _serverList.ServerClick -= ServerList_ServerClick;
+                    Controls.Remove(_serverList);
+                }
                 _serverList = null;
                 _uiInitialized = false;
                 _logger.LogDebug("HandleConnectionStateChange: Resetting Server Selection UI.");
@@ -425,12 +400,7 @@ namespace Client.Main.Scenes
 
         private void PopulateServerList(List<ServerInfo> servers)
         {
-            if (_serverList == null)
-            {
-                return;
-            }
-
-            _serverList.SetServers(servers);
+            _serverList?.SetServers(servers);
         }
 
         private void HandleCharacterListReceived(object sender,
@@ -518,72 +488,6 @@ namespace Client.Main.Scenes
         }
 
         // --- UI Event Handlers ---
-        private void NonEventGroup_SelectedIndexChanged(object sender, EventArgs e)
-        {
-            MuGame.ScheduleOnMainThread(() =>
-            {
-                if (_nonEventGroup == null || _serverList == null || _eventGroup == null)
-                {
-                    _logger.LogWarning("NonEventGroup_SelectedIndexChanged: UI controls are null.");
-                    return;
-                }
-
-                if (_nonEventGroup.ActiveIndex != -1)
-                {
-                    _logger.LogInformation("Non-Event Group selected: {Index}", _nonEventGroup.ActiveIndex);
-                    _eventGroup.UnselectServer();
-
-                    var currentServerList = _networkManager.GetCachedServerList();
-                    _serverList.Clear();
-                    foreach (var server in currentServerList)
-                    {
-                        // TODO: Filter servers for this group
-                        _serverList.AddServer((byte)server.ServerId, $"Server {server.ServerId}", server.LoadPercentage);
-                    }
-                    _serverList.Visible = true;
-                    if (_loginDialog != null) _loginDialog.Visible = false;
-                }
-                else
-                {
-                    _serverList.Clear();
-                    _serverList.Visible = false;
-                }
-            });
-        }
-
-        private void EventGroup_SelectedIndexChanged(object sender, EventArgs e)
-        {
-            MuGame.ScheduleOnMainThread(() =>
-            {
-                if (_eventGroup == null || _serverList == null || _nonEventGroup == null)
-                {
-                    _logger.LogWarning("EventGroup_SelectedIndexChanged: UI controls are null.");
-                    return;
-                }
-
-                if (_eventGroup.ActiveIndex != -1)
-                {
-                    _logger.LogInformation("Event Group selected: {Index}", _eventGroup.ActiveIndex);
-                    _nonEventGroup.UnselectServer();
-
-                    var currentServerList = _networkManager.GetCachedServerList();
-                    _serverList.Clear();
-                    foreach (var server in currentServerList)
-                    {
-                        // TODO: Filter event servers
-                        _serverList.AddServer((byte)server.ServerId, $"Event Srv {server.ServerId}", server.LoadPercentage);
-                    }
-                    _serverList.Visible = true;
-                    if (_loginDialog != null) _loginDialog.Visible = false;
-                }
-                else
-                {
-                    _serverList.Clear();
-                    _serverList.Visible = false;
-                }
-            });
-        }
-
         private void ServerList_ServerClick(object sender, ServerSelectEventArgs e)
         {
             _logger.LogInformation("Server selected: ID={ServerId}, Name={ServerName}. Requesting connection info...",
@@ -612,10 +516,7 @@ namespace Client.Main.Scenes
 
             // Proactively hide server selection UI right away to avoid overlap if the
             // connection state change is delayed (observed on Android builds).
-            _serverList?.GetType(); // no-op to avoid nullable warnings below
             if (_serverList != null) _serverList.Visible = false;
-            if (_nonEventGroup != null) _nonEventGroup.Visible = false;
-            if (_eventGroup != null) _eventGroup.Visible = false;
         }
 
         // --- Helper Methods ---

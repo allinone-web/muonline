@@ -535,6 +535,35 @@ namespace Client.Main
             }
         }
 
+
+        /// <summary>
+        /// 決定手機的 UI 虛擬畫布尺寸。
+        ///
+        /// 原本沿用桌面的 1280x720。iPhone Air 的可用區域接近 21:9，等比縮放後
+        /// 左右各留下約 260 px 的空白 —— UI 元素被擠在畫面中央，四個角落根本用不到。
+        /// 這裡固定高度（既有視窗版面依賴 720，低於它會超出畫面），
+        /// 寬度改由實際可用區域的長寬比推算，讓虛擬畫布正好鋪滿安全區域。
+        /// </summary>
+        private static Point ResolveMobileVirtualCanvas(Point screenSize, Configuration.MobileGraphicsSettings mobile)
+        {
+            int height = mobile.UiVirtualHeight > 0 ? mobile.UiVirtualHeight : Constants.BASE_UI_HEIGHT;
+            int configuredWidth = mobile.UiVirtualWidth > 0 ? mobile.UiVirtualWidth : Constants.BASE_UI_WIDTH;
+
+            if (!mobile.MatchScreenAspect || screenSize.X <= 0 || screenSize.Y <= 0)
+                return new Point(configuredWidth, height);
+
+            var insets = UiScaler.SafeAreaInsets;
+            float usableWidth = MathF.Max(screenSize.X - insets.X - insets.Z, 1f);
+            float usableHeight = MathF.Max(screenSize.Y - insets.Y - insets.W, 1f);
+
+            int width = (int)MathF.Round(height * (usableWidth / usableHeight));
+
+            // 不可比桌面版面窄 —— 既有視窗是照 1280 寬畫的。
+            // 上限避免異常長寬比（例如分割畫面）把 UI 拉得過小。
+            width = Math.Clamp(width, configuredWidth, configuredWidth * 2);
+            return new Point(width, height);
+        }
+
         protected override void Initialize()
         {
             (string configDirectory, string configFileName) = ResolveSettingsFileLocation();
@@ -698,11 +727,12 @@ namespace Client.Main
                 // 6.5 吋螢幕上 —— 按鈕與文字都小到難以操作。改用 Mobile 區塊的虛擬
                 // 畫布（預設 960x540），數值越小 UI 越大，可在 appsettings.json 調整。
                 var mobile = AppSettings?.Graphics?.Mobile ?? new Configuration.MobileGraphicsSettings();
-                int vw = mobile.UiVirtualWidth > 0 ? mobile.UiVirtualWidth : Constants.BASE_UI_WIDTH;
-                int vh = mobile.UiVirtualHeight > 0 ? mobile.UiVirtualHeight : Constants.BASE_UI_HEIGHT;
+                var canvas = ResolveMobileVirtualCanvas(screenSize, mobile);
+                int vw = canvas.X;
+                int vh = canvas.Y;
 
-                // Stretch 會把 1280x720 硬拉滿螢幕，橫縱倍率不同導致 UI 變形；
-                // 等比縮放比例正確，左右留白也順帶避開 iPhone 圓角。
+                // Stretch 會把畫布硬拉滿螢幕，橫縱倍率不同導致 UI 變形；
+                // 等比縮放比例正確，安全區域則由 UiScaler 一併扣掉。
                 var uiMode = mobile.UniformUiScale ? ScaleMode.Uniform : ScaleMode.Stretch;
                 UiScaler.Configure(screenSize.X, screenSize.Y, vw, vh, uiMode);
 
@@ -855,6 +885,9 @@ namespace Client.Main
 
             // Warm up the item database before inventory/NPC shop packets arrive. Public
             // lookups remain synchronous for compatibility, but normally complete from memory.
+            // 必須在預載道具定義之前設定 —— 定義是 Lazy 的，一旦建好就不會重算
+            Core.Utilities.ItemDatabase.SingleSlotItems = AppSettings?.SingleSlotItems ?? true;
+
             _ = ItemDatabase.PreloadAsync().ContinueWith(t =>
             {
                 if (t.Exception != null)
@@ -1858,11 +1891,10 @@ namespace Client.Main
                 // 與初始化時一致採用 Mobile 區塊，否則這裡會用桌面的 1280x720
                 // 把手機的 UI 縮放覆寫回去（畫面上的 UI 會突然變小）。
                 var mobileGfx = graphics?.Mobile ?? new Configuration.MobileGraphicsSettings();
-                int mvw = mobileGfx.UiVirtualWidth > 0 ? mobileGfx.UiVirtualWidth : Math.Max(1, graphics.UiVirtualWidth);
-                int mvh = mobileGfx.UiVirtualHeight > 0 ? mobileGfx.UiVirtualHeight : Math.Max(1, graphics.UiVirtualHeight);
+                var mobileCanvas = ResolveMobileVirtualCanvas(screenSize, mobileGfx);
 
                 var uiMode2 = mobileGfx.UniformUiScale ? ScaleMode.Uniform : ScaleMode.Stretch;
-                UiScaler.Configure(screenSize.X, screenSize.Y, mvw, mvh, uiMode2);
+                UiScaler.Configure(screenSize.X, screenSize.Y, mobileCanvas.X, mobileCanvas.Y, uiMode2);
 
                 Camera.Instance.AspectRatio = (float)screenSize.X / screenSize.Y;
 
@@ -1881,10 +1913,9 @@ namespace Client.Main
                 // 與初始化時一致採用 Mobile 區塊，否則這裡會用桌面的 1280x720
                 // 把手機的 UI 縮放覆寫回去（畫面上的 UI 會突然變小）。
                 var mobileGfx = graphics?.Mobile ?? new Configuration.MobileGraphicsSettings();
-                int mvw = mobileGfx.UiVirtualWidth > 0 ? mobileGfx.UiVirtualWidth : Math.Max(1, graphics.UiVirtualWidth);
-                int mvh = mobileGfx.UiVirtualHeight > 0 ? mobileGfx.UiVirtualHeight : Math.Max(1, graphics.UiVirtualHeight);
+                var mobileCanvas = ResolveMobileVirtualCanvas(screenSize, mobileGfx);
 
-                UiScaler.Configure(screenSize.X, screenSize.Y, mvw, mvh, ScaleMode.Stretch);
+                UiScaler.Configure(screenSize.X, screenSize.Y, mobileCanvas.X, mobileCanvas.Y, ScaleMode.Stretch);
 
                 Camera.Instance.AspectRatio = (float)screenSize.X / screenSize.Y;
 

@@ -360,7 +360,13 @@ namespace Client.Main.Objects
 
             if (!usePathfinding)
             {
-                var path = Pathfinding.BuildDirectPath(startPos, targetLocation);
+                // 要送給伺服器的直線路徑必須先截斷到第一個障礙 —— 伺服器一定會這樣做，
+                // 客戶端不做就會走進牆裡，位置逐漸與伺服器漂移（見 BuildDirectPath 的說明）。
+                // 重播其他玩家的移動時不截斷：那些路徑伺服器已經核可過了。
+                var path = sendToServer
+                    ? Pathfinding.BuildDirectPath(startPos, targetLocation, currentWorld)
+                    : Pathfinding.BuildDirectPath(startPos, targetLocation);
+
                 ApplyPathOnMainThread(path, sendToServer, currentWorld, startPos, requestVersion);
                 return;
             }

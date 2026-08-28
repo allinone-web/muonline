@@ -95,13 +95,140 @@ namespace Client.Main.Scenes
         public bool AttackNearestEnemy(Core.Client.SkillEntryState skill)
             => _skillController?.AttackNearestEnemy(skill) ?? false;
 
+        /// <summary>最近一次出手失敗的原因（可能為 null = 不需要回報）。</summary>
+        public string LastSkillFailureReason => _skillController?.LastFailureReason;
+
+        /// <summary>劍士連擊的進度（僅供顯示，傷害加成由伺服器計算）。</summary>
+        public Core.Client.SkillComboTracker ComboTracker { get; } = new();
+
         // 手機用的虛擬搖桿，取代點擊移動（見 UpdateVirtualJoystick）
         private VirtualJoystickControl _virtualJoystick;
         private TouchActionButtonsControl _touchActionButtons;
+        private TouchPickupListControl _touchPickupList;
 
         /// <summary>搖桿是否啟用 —— 只有觸控平台需要。</summary>
         public static bool UseVirtualJoystick => OperatingSystem.IsIOS() || OperatingSystem.IsAndroid();
+
+        /// <summary>手機的聊天視窗上緣，需避開左上角的 HP/MP/SD/AG 與寵物血條（見 ModernBottomHud.RefreshMobileLayout）。</summary>
+        private const int MobileChatLogTop = 140;
+
+        /// <summary>手機的 FPS / Ping 上緣，需避開右上角的介面按鈕。</summary>
+        private const int MobileStatusLabelTop = 112;
+
+        /// <summary>手機的左側視窗起點：頭像框右緣之後。</summary>
+        private const int MobileCharWindowLeft = 140;
+
+        /// <summary>
+        /// 座標是否落在手機的 UI 上（HUD、動作按鈕，或任何開著的視窗）。
+        ///
+        /// 沒有這個判斷，開著背包挑東西時每一次點擊都會同時把角色指令出去。
+        /// </summary>
+        private bool IsPointOverTouchUi(Point position)
+        {
+            if (_modernHud?.ContainsInteractivePoint(position) ?? false)
+                return true;
+
+            if (_touchActionButtons?.ContainsPoint(new Vector2(position.X, position.Y)) ?? false)
+                return true;
+
+            if (_touchPickupList?.ContainsPoint(position) ?? false)
+                return true;
+
+            return IsPointOverOpenWindow(position);
+        }
+
+        /// <summary>
+        /// 座標是否落在某個「開著的視窗」上（背包、商店、技能面板…）。
+        ///
+        /// MouseControl 是這一幀游標下最上層的「可互動且可見」控制項（見 BaseScene）。
+        /// 動作按鈕與搖桿都不走 UI 的點擊路由，兩者都得自己問這個問題 ——
+        /// 少了它，開著技能面板選技能時，同一次觸控會連帶把角色的技能也放出去。
+        /// </summary>
+        public bool IsPointOverOpenWindow(Point position)
+        {
+            _ = position;   // 命中判定已由 BaseScene 完成，見下方註解
+
+            var control = MouseControl;
+            if (control == null || ReferenceEquals(control, World))
+                return false;
+
+            // 保險：若某個控制項幾乎鋪滿整個畫面（例如全螢幕的容器），
+            // 擋掉搖桿等於讓玩家完全動不了，而且是無聲的。這種情況不擋。
+            var rect = control.DisplayRectangle;
+            var size = UiScaler.VirtualSize;
+            if (rect.Width >= size.X * 0.9f && rect.Height >= size.Y * 0.9f)
+                return false;
+
+            // MouseControl 依定義就是這個座標下最上層的可互動控制項，
+            // 命中判定已經由 BaseScene 做過，這裡不再自行比對矩形
+            // —— 有些控制項的命中形狀不等於 DisplayRectangle。
+            return true;
+        }
         public ChatLogWindow ChatLog => _chatLog;
+
+        /// <summary>手機的 MAP / CHAT 按鈕需要 —— 桌面是 M / Enter 快捷鍵開啟。</summary>
+        public MiniMapControl MiniMap => _miniMap;
+        public ChatInputBoxControl ChatInput => _chatInput;
+
+        /// <summary>最近一次量到的延遲（毫秒）。手機的狀態列由 ModernBottomHud 繪製。</summary>
+        public int? LastPing => _lastPingValue;
+
+        /// <summary>
+        /// 撿起指定的掉落物（或金幣）。
+        ///
+        /// 桌面是按空白鍵撿最近的一件（GameSceneHotkeys），手機沒有鍵盤、
+        /// 也已經停用點擊世界，因此撿東西的功能一度整個消失。
+        /// 這裡把流程抽出來共用，觸控的撿取清單（TouchPickupListControl）指定要撿哪一件。
+        /// </summary>
+        /// <returns>是否成功送出請求。</returns>
+        public bool PickupItem(ushort rawId)
+        {
+            var network = MuGame.Network;
+            var scopeManager = network?.GetScopeManager();
+            var characterState = network?.GetCharacterState();
+            if (scopeManager == null || characterState == null)
+                return false;
+
+            ushort maskedId = (ushort)(rawId & 0x7FFF);
+            var scopeObject = scopeManager.GetScopeObjectByMaskedId(maskedId);
+            if (scopeObject == null)
+            {
+                _logger?.LogWarning("Pickup: scope object {MaskedId:X4} disappeared before request", maskedId);
+                return false;
+            }
+
+            // 要先把待撿取的資料暫存起來，伺服器回覆時才知道該把什麼放進背包
+            characterState.SetPendingPickupRawId(rawId);
+
+            if (scopeObject is Core.Models.ItemScopeObject itemScope)
+            {
+                characterState.StashPickedItem(itemScope.ItemData.ToArray());
+            }
+            else if (scopeObject is not Core.Models.MoneyScopeObject)
+            {
+                _logger?.LogWarning("Pickup: unsupported scope object type {Type}", scopeObject.ObjectType);
+                return false;
+            }
+
+            var characterService = network.GetCharacterService();
+            if (characterService == null)
+                return false;
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await characterService.SendPickupItemRequestAsync(rawId, network.TargetVersion);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, "Error during pickup request for RawId {RawId}", rawId);
+                }
+            });
+
+            return true;
+        }
+
         public InventoryControl InventoryControl => _inventoryControl;
         public TradeControl TradeControl => TradeControl.Instance;
         public PauseMenuControl PauseMenu => _pauseMenu;
@@ -247,21 +374,43 @@ namespace Client.Main.Scenes
 
             if (UseVirtualJoystick)
             {
-                _virtualJoystick = new VirtualJoystickControl();
+                _virtualJoystick = new VirtualJoystickControl
+                {
+                    // 搖桿不走 UI 的點擊路由，得自己避開 HUD，
+                    // 否則按底部的藥水鈕會同時把角色指令出去。
+                    IsBlocked = IsPointOverTouchUi
+                };
                 Controls.Add(_virtualJoystick);
 
                 _touchActionButtons = new TouchActionButtonsControl(
-                    () => _modernHud?.AssignedSkills ?? System.Array.Empty<Core.Client.SkillEntryState>());
+                    index => _modernHud?.GetMobileSkill(index),
+                    index => _modernHud?.OpenMobileSkillAssignment(index));
                 Controls.Add(_touchActionButtons);
+
+                // 撿東西：桌面靠空白鍵或滑鼠點地面，手機兩條路都沒有（見 TouchPickupListControl）
+                _touchPickupList = new TouchPickupListControl();
+                Controls.Add(_touchPickupList);
             }
 
             _mapListControl = new MapListControl { Visible = false };
+            // 手機：聊天視窗原本在左下角，正好蓋在虛擬搖桿的啟用區上 ——
+            // 要嘛按不到聊天，要嘛想打字卻讓角色跑起來。改放到左上、資源條下方，
+            // 把整個左下角讓給搖桿。
             _chatLog = new ChatLogWindow
             {
-                X = 5,
-                Y = UiScaler.VirtualSize.Y - 160 - ChatInputBoxControl.CHATBOX_HEIGHT
+                X = UseVirtualJoystick ? 14 : 5,
+                Y = UseVirtualJoystick
+                    ? MobileChatLogTop
+                    : UiScaler.VirtualSize.Y - 160 - ChatInputBoxControl.CHATBOX_HEIGHT
             };
             Controls.Add(_chatLog);
+
+            if (UseVirtualJoystick)
+            {
+                // 手機的左側是直的一長條：資源條 → 寵物 → 聊天。
+                // 聊天保持精簡，才不會往下長到搖桿的啟用區。
+                _chatLog.SetShowingLines(4);
+            }
 
             _chatInput = new ChatInputBoxControl(_chatLog, MuGame.AppLoggerFactory)
             {
@@ -269,6 +418,9 @@ namespace Client.Main.Scenes
                 Y = UiScaler.VirtualSize.Y - 65 - ChatInputBoxControl.CHATBOX_HEIGHT
             };
             Controls.Add(_chatInput);
+
+            // 輸入框本來就是隱藏起步的；手機沒有 Enter 鍵，
+            // 改由 HUD 的 CHAT 按鈕開啟（見 ModernBottomHud.OnButtonClicked）。
             _duelController = new GameSceneDuelController(this, _chatLog, _logger);
 
             _notificationManager = new Controls.UI.NotificationManager();
@@ -292,20 +444,34 @@ namespace Client.Main.Scenes
             Controls.Add(_moveCommandWindow);
             _moveCommandWindow.MapWarpRequested += OnMapWarpRequested;
 
-            _characterInfoWindow = new CharacterInfoWindowControl { X = 20, Y = 50, Visible = false };
+            // 手機：預設位置會被左上角的頭像與資源文字蓋住（HUD 畫在最上層），
+            // 往右移到頭像旁邊、往下移到文字下方。
+            _characterInfoWindow = new CharacterInfoWindowControl
+            {
+                X = UseVirtualJoystick ? MobileCharWindowLeft : 20,
+                Y = UseVirtualJoystick ? InventoryControl.MobileTopSafeY : 50,
+                Visible = false
+            };
             Controls.Add(_characterInfoWindow);
             _miniMap = new MiniMapControl(this);
             Controls.Add(_miniMap);
             _partyPanel = new PartyPanelControl();
             Controls.Add(_partyPanel);
 
+            // 手機的右上角是介面按鈕（3 欄 2 列，見 ModernBottomHud.RefreshMobileLayout），
+            // FPS / Ping 要讓到按鈕下方，否則兩者疊在一起。
+            int statusTop = UseVirtualJoystick ? MobileStatusLabelTop : 5;
+
+            // 手機把 FPS / Ping / 時間 / 電量合併成 HUD 右上角的一行
+            // （見 ModernBottomHud.DrawStatusReadout），這兩個標籤只在桌面顯示。
             _fpsLabel = new LabelControl
             {
                 Text = "FPS: --",
                 Align = ControlAlign.Top | ControlAlign.Right,
-                Margin = new Margin { Top = 5, Right = 5 },
+                Margin = new Margin { Top = statusTop, Right = 5 },
                 FontSize = 10,
-                TextColor = Color.LightGreen
+                TextColor = Color.LightGreen,
+                Visible = !UseVirtualJoystick
             };
             Controls.Add(_fpsLabel);
 
@@ -313,9 +479,10 @@ namespace Client.Main.Scenes
             {
                 Text = "Ping: --",
                 Align = ControlAlign.Top | ControlAlign.Right,
-                Margin = new Margin { Top = 22, Right = 5 },
+                Margin = new Margin { Top = statusTop + 17, Right = 5 },
                 FontSize = 10,
-                TextColor = Color.White
+                TextColor = Color.White,
+                Visible = !UseVirtualJoystick
             };
             Controls.Add(_pingLabel);
 
@@ -411,6 +578,9 @@ namespace Client.Main.Scenes
             _chatInput.BringToFront();
             _pauseMenu.BringToFront();
             _modernHud.BringToFront();
+            _virtualJoystick?.BringToFront();
+            _touchActionButtons?.BringToFront();
+            _touchPickupList?.BringToFront();
             _currentLocationControl.BringToFront();
             _activeBuffsPanel.BringToFront();
             duelHud.BringToFront();
@@ -1145,6 +1315,20 @@ namespace Client.Main.Scenes
         internal void NotifyLocalSkillAnimation(ushort skillId)
         {
             _skillController?.NotifyLocalSkillAnimation(skillId);
+
+            // 連擊的進度以「伺服器回來的動畫」為準，不是以「送出封包」為準 ——
+            // 送出去的技能可能被伺服器丟掉，那樣段數就會跟伺服器對不上。
+            double now = MuGame.Instance?.GameTime?.TotalGameTime.TotalSeconds ?? 0;
+            if (skillId == Core.Client.SkillComboTracker.ComboAchievedSkillId)
+            {
+                ComboTracker.NotifyComboAchieved(now);
+            }
+            else
+            {
+                var characterClass = MuGame.Network?.GetCharacterState()?.Class
+                    ?? MUnique.OpenMU.Network.Packets.CharacterClassNumber.DarkWizard;
+                ComboTracker.RegisterConfirmedSkill(skillId, now, characterClass);
+            }
         }
 
         public override void Dispose()

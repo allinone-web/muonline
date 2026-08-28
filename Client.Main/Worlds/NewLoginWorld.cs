@@ -28,6 +28,17 @@ namespace Client.Main.Worlds
             cameraState = cameraState.With(
                 viewFar: 50000f,
                 target: cameraState.Target + new Vector3(0f, 0f, 1300f));
+
+            // 手機是超寬螢幕，照 16:9 調的垂直視角會讓水平方向多看到近四分之一 ——
+            // 實機截圖裡連海面貼圖的邊緣都露出來了。壓縮垂直視角把水平取景拉回設計值。
+            if (Client.Main.Controls.UI.MobileUi.IsMobile)
+            {
+                cameraState = cameraState.With(
+                    fieldOfView: WideScreenFraming.CompensateVerticalFov(
+                        cameraState.FieldOfView,
+                        cameraState.AspectRatio,
+                        MuGame.AppSettings?.Graphics?.Mobile?.MenuSceneZoom ?? 1f));
+            }
         }
 
         protected override void CreateMapTileObjects()

@@ -207,7 +207,24 @@ namespace Client.Main.Core.Utilities
         /// Builds a simple straight-line path ignoring obstacles. Used as a
         /// fallback when A* fails but we still need visible movement.
         /// </summary>
+        /// <summary>
+        /// 直線路徑，<b>不檢查地形</b>。
+        /// 只適用於「重播伺服器已經核可的移動」（例如其他玩家的走動）——
+        /// 那些路徑伺服器早就驗證過，客戶端照走即可。
+        /// 自己的角色要下指令給伺服器時，請用有帶 <paramref name="world"/> 的多載。
+        /// </summary>
         public static List<Vector2> BuildDirectPath(Vector2 start, Vector2 goal)
+            => BuildDirectPath(start, goal, null);
+
+        /// <summary>
+        /// 直線路徑，遇到不可走的格子就停在前一格。
+        ///
+        /// 伺服器一定會這樣截斷（<c>PlayerMovement.GetWalkableStepCount</c>），
+        /// 客戶端不做的話會走進牆裡、與伺服器的位置逐漸漂移：
+        /// 漂到 5 格以上就被橡皮筋拉回，而漂移期間不斷重下路徑會讓
+        /// 反外掛的速度檢查誤判為加速外掛 —— 實測會累積警告到自動封鎖帳號。
+        /// </summary>
+        public static List<Vector2> BuildDirectPath(Vector2 start, Vector2 goal, WorldControl world)
         {
             List<Vector2> path = new();
             Vector2 current = start;
@@ -217,6 +234,10 @@ namespace Client.Main.Core.Utilities
                     current.X += (float)Math.Sign(goal.X - current.X);
                 if (current.Y != goal.Y)
                     current.Y += (float)Math.Sign(goal.Y - current.Y);
+
+                if (world != null && (!IsWithinMapBounds(current, world) || !world.IsWalkable(current)))
+                    break;
+
                 path.Add(current);
             }
 

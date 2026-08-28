@@ -47,16 +47,42 @@ namespace Client.Main.Controls.UI.Game.Inventory
         // ═══════════════════════════════════════════════════════════════
         // WINDOW DIMENSIONS - REDESIGNED
         // ═══════════════════════════════════════════════════════════════
-        private const int WINDOW_WIDTH = 396;
-        private const int WINDOW_HEIGHT = 700;
+        // 手機是橫向的長螢幕：水平空間很多、垂直空間很少。
+        // 桌面版把「裝備欄」疊在「背包格」上面，總高 700 —— 在 720 高的畫布上
+        // 幾乎頂滿，格子還只有 34 px。手機改成左右兩欄：左邊裝備、右邊背包，
+        // 兩邊都拿得到完整高度，格子也放得大。
+        private static readonly bool s_mobile = Client.Main.Controls.UI.MobileUi.IsMobile;
+
+        // 桌面是固定尺寸；手機依畫布算出來（見 ResolveWindowSize），因此是實例欄位。
+        private int WINDOW_WIDTH = 396;
+        private int WINDOW_HEIGHT = 700;
+
+        /// <summary>手機視窗的上緣。要讓開右上角的介面按鈕、經驗條與狀態列。</summary>
+        private const int MobileWindowTop = 158;
+
+        private const int MobilePreviewWidth = 200;
+        private const int MobileInfoWidth = 270;
+        private const int MobileColumnGap = 14;
+
+        // 手機的四欄：立體圖 | 裝備 | 背包 | 資訊
+        private Rectangle _previewPanelRect;
+        private Rectangle _infoPanelRect;
+
+        // 資訊欄字級的快取（見 DrawMobileItemDetail）
+        private InventoryItem _infoScaleItem;
+        private int _infoScaleWidth = -1;
+        private float _infoScale = 0.44f;
 
         private const int HEADER_HEIGHT = 52;
         private const int SECTION_SPACING = 16;
         private const int PANEL_PADDING = 12;
-        private const int EQUIP_SECTION_HEIGHT = 270;
+        private static readonly int EQUIP_SECTION_HEIGHT = s_mobile ? 400 : 270;
 
-        public const int INVENTORY_SQUARE_WIDTH = 34;
-        public const int INVENTORY_SQUARE_HEIGHT = 34;
+        public static readonly int INVENTORY_SQUARE_WIDTH = s_mobile ? 48 : 34;
+        public static readonly int INVENTORY_SQUARE_HEIGHT = s_mobile ? 48 : 34;
+
+        /// <summary>裝備欄那一欄的水平中心。桌面是整個視窗的中心，手機是左半欄的中心。</summary>
+        private int _equipCenterX;
 
         public const int Columns = 8;
         public const int Rows = 8;
@@ -270,6 +296,11 @@ namespace Client.Main.Controls.UI.Game.Inventory
             _logger = factory?.CreateLogger<InventoryControl>();
 
             LoadLayoutDefinitions();
+
+            // 尺寸必須先決定 —— BuildLayoutMetrics 的每一欄都是從 WINDOW_WIDTH 推算的。
+            // 順序反過來的話，版面會用預設的 396 去算，最右邊的資訊欄寬度剛好變成 0，
+            // 於是只有那一欄不見（其他欄仍在視窗範圍內，所以看起來只是「文字沒出來」）。
+            ResolveWindowSize();
             BuildLayoutMetrics();
 
             ControlSize = new Point(WINDOW_WIDTH, WINDOW_HEIGHT);
@@ -277,7 +308,8 @@ namespace Client.Main.Controls.UI.Game.Inventory
             AutoViewSize = false;
             Interactive = true;
             Visible = false;
-            Align = ControlAlign.VerticalCenter | ControlAlign.Right;
+            // 手機：靠右對齊會正好躲到右上角那六顆介面按鈕底下，改用明確座標（見 PositionForMobile）
+            Align = s_mobile ? ControlAlign.None : (ControlAlign.VerticalCenter | ControlAlign.Right);
             Scale = 1f;
 
             _itemGrid = new InventoryItem[Columns, Rows];
@@ -355,6 +387,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
         public void Show()
         {
             // Force correct position BEFORE first draw to prevent flash on wrong side
+            PositionForMobile();
             ForceAlignNow();
             Align = ControlAlign.None; // Prevent auto-realignment
             _networkManager?.GetCharacterState()?.ClearPendingInventoryMove(); // ensure no stale hides
@@ -375,6 +408,27 @@ namespace Client.Main.Controls.UI.Game.Inventory
 
             InvalidateStaticSurface();
         }
+
+        /// <summary>
+        /// 手機：把視窗擺在「介面按鈕區塊的左邊」與「左上角資源資訊的下面」，
+        /// 否則視窗會被 HUD 蓋住 —— HUD 是最上層繪製的，重疊處的文字會透出來，
+        /// 也點不到底下的格子。
+        /// </summary>
+        private void PositionForMobile()
+        {
+            if (!s_mobile)
+                return;
+
+            var canvas = Controllers.UiScaler.VirtualSize;
+
+            // 水平與垂直都置中。少掉底列之後高度剛好落在右上角按鈕區塊的下方，
+            // 置中比硬釘在某個 Y 好看，也不會壓到那六顆按鈕。
+            X = Math.Max(PANEL_PADDING, (canvas.X - WINDOW_WIDTH) / 2);
+            Y = Math.Max(12, (canvas.Y - WINDOW_HEIGHT) / 2);
+        }
+
+        /// <summary>左上角的頭像與數值文字底下的第一個安全 Y 座標。</summary>
+        internal const int MobileTopSafeY = 112;
 
         /// <summary>
         /// Forces immediate position calculation based on Align property.
@@ -537,7 +591,13 @@ namespace Client.Main.Controls.UI.Game.Inventory
                     return;
                 }
 
-                if (!IsMouseOverGrid() && _itemDragMoved)
+                // 丟到地上必須是點在<b>視窗外面</b>，不能只是「不在背包格子上」。
+                //
+                // 原本的條件是 !IsMouseOverGrid()，等於視窗裡除了格子以外的任何地方
+                // ——標題列、裝備欄的空白、以及新加的立體圖／資訊欄——都會把手上的
+                // 道具丟到地上。滑鼠時代不容易誤觸，觸控上點一下就沒了：
+                // 實測「選一件裝備、再點左邊的立體圖」就會把那件裝備丟掉。
+                if (_itemDragMoved && !IsMouseOver)
                 {
                     HandleDropOutsideInventory();
                 }
@@ -607,6 +667,9 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 DrawEquippedItems(spriteBatch);
                 DrawChrome(spriteBatch);
                 DrawTexts(spriteBatch);
+                DrawMobilePickedHighlight(spriteBatch);
+                if (s_mobile)
+                    DrawMobileDetailColumns(spriteBatch);
                 DrawTooltip(spriteBatch);
             }
             finally
@@ -625,7 +688,55 @@ namespace Client.Main.Controls.UI.Game.Inventory
         protected override void OnScreenSizeChanged()
         {
             base.OnScreenSizeChanged();
+
+            if (s_mobile && ResolveWindowSize())
+            {
+                ControlSize = new Point(WINDOW_WIDTH, WINDOW_HEIGHT);
+                ViewSize = ControlSize;
+                BuildLayoutMetrics();
+            }
+
             InvalidateStaticSurface();
+        }
+
+        /// <summary>
+        /// 決定視窗尺寸。手機用整個畫布的寬度（扣掉邊距），因為四欄版面需要橫向空間；
+        /// 上緣讓開右上角的介面按鈕、經驗條與狀態列。
+        /// </summary>
+        /// <returns>尺寸是否改變。</returns>
+        private bool ResolveWindowSize()
+        {
+            int width, height;
+
+            if (s_mobile)
+            {
+                // 依內容決定寬度，不要鋪滿畫布 —— 鋪滿的話沒有選道具時，
+                // 右邊會出現一大片空白，看起來像壞掉。
+                var canvas = Controllers.UiScaler.VirtualSize;
+                int content = PANEL_PADDING * 2
+                    + MobilePreviewWidth
+                    + MobileInfoWidth
+                    + (INVENTORY_SQUARE_WIDTH * 9 + 32)          // 裝備欄
+                    + (Columns * INVENTORY_SQUARE_WIDTH + 20)    // 背包欄（含外框）
+                    + MobileColumnGap * 3;
+
+                width = Math.Min(content, canvas.X - 24);
+
+                // 高度只需要容納標題 + 背包格（裝備欄比它矮），不再有底列
+                height = HEADER_HEIGHT + 8 + Rows * INVENTORY_SQUARE_HEIGHT + 16;
+            }
+            else
+            {
+                width = 396;
+                height = 700;
+            }
+
+            if (width == WINDOW_WIDTH && height == WINDOW_HEIGHT)
+                return false;
+
+            WINDOW_WIDTH = width;
+            WINDOW_HEIGHT = height;
+            return true;
         }
 
         private void InitializeTextEntries()
@@ -717,6 +828,13 @@ namespace Client.Main.Controls.UI.Game.Inventory
 
         private void BuildLayoutMetrics()
         {
+            if (s_mobile)
+            {
+                BuildMobileLayoutMetrics();
+                return;
+            }
+
+            _equipCenterX = WINDOW_WIDTH / 2;
             BuildEquipSlots();
 
             // Header
@@ -767,12 +885,80 @@ namespace Client.Main.Controls.UI.Game.Inventory
             _beamRect = Rectangle.Empty;
         }
 
+        /// <summary>
+        /// 手機版的兩欄配置：
+        ///
+        ///   ┌─────────── 標題 ───────────────────────────────┐
+        ///   │  裝備（人物剪影 + 12 個裝備格）  │  背包 8x8    │
+        ///   │                                 │              │
+        ///   ├───────────────── 金幣 / 按鈕 ────────────────────┤
+        ///   └────────────────────────────────────────────────┘
+        /// </summary>
+        private void BuildMobileLayoutMetrics()
+        {
+            // 手機沒有底列。金幣與修理鈕都併進標題列 ——
+            // 少一整列（約 64 px）視窗才矮得下來，才能在畫面上垂直置中。
+            int contentTop = HEADER_HEIGHT + 8;
+            int contentBottom = WINDOW_HEIGHT - 14;
+            int contentHeight = contentBottom - contentTop;
+
+            int gridTotalWidth = Columns * INVENTORY_SQUARE_WIDTH;
+            int gridTotalHeight = Rows * INVENTORY_SQUARE_HEIGHT;
+
+            // 四欄由左到右：立體圖 | 裝備 | 背包 | 資訊
+            const int ColumnGap = MobileColumnGap;
+            int equipWidth = INVENTORY_SQUARE_WIDTH * 9 + 32;   // 裝備欄需要的最小寬度，見 BuildEquipSlots
+            int gridColumnWidth = gridTotalWidth + 20;          // 含外框
+
+            // 裝備與背包是固定寬度，立體圖與資訊分剩下的。
+            // 畫布窄的時候先犧牲立體圖 —— 資訊讀不到比圖小更糟。
+            int flexible = WINDOW_WIDTH - PANEL_PADDING * 2 - equipWidth - gridColumnWidth - ColumnGap * 3;
+            int previewWidth = Math.Clamp(flexible - MobileInfoWidth, 130, MobilePreviewWidth);
+
+            int x = PANEL_PADDING;
+            _previewPanelRect = new Rectangle(x, contentTop, previewWidth, contentHeight);
+            x += previewWidth + ColumnGap;
+
+            _paperdollPanelRect = new Rectangle(x, contentTop, equipWidth, EQUIP_SECTION_HEIGHT);
+            _equipCenterX = _paperdollPanelRect.Center.X;
+            x += equipWidth + ColumnGap;
+
+            int gridX = x + 10;
+            int gridY = contentTop + Math.Max(0, (contentHeight - gridTotalHeight) / 2);
+            _gridRect = new Rectangle(gridX, gridY, gridTotalWidth, gridTotalHeight);
+            _gridFrameRect = new Rectangle(gridX - 10, gridY - 10, gridTotalWidth + 20, gridTotalHeight + 20);
+            x += gridColumnWidth + ColumnGap;
+
+            // 最右欄：資訊。剩下的寬度全給它。
+            int infoWidth = Math.Max(0, WINDOW_WIDTH - PANEL_PADDING - x);
+            _infoPanelRect = new Rectangle(x, contentTop, infoWidth, contentHeight);
+
+            BuildEquipSlots();
+
+            _headerRect = new Rectangle(0, 0, WINDOW_WIDTH, HEADER_HEIGHT);
+            _footerRect = Rectangle.Empty;
+
+            // 金幣移到標題列左側
+            _zenIconRect = new Rectangle(PANEL_PADDING + 6, 14, 24, 24);
+            _zenFieldRect = new Rectangle(_zenIconRect.Right + 10, 10, 200, 32);
+
+            // 按鈕加大到手指按得到的尺寸，全部收進標題列右側
+            int btnSize = 46;
+            _closeButtonRect = new Rectangle(WINDOW_WIDTH - btnSize - 12, 3, btnSize, btnSize);
+            _footerRightButtonRect = new Rectangle(_closeButtonRect.X - btnSize - 10, 3, btnSize, btnSize);
+
+            // 底列原本還有一顆重複的關閉鈕，標題列已經有了，手機不再重複
+            _footerLeftButtonRect = Rectangle.Empty;
+
+            _beamRect = Rectangle.Empty;
+        }
+
         private void BuildEquipSlots()
         {
             _equipSlots.Clear();
 
             int cell = INVENTORY_SQUARE_WIDTH;
-            int panelCenterX = WINDOW_WIDTH / 2;
+            int panelCenterX = _equipCenterX;
             int baseY = HEADER_HEIGHT + 20;
 
             // Left column (pet, left-hand weapon, gloves)
@@ -1013,7 +1199,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
 
             // Character silhouette area (center darker region)
             int silhouetteWidth = INVENTORY_SQUARE_WIDTH * 2 + 20;
-            int silhouetteX = (WINDOW_WIDTH - silhouetteWidth) / 2;
+            int silhouetteX = _equipCenterX - silhouetteWidth / 2;
             var silhouetteRect = new Rectangle(silhouetteX, _paperdollPanelRect.Y + 10,
                                                 silhouetteWidth, _paperdollPanelRect.Height - 20);
             spriteBatch.Draw(pixel, silhouetteRect, Theme.BgDarkest * 0.5f);
@@ -1318,6 +1504,44 @@ namespace Client.Main.Controls.UI.Game.Inventory
             return false;
         }
 
+        /// <summary>
+        /// 選取背包格子裡的某個道具（內部就是「拿起」）。
+        /// 若手上已經拿著別的道具，先把它放回原本的格子。
+        /// </summary>
+        private void SelectGridItem(InventoryItem item, Point mousePos)
+        {
+            if (item == null)
+                return;
+
+            if (_pickedItemRenderer.Item is InventoryItem carried && !ReferenceEquals(carried, item))
+            {
+                // 放回原本的格子，不送封包。
+                // 一定要確保放得回去 —— AddItem 失敗的話道具會從畫面上消失
+                // （它已經被移出 _items），要等下一次伺服器刷新才會回來。
+                if (_pickedItemOriginalGrid.X >= 0 && _pickedItemOriginalGrid.Y >= 0)
+                    carried.GridPosition = _pickedItemOriginalGrid;
+
+                if (!AddItem(carried))
+                {
+                    _logger?.LogWarning(
+                        "Could not return the carried item to slot {Slot}; requesting an inventory refresh.",
+                        carried.GridPosition);
+                    _networkManager?.GetCharacterState()?.RaiseInventoryChanged();
+                }
+
+                ReleasePickedItem();
+            }
+
+            _pickedItemRenderer.PickUpItem(item);
+            _pickedItemOriginalGrid = item.GridPosition;
+            _pickedAtMousePos = mousePos;
+            _itemDragMoved = false;
+            RemoveItemFromGrid(item);
+            _items.Remove(item);
+            _hoveredItem = null;
+            _pickedFromEquipSlot = -1;
+        }
+
         private void HandleInventoryInteraction(Point mousePos, bool leftJustPressed, bool leftJustReleased)
         {
             Point gridSlot = GetSlotAtScreenPosition(mousePos);
@@ -1400,6 +1624,20 @@ namespace Client.Main.Controls.UI.Game.Inventory
                         {
                             return;
                         }
+                        else if (s_mobile
+                                 && _hoveredItem != null
+                                 && _pickedFromEquipSlot < 0
+                                 && !ReferenceEquals(_hoveredItem, _pickedItemRenderer.Item))
+                        {
+                            // 手機：點另一個道具 = 改選它。
+                            //
+                            // 原版是「點一下拿起、再點一下放下」，所以拿著東西時點別的道具
+                            // 會被當成「放到它身上」—— 放不下就什麼事都不發生，玩家會覺得
+                            // 「點了沒反應、左邊的圖也不換」。
+                            // 移動仍然靠點空格子完成，不受影響。
+                            SelectGridItem(_hoveredItem, mousePos);
+                            return;
+                        }
                     }
                     else if (_hoveredItem != null)
                     {
@@ -1439,14 +1677,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
                         }
 
                         // Normal mode - pick up item
-                        _pickedItemRenderer.PickUpItem(_hoveredItem);
-                        _pickedItemOriginalGrid = _hoveredItem.GridPosition;
-                        _pickedAtMousePos = mousePos;
-                        _itemDragMoved = false;
-                        RemoveItemFromGrid(_hoveredItem);
-                        _items.Remove(_hoveredItem);
-                        _hoveredItem = null;
-                        _pickedFromEquipSlot = -1;
+                        SelectGridItem(_hoveredItem, mousePos);
                     }
                 }
 
@@ -2334,6 +2565,14 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 return;
             }
 
+            // 手機：游標會停在最後一次觸控的位置，高亮於是永遠留在那一格 ——
+            // 空格子看起來像「被選中了」，玩家會以為那裡有東西。
+            // 只在手指按住時顯示高亮。
+            if (s_mobile && MuGame.Instance.UiMouseState.LeftButton != ButtonState.Pressed)
+            {
+                return;
+            }
+
             Rectangle gridRect = Translate(_gridRect);
             var dragged = _pickedItem_renderer_item() ?? VaultControl.Instance?.GetDraggedItem();
 
@@ -2437,7 +2676,9 @@ namespace Client.Main.Controls.UI.Game.Inventory
             }
 
             DrawCloseButton(spriteBatch);
-            DrawFooterButton(spriteBatch, _footerLeftButtonRect, "X", _leftFooterHovered);
+
+            if (_footerLeftButtonRect.Width > 0)
+                DrawFooterButton(spriteBatch, _footerLeftButtonRect, "X", _leftFooterHovered);
             string buttonText = (_networkManager?.GetCharacterState()?.Level >= _repairEnableLevel) ? "R" : "+";
             DrawFooterButton(spriteBatch, _footerRightButtonRect, buttonText, _rightFooterHovered);
         }
@@ -2531,13 +2772,32 @@ namespace Client.Main.Controls.UI.Game.Inventory
 
         private void DrawTooltip(SpriteBatch spriteBatch)
         {
-            if (_pickedItem_renderer_item() != null || _hoveredItem == null || _font == null)
+            if (_font == null)
                 return;
 
-            var lines = ItemUiHelper.BuildTooltipLines(_hoveredItem);
+            // 手機：點一下道具就是「選取」，資訊要立刻出來。
+            // 桌面沿用原本的規則 —— 手上拿著東西時不顯示提示。
+            InventoryItem infoItem;
+            if (s_mobile)
+            {
+                infoItem = GetMobileInfoItem();
+            }
+            else if (_pickedItem_renderer_item() != null)
+            {
+                return;   // 桌面：手上拿著東西時不顯示提示
+            }
+            else
+            {
+                infoItem = _hoveredItem;
+            }
+
+            if (infoItem == null)
+                return;
+
+            var lines = ItemUiHelper.BuildTooltipLines(infoItem);
             if (NpcShopControl.IsOpen)
             {
-                int sellPrice = ItemPriceCalculator.CalculateSellPrice(_hoveredItem);
+                int sellPrice = ItemPriceCalculator.CalculateSellPrice(infoItem);
                 if (sellPrice > 0)
                 {
                     lines.Add(($"Sell Price: {sellPrice} Zen", Theme.TextGold));
@@ -2545,9 +2805,9 @@ namespace Client.Main.Controls.UI.Game.Inventory
             }
             else if (_isRepairMode)
             {
-                if (Core.Utilities.ItemPriceCalculator.IsRepairable(_hoveredItem))
+                if (Core.Utilities.ItemPriceCalculator.IsRepairable(infoItem))
                 {
-                    int repairCost = (int)(Core.Utilities.ItemPriceCalculator.CalculateRepairPrice(_hoveredItem, false) * 2.5);
+                    int repairCost = (int)(Core.Utilities.ItemPriceCalculator.CalculateRepairPrice(infoItem, false) * 2.5);
                     if (repairCost > 0)
                     {
                         lines.Add(($"Self Repair Cost: {repairCost} Zen", Theme.TextGold));
@@ -2581,7 +2841,18 @@ namespace Client.Main.Controls.UI.Game.Inventory
             int tooltipHeight = totalHeight + paddingY * 2;
 
             Point mousePosition = MuGame.Instance.UiMouseState.Position;
+            Rectangle screenBounds = new(0, 0, UiScaler.VirtualSize.X, UiScaler.VirtualSize.Y);
 
+            int previewSize = 0;
+
+            if (s_mobile)
+            {
+                // 手機不用浮動提示框。跟著手指跑的提示一定會擋住旁邊的格子，
+                // 而且手指本身就壓在上面 —— 那是滑鼠時代的做法。
+                // 改成視窗裡的固定兩欄：最左邊放立體圖，最右邊放文字。
+                DrawMobileItemDetail(spriteBatch, infoItem, lines, scale, lineSpacing);
+                return;
+            }
             // Hovered item position
             Rectangle hoveredItemRect;
             if (_hoveredEquipSlot >= 0 && _equipSlots.TryGetValue((byte)_hoveredEquipSlot, out var layout))
@@ -2592,15 +2863,14 @@ namespace Client.Main.Controls.UI.Game.Inventory
             {
                 Point gridTopLeft = Translate(_gridRect).Location;
                 hoveredItemRect = new Rectangle(
-                    gridTopLeft.X + _hoveredItem.GridPosition.X * INVENTORY_SQUARE_WIDTH,
-                    gridTopLeft.Y + _hoveredItem.GridPosition.Y * INVENTORY_SQUARE_HEIGHT,
-                    _hoveredItem.Definition.Width * INVENTORY_SQUARE_WIDTH,
-                    _hoveredItem.Definition.Height * INVENTORY_SQUARE_HEIGHT);
+                    gridTopLeft.X + infoItem.GridPosition.X * INVENTORY_SQUARE_WIDTH,
+                    gridTopLeft.Y + infoItem.GridPosition.Y * INVENTORY_SQUARE_HEIGHT,
+                    infoItem.Definition.Width * INVENTORY_SQUARE_WIDTH,
+                    infoItem.Definition.Height * INVENTORY_SQUARE_HEIGHT);
             }
 
             // Tooltip positioning
             Rectangle tooltipRect = new(mousePosition.X + 16, mousePosition.Y + 16, tooltipWidth, tooltipHeight);
-            Rectangle screenBounds = new(0, 0, UiScaler.VirtualSize.X, UiScaler.VirtualSize.Y);
 
             // Avoid overlapping the item
             if (tooltipRect.Intersects(hoveredItemRect))
@@ -2628,8 +2898,154 @@ namespace Client.Main.Controls.UI.Game.Inventory
             tooltipRect.X = Math.Clamp(tooltipRect.X, 10, screenBounds.Right - tooltipRect.Width - 10);
             tooltipRect.Y = Math.Clamp(tooltipRect.Y, 10, screenBounds.Bottom - tooltipRect.Height - 10);
 
+            DrawTooltipBody(spriteBatch, tooltipRect, lines, infoItem, scale, lineSpacing, paddingX, paddingY, previewSize);
+        }
+
+        /// <summary>目前要顯示資訊的道具：手上拿著的優先，其次是游標所在的。</summary>
+        private InventoryItem GetMobileInfoItem()
+            => _pickedItem_renderer_item() as InventoryItem ?? _hoveredItem;
+
+        /// <summary>
+        /// 兩個詳細資訊欄的底。沒有選道具時要畫出提示，
+        /// 否則整片空白看起來像介面壞了。
+        /// </summary>
+        private void DrawMobileDetailColumns(SpriteBatch spriteBatch)
+        {
             var pixel = GraphicsManager.Instance.Pixel;
-            if (pixel == null) return;
+            if (pixel == null || _font == null)
+                return;
+
+            var previewRect = Translate(_previewPanelRect);
+            var infoRect = Translate(_infoPanelRect);
+
+            spriteBatch.Draw(pixel, previewRect, new Color(10, 13, 19) * 0.35f);
+            spriteBatch.Draw(pixel, infoRect, new Color(10, 13, 19) * 0.35f);
+
+            if (GetMobileInfoItem() != null)
+                return;
+
+            const string hint = "選擇道具查看";
+            float scale = 0.46f;
+            var size = _font.MeasureString(hint) * scale;
+            var position = new Vector2(
+                infoRect.X + (infoRect.Width - size.X) * 0.5f,
+                infoRect.Y + (infoRect.Height - size.Y) * 0.5f);
+
+            spriteBatch.DrawString(_font, hint, position, Theme.TextDark, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+        }
+
+        /// <summary>
+        /// 手機的道具詳細資訊：最左欄一張大立體圖，最右欄文字。
+        ///
+        /// MU 的道具圖示<b>不是圖片，是即時算出來的 3D 模型</b>（<see cref="BmdPreviewRenderer"/>），
+        /// 所以想放多大就放多大。背包格子只佔一格看不清細節，就靠這一欄補回來。
+        /// </summary>
+        private void DrawMobileItemDetail(
+            SpriteBatch spriteBatch,
+            InventoryItem infoItem,
+            System.Collections.Generic.List<(string Text, Color Color)> lines,
+            float scale,
+            int lineSpacing)
+        {
+            var pixel = GraphicsManager.Instance.Pixel;
+            if (pixel == null || _font == null)
+                return;
+
+            var previewRect = Translate(_previewPanelRect);
+            var infoRect = Translate(_infoPanelRect);
+
+            // ── 立體圖 ──
+            if (previewRect.Width > 40 && previewRect.Height > 40)
+            {
+                int side = Math.Min(previewRect.Width - 16, previewRect.Height - 16);
+                var imageRect = new Rectangle(
+                    previewRect.X + (previewRect.Width - side) / 2,
+                    previewRect.Y + 12,
+                    side, side);
+
+                try
+                {
+                    // 用會轉動的版本 —— MU 的道具本來就是即時算的 3D 模型，
+                    // 靜態的那一張會讓人以為只是圖片。
+                    var preview = _currentGameTime != null
+                        ? BmdPreviewRenderer.GetSmoothAnimatedPreview(infoItem, side, side, _currentGameTime)
+                        : BmdPreviewRenderer.GetPreview(infoItem, side, side);
+
+                    if (preview != null)
+                        spriteBatch.Draw(preview, imageRect, Color.White);
+                }
+                catch
+                {
+                    // 模型還沒載好就先留空，下一幀會補上
+                }
+            }
+
+            // ── 文字 ──
+            if (infoRect.Width < 80)
+                return;
+
+            // 字級要縮到最長的一行剛好塞得進欄寬。
+            // 「Can be equipped by Magic Gladiator」這種句子比欄位寬，
+            // 不縮的話會整片溢出到視窗外面（實機截圖確認過）。
+            // 量測整份清單不便宜，而它只在「選了不同的道具」或欄寬改變時才會變。
+            int available = infoRect.Width - 20;
+            if (!ReferenceEquals(_infoScaleItem, infoItem) || _infoScaleWidth != available)
+            {
+                float widest = 0f;
+                foreach (var (text, _) in lines)
+                    widest = Math.Max(widest, _font.MeasureString(text).X);
+
+                _infoScaleItem = infoItem;
+                _infoScaleWidth = available;
+                _infoScale = Math.Max(widest > 0f ? Math.Min(scale, available / widest) : scale, 0.26f);
+            }
+
+            float fitScale = _infoScale;
+
+            int textY = infoRect.Y + 12;
+            bool isFirstLine = true;
+
+            foreach (var (text, color) in lines)
+            {
+                Vector2 textSize = _font.MeasureString(text) * fitScale;
+                if (textY + textSize.Y > infoRect.Bottom - 8)
+                    break;   // 塞不下就停，不要溢出到背包格子上
+
+                var position = new Vector2(infoRect.X + 10, textY);
+                spriteBatch.DrawString(_font, text, position + Vector2.One, Color.Black * 0.7f,
+                                       0f, Vector2.Zero, fitScale, SpriteEffects.None, 0f);
+                spriteBatch.DrawString(_font, text, position, isFirstLine ? Theme.TextGold : color,
+                                       0f, Vector2.Zero, fitScale, SpriteEffects.None, 0f);
+
+                textY += (int)textSize.Y + lineSpacing;
+
+                if (isFirstLine)
+                {
+                    textY += 4;
+                    spriteBatch.Draw(pixel, new Rectangle(infoRect.X + 10, textY, infoRect.Width - 20, 1),
+                                     Theme.Accent * 0.3f);
+                    textY += 6;
+                    isFirstLine = false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 畫出道具資訊框本體。位置由呼叫端決定 —— 桌面跟著游標，手機固定在視窗旁邊。
+        /// </summary>
+        private void DrawTooltipBody(
+            SpriteBatch spriteBatch,
+            Rectangle tooltipRect,
+            System.Collections.Generic.List<(string Text, Color Color)> lines,
+            InventoryItem infoItem,
+            float scale,
+            int lineSpacing,
+            int paddingX,
+            int paddingY,
+            int previewSize)
+        {
+            var pixel = GraphicsManager.Instance.Pixel;
+            if (pixel == null || _font == null) return;
 
             // ═══════════════════════════════════════════════════════════
             // TOOLTIP BACKGROUND
@@ -2643,9 +3059,9 @@ namespace Client.Main.Controls.UI.Game.Inventory
             UiDrawHelper.DrawVerticalGradient(spriteBatch, tooltipRect, new Color(20, 24, 32, 252), new Color(12, 14, 18, 254));
 
             // Border color based on item rarity
-            bool isExcellent = _hoveredItem.Details.IsExcellent;
-            bool isAncient = _hoveredItem.Details.IsAncient;
-            bool isHighLevel = _hoveredItem.Details.Level >= 7;
+            bool isExcellent = infoItem.Details.IsExcellent;
+            bool isAncient = infoItem.Details.IsAncient;
+            bool isHighLevel = infoItem.Details.Level >= 7;
 
             Color borderColor = isExcellent ? Theme.GlowExcellent :
                                 isAncient ? Theme.GlowAncient :
@@ -2664,6 +3080,31 @@ namespace Client.Main.Controls.UI.Game.Inventory
             // ═══════════════════════════════════════════════════════════
 
             int textY = tooltipRect.Y + paddingY;
+
+            if (previewSize > 0)
+            {
+                var previewRect = new Rectangle(
+                    tooltipRect.X + (tooltipRect.Width - previewSize) / 2,
+                    textY,
+                    previewSize,
+                    previewSize);
+
+                spriteBatch.Draw(pixel, previewRect, new Color(6, 8, 12) * 0.55f);
+
+                try
+                {
+                    var preview = BmdPreviewRenderer.GetPreview(infoItem, previewSize, previewSize);
+                    if (preview != null)
+                        spriteBatch.Draw(preview, previewRect, Color.White);
+                }
+                catch
+                {
+                    // 模型還沒載好就先留空，下一幀會補上
+                }
+
+                textY += previewSize + 10;
+            }
+
             bool isFirstLine = true;
 
             foreach (var (text, color) in lines)
@@ -2690,6 +3131,63 @@ namespace Client.Main.Controls.UI.Game.Inventory
                     isFirstLine = false;
                 }
             }
+        }
+
+        /// <summary>
+        /// 手機：拿起的道具不跟著手指跑，改在來源格子畫一圈外框表示「已選取」。
+        /// 再點另一個格子就是移動過去。
+        /// </summary>
+        private void DrawMobilePickedHighlight(SpriteBatch spriteBatch)
+        {
+            if (!s_mobile)
+                return;
+
+            var item = _pickedItemRenderer.Item;
+            if (item == null)
+                return;
+
+            var pixel = GraphicsManager.Instance.Pixel;
+            if (pixel == null)
+                return;
+
+            Rectangle rect;
+            if (_pickedFromEquipSlot >= 0 && _equipSlots.TryGetValue((byte)_pickedFromEquipSlot, out var layout))
+            {
+                rect = Translate(layout.Rect);
+            }
+            else if (_pickedItemOriginalGrid.X >= 0 && _pickedItemOriginalGrid.Y >= 0)
+            {
+                Point gridTopLeft = Translate(_gridRect).Location;
+                rect = new Rectangle(
+                    gridTopLeft.X + _pickedItemOriginalGrid.X * INVENTORY_SQUARE_WIDTH,
+                    gridTopLeft.Y + _pickedItemOriginalGrid.Y * INVENTORY_SQUARE_HEIGHT,
+                    Math.Max(1, item.Definition.Width) * INVENTORY_SQUARE_WIDTH,
+                    Math.Max(1, item.Definition.Height) * INVENTORY_SQUARE_HEIGHT);
+            }
+            else
+            {
+                return;
+            }
+
+            // 道具的圖示要留在原格。
+            // 「拿起」在內部是把道具從格子陣列移除，因此原本會整個消失 ——
+            // 玩家看到的是一個空格子，完全不知道自己手上還拿著東西。
+            var itemTexture = ResolveItemTexture(item, rect.Width, rect.Height);
+            if (itemTexture != null)
+            {
+                int pad = 3;
+                var iconRect = new Rectangle(rect.X + pad, rect.Y + pad,
+                    Math.Max(1, rect.Width - pad * 2), Math.Max(1, rect.Height - pad * 2));
+                spriteBatch.Draw(itemTexture, iconRect, Color.White);
+            }
+
+            const int thickness = 3;
+            Color accent = Theme.Accent;
+            spriteBatch.Draw(pixel, new Rectangle(rect.X, rect.Y, rect.Width, thickness), accent);
+            spriteBatch.Draw(pixel, new Rectangle(rect.X, rect.Bottom - thickness, rect.Width, thickness), accent);
+            spriteBatch.Draw(pixel, new Rectangle(rect.X, rect.Y, thickness, rect.Height), accent);
+            spriteBatch.Draw(pixel, new Rectangle(rect.Right - thickness, rect.Y, thickness, rect.Height), accent);
+            spriteBatch.Draw(pixel, rect, accent * 0.12f);
         }
 
         private Rectangle Translate(Rectangle rect)

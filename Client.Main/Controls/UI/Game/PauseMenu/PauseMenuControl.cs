@@ -252,6 +252,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
         private LabelControl _titleLabel;
         private LabelControl _subtitleLabel;
         private LabelControl _footerLabel;
+        private ButtonControl _btnParty;
         private ButtonControl _btnCharacterSelect;
         private ButtonControl _btnServerSelect;
         private ButtonControl _btnOptions;
@@ -276,11 +277,26 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             ControlSize = ViewSize;
             BackgroundColor = Color.Transparent;
 
+            // 手機的底部 HUD 只有六個位置，PARTY 讓給了 SKILL（技能面板原本沒有入口），
+            // 組隊改掛在這裡。桌面的底部面板還有 PARTY 鈕，不必重複。
+            bool showParty = MobileUi.IsMobile;
+            int buttonCount = showParty ? 6 : 5;
+
+            // 版面：第一顆按鈕在 y=111，每顆 56 高、間距 10，底部留 69。
+            const int MenuButtonHeight = 56;
+            const int MenuButtonSpacing = 10;
+            const int MenuFirstButtonY = 111;
+            const int MenuBottomPadding = 69;
+            int panelHeight = MenuFirstButtonY
+                + buttonCount * MenuButtonHeight
+                + (buttonCount - 1) * MenuButtonSpacing
+                + MenuBottomPadding;
+
             _panel = new PausePanelControl
             {
                 AutoViewSize = false,
-                ControlSize = new Point(430, 500),
-                ViewSize = new Point(430, 500),
+                ControlSize = new Point(430, panelHeight),
+                ViewSize = new Point(430, panelHeight),
                 Align = Models.ControlAlign.HorizontalCenter | Models.ControlAlign.VerticalCenter,
                 HeaderHeight = 98,
                 Interactive = true
@@ -312,10 +328,10 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             _panel.Controls.Add(_subtitleLabel);
 
             int btnWidth = 342;
-            int btnHeight = 56;
+            int btnHeight = MenuButtonHeight;
             int x = (_panel.ViewSize.X - btnWidth) / 2;
-            int y = 111;
-            int spacing = 10;
+            int y = MenuFirstButtonY;
+            int spacing = MenuButtonSpacing;
 
             _btnResume = CreateButton("Continue", "Return to the game", x, y, btnWidth, btnHeight, ModernHudTheme.AccentBright);
             _btnResume.Click += (s, e) =>
@@ -328,6 +344,24 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             };
             _panel.Controls.Add(_btnResume);
             y += btnHeight + spacing;
+
+            if (showParty)
+            {
+                _btnParty = CreateButton("Party", "Invite, kick and view your party", x, y, btnWidth, btnHeight, ModernHudTheme.Accent);
+                _btnParty.Click += (s, e) =>
+                {
+                    TogglePartyPanel();
+
+                    // 開了組隊面板就把暫停選單收起來 —— 兩個都開著會互相遮擋
+                    ResumeClicked?.Invoke(this, EventArgs.Empty);
+                    Visible = false;
+                    _panel.Visible = true;
+                    if (_optionsPanel != null)
+                        _optionsPanel.Visible = false;
+                };
+                _panel.Controls.Add(_btnParty);
+                y += btnHeight + spacing;
+            }
 
             _btnCharacterSelect = CreateButton("Character Select", "Leave the world and choose another hero", x, y, btnWidth, btnHeight, ModernHudTheme.SecondaryBright);
             _btnCharacterSelect.Click += async (s, e) =>
@@ -400,9 +434,14 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             if (Status != GameControlStatus.Ready || !Visible)
                 return;
 
-            var sprite = GraphicsManager.Instance.Sprite;
-            var rect = DisplayRectangle;
-            UiDrawHelper.DrawVerticalGradient(sprite, rect, new Color(6, 8, 13, 205), new Color(0, 0, 0, 238), 20);
+            // 手機不畫全螢幕遮罩。近乎全黑的一層把遊戲整個蓋掉，
+            // 在手機上顯得笨重 —— 面板本身已經是不透明的，看得出焦點在哪。
+            if (!MobileUi.IsMobile)
+            {
+                var sprite = GraphicsManager.Instance.Sprite;
+                var rect = DisplayRectangle;
+                UiDrawHelper.DrawVerticalGradient(sprite, rect, new Color(6, 8, 13, 205), new Color(0, 0, 0, 238), 20);
+            }
 
             base.Draw(gameTime);
         }
@@ -423,6 +462,27 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 FontSize = 14f,
                 TextColor = ModernHudTheme.TextWhite
             };
+        }
+
+        /// <summary>
+        /// 切換組隊面板。與 ModernBottomHud 的 PARTY 鈕走同一條路（在場景的控制項裡找它）。
+        /// </summary>
+        private void TogglePartyPanel()
+        {
+            if (MuGame.Instance?.ActiveScene is not GameScene gs)
+                return;
+
+            var controls = gs.Controls.GetSnapshotArray();
+            for (int i = 0; i < controls.Length; i++)
+            {
+                if (controls[i] is Party.PartyPanelControl party)
+                {
+                    party.Visible = !party.Visible;
+                    if (party.Visible)
+                        party.BringToFront();
+                    return;
+                }
+            }
         }
 
         private void ToggleOptionsPanel()

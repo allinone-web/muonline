@@ -13,8 +13,8 @@ namespace Client.Main.Controls.UI.Game.Inventory
         private SpriteFont _font;
 
         // Slot dimensions for scaling the item "icon"
-        private const int SquareWidth = InventoryControl.INVENTORY_SQUARE_WIDTH;
-        private const int SquareHeight = InventoryControl.INVENTORY_SQUARE_HEIGHT;
+        private static readonly int SquareWidth = InventoryControl.INVENTORY_SQUARE_WIDTH;
+        private static readonly int SquareHeight = InventoryControl.INVENTORY_SQUARE_HEIGHT;
 
         public PickedItemRenderer()
         {
@@ -26,7 +26,11 @@ namespace Client.Main.Controls.UI.Game.Inventory
         public void PickUpItem(InventoryItem item)
         {
             Item = item;
-            Visible = true;
+
+            // 手機不畫「跟著手指跑的道具」。游標在觸控上是停在最後一次觸控的位置，
+            // 那張圖就一直黏在畫面上；接著再點第二個道具，兩張圖會疊在一起。
+            // 手機改為在來源格子畫外框表示「這個被選起來了」（見 InventoryControl）。
+            Visible = !Client.Main.Controls.UI.MobileUi.IsMobile;
             // For now, we draw a rectangle
             if (GraphicsManager.Instance != null) // Ensure GraphicsManager is available
             {

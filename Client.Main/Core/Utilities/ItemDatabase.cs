@@ -16,6 +16,21 @@ namespace Client.Main.Core.Utilities
 {
     public static class ItemDatabase
     {
+        /// <summary>
+        /// 每件道具是否只佔背包一格。
+        ///
+        /// MU 原本是俄羅斯方塊式的格子：一把劍佔 3x2、一瓶藥水佔 1x1。那是 1998 年的
+        /// 設計，在手機上只增加拖曳的困難、不增加樂趣。開啟後每件道具都只佔一格，
+        /// 道具的真實尺寸改由資訊面板的立體圖呈現。
+        ///
+        /// <b>必須與伺服器一致</b>（OpenMU 的 <c>OPENMU_SINGLE_SLOT_ITEMS</c>）。
+        /// 尺寸不走網路協議，兩邊各自從自己的道具定義推導 —— 只改一邊的話，
+        /// 客戶端看起來合法的移動會被伺服器拒絕，道具會彈回原位。
+        ///
+        /// 由 <see cref="MuGame"/> 在載入設定後、預載道具定義之前設定。
+        /// </summary>
+        public static bool SingleSlotItems { get; set; } = true;
+
         /// <summary>Lookup cache: (Group, Id) → item definition.</summary>
         private static readonly Lazy<Task<Dictionary<(byte Group, short Id), ItemDefinition>>> _definitionsTask =
             new(() => Task.Run(InitializeItemDataAsync), LazyThreadSafetyMode.ExecutionAndPublication);
@@ -73,6 +88,14 @@ namespace Client.Main.Core.Utilities
                     if (item.ItemSubGroup == 4 && itemName != "Arrow" && itemName != "Bolt") // Group 4
                     {
                         width = 2;
+                    }
+
+                    // 一格一裝備（見 SingleSlotItems）。只影響背包排列，
+                    // 判斷雙手武器等其他用途在伺服器端仍讀原始尺寸。
+                    if (SingleSlotItems)
+                    {
+                        width = 1;
+                        height = 1;
                     }
 
                     var definition = new ItemDefinition(
