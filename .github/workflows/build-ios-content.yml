@@ -1,0 +1,80 @@
+# 在 Windows runner 上編譯 iOS 平台的 MonoGame 內容。
+#
+# 為什麼需要這條 CI：
+#   MonoGame 的 shader 編譯器 MGFXC 依賴 d3dcompiler，macOS 上必須透過 Wine 才能執行。
+#   而 Homebrew 的 wine-stable 已因無法通過 macOS Gatekeeper 被標記棄用（2026-09-01 停用），
+#   本機建置 iOS shader 這條路實質上不通。
+#
+#   先前的權宜做法是讓 iOS 沿用 DesktopGL 編好的 .xnb，但桌面 GL 與 OpenGL ES 的
+#   GLSL 方言不同 —— 實測 iPhone Air 上，使用這些 shader 的網格會整個不繪製：
+#   Medium/High 畫質下角色只剩頭與翅膀，Low（關閉自訂 shader）才正常。
+#
+#   Windows runner 上 MGFXC 原生可用，因此在這裡產生正確的 iOS .xnb。
+#
+# 用法：
+#   1. 手動觸發此工作流程（workflow_dispatch）
+#   2. 下載 ios-content 產物
+#   3. 解壓到 Client.Main/MGContent/PrebuiltContent/iOS/Content/ 並提交
+
+name: Build iOS Content
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Client.Main/MGContent/**.fx'
+      - 'Client.Main/MGContent/Content.mgcb'
+      - '.github/workflows/build-ios-content.yml'
+
+jobs:
+  build-ios-content:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore MGCB tool
+        run: dotnet tool restore
+
+      - name: Build content for iOS
+        shell: pwsh
+        run: |
+          # Content.mgcb 內的 outputDir/intermediateDir 用 $(Platform) 變數，
+          # 這裡以命令列覆寫成固定路徑，方便後續收集產物。
+          dotnet mgcb `
+            /@:Client.Main/MGContent/Content.mgcb `
+            /platform:iOS `
+            /outputDir:$env:GITHUB_WORKSPACE/ios-content `
+            /intermediateDir:$env:GITHUB_WORKSPACE/ios-content-obj `
+            /workingDir:Client.Main/MGContent
+
+      - name: Verify XNB platform byte
+        shell: pwsh
+        run: |
+          # XNB 標頭第 4 個位元組是平台代碼：'i' (0x69) = iOS、'd' (0x64) = DesktopGL。
+          # 這一步確保產出的確實是 iOS 版本 —— 先前正是拿錯平台才出問題。
+          $bad = @()
+          Get-ChildItem -Path ios-content -Filter *.xnb -Recurse | ForEach-Object {
+            $bytes = [System.IO.File]::ReadAllBytes($_.FullName)[0..3]
+            $platform = [char]$bytes[3]
+            Write-Host "$($_.Name): platform='$platform'"
+            if ($platform -ne 'i') { $bad += "$($_.Name) => '$platform'" }
+          }
+          if ($bad.Count -gt 0) {
+            Write-Error "以下檔案不是 iOS 平台：`n$($bad -join "`n")"
+            exit 1
+          }
+          Write-Host "全部 .xnb 皆為 iOS 平台。"
+
+      - name: Upload iOS content
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-content
+          path: ios-content/**/*.xnb
+          if-no-files-found: error
