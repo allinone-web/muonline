@@ -4014,6 +4014,13 @@ namespace Client.Main.Objects.Player
             if (part != null && !string.IsNullOrEmpty(modelPath))
             {
                 string originalModelPath = modelPath;
+
+                // UpdateAppearanceFromInventoryAsync 會先載入職業預設身體部位，再用裝備覆寫。
+                // 若裝備模型載入失敗，下面的指派會把預設模型清成 null，該部位就整個消失
+                // ——實測 test0Dk（戰士）穿 Leather Pants 時兩條腿不見，登入選角與遊戲中皆然。
+                // 先留著舊模型，載入失敗時退回去。
+                var previousModel = part.Model;
+
                 if (part == Helm && IsDarkLordClass(CharacterClass))
                 {
                     modelPath = HelmModelRules.GetDarkLordMaskModelPath(modelPath) ?? modelPath;
@@ -4041,6 +4048,15 @@ namespace Client.Main.Objects.Player
                 if (part.Model == null)
                 {
                     _logger?.LogWarning("[PlayerObject] Failed to load model {Path} for {Part}", modelPath, part.GetType().Name);
+
+                    // 退回職業預設模型，總比整個部位不見好
+                    if (previousModel != null)
+                    {
+                        part.Model = previousModel;
+                        _logger?.LogInformation(
+                            "[PlayerObject] Kept previously loaded model for {Part} after {Path} failed to load.",
+                            part.GetType().Name, modelPath);
+                    }
                 }
             }
         }

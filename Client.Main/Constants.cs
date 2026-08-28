@@ -23,7 +23,10 @@ namespace Client.Main
         public const float ROTATION_SENSITIVITY = 0.003f;
 
         // Default camera values
-        public const float DEFAULT_CAMERA_DISTANCE = 1700f;
+        // 由 const 改為 static：手機需要比桌面更近的預設鏡頭，
+        // 否則角色與怪物在 6.5 吋螢幕上小到看不清楚。
+        // 實際值於載入設定時由 MuOnlineSettings.Graphics.Mobile 決定。
+        public static float DEFAULT_CAMERA_DISTANCE = 1700f;
         public static readonly float DEFAULT_CAMERA_PITCH = MathHelper.ToRadians(135.87f);
         public static readonly float DEFAULT_CAMERA_YAW = MathHelper.ToRadians(-41.99f);
 

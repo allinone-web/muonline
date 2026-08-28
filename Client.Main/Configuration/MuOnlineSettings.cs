@@ -29,6 +29,35 @@ namespace Client.Main.Configuration
         public bool EnableBmdMeshBatching { get; set; } = true;
         public bool EnableEffectPooling { get; set; } = true;
         public int RenderMetricsLevel { get; set; } = 1;
+
+        /// <summary>
+        /// 手機（iOS / Android）專用的呈現設定。桌面平台不受影響。
+        /// </summary>
+        public MobileGraphicsSettings Mobile { get; set; } = new();
+    }
+
+    /// <summary>
+    /// 這份客戶端的 UI 與鏡頭都是照 PC 螢幕調的，直接搬到手機上會過小。
+    /// 這裡的預設值針對 6–7 吋手機調整過，可在 appsettings.json 覆寫。
+    /// </summary>
+    public class MobileGraphicsSettings
+    {
+        /// <summary>
+        /// UI 虛擬畫布寬度。UI 以此為基準等比拉伸到實際螢幕，
+        /// <b>數值越小，畫面上的 UI 元素越大</b>。桌面為 1280。
+        /// </summary>
+        public int UiVirtualWidth { get; set; } = 960;
+
+        /// <summary>
+        /// UI 虛擬畫布高度。桌面為 720。
+        /// </summary>
+        public int UiVirtualHeight { get; set; } = 540;
+
+        /// <summary>
+        /// 預設鏡頭距離，<b>數值越小角色越大</b>。桌面為 1700，
+        /// 可用範圍見 Constants.MIN/MAX_CAMERA_DISTANCE（800–1800）。
+        /// </summary>
+        public float CameraDistance { get; set; } = 1150f;
     }
 
     public abstract class LeafEffectSettingsBase

@@ -535,6 +535,23 @@ namespace Client.Main
             }
             bootLogger.LogInformation("✅ Configuration loaded.");
 
+            // 手機上鏡頭要比桌面近，否則角色與怪物太小。
+            // DEFAULT_CAMERA_DISTANCE 已由 const 改為 static 以支援此覆寫。
+            if (OperatingSystem.IsIOS() || OperatingSystem.IsAndroid())
+            {
+                var mobileCam = AppSettings?.Graphics?.Mobile;
+                if (mobileCam != null && mobileCam.CameraDistance > 0f)
+                {
+                    float clamped = Math.Clamp(
+                        mobileCam.CameraDistance,
+                        Constants.MIN_CAMERA_DISTANCE,
+                        Constants.MAX_CAMERA_DISTANCE);
+                    Constants.DEFAULT_CAMERA_DISTANCE = clamped;
+                    bootLogger.LogInformation(
+                        "✅ Mobile camera distance = {Distance} (desktop default 1700)", clamped);
+                }
+            }
+
             // --- Initialize Network Manager ---
             // Needs CharacterState and ScopeManager - create basic instances for now
             // You'll likely manage these more centrally later
@@ -604,16 +621,17 @@ namespace Client.Main
                 _graphics.PreferredBackBufferHeight = screenSize.Y;
                 _graphics.ApplyChanges();
 
-                UiScaler.Configure(
-                    screenSize.X,
-                    screenSize.Y,
-                    Constants.BASE_UI_WIDTH,
-                    Constants.BASE_UI_HEIGHT,
-                    ScaleMode.Stretch);
+                // 原本寫死 BASE_UI_WIDTH/HEIGHT（1280x720），等於把 PC 版面直接搬到
+                // 6.5 吋螢幕上 —— 按鈕與文字都小到難以操作。改用 Mobile 區塊的虛擬
+                // 畫布（預設 960x540），數值越小 UI 越大，可在 appsettings.json 調整。
+                var mobile = AppSettings?.Graphics?.Mobile ?? new Configuration.MobileGraphicsSettings();
+                int vw = mobile.UiVirtualWidth > 0 ? mobile.UiVirtualWidth : Constants.BASE_UI_WIDTH;
+                int vh = mobile.UiVirtualHeight > 0 ? mobile.UiVirtualHeight : Constants.BASE_UI_HEIGHT;
+
+                UiScaler.Configure(screenSize.X, screenSize.Y, vw, vh, ScaleMode.Stretch);
 
                 bootLogger.LogInformation("✅ iOS UiScaler configured: Screen={Width}x{Height}, Virtual={VWidth}x{VHeight}, ScaleX={ScaleX:F4}, ScaleY={ScaleY:F4}",
-                    screenSize.X, screenSize.Y,
-                    Constants.BASE_UI_WIDTH, Constants.BASE_UI_HEIGHT,
+                    screenSize.X, screenSize.Y, vw, vh,
                     UiScaler.ScaleX, UiScaler.ScaleY);
             }
             else
@@ -1757,12 +1775,13 @@ namespace Client.Main
                 _graphics.PreferredBackBufferHeight = screenSize.Y;
                 _graphics.ApplyChanges();
 
-                UiScaler.Configure(
-                    screenSize.X,
-                    screenSize.Y,
-                    Math.Max(1, graphics.UiVirtualWidth),
-                    Math.Max(1, graphics.UiVirtualHeight),
-                    ScaleMode.Stretch);
+                // 與初始化時一致採用 Mobile 區塊，否則這裡會用桌面的 1280x720
+                // 把手機的 UI 縮放覆寫回去（畫面上的 UI 會突然變小）。
+                var mobileGfx = graphics?.Mobile ?? new Configuration.MobileGraphicsSettings();
+                int mvw = mobileGfx.UiVirtualWidth > 0 ? mobileGfx.UiVirtualWidth : Math.Max(1, graphics.UiVirtualWidth);
+                int mvh = mobileGfx.UiVirtualHeight > 0 ? mobileGfx.UiVirtualHeight : Math.Max(1, graphics.UiVirtualHeight);
+
+                UiScaler.Configure(screenSize.X, screenSize.Y, mvw, mvh, ScaleMode.Stretch);
 
                 Camera.Instance.AspectRatio = (float)screenSize.X / screenSize.Y;
 
@@ -1778,12 +1797,13 @@ namespace Client.Main
                 _graphics.PreferredBackBufferHeight = screenSize.Y;
                 _graphics.ApplyChanges();
 
-                UiScaler.Configure(
-                    screenSize.X,
-                    screenSize.Y,
-                    Math.Max(1, graphics.UiVirtualWidth),
-                    Math.Max(1, graphics.UiVirtualHeight),
-                    ScaleMode.Stretch);
+                // 與初始化時一致採用 Mobile 區塊，否則這裡會用桌面的 1280x720
+                // 把手機的 UI 縮放覆寫回去（畫面上的 UI 會突然變小）。
+                var mobileGfx = graphics?.Mobile ?? new Configuration.MobileGraphicsSettings();
+                int mvw = mobileGfx.UiVirtualWidth > 0 ? mobileGfx.UiVirtualWidth : Math.Max(1, graphics.UiVirtualWidth);
+                int mvh = mobileGfx.UiVirtualHeight > 0 ? mobileGfx.UiVirtualHeight : Math.Max(1, graphics.UiVirtualHeight);
+
+                UiScaler.Configure(screenSize.X, screenSize.Y, mvw, mvh, ScaleMode.Stretch);
 
                 Camera.Instance.AspectRatio = (float)screenSize.X / screenSize.Y;
 
