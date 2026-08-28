@@ -616,6 +616,64 @@ namespace Client.Main.Scenes
             hero.MoveTo(targetLocation, sendToServer: true, usePathfinding: usePathfinding);
         }
 
+        /// <summary>
+        /// 手機用：自動鎖定最近的敵人並施放指定技能（技能為 null 則普通攻擊）。
+        ///
+        /// 桌面的流程是「先選技能、再點目標」，手機上要點兩次而且要點準небольш的怪物，
+        /// 體驗很差。手遊 MMO 的標準做法是按鈕直接對最近的敵人出手，這裡照做。
+        /// </summary>
+        /// <returns>是否成功出手（找不到目標或超出射程時回傳 false）。</returns>
+        public bool AttackNearestEnemy(Core.Client.SkillEntryState skill)
+        {
+            var hero = _scene.Hero;
+            if (hero == null || hero.IsDead)
+                return false;
+
+            var target = FindNearestEnemy(hero);
+            if (target == null)
+                return false;
+
+            if (skill != null)
+                return UseSkillOnTarget(skill, target);
+
+            // 沒有指定技能就普通攻擊
+            hero.FaceTowards(target.Location, immediate: true);
+            _ = MuGame.Network.GetCharacterService().SendHitRequestAsync(
+                target.NetworkId,
+                attackAnimation: 0x78,
+                lookingDirection: (byte)hero.Direction);
+            return true;
+        }
+
+        /// <summary>
+        /// 找出最近且存活的怪物。只看格子距離，夠用且成本低。
+        /// </summary>
+        private MonsterObject FindNearestEnemy(Objects.Player.PlayerObject hero)
+        {
+            var monsters = _scene.World?.Monsters;
+            if (monsters == null || monsters.Count == 0)
+                return null;
+
+            MonsterObject best = null;
+            float bestDistanceSquared = float.MaxValue;
+
+            for (int i = 0; i < monsters.Count; i++)
+            {
+                var monster = monsters[i];
+                if (monster == null || monster.IsDead || !monster.Visible)
+                    continue;
+
+                float distanceSquared = Vector2.DistanceSquared(hero.Location, monster.Location);
+                if (distanceSquared < bestDistanceSquared)
+                {
+                    bestDistanceSquared = distanceSquared;
+                    best = monster;
+                }
+            }
+
+            return best;
+        }
+
         private bool UseSkillOnTarget(Core.Client.SkillEntryState skill, MonsterObject target)
         {
             var hero = _scene.Hero;

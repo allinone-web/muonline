@@ -591,20 +591,6 @@ namespace Client.Main
             }
             bootLogger.LogInformation("✅ Configuration loaded.");
 
-            // 使用者在設定選單裡的選擇，必須蓋在畫質預設之上
-            ApplyPersistedRenderToggles(AppSettings?.Graphics);
-            if (AppSettings?.Graphics?.RenderScale is float savedScale && savedScale > 0.05f)
-            {
-                Constants.RENDER_SCALE = savedScale;
-            }
-            else if (OperatingSystem.IsIOS() || OperatingSystem.IsAndroid())
-            {
-                // 畫質預設 Medium 會設成 0.9，而縮放渲染路徑會讓 3D 畫面被壓扁。
-                // 使用者沒有明確指定時，手機一律用 Mobile 區塊的值（預設 1.0）。
-                var mobileScale = AppSettings?.Graphics?.Mobile?.RenderScale ?? 1.0f;
-                if (mobileScale > 0.05f)
-                    Constants.RENDER_SCALE = mobileScale;
-            }
 
             // 手機上鏡頭要比桌面近，否則角色與怪物太小。
             // DEFAULT_CAMERA_DISTANCE 已由 const 改為 static 以支援此覆寫。
@@ -662,6 +648,22 @@ namespace Client.Main
 
             ApplyGraphicsConfiguration(AppSettings.Graphics);
             GraphicsQualityManager.ApplyFromSettings(AppSettings.Graphics, GraphicsDevice?.Adapter ?? GraphicsAdapter.DefaultAdapter, _logger);
+
+            // 必須在畫質預設「之後」—— 預設會覆寫這些欄位，
+            // 使用者在設定選單的個別選擇要蓋在預設之上。
+            // （先前放在預設之前，等於完全沒有效果。）
+            ApplyPersistedRenderToggles(AppSettings?.Graphics);
+            if (AppSettings?.Graphics?.RenderScale is float savedScale && savedScale > 0.05f)
+            {
+                Constants.RENDER_SCALE = savedScale;
+            }
+            else if (OperatingSystem.IsIOS() || OperatingSystem.IsAndroid())
+            {
+                // 畫質預設 Medium 會設成 0.9，而縮放渲染路徑會讓 3D 畫面被壓扁。
+                var mobileScale = AppSettings?.Graphics?.Mobile?.RenderScale ?? 1.0f;
+                if (mobileScale > 0.05f)
+                    Constants.RENDER_SCALE = mobileScale;
+            }
             ApplyPerformanceCapsFromSettings(AppSettings.Graphics);
             ApplyGraphicsOptions();
 

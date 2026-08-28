@@ -91,8 +91,13 @@ namespace Client.Main.Scenes
         // ───────────────────────── Properties ─────────────────────────
         public HeroObject Hero => _hero;
 
+        /// <summary>手機用：對最近的敵人施放技能（null 為普通攻擊）。</summary>
+        public bool AttackNearestEnemy(Core.Client.SkillEntryState skill)
+            => _skillController?.AttackNearestEnemy(skill) ?? false;
+
         // 手機用的虛擬搖桿，取代點擊移動（見 UpdateVirtualJoystick）
         private VirtualJoystickControl _virtualJoystick;
+        private TouchActionButtonsControl _touchActionButtons;
 
         /// <summary>搖桿是否啟用 —— 只有觸控平台需要。</summary>
         public static bool UseVirtualJoystick => OperatingSystem.IsIOS() || OperatingSystem.IsAndroid();
@@ -244,6 +249,10 @@ namespace Client.Main.Scenes
             {
                 _virtualJoystick = new VirtualJoystickControl();
                 Controls.Add(_virtualJoystick);
+
+                _touchActionButtons = new TouchActionButtonsControl(
+                    () => _modernHud?.AssignedSkills ?? System.Array.Empty<Core.Client.SkillEntryState>());
+                Controls.Add(_touchActionButtons);
             }
 
             _mapListControl = new MapListControl { Visible = false };
@@ -703,6 +712,14 @@ namespace Client.Main.Scenes
         {
             if (_virtualJoystick == null || _hero == null)
                 return;
+
+            // 觸控落在技能按鈕上時不要同時驅動搖桿
+            var uiMouse = MuGame.Instance.UiMouseState;
+            if (_touchActionButtons != null
+                && _touchActionButtons.ContainsPoint(new Vector2(uiMouse.X, uiMouse.Y)))
+            {
+                return;
+            }
 
             if (!_virtualJoystick.ShouldIssueMove(gameTime, out var screenDirection))
                 return;

@@ -143,6 +143,24 @@ namespace Client.Main.Controls.UI.Game.Hud
 
         public SkillEntryState? SelectedSkill => _slotSkills[_activeSkillSlot];
 
+        /// <summary>
+        /// 已指派技能的快捷格內容（依格子順序，跳過未指派的）。
+        /// 供手機的技能按鈕取用 —— 沿用玩家在快捷列的指派，不另建一套。
+        /// </summary>
+        public IReadOnlyList<SkillEntryState> AssignedSkills
+        {
+            get
+            {
+                var result = new List<SkillEntryState>();
+                for (int i = PotionSlotCount; i < SlotCount; i++)
+                {
+                    if (_slotSkills[i] is SkillEntryState skill)
+                        result.Add(skill);
+                }
+                return result;
+            }
+        }
+
         public ModernBottomHud(CharacterState state, SkillSelectionPanel skillPanel)
         {
             _state = state;

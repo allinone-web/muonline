@@ -1,6 +1,8 @@
 using System;
 using Client.Main.Controllers;
 using Client.Main.Graphics;
+using Client.Main.Helpers;
+using Client.Main.Models;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
@@ -147,7 +149,7 @@ namespace Client.Main.Controls.UI.Game
 
         public override void Draw(GameTime gameTime)
         {
-            if (!Visible || !_active)
+            if (Status != GameControlStatus.Ready || !Visible || !_active)
                 return;
 
             _pixel ??= GraphicsManager.Instance.Pixel;
@@ -155,12 +157,29 @@ namespace Client.Main.Controls.UI.Game
                 return;
 
             var sb = GraphicsManager.Instance.Sprite;
-            sb.Begin(transformMatrix: UiScaler.SpriteTransform);
+            if (sb == null)
+                return;
+
+            // 場景可能已經開好批次；重複 Begin 會失敗，畫面上就什麼都看不到。
+            SpriteBatchScope? scope = null;
+            if (!SpriteBatchScope.BatchIsBegun)
+            {
+                scope = new SpriteBatchScope(
+                    sb, SpriteSortMode.Deferred, BlendState.AlphaBlend,
+                    SamplerState.LinearClamp, transform: UiScaler.SpriteTransform);
+            }
+
+            try
+            {
 
             DrawRing(sb, _center, BaseRadius, new Color(255, 255, 255, 46), 3f);
             DrawDisc(sb, _knob, KnobRadius, new Color(255, 255, 255, 92));
 
-            sb.End();
+            }
+            finally
+            {
+                scope?.Dispose();
+            }
 
             base.Draw(gameTime);
         }
