@@ -2,29 +2,46 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0-ios</TargetFramework>
-    <RuntimeIdentifier>iossimulator-x64</RuntimeIdentifier>
+    <!-- 本機修改：原本寫死 iossimulator-x64，Apple Silicon 需要 arm64 -->
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' and '$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)' == 'Arm64'">iossimulator-arm64</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">iossimulator-x64</RuntimeIdentifier>
     <OutputType>Exe</OutputType>
-    <SupportedOSPlatformVersion>11.2</SupportedOSPlatformVersion>
-    <CodesignKey>iPhone Developer</CodesignKey>
+    <!-- 本機修改：.NET 10 iOS SDK 最低要求 12.2，原本的 11.2 直接編譯失敗 -->
+    <SupportedOSPlatformVersion>12.2</SupportedOSPlatformVersion>
     <SkipXcodeVersionCheck>true</SkipXcodeVersionCheck>
-    <EnableCodeSigning>false</EnableCodeSigning>
+    <!-- 本機修改：原本 EnableCodeSigning=false，模擬器會以 SIGKILL (Code Signature Invalid) 殺掉進程。
+         模擬器用 ad-hoc 簽名（"-"）即可；真機才需要換成開發者憑證。 -->
+    <CodesignKey Condition="'$(CodesignKey)' == ''">-</CodesignKey>
+    <EnableCodeSigning>true</EnableCodeSigning>
     <ClientMainTargetFramework>net10.0-ios</ClientMainTargetFramework>
     <UseSourceGenerators>true</UseSourceGenerators>
+    <UsePrebuiltContent Condition="'$(UsePrebuiltContent)' == ''">false</UsePrebuiltContent>
+    <PrebuiltContentDir>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../Client.Main/MGContent/PrebuiltContent/iOS/Content'))</PrebuiltContentDir>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="MonoGame.Content.Builder.Task" Version="3.8.4.1" />
-    <PackageReference Include="MonoGame.Framework.iOS" Version="3.8.4.1" />
+    <PackageReference Include="MonoGame.Content.Builder.Task" Version="3.8.5" />
+    <PackageReference Include="MonoGame.Framework.iOS" Version="3.8.5" />
   </ItemGroup>
 
   <PropertyGroup>
     <DefineConstants>$(DefineConstants);IOS</DefineConstants>
   </PropertyGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(UsePrebuiltContent)' != 'true'">
     <MonoGameContentReference Include="..\Client.Main\MGContent\Content.mgcb">
       <Link>Content\Content.mgcb</Link>
     </MonoGameContentReference>
+  </ItemGroup>
+
+  <!-- 本機修改：macOS 上 MGFXC 需要 Wine 才能編 .fx，改用預先產生的 .xnb -->
+  <ItemGroup Condition="'$(UsePrebuiltContent)' == 'true'">
+    <BundleResource Include="$(PrebuiltContentDir)/*.xnb">
+      <LogicalName>Content/%(Filename)%(Extension)</LogicalName>
+    </BundleResource>
+    <BundleResource Include="..\Client.Main\appsettings.json">
+      <LogicalName>appsettings.json</LogicalName>
+    </BundleResource>
   </ItemGroup>
 
   <ItemGroup>
