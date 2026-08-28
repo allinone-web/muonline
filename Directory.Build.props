@@ -35,4 +35,28 @@
 
     <DefineConstants>$(DefineConstants);PERFORMANCE_RELEASE</DefineConstants>
   </PropertyGroup>
+
+  <!--
+    已知的體積優化機會（尚未套用，套用會使 iOS AOT 失敗）
+    ================================================================
+    MUnique.OpenMU.Network 透過 MUnique.OpenMU.PlugIns 傳遞相依到
+    Microsoft.CodeAnalysis.CSharp —— OpenMU 伺服器端「執行期編譯插件」用的，
+    客戶端原始碼完全沒有引用。實測代價：
+
+      託管組件          6.2 MB
+      AOT 原生碼      128.6 MB   （iOS 執行檔共 165 MB，約八成是它）
+      iOS AOT 時間    多出十幾分鐘
+
+    直接以 ExcludeAssets="all" 排除 Microsoft.CodeAnalysis.* 之後：
+      桌面版正常（那些型別從未被實際載入，tools/LoginTest 全流程通過）
+      iOS 建置失敗 —— AOT 必須解析 PlugIns.dll 的所有型別參照：
+        error : Failed to AOT compile MUnique.OpenMU.PlugIns.dll, exited with code 1
+
+    要真正拿到這 128 MB，需要下列其中一種做法：
+      1. 連 MUnique.OpenMU.PlugIns 一併排除（須先確認 OpenMU.Network 在
+         客戶端路徑上完全不觸碰 PlugIns 型別）
+      2. 自行重建一份不相依 PlugIns 的 OpenMU.Network
+      3. 用 ILLink descriptor 精準裁剪 Roslyn，再確認 AOT 能通過
+  -->
+
 </Project>

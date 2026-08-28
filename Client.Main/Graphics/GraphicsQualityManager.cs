@@ -101,6 +101,16 @@ namespace Client.Main.Graphics
             if (OperatingSystem.IsAndroid())
                 return GraphicsQualityPreset.Low;
 
+            // iOS 先前沒有分支，會掉到下面的桌面顯示卡判斷，最後落在
+            // 「Unknown adapters default to Medium」—— 結果是對的，但並非刻意選擇。
+            // 這裡把它寫明：iOS 以 Medium 為基準（RENDER_SCALE 0.9、關草地與
+            // 地形 GPU 光照），涵蓋較舊機型；高階裝置可在 appsettings.json 用
+            // MuOnlineSettings:Graphics:QualityPreset = "High" 覆寫。
+            // 實測 iPhone Air（iOS 26.1）在登入場景 draw 僅 5.1 ms，每幀尚餘
+            // 約 11 ms，確實有拉到 High 的空間。
+            if (OperatingSystem.IsIOS())
+                return GraphicsQualityPreset.Medium;
+
             LastAdapterInfo = GetAdapterInfo(adapter);
 
             if (LastAdapterInfo.IsSoftware || LastAdapterInfo.IsIntegrated)
