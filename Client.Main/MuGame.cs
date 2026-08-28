@@ -591,8 +591,20 @@ namespace Client.Main
             }
             bootLogger.LogInformation("✅ Configuration loaded.");
 
-            // 使用者在設定選單裡的開關選擇，必須蓋在畫質預設之上
+            // 使用者在設定選單裡的選擇，必須蓋在畫質預設之上
             ApplyPersistedRenderToggles(AppSettings?.Graphics);
+            if (AppSettings?.Graphics?.RenderScale is float savedScale && savedScale > 0.05f)
+            {
+                Constants.RENDER_SCALE = savedScale;
+            }
+            else if (OperatingSystem.IsIOS() || OperatingSystem.IsAndroid())
+            {
+                // 畫質預設 Medium 會設成 0.9，而縮放渲染路徑會讓 3D 畫面被壓扁。
+                // 使用者沒有明確指定時，手機一律用 Mobile 區塊的值（預設 1.0）。
+                var mobileScale = AppSettings?.Graphics?.Mobile?.RenderScale ?? 1.0f;
+                if (mobileScale > 0.05f)
+                    Constants.RENDER_SCALE = mobileScale;
+            }
 
             // 手機上鏡頭要比桌面近，否則角色與怪物太小。
             // DEFAULT_CAMERA_DISTANCE 已由 const 改為 static 以支援此覆寫。
@@ -687,7 +699,10 @@ namespace Client.Main
                 int vw = mobile.UiVirtualWidth > 0 ? mobile.UiVirtualWidth : Constants.BASE_UI_WIDTH;
                 int vh = mobile.UiVirtualHeight > 0 ? mobile.UiVirtualHeight : Constants.BASE_UI_HEIGHT;
 
-                UiScaler.Configure(screenSize.X, screenSize.Y, vw, vh, ScaleMode.Stretch);
+                // Stretch 會把 1280x720 硬拉滿螢幕，橫縱倍率不同導致 UI 變形；
+                // 等比縮放比例正確，左右留白也順帶避開 iPhone 圓角。
+                var uiMode = mobile.UniformUiScale ? ScaleMode.Uniform : ScaleMode.Stretch;
+                UiScaler.Configure(screenSize.X, screenSize.Y, vw, vh, uiMode);
 
                 bootLogger.LogInformation("✅ iOS UiScaler configured: Screen={Width}x{Height}, Virtual={VWidth}x{VHeight}, ScaleX={ScaleX:F4}, ScaleY={ScaleY:F4}",
                     screenSize.X, screenSize.Y, vw, vh,
@@ -1844,7 +1859,8 @@ namespace Client.Main
                 int mvw = mobileGfx.UiVirtualWidth > 0 ? mobileGfx.UiVirtualWidth : Math.Max(1, graphics.UiVirtualWidth);
                 int mvh = mobileGfx.UiVirtualHeight > 0 ? mobileGfx.UiVirtualHeight : Math.Max(1, graphics.UiVirtualHeight);
 
-                UiScaler.Configure(screenSize.X, screenSize.Y, mvw, mvh, ScaleMode.Stretch);
+                var uiMode2 = mobileGfx.UniformUiScale ? ScaleMode.Uniform : ScaleMode.Stretch;
+                UiScaler.Configure(screenSize.X, screenSize.Y, mvw, mvh, uiMode2);
 
                 Camera.Instance.AspectRatio = (float)screenSize.X / screenSize.Y;
 
@@ -2158,6 +2174,40 @@ namespace Client.Main
         /// 選單裡多數開關原本只寫入 Constants 的記憶體欄位，重開遊戲就全部回到預設值
         /// —— 實測 iPhone 上調整完畫面設定，重登後全部丟失。
         /// </summary>
+        /// <summary>
+        /// 保存畫面縮放比例。設定選單的 Render Scale 原本只寫入 Constants，
+        /// 重開遊戲會被畫質預設覆寫回去 —— 選單顯示的值與實際生效的值因此不一致。
+        /// </summary>
+        public static void PersistRenderScale(float scale)
+        {
+            var logger = AppLoggerFactory?.CreateLogger<MuGame>();
+            try
+            {
+                Directory.CreateDirectory(WritableConfigDirectory ?? ConfigDirectory ?? AppContext.BaseDirectory);
+
+                JsonObject root = LoadLocalSettings(logger);
+                if (root["MuOnlineSettings"] is not JsonObject muSettings)
+                {
+                    muSettings = new JsonObject();
+                    root["MuOnlineSettings"] = muSettings;
+                }
+                if (muSettings["Graphics"] is not JsonObject graphics)
+                {
+                    graphics = new JsonObject();
+                    muSettings["Graphics"] = graphics;
+                }
+
+                graphics["RenderScale"] = scale;
+
+                var options = new JsonSerializerOptions { WriteIndented = true };
+                File.WriteAllText(LocalSettingsPath, root.ToJsonString(options));
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Failed to persist render scale.");
+            }
+        }
+
         public static void PersistRenderToggle(string name, bool value)
         {
             if (string.IsNullOrWhiteSpace(name))

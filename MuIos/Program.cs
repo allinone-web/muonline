@@ -37,6 +37,7 @@ namespace MuIos
             {
                 ConfigureDataPath();
                 ConfigureDxtDecompression();
+                ConfigureSafeArea();
                 // iOS 需要自己的文字輸入實作，否則點了輸入框不會有鍵盤（見 IosTextFieldControl）
                 Client.Main.Controls.UI.TextFieldControl.ControlType = typeof(IosTextFieldControl);
                 RunGame();
@@ -48,6 +49,41 @@ namespace MuIos
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// 把 UIKit 的安全區域傳給 UiScaler。
+        ///
+        /// iPhone 的圓角與動態島會裁掉畫面邊緣，UI 若鋪滿整個 back buffer，
+        /// 四角的元素會被切掉而且點不到 —— 實測 iPhone Air 上就是如此。
+        /// SafeAreaInsets 的單位是 point，back buffer 是 pixel，需乘上 scale。
+        /// </summary>
+        private static void ConfigureSafeArea()
+        {
+            try
+            {
+                var window = UIApplication.SharedApplication?.Windows?.FirstOrDefault(w => w.IsKeyWindow)
+                             ?? UIApplication.SharedApplication?.Windows?.FirstOrDefault();
+                if (window == null)
+                    return;
+
+                var insets = window.SafeAreaInsets;
+                nfloat scale = window.Screen?.NativeScale ?? UIScreen.MainScreen.NativeScale;
+
+                Client.Main.Controllers.UiScaler.SafeAreaInsets = new Microsoft.Xna.Framework.Vector4(
+                    (float)(insets.Left * scale),
+                    (float)(insets.Top * scale),
+                    (float)(insets.Right * scale),
+                    (float)(insets.Bottom * scale));
+
+                Console.WriteLine(
+                    $"[MuIos] SafeAreaInsets (px) L={insets.Left * scale} T={insets.Top * scale} " +
+                    $"R={insets.Right * scale} B={insets.Bottom * scale}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[MuIos] Failed to read safe area insets: {ex.Message}");
+            }
         }
 
         /// <summary>

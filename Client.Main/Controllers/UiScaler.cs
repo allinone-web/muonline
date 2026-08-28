@@ -67,6 +67,13 @@ namespace Client.Main.Controllers
         /// </summary>
         public static bool IsConfigured { get; private set; } = false;
 
+        /// <summary>
+        /// iPhone 的圓角與動態島會裁掉畫面邊緣。UI 若鋪滿整個 back buffer，
+        /// 四角的元素會被切掉且點不到。這裡以像素為單位內縮可用區域。
+        /// 由平台端（MuIos）在取得 UIKit 的 SafeAreaInsets 後設定。
+        /// </summary>
+        public static Vector4 SafeAreaInsets { get; set; } = Vector4.Zero; // Left, Top, Right, Bottom
+
         public static void Configure(int actualWidth, int actualHeight, int virtualWidth, int virtualHeight,
             ScaleMode mode = ScaleMode.Uniform)
         {
@@ -122,20 +129,26 @@ namespace Client.Main.Controllers
 
         private static void ConfigureStretch()
         {
-            ScaleX = MathF.Max((float)ActualSize.X / VirtualSize.X, MinScale);
-            ScaleY = MathF.Max((float)ActualSize.Y / VirtualSize.Y, MinScale);
+            // 扣掉安全區域後才是 UI 真正可用的範圍（iPhone 圓角、動態島、home indicator）
+            float usableWidth = MathF.Max(ActualSize.X - SafeAreaInsets.X - SafeAreaInsets.Z, 1f);
+            float usableHeight = MathF.Max(ActualSize.Y - SafeAreaInsets.Y - SafeAreaInsets.W, 1f);
+
+            ScaleX = MathF.Max(usableWidth / VirtualSize.X, MinScale);
+            ScaleY = MathF.Max(usableHeight / VirtualSize.Y, MinScale);
             Scale = Math.Min(ScaleX, ScaleY); // For backward compatibility
 
             InverseScaleX = 1f / ScaleX;
             InverseScaleY = 1f / ScaleY;
             InverseScale = 1f / Scale;
 
-            Offset = Vector2.Zero; // No offset in stretch mode - fills entire screen
+            Offset = new Vector2(SafeAreaInsets.X, SafeAreaInsets.Y);
 
             // Create non-uniform scale transform
             float finalScaleX = ScaleX * Constants.RENDER_SCALE;
             float finalScaleY = ScaleY * Constants.RENDER_SCALE;
-            SpriteTransform = Matrix.CreateScale(finalScaleX, finalScaleY, 1f);
+            // 縮放後還要平移到安全區域起點，否則 UI 只是變小、仍然貼在螢幕左上角
+            SpriteTransform = Matrix.CreateScale(finalScaleX, finalScaleY, 1f)
+                            * Matrix.CreateTranslation(Offset.X, Offset.Y, 0f);
         }
 
         /// <summary>

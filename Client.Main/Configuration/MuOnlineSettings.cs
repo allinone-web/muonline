@@ -43,6 +43,11 @@ namespace Client.Main.Configuration
         /// 這裡以「開關名稱 -> 值」保存，啟動時於套用畫質預設之後再覆寫回去。
         /// </summary>
         public Dictionary<string, bool> RenderToggles { get; set; } = new();
+
+        /// <summary>
+        /// 使用者在設定選單選擇的畫面縮放比例。null 表示沿用畫質預設的值。
+        /// </summary>
+        public float? RenderScale { get; set; }
     }
 
     /// <summary>
@@ -72,6 +77,24 @@ namespace Client.Main.Configuration
         /// 可用範圍見 Constants.MIN/MAX_CAMERA_DISTANCE（800–1800）。
         /// </summary>
         public float CameraDistance { get; set; } = 850f;
+
+        /// <summary>
+        /// 手機的畫面縮放比例。
+        ///
+        /// 畫質預設 Medium 會把 RENDER_SCALE 設為 0.9，而縮放渲染路徑在 iOS 上
+        /// 會讓 3D 畫面被壓扁（角色與建築變形）—— 實測必須手動點 Render Scale 100%
+        /// 才恢復正常比例。實機有約 11 ms 的每幀餘裕，直接用 1.0 即可。
+        /// </summary>
+        public float RenderScale { get; set; } = 1.0f;
+
+        /// <summary>
+        /// UI 是否維持等比縮放。
+        ///
+        /// 原本用 Stretch 把 1280x720 硬拉滿螢幕，在 2868x1320 上橫向 2.241 倍、
+        /// 縱向 1.833 倍 —— UI 被橫向拉寬 22%。改為等比後比例正確，
+        /// 左右留白也順帶避開 iPhone 的圓角。
+        /// </summary>
+        public bool UniformUiScale { get; set; } = true;
     }
 
     public abstract class LeafEffectSettingsBase

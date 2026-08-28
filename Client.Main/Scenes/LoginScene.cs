@@ -600,7 +600,14 @@ namespace Client.Main.Scenes
             {
                 _loginDialog.Visible = true;
                 _loginDialog.BringToFront();
-                _loginDialog.FocusUsername();
+
+                // 手機上自動聚焦會立刻彈出系統鍵盤擋住畫面。帳號密碼已經記住，
+                // 多數情況只要直接按 OK，沒必要每次都叫出鍵盤。
+                // 桌面沒有這個困擾，維持原本的自動聚焦。
+                if (!OperatingSystem.IsIOS() && !OperatingSystem.IsAndroid())
+                {
+                    _loginDialog.FocusUsername();
+                }
             }
 
             // Proactively hide server selection UI right away to avoid overlap if the

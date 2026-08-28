@@ -1408,6 +1408,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
 
             private void SetRenderScale(float scale)
             {
+            MuGame.PersistRenderScale(scale);
                 float clampedScale = MathHelper.Clamp(scale, 0.3f, 3.0f);
 
                 if (Math.Abs(Constants.RENDER_SCALE - clampedScale) < 0.0001f)
