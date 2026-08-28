@@ -1010,6 +1010,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     AddOption("Draw Grass", () => Constants.DRAW_GRASS, value =>
                     {
                         Constants.DRAW_GRASS = value;
+                        MuGame.PersistRenderToggle("DRAW_GRASS", value);
                         if (value)
                         {
                             // When enabling grass, ensure textures are loaded
@@ -1017,8 +1018,8 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                             scene?.World?.Terrain?.ReloadGrassIfNeeded();
                         }
                     }, ref currentY, OptionRowHeight);
-                    AddOption("Low Quality Switch", () => Constants.ENABLE_LOW_QUALITY_SWITCH, value => Constants.ENABLE_LOW_QUALITY_SWITCH = value, ref currentY, OptionRowHeight);
-                    AddOption("Low Quality in Login", () => Constants.ENABLE_LOW_QUALITY_IN_LOGIN_SCENE, value => Constants.ENABLE_LOW_QUALITY_IN_LOGIN_SCENE = value, ref currentY, OptionRowHeight);
+                    AddOption("Low Quality Switch", () => Constants.ENABLE_LOW_QUALITY_SWITCH, value => { Constants.ENABLE_LOW_QUALITY_SWITCH = value; MuGame.PersistRenderToggle("ENABLE_LOW_QUALITY_SWITCH", value); }, ref currentY, OptionRowHeight);
+                    AddOption("Low Quality in Login", () => Constants.ENABLE_LOW_QUALITY_IN_LOGIN_SCENE, value => { Constants.ENABLE_LOW_QUALITY_IN_LOGIN_SCENE = value; MuGame.PersistRenderToggle("ENABLE_LOW_QUALITY_IN_LOGIN_SCENE", value); }, ref currentY, OptionRowHeight);
                 });
             }
 
@@ -1092,7 +1093,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             {
                 BuildCategory("Graphics", (ref int currentY) =>
                 {
-                    AddOption("High Quality Textures", () => Constants.HIGH_QUALITY_TEXTURES, value => Constants.HIGH_QUALITY_TEXTURES = value, ref currentY, OptionRowHeight);
+                    AddOption("High Quality Textures", () => Constants.HIGH_QUALITY_TEXTURES, value => { Constants.HIGH_QUALITY_TEXTURES = value; MuGame.PersistRenderToggle("HIGH_QUALITY_TEXTURES", value); }, ref currentY, OptionRowHeight);
                     AddOption("V-Sync", () => !Constants.DISABLE_VSYNC, value =>
                     {
                         _owner.SetVSync(value);
@@ -1131,17 +1132,19 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     AddOption("Dynamic Lights", () => Constants.ENABLE_DYNAMIC_LIGHTS, value =>
                     {
                         Constants.ENABLE_DYNAMIC_LIGHTS = value;
+                        MuGame.PersistRenderToggle("ENABLE_DYNAMIC_LIGHTS", value);
                     }, ref currentY, OptionRowHeight, RefreshOptions);
                     AddOption("Dynamic Lighting Shader (GPU)", () => Constants.ENABLE_DYNAMIC_LIGHTING_SHADER, value =>
                     {
                         Constants.ENABLE_DYNAMIC_LIGHTING_SHADER = value;
+                        MuGame.PersistRenderToggle("ENABLE_DYNAMIC_LIGHTING_SHADER", value);
                         if (!value)
                             Constants.ENABLE_TERRAIN_GPU_LIGHTING = false;
                     }, ref currentY, OptionRowHeight, RefreshOptions);
                     AddOption("Optimize for Integrated GPU", () => Constants.OPTIMIZE_FOR_INTEGRATED_GPU, value => Constants.OPTIMIZE_FOR_INTEGRATED_GPU = value, ref currentY, OptionRowHeight);
                     AddOption("Debug Lighting Areas", () => Constants.DEBUG_LIGHTING_AREAS, value => Constants.DEBUG_LIGHTING_AREAS = value, ref currentY, OptionRowHeight);
-                    AddOption("Item Material Shader", () => Constants.ENABLE_ITEM_MATERIAL_SHADER, value => Constants.ENABLE_ITEM_MATERIAL_SHADER = value, ref currentY, OptionRowHeight);
-                    AddOption("Monster Material Shader", () => Constants.ENABLE_MONSTER_MATERIAL_SHADER, value => Constants.ENABLE_MONSTER_MATERIAL_SHADER = value, ref currentY, OptionRowHeight);
+                    AddOption("Item Material Shader", () => Constants.ENABLE_ITEM_MATERIAL_SHADER, value => { Constants.ENABLE_ITEM_MATERIAL_SHADER = value; MuGame.PersistRenderToggle("ENABLE_ITEM_MATERIAL_SHADER", value); }, ref currentY, OptionRowHeight);
+                    AddOption("Monster Material Shader", () => Constants.ENABLE_MONSTER_MATERIAL_SHADER, value => { Constants.ENABLE_MONSTER_MATERIAL_SHADER = value; MuGame.PersistRenderToggle("ENABLE_MONSTER_MATERIAL_SHADER", value); }, ref currentY, OptionRowHeight);
                 });
             }
 

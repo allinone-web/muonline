@@ -591,6 +591,9 @@ namespace Client.Main
             }
             bootLogger.LogInformation("✅ Configuration loaded.");
 
+            // 使用者在設定選單裡的開關選擇，必須蓋在畫質預設之上
+            ApplyPersistedRenderToggles(AppSettings?.Graphics);
+
             // 手機上鏡頭要比桌面近，否則角色與怪物太小。
             // DEFAULT_CAMERA_DISTANCE 已由 const 改為 static 以支援此覆寫。
             if (OperatingSystem.IsIOS() || OperatingSystem.IsAndroid())
@@ -2146,6 +2149,84 @@ namespace Client.Main
             catch (Exception ex)
             {
                 logger?.LogWarning(ex, "Failed to persist quick slot assignments for character {CharacterName}.", characterName);
+            }
+        }
+
+        /// <summary>
+        /// 保存設定選單中單一開關的選擇。
+        ///
+        /// 選單裡多數開關原本只寫入 Constants 的記憶體欄位，重開遊戲就全部回到預設值
+        /// —— 實測 iPhone 上調整完畫面設定，重登後全部丟失。
+        /// </summary>
+        public static void PersistRenderToggle(string name, bool value)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return;
+
+            var logger = AppLoggerFactory?.CreateLogger<MuGame>();
+            try
+            {
+                Directory.CreateDirectory(WritableConfigDirectory ?? ConfigDirectory ?? AppContext.BaseDirectory);
+
+                JsonObject root = LoadLocalSettings(logger);
+                if (root["MuOnlineSettings"] is not JsonObject muSettings)
+                {
+                    muSettings = new JsonObject();
+                    root["MuOnlineSettings"] = muSettings;
+                }
+
+                if (muSettings["Graphics"] is not JsonObject graphics)
+                {
+                    graphics = new JsonObject();
+                    muSettings["Graphics"] = graphics;
+                }
+
+                if (graphics["RenderToggles"] is not JsonObject toggles)
+                {
+                    toggles = new JsonObject();
+                    graphics["RenderToggles"] = toggles;
+                }
+
+                toggles[name] = value;
+
+                var options = new JsonSerializerOptions { WriteIndented = true };
+                File.WriteAllText(LocalSettingsPath, root.ToJsonString(options));
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Failed to persist render toggle {Name}.", name);
+            }
+        }
+
+        /// <summary>
+        /// 啟動時把保存的開關套回 Constants。
+        /// 必須在套用畫質預設「之後」呼叫 —— 預設會覆寫這些欄位，
+        /// 使用者的個別選擇要蓋在預設之上。
+        /// </summary>
+        public static void ApplyPersistedRenderToggles(GraphicsSettings graphics)
+        {
+            var toggles = graphics?.RenderToggles;
+            if (toggles == null || toggles.Count == 0)
+                return;
+
+            foreach (var (name, value) in toggles)
+            {
+                switch (name)
+                {
+                    case nameof(Constants.ENABLE_DYNAMIC_LIGHTS): Constants.ENABLE_DYNAMIC_LIGHTS = value; break;
+                    case nameof(Constants.ENABLE_DYNAMIC_LIGHTING_SHADER): Constants.ENABLE_DYNAMIC_LIGHTING_SHADER = value; break;
+                    case nameof(Constants.ENABLE_TERRAIN_GPU_LIGHTING): Constants.ENABLE_TERRAIN_GPU_LIGHTING = value; break;
+                    case nameof(Constants.ENABLE_ITEM_MATERIAL_SHADER): Constants.ENABLE_ITEM_MATERIAL_SHADER = value; break;
+                    case nameof(Constants.ENABLE_MONSTER_MATERIAL_SHADER): Constants.ENABLE_MONSTER_MATERIAL_SHADER = value; break;
+                    case nameof(Constants.ENABLE_WEAPON_TRAIL): Constants.ENABLE_WEAPON_TRAIL = value; break;
+                    case nameof(Constants.HIGH_QUALITY_TEXTURES): Constants.HIGH_QUALITY_TEXTURES = value; break;
+                    case nameof(Constants.DRAW_GRASS): Constants.DRAW_GRASS = value; break;
+                    case nameof(Constants.BACKGROUND_MUSIC): Constants.BACKGROUND_MUSIC = value; break;
+                    case nameof(Constants.SOUND_EFFECTS): Constants.SOUND_EFFECTS = value; break;
+                    case nameof(Constants.ENABLE_LOW_QUALITY_SWITCH): Constants.ENABLE_LOW_QUALITY_SWITCH = value; break;
+                    case nameof(Constants.ENABLE_LOW_QUALITY_IN_LOGIN_SCENE): Constants.ENABLE_LOW_QUALITY_IN_LOGIN_SCENE = value; break;
+                    default: break;
+                }
             }
         }
 

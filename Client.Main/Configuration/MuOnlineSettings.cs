@@ -34,6 +34,15 @@ namespace Client.Main.Configuration
         /// 手機（iOS / Android）專用的呈現設定。桌面平台不受影響。
         /// </summary>
         public MobileGraphicsSettings Mobile { get; set; } = new();
+
+        /// <summary>
+        /// 設定選單中各項開關的使用者選擇。
+        ///
+        /// 選單裡多數開關（動態光源、各材質 shader、草地、高品質貼圖、音效等）
+        /// 原本只寫入 Constants 的記憶體欄位，重開遊戲就全部回到預設值。
+        /// 這裡以「開關名稱 -> 值」保存，啟動時於套用畫質預設之後再覆寫回去。
+        /// </summary>
+        public Dictionary<string, bool> RenderToggles { get; set; } = new();
     }
 
     /// <summary>

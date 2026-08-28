@@ -117,6 +117,15 @@ namespace Client.Main.Controls.UI.Game.Hud
         private int _hoveredButton = -1;
         private int _hoveredSlot = -1;
 
+        // --- 觸控長按 ---
+        // 桌面上「點擊格子」是指派、「按鍵盤 Q/W/E/1-0」才是使用。
+        // 手機沒有鍵盤，等於永遠無法使用藥水與技能。
+        // 改為：輕點 = 使用（格子已有內容時），長按 = 指派。
+        private int _pressedSlot = -1;
+        private double _pressElapsedSeconds;
+        private bool _longPressHandled;
+        private const double LongPressSeconds = 0.45;
+
         // Keyboard
         private static readonly Keys[] SlotKeys =
         {
@@ -171,6 +180,8 @@ namespace Client.Main.Controls.UI.Game.Hud
 
             float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
             _totalTime = gameTime.TotalGameTime.TotalSeconds;
+
+            UpdateSlotLongPress(gameTime);
 
             _targetHpPct = _state.MaximumHealth > 0 ? _state.CurrentHealth / (float)_state.MaximumHealth : 0f;
             _targetMpPct = _state.MaximumMana > 0 ? _state.CurrentMana / (float)_state.MaximumMana : 0f;
@@ -266,17 +277,14 @@ namespace Client.Main.Controls.UI.Game.Hud
             {
                 if (_slotRects[i].Contains(mousePos.X, mousePos.Y))
                 {
-                    if (i < PotionSlotCount)
+                    // 長按已經開過指派面板了，放開時不要再觸發使用
+                    if (_longPressHandled)
                     {
-                        // Potion slot → open picker
-                        OpenPotionPicker(i);
+                        _longPressHandled = false;
+                        return true;
                     }
-                    else
-                    {
-                        // Skill slot → open skill selection panel
-                        _pendingAssignSlot = i;
-                        _skillPanel.Open(_state);
-                    }
+
+                    ActivateOrAssignSlot(i);
                     return true;
                 }
             }
@@ -294,6 +302,98 @@ namespace Client.Main.Controls.UI.Game.Hud
                 return true;
 
             return false;
+        }
+
+        /// <summary>
+        /// 輕點格子：已有內容就直接使用（等同桌面按 Q/W/E 或 1-0），
+        /// 空格子則開啟指派面板。長按一律開啟指派面板（見 UpdateSlotLongPress）。
+        /// </summary>
+        private void ActivateOrAssignSlot(int slot)
+        {
+            if (slot < PotionSlotCount)
+            {
+                bool hasPotion = _potionAssignments[slot].HasValue;
+                if (hasPotion)
+                    ConsumePotionInSlot(slot);
+                else
+                    OpenPotionPicker(slot);
+                return;
+            }
+
+            bool hasSkill = _slotSkills[slot] != null;
+            if (hasSkill)
+            {
+                _activeSkillSlot = slot;
+                PersistQuickSlots();
+            }
+            else
+            {
+                _pendingAssignSlot = slot;
+                _skillPanel.Open(_state);
+            }
+        }
+
+        /// <summary>
+        /// 長按格子開啟指派面板 —— 手機上沒有右鍵或其他修飾鍵可用。
+        /// </summary>
+        private void UpdateSlotLongPress(GameTime gameTime)
+        {
+            if (_potionPickerOpen)
+            {
+                _pressedSlot = -1;
+                return;
+            }
+
+            var mouse = MuGame.Instance.UiMouseState;
+            bool pressed = mouse.LeftButton == Microsoft.Xna.Framework.Input.ButtonState.Pressed;
+
+            if (!pressed)
+            {
+                _pressedSlot = -1;
+                _pressElapsedSeconds = 0;
+                return;
+            }
+
+            int slotUnderCursor = -1;
+            for (int i = 0; i < _slotRects.Length; i++)
+            {
+                if (_slotRects[i].Contains(mouse.X, mouse.Y))
+                {
+                    slotUnderCursor = i;
+                    break;
+                }
+            }
+
+            if (slotUnderCursor < 0)
+            {
+                _pressedSlot = -1;
+                _pressElapsedSeconds = 0;
+                return;
+            }
+
+            // 手指滑到別的格子就重新計時
+            if (slotUnderCursor != _pressedSlot)
+            {
+                _pressedSlot = slotUnderCursor;
+                _pressElapsedSeconds = 0;
+                _longPressHandled = false;
+                return;
+            }
+
+            _pressElapsedSeconds += gameTime.ElapsedGameTime.TotalSeconds;
+            if (_pressElapsedSeconds < LongPressSeconds || _longPressHandled)
+                return;
+
+            _longPressHandled = true;
+            if (_pressedSlot < PotionSlotCount)
+            {
+                OpenPotionPicker(_pressedSlot);
+            }
+            else
+            {
+                _pendingAssignSlot = _pressedSlot;
+                _skillPanel.Open(_state);
+            }
         }
 
         private void RefreshResourceTexts()
