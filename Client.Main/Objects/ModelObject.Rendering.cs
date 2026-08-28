@@ -186,15 +186,32 @@ namespace Client.Main.Objects
             if (Model?.Meshes != null && _meshes != null)
             {
                 int meshCount = Math.Min(Model.Meshes.Length, _meshes.Length);
+                bool diagnose = MeshPlanDiagnostics.ShouldDiagnose(this);
                 for (int meshIndex = 0; meshIndex < meshCount; meshIndex++)
                 {
                     if (IsHiddenMesh(meshIndex))
+                    {
+                        if (diagnose)
+                            MeshPlanDiagnostics.Report(this, meshIndex, Model.Meshes[meshIndex].TexturePath,
+                                "SKIPPED-hidden",
+                                $"hiddenMesh={HiddenMesh} byScript={_meshes[meshIndex].HiddenByScript} shouldRender={ShouldRenderMesh(meshIndex)}");
                         continue;
+                    }
 
                     bool isBlend = IsBlendMesh(meshIndex);
                     bool isRgba = _meshes[meshIndex].IsRgba;
                     if (LowQuality && isBlend && !preserveBlendMeshes)
+                    {
+                        if (diagnose)
+                            MeshPlanDiagnostics.Report(this, meshIndex, Model.Meshes[meshIndex].TexturePath,
+                                "SKIPPED-lowQualityBlend", $"lowQuality={LowQuality}");
                         continue;
+                    }
+
+                    if (diagnose)
+                        MeshPlanDiagnostics.Report(this, meshIndex, Model.Meshes[meshIndex].TexturePath,
+                            _meshes[meshIndex].Texture == null ? "PLANNED-but-TEXTURE-NULL" : "PLANNED",
+                            $"blend={isBlend} rgba={isRgba}");
 
                     var target = (isRgba || isBlend) ? _transparentMeshPlan : _opaqueMeshPlan;
                     Texture2D texture = _meshes[meshIndex].Texture;

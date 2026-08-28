@@ -573,6 +573,7 @@ namespace Client.Main.Objects.Player
                 while (true)
                 {
                     await UpdateAppearanceFromInventoryAsync();
+                    DumpBodyPartStateOnce();
 
                     lock (_inventoryAppearanceUpdateSync)
                     {
@@ -3564,6 +3565,54 @@ namespace Client.Main.Objects.Player
             await SetBodyPartsAsync("Player/",
                 "HelmClass", "ArmorClass", "PantClass", "GloveClass", "BootClass",
                 (int)playerClass);
+        }
+
+        private bool _bodyPartStateDumped;
+
+        /// <summary>
+        /// 一次性傾印各身體部位的實際狀態。
+        ///
+        /// 追查「戰士看不到腿」時，離線檢查已確認 PantClass02.bmd 與 PantMale05.bmd
+        /// 都能解析、引用的貼圖也全部存在 —— 所以不是缺資源。剩下的可能是模型沒掛上、
+        /// 物件不可見，或網格被隱藏（HiddenMesh / 貼圖腳本的 HiddenMesh 旗標）。
+        /// 這裡把這些狀態一次印出來定位。
+        /// </summary>
+        private void DumpBodyPartStateOnce()
+        {
+            if (_bodyPartStateDumped || !IsMainWalker)
+                return;
+
+            _bodyPartStateDumped = true;
+
+            Console.WriteLine($"[BodyParts] class={CharacterClass} mapped={MapNetworkClassToModelClass(_characterClass)}");
+            DumpPart("Helm", Helm);
+            DumpPart("Armor", Armor);
+            DumpPart("Pants", Pants);
+            DumpPart("Gloves", Gloves);
+            DumpPart("Boots", Boots);
+
+            static void DumpPart(string name, ModelObject part)
+            {
+                if (part == null)
+                {
+                    Console.WriteLine($"[BodyParts]   {name}: <part object is null>");
+                    return;
+                }
+
+                int meshCount = part.Model?.Meshes?.Length ?? -1;
+                Console.WriteLine(
+                    $"[BodyParts]   {name}: model={(part.Model != null ? "OK" : "NULL")} " +
+                    $"meshes={meshCount} visible={part.Visible} status={part.Status} " +
+                    $"hiddenMesh={part.HiddenMesh} blendMesh={part.BlendMesh}");
+
+                if (part.Model?.Meshes == null)
+                    return;
+
+                for (int i = 0; i < part.Model.Meshes.Length; i++)
+                {
+                    Console.WriteLine($"[BodyParts]     mesh[{i}] texture='{part.Model.Meshes[i].TexturePath}'");
+                }
+            }
         }
 
         private async Task ResetBodyPartToClassDefaultAsync(ModelObject bodyPart, string partPrefix)
