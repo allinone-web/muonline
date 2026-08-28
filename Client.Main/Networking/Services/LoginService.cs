@@ -53,6 +53,10 @@ namespace Client.Main.Networking.Services
             }
 
             _logger.LogInformation("Sending login packet for user '{Username}'...", username);
+#if IOS
+            // iOS 的 logger console provider 預設關閉，用 Console 直接輸出以便 devicectl 觀察
+            Console.WriteLine($"[MuIos.Login] sending username='{username}' passwordLength={password?.Length ?? 0}");
+#endif
             try
             {
                 await _connectionManager.Connection.SendAsync(() =>

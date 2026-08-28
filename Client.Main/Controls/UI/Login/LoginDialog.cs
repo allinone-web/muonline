@@ -190,6 +190,9 @@ namespace Client.Main.Controls.UI.Login
         // Invokes the LoginAttempt event
         private void AttemptLogin()
         {
+#if IOS
+            Console.WriteLine($"[MuIos.Login] AttemptLogin user='{_userInput.Value}' passwordLength={_passwordInput.Value?.Length ?? 0}");
+#endif
             // Blur fields to hide soft keyboard (especially on mobile) after submitting.
             _userInput.OnBlur();
             _passwordInput.OnBlur();

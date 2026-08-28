@@ -1494,11 +1494,16 @@ namespace Client.Main
             }
             else
             {
-                if (OperatingSystem.IsAndroid())
+                if (OperatingSystem.IsAndroid() || OperatingSystem.IsIOS())
                 {
                     // Keep the cursor at the last touch position when finger is lifted.
                     // This prevents the UI system from thinking we clicked outside the control.
                     // The cursor will stay at this position until next touch - we DON'T move it to (-1, -1).
+                    //
+                    // 本機修改：原本只判斷 Android。iOS 會掉進下面的桌面分支去讀實體滑鼠，
+                    // 而 iOS 沒有滑鼠，Mouse.Position 恆為 (0,0) —— 於是每次手指離開螢幕，
+                    // 游標就瞬間跳到左上角，UI 控制項會認為放開的位置在自己範圍外，
+                    // 導致按鈕點擊時好時壞。
 
                     UiMousePosition = PrevUiMouseState.Position;
                     UiTouchPosition = PrevUiMouseState.Position;
@@ -1511,7 +1516,7 @@ namespace Client.Main
                 }
                 else
                 {
-                    // WINDOWS: Use standard mouse
+                    // 桌面平台：使用實體滑鼠
                     UiMousePosition = UiScaler.ToVirtual(Mouse.Position);
                     UiTouchPosition = UiMousePosition;
 

@@ -34,6 +34,8 @@ namespace MuIos
             try
             {
                 ConfigureDataPath();
+                // iOS 需要自己的文字輸入實作，否則點了輸入框不會有鍵盤（見 IosTextFieldControl）
+                Client.Main.Controls.UI.TextFieldControl.ControlType = typeof(IosTextFieldControl);
                 RunGame();
             }
             catch (Exception ex)

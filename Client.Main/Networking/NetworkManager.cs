@@ -357,10 +357,16 @@ namespace Client.Main.Networking
         {
             if (_currentState != ClientConnectionState.ConnectedToGameServer && _currentState != ClientConnectionState.Authenticating) // Allow retry in Authenticating state
             {
+#if IOS
+                Console.WriteLine($"[MuIos.Login] REJECTED state={_currentState}");
+#endif
                 OnErrorOccurred($"Cannot send login request in state: {_currentState}");
                 return;
             }
             _logger.LogInformation("Sending login request for user: {Username}", username);
+#if IOS
+            Console.WriteLine($"[MuIos.Login] state OK ({_currentState}), forwarding to LoginService");
+#endif
             UpdateState(ClientConnectionState.Authenticating);
             await _loginService.SendLoginRequestAsync(username, password);
         }

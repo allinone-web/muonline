@@ -15,6 +15,20 @@
     <DefineConstants>$(DefineConstants);WINDOWS_DX</DefineConstants>
   </PropertyGroup>
 
+  <!--
+    本機修改：Client.Main 原始碼裡有多處 #if IOS / #if !IOS，但 .NET SDK 為
+    net10.0-ios 定義的符號是 __IOS__（Xamarin 慣例），並非 IOS。只有 MuIos.csproj
+    自己明確加了 IOS，因此那些守衛在 Client.Main 中全部失效，例如：
+      MuGame.cs:531                 設定無效時仍呼叫 Exit()（iOS 不允許程式自行終止）
+      LoginScene.cs:320/328         連線中斷後仍呼叫 Exit()
+      PauseMenuControl.cs:702/710   離開遊戲時仍呼叫 Exit()
+      MuGame.cs:1385                桌面專用的 vsync/FixedTimeStep 設定照樣套用
+    在這裡補上 IOS，讓這些守衛按作者原意生效。
+  -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-ios'">
+    <DefineConstants>$(DefineConstants);IOS</DefineConstants>
+  </PropertyGroup>
+
   <PropertyGroup Condition="'$(MonoGamePlatform)' == 'WindowsDX12'">
     <DefineConstants>$(DefineConstants);WINDOWS_DX;WINDOWS_DX12;NATIVE_BACKEND</DefineConstants>
   </PropertyGroup>
