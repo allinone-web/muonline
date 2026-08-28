@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.Linq;
+using Client.Data.Texture;
+using Client.Main.Content;
 using Foundation;
 using UIKit;
 
@@ -34,6 +36,7 @@ namespace MuIos
             try
             {
                 ConfigureDataPath();
+                ConfigureDxtDecompression();
                 // iOS 需要自己的文字輸入實作，否則點了輸入框不會有鍵盤（見 IosTextFieldControl）
                 Client.Main.Controls.UI.TextFieldControl.ControlType = typeof(IosTextFieldControl);
                 RunGame();
@@ -45,6 +48,32 @@ namespace MuIos
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// MU 的 .OZD 貼圖是 DXT（S3TC）壓縮的 DDS。iOS 的 GPU 只支援
+        /// PVRTC / ETC / ASTC，<b>不支援 DXT</b>，因此以 SurfaceFormat.Dxt1/3/5
+        /// 建立 Texture2D 會失敗，貼圖變成 null，而 ModelObject 對沒有貼圖的網格
+        /// 是直接跳過不繪製的。
+        ///
+        /// 實際表現：戰士看不到腿、NPC 只剩一顆頭、地形貼圖 38 張只成功 14 張、
+        /// 草地貼圖索引為空 —— 全部同一個原因。
+        ///
+        /// Android 早就以 CustomDecompressFunction 在軟體端解壓 DXT
+        /// （MuAndroid/MainActivity.cs），iOS 卻沒有對應處理。這裡補上，
+        /// 共用 Client.Main 既有的 DxtDecoder。
+        /// </summary>
+        private static void ConfigureDxtDecompression()
+        {
+            TextureLoader.Instance.CustomDecompressFunction = textureInfo => textureInfo.Format switch
+            {
+                TextureSurfaceFormat.Dxt1 => DxtDecoder.DecompressDXT1(textureInfo.Data, textureInfo.Width, textureInfo.Height),
+                TextureSurfaceFormat.Dxt3 => DxtDecoder.DecompressDXT3(textureInfo.Data, textureInfo.Width, textureInfo.Height),
+                TextureSurfaceFormat.Dxt5 => DxtDecoder.DecompressDXT5(textureInfo.Data, textureInfo.Width, textureInfo.Height),
+                _ => throw new NotSupportedException($"Unsupported DXT format for decompression: {textureInfo.Format}"),
+            };
+
+            Console.WriteLine("[MuIos] DXT software decompression enabled (iOS GPUs cannot sample S3TC).");
         }
 
         // Constants 預設把 DataPath 指到 AppDomain.BaseDirectory/Data，也就是 .app bundle。

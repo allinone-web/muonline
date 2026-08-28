@@ -86,7 +86,15 @@ namespace Client.Main
         public static MuOnlineSettings AppSettings { get; private set; }
         public static NetworkManager Network { get; private set; }
         public static string ConfigDirectory { get; private set; }
-        public static string LocalSettingsPath => Path.Combine(ConfigDirectory ?? AppContext.BaseDirectory, LocalSettingsFileName);
+        /// <summary>
+        /// 可寫入設定的目錄。桌面平台與 <see cref="ConfigDirectory"/> 相同；
+        /// iOS / Android 上 app bundle 為唯讀，必須改用容器中的可寫路徑，
+        /// 否則所有本地設定（含技能列配置、伺服器位址）都會寫入失敗。
+        /// </summary>
+        public static string WritableConfigDirectory { get; private set; }
+
+        public static string LocalSettingsPath => Path.Combine(
+            WritableConfigDirectory ?? ConfigDirectory ?? AppContext.BaseDirectory, LocalSettingsFileName);
         public static Controllers.TaskScheduler TaskScheduler => _taskScheduler;
         public static int FrameIndex { get; private set; }
         public static int MainThreadPendingActions => _mainThreadDispatcher.PendingCount;
@@ -480,19 +488,67 @@ namespace Client.Main
             return (Path.GetDirectoryName(currentDirectoryCandidate) ?? AppContext.BaseDirectory, Path.GetFileName(currentDirectoryCandidate));
         }
 
+        /// <summary>
+        /// 決定可寫入設定的目錄。iOS / Android 的 app bundle 唯讀且已簽名，
+        /// 寫入會直接失敗（實測 iPhone 上技能列配置無法保存），因此改用容器路徑。
+        /// </summary>
+        private static string ResolveWritableConfigDirectory(string configDirectory)
+        {
+            if (!OperatingSystem.IsIOS() && !OperatingSystem.IsAndroid())
+            {
+                return configDirectory;
+            }
+
+            string baseDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            if (string.IsNullOrEmpty(baseDir))
+            {
+                baseDir = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            }
+            if (string.IsNullOrEmpty(baseDir))
+            {
+                return configDirectory;
+            }
+
+            string dir = Path.Combine(baseDir, "MuOnline");
+            try
+            {
+                Directory.CreateDirectory(dir);
+                return dir;
+            }
+            catch
+            {
+                return configDirectory;
+            }
+        }
+
+        private static Microsoft.Extensions.FileProviders.IFileProvider CreateWritableConfigFileProvider()
+        {
+            string dir = WritableConfigDirectory ?? ConfigDirectory ?? AppContext.BaseDirectory;
+            try
+            {
+                Directory.CreateDirectory(dir);
+                return new Microsoft.Extensions.FileProviders.PhysicalFileProvider(dir);
+            }
+            catch
+            {
+                return new Microsoft.Extensions.FileProviders.PhysicalFileProvider(AppContext.BaseDirectory);
+            }
+        }
+
         protected override void Initialize()
         {
             (string configDirectory, string configFileName) = ResolveSettingsFileLocation();
             ConfigDirectory = configDirectory;
+            WritableConfigDirectory = ResolveWritableConfigDirectory(configDirectory);
             var configurationBuilder = new ConfigurationBuilder()
                 .SetBasePath(ConfigDirectory)
 #if PERFORMANCE_RELEASE
                 .AddJsonFile(configFileName, optional: false, reloadOnChange: false)
-                .AddJsonFile(LocalSettingsFileName, optional: true, reloadOnChange: false)
+                .AddJsonFile(CreateWritableConfigFileProvider(), LocalSettingsFileName, optional: true, reloadOnChange: false)
                 .AddJsonFile("appsettings.performance.json", optional: true, reloadOnChange: false);
 #else
                 .AddJsonFile(configFileName, optional: false, reloadOnChange: true)
-                .AddJsonFile(LocalSettingsFileName, optional: true, reloadOnChange: true);
+                .AddJsonFile(CreateWritableConfigFileProvider(), LocalSettingsFileName, optional: true, reloadOnChange: true);
 #endif
             AppConfiguration = configurationBuilder.Build();
 
@@ -1918,7 +1974,7 @@ namespace Client.Main
             var logger = AppLoggerFactory?.CreateLogger<MuGame>();
             try
             {
-                Directory.CreateDirectory(ConfigDirectory ?? AppContext.BaseDirectory);
+                Directory.CreateDirectory(WritableConfigDirectory ?? ConfigDirectory ?? AppContext.BaseDirectory);
 
                 JsonObject root = LoadLocalSettings(logger);
                 if (root["MuOnlineSettings"] is not JsonObject muSettings)
@@ -2027,7 +2083,7 @@ namespace Client.Main
             var logger = AppLoggerFactory?.CreateLogger<MuGame>();
             try
             {
-                Directory.CreateDirectory(ConfigDirectory ?? AppContext.BaseDirectory);
+                Directory.CreateDirectory(WritableConfigDirectory ?? ConfigDirectory ?? AppContext.BaseDirectory);
 
                 JsonObject root = LoadLocalSettings(logger);
                 if (root["MuOnlineSettings"] is not JsonObject muSettings)
@@ -2094,7 +2150,7 @@ namespace Client.Main
             var logger = AppLoggerFactory?.CreateLogger<MuGame>();
             try
             {
-                Directory.CreateDirectory(ConfigDirectory ?? AppContext.BaseDirectory);
+                Directory.CreateDirectory(WritableConfigDirectory ?? ConfigDirectory ?? AppContext.BaseDirectory);
 
                 JsonObject root = LoadLocalSettings(logger);
                 if (root["MuOnlineSettings"] is not JsonObject muSettings)
@@ -2126,7 +2182,7 @@ namespace Client.Main
             var logger = AppLoggerFactory?.CreateLogger<MuGame>();
             try
             {
-                Directory.CreateDirectory(ConfigDirectory ?? AppContext.BaseDirectory);
+                Directory.CreateDirectory(WritableConfigDirectory ?? ConfigDirectory ?? AppContext.BaseDirectory);
 
                 JsonObject root = LoadLocalSettings(logger);
                 if (root["MuOnlineSettings"] is not JsonObject muSettings)
@@ -2163,7 +2219,7 @@ namespace Client.Main
             var logger = AppLoggerFactory?.CreateLogger<MuGame>();
             try
             {
-                Directory.CreateDirectory(ConfigDirectory ?? AppContext.BaseDirectory);
+                Directory.CreateDirectory(WritableConfigDirectory ?? ConfigDirectory ?? AppContext.BaseDirectory);
 
                 JsonObject root = LoadLocalSettings(logger);
                 if (root["MuOnlineSettings"] is not JsonObject muSettings)
@@ -2196,7 +2252,7 @@ namespace Client.Main
             var logger = AppLoggerFactory?.CreateLogger<MuGame>();
             try
             {
-                Directory.CreateDirectory(ConfigDirectory ?? AppContext.BaseDirectory);
+                Directory.CreateDirectory(WritableConfigDirectory ?? ConfigDirectory ?? AppContext.BaseDirectory);
 
                 JsonObject root = LoadLocalSettings(logger);
                 if (root["MuOnlineSettings"] is not JsonObject muSettings)
@@ -2222,6 +2278,74 @@ namespace Client.Main
                 logger?.LogWarning(ex, "Failed to persist monster shadow mode to disk.");
             }
         }
+
+        /// <summary>
+        /// 記住上次登入的帳號與密碼。手機上每次都要叫出系統鍵盤重打非常麻煩。
+        ///
+        /// ⚠ <b>密碼以明文寫入</b> <c>appsettings.local.json</c>。該檔位於 app 的私有沙盒，
+        /// 其他 app 無法讀取，但越獄裝置或未加密備份仍可能取得。正式產品應改用
+        /// iOS Keychain（kSecClassGenericPassword）。此處為開發測試便利性所做的取捨。
+        /// </summary>
+        public static void PersistLoginCredentials(string username, string password)
+        {
+            if (string.IsNullOrWhiteSpace(username))
+            {
+                return;
+            }
+
+            var logger = AppLoggerFactory?.CreateLogger<MuGame>();
+            try
+            {
+                Directory.CreateDirectory(WritableConfigDirectory ?? ConfigDirectory ?? AppContext.BaseDirectory);
+
+                JsonObject root = LoadLocalSettings(logger);
+                if (root["MuOnlineSettings"] is not JsonObject muSettings)
+                {
+                    muSettings = new JsonObject();
+                    root["MuOnlineSettings"] = muSettings;
+                }
+
+                muSettings["LastUsername"] = username;
+                if (!string.IsNullOrEmpty(password))
+                {
+                    muSettings["LastPassword"] = password;
+                }
+
+                var options = new JsonSerializerOptions { WriteIndented = true };
+                File.WriteAllText(LocalSettingsPath, root.ToJsonString(options));
+                logger?.LogDebug("Saved login credentials to {Path}", LocalSettingsPath);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Failed to persist login credentials.");
+            }
+        }
+
+        private static string ReadLocalString(string key)
+        {
+            try
+            {
+                JsonObject root = LoadLocalSettings(AppLoggerFactory?.CreateLogger<MuGame>());
+                if (root["MuOnlineSettings"] is JsonObject muSettings
+                    && muSettings[key] is JsonValue value
+                    && value.TryGetValue(out string text))
+                {
+                    return text ?? string.Empty;
+                }
+            }
+            catch
+            {
+                // 讀不到就當作沒有紀錄
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>讀取上次登入的帳號名稱；沒有紀錄時回傳空字串。</summary>
+        public static string LoadLastUsername() => ReadLocalString("LastUsername");
+
+        /// <summary>讀取上次登入的密碼；沒有紀錄時回傳空字串。見 <see cref="PersistLoginCredentials"/> 的安全性說明。</summary>
+        public static string LoadLastPassword() => ReadLocalString("LastPassword");
 
         private static JsonObject LoadLocalSettings(ILogger logger)
         {

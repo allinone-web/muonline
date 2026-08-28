@@ -43,21 +43,26 @@ namespace Client.Main.Configuration
     public class MobileGraphicsSettings
     {
         /// <summary>
-        /// UI 虛擬畫布寬度。UI 以此為基準等比拉伸到實際螢幕，
-        /// <b>數值越小，畫面上的 UI 元素越大</b>。桌面為 1280。
+        /// UI 虛擬畫布寬度。UI 以此為基準拉伸到實際螢幕，
+        /// <b>數值越小，畫面上的 UI 元素越大</b>。
+        ///
+        /// ⚠ 實測過 960x540：UI 確實變大且好按，但現有視窗版面是照 1280x720 畫的，
+        /// 最大的視窗達 560x700 —— 高度一旦低於 720 就會超出畫面，關閉鈕點不到、
+        /// 底部導覽列被遮住。要真正放大 UI 必須重排版面，不能只縮虛擬畫布。
+        /// 因此維持 1280x720，放大效果改由 CameraDistance 提供。
         /// </summary>
-        public int UiVirtualWidth { get; set; } = 960;
+        public int UiVirtualWidth { get; set; } = 1280;
 
         /// <summary>
-        /// UI 虛擬畫布高度。桌面為 720。
+        /// UI 虛擬畫布高度。不可低於 720，見上方說明。
         /// </summary>
-        public int UiVirtualHeight { get; set; } = 540;
+        public int UiVirtualHeight { get; set; } = 720;
 
         /// <summary>
         /// 預設鏡頭距離，<b>數值越小角色越大</b>。桌面為 1700，
         /// 可用範圍見 Constants.MIN/MAX_CAMERA_DISTANCE（800–1800）。
         /// </summary>
-        public float CameraDistance { get; set; } = 1150f;
+        public float CameraDistance { get; set; } = 850f;
     }
 
     public abstract class LeafEffectSettingsBase

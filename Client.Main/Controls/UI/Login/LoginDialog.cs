@@ -124,6 +124,19 @@ namespace Client.Main.Controls.UI.Login
             };
             _okButton.Click += OkButton_Click; // Use dedicated method
             Controls.Add(_okButton);
+
+            // 帶入上次登入的帳號與密碼。手機上每次都要叫出系統鍵盤重打非常麻煩。
+            // 密碼的保存方式與安全性取捨見 MuGame.PersistLoginCredentials。
+            var lastUser = MuGame.LoadLastUsername();
+            if (!string.IsNullOrEmpty(lastUser))
+            {
+                _userInput.Value = lastUser;
+            }
+            var lastPassword = MuGame.LoadLastPassword();
+            if (!string.IsNullOrEmpty(lastPassword))
+            {
+                _passwordInput.Value = lastPassword;
+            }
         }
 
         // Public Methods
@@ -193,6 +206,7 @@ namespace Client.Main.Controls.UI.Login
 #if IOS
             Console.WriteLine($"[MuIos.Login] AttemptLogin user='{_userInput.Value}' passwordLength={_passwordInput.Value?.Length ?? 0}");
 #endif
+            MuGame.PersistLoginCredentials(_userInput.Value, _passwordInput.Value);
             // Blur fields to hide soft keyboard (especially on mobile) after submitting.
             _userInput.OnBlur();
             _passwordInput.OnBlur();
