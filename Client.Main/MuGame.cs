@@ -818,6 +818,17 @@ namespace Client.Main
                 ModelObject.BeginFrameGpuSkinningMetrics();
 
                 FPSCounter.Instance.CalcFPS(gameTime);
+#if !PERFORMANCE_RELEASE
+                // RenderMetricsLevel 2 時把幀時間分解寫到 stdout。行動裝置上看不到畫面上的
+                // 疊加層時（例如透過 `simctl launch --console` 或 device log 觀察），這是唯一
+                // 能區分「瓶頸在託管程式碼」還是「瓶頸在 GPU/繪圖後端」的方法：
+                // draw 佔滿整個 cpu 而 unacct 很小 => 時間花在同步的繪圖呼叫裡。
+                if (Constants.RENDER_METRICS_LEVEL >= 2 && FrameIndex % 60 == 0)
+                {
+                    var metrics = _frameProfiler.Current;
+                    Console.WriteLine($"[PERF] f={metrics.FrameIndex} interval={metrics.FrameIntervalMs:F1}ms cpu={metrics.CpuFrameMs:F1}ms update={metrics.UpdateMs:F1}ms draw={metrics.DrawMs:F1}ms unacct={metrics.FrameIntervalUnaccountedMs:F1}ms p95={metrics.P95Ms:F1}ms wallP95={metrics.WallP95Ms:F1}ms");
+                }
+#endif
                 bool recoveredFrame = false;
                 if (ShouldUseIntermediateRenderTarget())
                 {
