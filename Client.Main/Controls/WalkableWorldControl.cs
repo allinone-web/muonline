@@ -110,8 +110,19 @@ namespace Client.Main.Controls
 
             CalculateMouseTilePos();
 
+            // 手機改用虛擬搖桿操控移動。點擊移動若保留，
+            // 每次點搖桿、ATK 或技能鈕都會同時讓角色往手指位置跑，兩套操作互相打架。
+            // 這是點擊移動的主要路徑，與 GameSceneSkillController 那條各自獨立 ——
+            // 先前只擋了後者，所以衝突依舊存在。
+            //
+            // 注意：這裡整段一併涵蓋了「點怪物就攻擊」。手機已有 ATK 與技能鈕
+            // 自動鎖定最近的敵人，不需要點準怪物。
+            bool touchControlsReplaceClickToMove =
+                OperatingSystem.IsIOS() || OperatingSystem.IsAndroid();
+
             // Handle click‐to‐move with a simple cooldown
-            if (!Scene.IsMouseInputConsumedThisFrame && // check if UI already handled the click
+            if (!touchControlsReplaceClickToMove &&
+                !Scene.IsMouseInputConsumedThisFrame && // check if UI already handled the click
                 (Scene.MouseControl == this || Scene.MouseControl == World) && // ensure this world or its base is the target
                 MuGame.Instance.Mouse.LeftButton == ButtonState.Pressed &&
                 _cursorNextMoveTime <= 0f)
