@@ -14,6 +14,15 @@
 	<string>MuIos</string>
 	<key>MinimumOSVersion</key>
 	<string>12.2</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSBonjourServices</key>
+	<array/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>連線到區域網路中的 MU 遊戲伺服器。</string>
 	<key>UIDeviceFamily</key>
 	<array>
 		<integer>1</integer>

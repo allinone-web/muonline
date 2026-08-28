@@ -1,4 +1,6 @@
 using System;
+using System.IO;
+using System.Linq;
 using Foundation;
 using UIKit;
 
@@ -31,6 +33,7 @@ namespace MuIos
         {
             try
             {
+                ConfigureDataPath();
                 RunGame();
             }
             catch (Exception ex)
@@ -40,6 +43,27 @@ namespace MuIos
             }
 
             return true;
+        }
+
+        // Constants 預設把 DataPath 指到 AppDomain.BaseDirectory/Data，也就是 .app bundle。
+        // 那在模擬器上可行（可以把 Data 軟連結進已安裝的 bundle），但真機的 bundle 唯讀且
+        // 已簽名，2.5 GB 的遊戲資源既放不進去也無法在安裝後寫入。
+        // 因此：bundle 內有資源就用它，否則改用容器中可寫入的 Documents/Data。
+        private static void ConfigureDataPath()
+        {
+            var bundleData = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Data");
+            if (Directory.Exists(bundleData) && Directory.EnumerateFileSystemEntries(bundleData).Any())
+            {
+                Client.Main.Constants.DataPath = bundleData;
+                Console.WriteLine($"[MuIos] DataPath (bundle) = {bundleData}");
+                return;
+            }
+
+            var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            var containerData = Path.Combine(documents, "Data");
+            Directory.CreateDirectory(containerData);
+            Client.Main.Constants.DataPath = containerData;
+            Console.WriteLine($"[MuIos] DataPath (container) = {containerData}");
         }
     }
 }
