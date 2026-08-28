@@ -158,6 +158,7 @@ namespace Client.Main.Content
                 if (data == null)
                 {
                     if (_logger != null && _logger.IsEnabled(LogLevel.Debug)) _logFailedLoadData(_logger, fullPath, null);
+                    Console.WriteLine($"[TextureLoader] READER RETURNED NULL '{fullPath}'");
                     return null;
                 }
 
@@ -174,6 +175,7 @@ namespace Client.Main.Content
             catch (Exception ex)
             {
                 if (_logger != null && _logger.IsEnabled(LogLevel.Debug)) _logFailedAsset(_logger, path ?? string.Empty, ex);
+                Console.WriteLine($"[TextureLoader] PREPARE FAILED '{path}': {ex.GetType().Name}: {ex.Message}");
                 return null;
             }
         }
@@ -206,6 +208,7 @@ namespace Client.Main.Content
             }
 
             if (_logger != null && _logger.IsEnabled(LogLevel.Debug)) _logFileNotFound(_logger, expectedFilePath, null);
+            Console.WriteLine($"[TextureLoader] FILE NOT FOUND '{expectedFilePath}' (ext={ext})");
             return null;
         }
 
@@ -386,6 +389,7 @@ namespace Client.Main.Content
                         {
                             texture.Dispose();
                             _logger?.LogDebug("Unsupported texture components: {Components} for texture {Path}", components, path);
+                            Console.WriteLine($"[TextureLoader] unsupported components={components} '{path}'");
                             return null;
                         }
 
@@ -399,6 +403,7 @@ namespace Client.Main.Content
                                 data.Length,
                                 requiredBytes,
                                 path);
+                            Console.WriteLine($"[TextureLoader] truncated {data.Length}/{requiredBytes} '{path}'");
                             return null;
                         }
 
@@ -429,6 +434,7 @@ namespace Client.Main.Content
                 catch (Exception ex)
                 {
                     _logger?.LogError(ex, "Failed creating Texture2D for {Path}", path);
+                    Console.WriteLine($"[TextureLoader] EXCEPTION '{path}': {ex.GetType().Name}: {ex.Message}");
                     return null;
                 }
             }

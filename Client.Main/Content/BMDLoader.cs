@@ -460,6 +460,20 @@ namespace Client.Main.Content
             string finalPath = Path.Combine(Constants.DataPath, path);
             return Task.FromResult(File.Exists(finalPath));
         }
+        // 同一路徑只記錄一次，避免每幀刷屏
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _reportedMissingModels = new();
+
+        private static void LogMissingModelOnce(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+                return;
+
+            if (_reportedMissingModels.TryAdd(path, 0))
+            {
+                Console.WriteLine($"[BMDLoader] MODEL NOT FOUND '{path}'");
+            }
+        }
+
         private async Task<BMD> LoadAssetAsync(string path, string textureFolder = null)
         {
             try
@@ -469,6 +483,10 @@ namespace Client.Main.Content
                 if (!File.Exists(path))
                 {
                     _logger?.LogDebug($"Model not found: {path}");
+                    // 模型整個載入失敗時，該物件連一個網格都沒有 ——
+                    // 網格層級的診斷（ModelObject 的 MESH TEXTURE MISSING）不會有任何輸出。
+                    // 這是角色缺腿、NPC 只剩頭這類現象的另一個可能來源，必須看得到。
+                    LogMissingModelOnce(path);
                     return null;
                 }
 

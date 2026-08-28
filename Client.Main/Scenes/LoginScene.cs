@@ -501,6 +501,7 @@ namespace Client.Main.Scenes
                     ? "Account is already connected."
                     : "Login Failed. Check credentials or server status.";
                 MessageWindow.Show(messageToShow);
+                _loginDialog?.ResetSubmitState();   // 解除送出鎖定，讓使用者能重試
                 // Visibility of login dialog, etc., is handled by HandleConnectionStateChange after state update
             });
         }
@@ -511,6 +512,7 @@ namespace Client.Main.Scenes
             {
                 _logger.LogError("UI received NetworkError: {Error}", errorMessage);
                 MessageWindow.Show($"Network Error: {errorMessage}");
+                _loginDialog?.ResetSubmitState();
                 UpdateStatusLabel(ClientConnectionState.Disconnected); // This will trigger UI updates via HandleConnectionStateChange
             });
         }

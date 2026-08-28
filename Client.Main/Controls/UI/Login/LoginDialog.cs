@@ -15,6 +15,15 @@ namespace Client.Main.Controls.UI.Login
         private readonly TextFieldControl _passwordInput;
         private readonly OkButton _okButton;
 
+        // 送出登入後到伺服器回應之間約 1-2 秒沒有任何回饋，實測使用者會以為沒反應
+        // 而重複點擊 —— 第一次其實已經登入成功，第二次就收到 AccountAlreadyConnected。
+        // 這裡在等待期間鎖住按鈕並給視覺提示。
+        private bool _isSubmitting;
+        private double _submitElapsedSeconds;
+
+        /// <summary>逾時保護。封包遺失或伺服器無回應時，避免按鈕永久鎖死。</summary>
+        private const double SubmitTimeoutSeconds = 15.0;
+
         // Properties
         public string ServerName
         {
@@ -152,8 +161,35 @@ namespace Client.Main.Controls.UI.Login
             });
         }
 
+        private void SetSubmitting(bool submitting)
+        {
+            _isSubmitting = submitting;
+            _submitElapsedSeconds = 0;
+
+            if (_okButton != null)
+            {
+                _okButton.Interactive = !submitting;
+                _okButton.Alpha = submitting ? 0.45f : 1f;
+            }
+        }
+
+        /// <summary>
+        /// 由 LoginScene 在登入失敗、連線錯誤或狀態回復時呼叫，解除送出鎖定。
+        /// </summary>
+        public void ResetSubmitState() => SetSubmitting(false);
+
         public override void Update(GameTime gameTime)
         {
+            // 逾時保護：伺服器沒有回應時解除鎖定，否則按鈕會永久按不下去
+            if (_isSubmitting)
+            {
+                _submitElapsedSeconds += gameTime.ElapsedGameTime.TotalSeconds;
+                if (_submitElapsedSeconds >= SubmitTimeoutSeconds)
+                {
+                    SetSubmitting(false);
+                }
+            }
+
             // Handle Tab key to switch focus between input fields
             if (MuGame.Instance.Keyboard.IsKeyDown(Keys.Tab) && MuGame.Instance.PrevKeyboard.IsKeyUp(Keys.Tab))
             {
@@ -206,6 +242,12 @@ namespace Client.Main.Controls.UI.Login
 #if IOS
             Console.WriteLine($"[MuIos.Login] AttemptLogin user='{_userInput.Value}' passwordLength={_passwordInput.Value?.Length ?? 0}");
 #endif
+            if (_isSubmitting)
+            {
+                return;
+            }
+
+            SetSubmitting(true);
             MuGame.PersistLoginCredentials(_userInput.Value, _passwordInput.Value);
             // Blur fields to hide soft keyboard (especially on mobile) after submitting.
             _userInput.OnBlur();

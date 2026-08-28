@@ -66,6 +66,12 @@ namespace Client.Main.Controls.Terrain
                                 entry.Target[entry.TextureIndex] = texture;
                                 _loadedCount++;
                             }
+                            else
+                            {
+                                // 回傳 null 不會拋例外，原本會被靜默跳過，
+                                // 只從「Uploaded 14/38」這種數字看不出是哪些檔案有問題。
+                                Console.WriteLine($"[TerrainLoader] NULL texture {entry.TextureIndex} '{entry.Path}'");
+                            }
                         }
                         catch (Exception ex)
                         {

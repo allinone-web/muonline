@@ -554,6 +554,13 @@ namespace Client.Main.Objects
                 InvalidateMeshRenderPlan();
             }
 
+            // 診斷：沒有貼圖的網格會被直接跳過不繪製（角色缺腿、NPC 只剩頭都是這樣來的）。
+            // 非延遲載入時仍拿不到貼圖，才是真的失敗，值得記錄。
+            if (!allowLazyLoad && resolvedTexture == null)
+            {
+                LogMissingMeshTextureOnce(texturePath);
+            }
+
             bool needsMetadataRefresh = allowLazyLoad || ms.Script == null || ms.Data == null;
             if (!needsMetadataRefresh)
                 return ms.Texture != null;
@@ -699,5 +706,19 @@ namespace Client.Main.Objects
 
             ReleaseFastMeshBatchBuffers();
         }
-    }
+    
+        // 同一個貼圖路徑只記錄一次，避免每幀刷屏
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _reportedMissingTextures = new();
+
+        private static void LogMissingMeshTextureOnce(string texturePath)
+        {
+            if (string.IsNullOrEmpty(texturePath))
+                return;
+
+            if (_reportedMissingTextures.TryAdd(texturePath, 0))
+            {
+                Console.WriteLine($"[ModelObject] MESH TEXTURE MISSING '{texturePath}' -> mesh will not be drawn");
+            }
+        }
+}
 }
