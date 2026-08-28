@@ -1554,8 +1554,12 @@ namespace Client.Main
                 UiTouchPosition = virtualTouchPos;
                 UiMousePosition = virtualTouchPos; // Mouse follows finger
 
-                // Touch as left mouse button
-                var leftButtonState = (touch.State == TouchLocationState.Pressed || touch.State == TouchLocationState.Moved)
+                // 單指才對映成滑鼠左鍵。兩指以上是鏡頭手勢（縮放／旋轉，見
+                // MainPlayerCameraController.UpdateTouchGestures），此時若仍送出左鍵，
+                // 縮放的同時角色會被指令走到手指位置。
+                bool singleFingerInput = Touch.Count == 1;
+                var leftButtonState = (singleFingerInput
+                        && (touch.State == TouchLocationState.Pressed || touch.State == TouchLocationState.Moved))
                     ? Microsoft.Xna.Framework.Input.ButtonState.Pressed
                     : Microsoft.Xna.Framework.Input.ButtonState.Released;
 
