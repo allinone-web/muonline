@@ -603,6 +603,12 @@ namespace Client.Main.Scenes
             if (hero == null)
                 return;
 
+            // 手機改用虛擬搖桿操控移動。若同時保留點擊移動，
+            // 每次點技能按鈕或 UI 空白處都會讓角色跑掉，兩套操作互相打架。
+            // 攻擊時為了接近目標而移動（force）仍然保留。
+            if (GameScene.UseVirtualJoystick && !force)
+                return;
+
             if (!force && (hero.IsMoving || hero.MovementIntent))
                 return;
 

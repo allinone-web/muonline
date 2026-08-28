@@ -90,6 +90,12 @@ namespace Client.Main.Scenes
         // Performance optimization fields - track object IDs for O(1) lookups
         // ───────────────────────── Properties ─────────────────────────
         public HeroObject Hero => _hero;
+
+        // 手機用的虛擬搖桿，取代點擊移動（見 UpdateVirtualJoystick）
+        private VirtualJoystickControl _virtualJoystick;
+
+        /// <summary>搖桿是否啟用 —— 只有觸控平台需要。</summary>
+        public static bool UseVirtualJoystick => OperatingSystem.IsIOS() || OperatingSystem.IsAndroid();
         public ChatLogWindow ChatLog => _chatLog;
         public InventoryControl InventoryControl => _inventoryControl;
         public TradeControl TradeControl => TradeControl.Instance;
@@ -233,6 +239,12 @@ namespace Client.Main.Scenes
             Controls.Add(BloodCastleEnterControl.Instance);
             Controls.Add(BloodCastleTimeControl.Instance);
             Controls.Add(BloodCastleResultControl.Instance);
+
+            if (UseVirtualJoystick)
+            {
+                _virtualJoystick = new VirtualJoystickControl();
+                Controls.Add(_virtualJoystick);
+            }
 
             _mapListControl = new MapListControl { Visible = false };
             _chatLog = new ChatLogWindow
@@ -679,8 +691,61 @@ namespace Client.Main.Scenes
         }
 
         // ─────────────────────────── Update Loop ───────────────────────────
+        /// <summary>
+        /// 把搖桿方向換算成移動指令。
+        ///
+        /// MU 的協議是「送一條路徑」而不是「送方向」，所以這裡不改協議：
+        /// 取角色前方數格、位於搖桿方向上的格子作為目標，走既有的 MoveTo。
+        /// 螢幕方向要先轉成世界方向 —— 鏡頭是等角視角且可旋轉，
+        /// 直接把螢幕向量當世界向量會導致走的方向和手指不一致。
+        /// </summary>
+        private void UpdateVirtualJoystick(GameTime gameTime)
+        {
+            if (_virtualJoystick == null || _hero == null)
+                return;
+
+            if (!_virtualJoystick.ShouldIssueMove(gameTime, out var screenDirection))
+                return;
+
+            var worldDirection = ScreenDirectionToWorld(screenDirection);
+            if (worldDirection == Vector2.Zero)
+                return;
+
+            var target = _hero.Location + worldDirection * VirtualJoystickControl.TileDistance;
+            var tile = new Vector2(MathF.Round(target.X), MathF.Round(target.Y));
+
+            // 搖桿是直接操控，不要繞路 —— 用直線路徑，撞到障礙就停住，
+            // 這比自動繞遠路更符合手感。
+            _hero.MoveTo(tile, sendToServer: true, usePathfinding: false);
+        }
+
+        /// <summary>
+        /// 螢幕方向轉世界方向。鏡頭 yaw 會旋轉整個視角，
+        /// 必須把螢幕向量反向旋轉回世界座標，玩家才會覺得「往哪推就往哪走」。
+        /// </summary>
+        private static Vector2 ScreenDirectionToWorld(Vector2 screenDirection)
+        {
+            if (screenDirection == Vector2.Zero)
+                return Vector2.Zero;
+
+            // 螢幕 Y 向下，世界 Y 向上
+            var dir = new Vector2(screenDirection.X, -screenDirection.Y);
+
+            float yaw = Constants.DEFAULT_CAMERA_YAW;
+            float cos = MathF.Cos(-yaw);
+            float sin = MathF.Sin(-yaw);
+
+            var rotated = new Vector2(
+                dir.X * cos - dir.Y * sin,
+                dir.X * sin + dir.Y * cos);
+
+            return rotated == Vector2.Zero ? Vector2.Zero : Vector2.Normalize(rotated);
+        }
+
         public override void Update(GameTime gameTime)
         {
+            UpdateVirtualJoystick(gameTime);
+
             if (Status != GameControlStatus.Ready)
             {
                 _mapController?.UpdateLoading(gameTime);
