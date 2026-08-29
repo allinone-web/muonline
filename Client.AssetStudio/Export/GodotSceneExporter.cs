@@ -33,7 +33,10 @@ namespace Client.AssetStudio.Export;
 public static class GodotSceneExporter
 {
     public sealed record Options(
-        int MaxObjectTypes = 64,
+        // 預設要蓋滿：一張圖大約 110 種物件，全部匯出只要 8 秒、11 MB。
+        // 之前預設 64，結果地圖上有 92 個物件因為型別沒匯出而缺席 ——
+        // 而那在畫面上看起來就是「這張圖跟遊戲裡不太一樣」，很難查。
+        int MaxObjectTypes = 512,
         bool ExportObjects = true,
         float SampleFps = GltfImporterDefaults.SampleFps);
 
@@ -152,8 +155,8 @@ public static class GodotSceneExporter
     {
         var models = new Dictionary<short, string>();
 
-        // 先export最常出現的型別。原型只是要看畫面，全部匯出既慢又沒有必要 ——
-        // 遮罩測試需要的是「有幾棟房子擋在角色前面」，不是 107 種樹都到齊。
+        // 依出現次數排序後取前 N 種。預設的 N 大到蓋滿整張圖；
+        // 調小是「我只想快速看一眼」時的選項，而不是常態。
         var byFrequency = placements
             .GroupBy(p => p.Type)
             .OrderByDescending(g => g.Count())
