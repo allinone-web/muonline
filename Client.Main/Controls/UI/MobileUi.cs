@@ -304,6 +304,56 @@ namespace Client.Main.Controls.UI
         }
 
         /// <summary>
+        /// 捲軸：一條底槽 + 一塊滑塊，都是純色矩形。
+        ///
+        /// 原本用的是三張 9-slice 貼圖（上端帽、可平鋪的中段、下端帽）加一張滑塊，
+        /// 光是中段就得跑一個迴圈逐段貼。在手機上那三張圖總共佔不到 12 px 寬，
+        /// 誰也看不出接縫在哪 —— 換成兩個矩形，順便省掉四張貼圖。
+        /// </summary>
+        public static void DrawScrollbar(SpriteBatch sb, Rectangle track, Rectangle thumb, bool dragging)
+        {
+            var pixel = Controllers.GraphicsManager.Instance?.Pixel;
+            if (pixel == null)
+                return;
+
+            sb.Draw(pixel, track, Track * 0.35f);
+
+            if (!thumb.IsEmpty)
+            {
+                // 太短的滑塊抓不到。給一個最小高度，代價是滑動範圍略微失真，
+                // 但「抓得到」比「長度精準」重要得多。
+                if (thumb.Height < 28)
+                {
+                    int grow = 28 - thumb.Height;
+                    thumb.Y = Math.Max(track.Y, thumb.Y - grow / 2);
+                    thumb.Height = Math.Min(track.Height, 28);
+                    if (thumb.Bottom > track.Bottom)
+                        thumb.Y = track.Bottom - thumb.Height;
+                }
+
+                sb.Draw(pixel, thumb, PanelBorder * (dragging ? 0.95f : 0.6f));
+            }
+        }
+
+        /// <summary>
+        /// 右下角的縮放握把：三條短斜線。取代 newui_scrollbar_stretch.jpg。
+        /// </summary>
+        public static void DrawResizeGrip(SpriteBatch sb, Rectangle rect, bool dragging)
+        {
+            var pixel = Controllers.GraphicsManager.Instance?.Pixel;
+            if (pixel == null || rect.IsEmpty)
+                return;
+
+            var color = PanelBorder * (dragging ? 0.9f : 0.55f);
+            for (int i = 1; i <= 3; i++)
+            {
+                int inset = i * 4;
+                sb.Draw(pixel, new Rectangle(rect.Right - inset - 2, rect.Bottom - 3, inset + 2, 2), color);
+                sb.Draw(pixel, new Rectangle(rect.Right - 3, rect.Bottom - inset - 2, 2, inset + 2), color);
+            }
+        }
+
+        /// <summary>
         /// 視窗開啟時的滑入動畫。
         ///
         /// 視窗瞬間出現是最明顯的「沒做完」的感覺。位移只要 18 px、時間 0.18 秒，

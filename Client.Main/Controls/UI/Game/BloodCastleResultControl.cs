@@ -8,6 +8,7 @@ using Client.Main.Models;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
+using Client.Main.Controls.UI.Game.Common;
 
 namespace Client.Main.Controls.UI.Game
 {
@@ -21,15 +22,24 @@ namespace Client.Main.Controls.UI.Game
         private const float FONT_SCALE_TITLE = 0.50f;
         private const float FONT_SCALE_BODY = 0.38f;
 
+        /// <summary>
+        /// 這個面板的顏色。每一個值都轉發到 <see cref="ModernHudTheme"/>：
+        /// 桌面拿到的是一模一樣的數值，<b>手機拿到的是扁平化後的那一組</b>
+        /// （金色點綴變中性灰、底色三階收斂成同一個半透明深藍灰）。
+        ///
+        /// 這裡原本是十份各自寫死的複本 —— 改一次配色要改十個檔案，
+        /// 而手機的面板也就永遠跟登入畫面長得不一樣。
+        /// 值和 ModernHudTheme 不同的欄位保留原本的字面值，並在該行說明原因。
+        /// </summary>
         private static class Theme
         {
-            public static readonly Color BgDarkest = new(8, 10, 14, 252);
-            public static readonly Color BgDark = new(16, 20, 26, 250);
-            public static readonly Color BgMid = new(24, 30, 38, 248);
-            public static readonly Color BorderOuter = new(5, 6, 8, 255);
-            public static readonly Color BorderInner = new(60, 70, 85, 200);
-            public static readonly Color Accent = new(212, 175, 85);
-            public static readonly Color TextWhite = new(240, 240, 245);
+            public static readonly Color BgDarkest = ModernHudTheme.BgDarkest;
+            public static readonly Color BgDark = ModernHudTheme.BgDark;
+            public static readonly Color BgMid = ModernHudTheme.BgMid;
+            public static readonly Color BorderOuter = ModernHudTheme.BorderOuter;
+            public static readonly Color BorderInner = ModernHudTheme.BorderInner;
+            public static readonly Color Accent = ModernHudTheme.Accent;
+            public static readonly Color TextWhite = ModernHudTheme.TextWhite;
             public static readonly Color Success = new(128, 255, 128);
             public static readonly Color Failure = new(255, 128, 128);
             public static readonly Color ExpColor = new(210, 255, 210);

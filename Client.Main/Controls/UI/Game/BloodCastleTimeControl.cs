@@ -7,6 +7,7 @@ using Client.Main.Helpers;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Client.Main.Models;
+using Client.Main.Controls.UI.Game.Common;
 
 namespace Client.Main.Controls.UI.Game
 {
@@ -21,15 +22,24 @@ namespace Client.Main.Controls.UI.Game
         private const int TIME_STATE_NORMAL = 1;
         private const int TIME_STATE_URGENT = 2;
 
+        /// <summary>
+        /// 這個面板的顏色。每一個值都轉發到 <see cref="ModernHudTheme"/>：
+        /// 桌面拿到的是一模一樣的數值，<b>手機拿到的是扁平化後的那一組</b>
+        /// （金色點綴變中性灰、底色三階收斂成同一個半透明深藍灰）。
+        ///
+        /// 這裡原本是十份各自寫死的複本 —— 改一次配色要改十個檔案，
+        /// 而手機的面板也就永遠跟登入畫面長得不一樣。
+        /// 值和 ModernHudTheme 不同的欄位保留原本的字面值，並在該行說明原因。
+        /// </summary>
         private static class Theme
         {
             public static readonly Color BgDark = new(16, 20, 26, 220);
-            public static readonly Color BorderOuter = new(5, 6, 8, 255);
-            public static readonly Color BorderInner = new(60, 70, 85, 200);
-            public static readonly Color Accent = new(212, 175, 85);
+            public static readonly Color BorderOuter = ModernHudTheme.BorderOuter;
+            public static readonly Color BorderInner = ModernHudTheme.BorderInner;
+            public static readonly Color Accent = ModernHudTheme.Accent;
             public static readonly Color TextNormal = new(255, 150, 0);   // Orange
             public static readonly Color TextUrgent = new(255, 32, 32);   // Red
-            public static readonly Color TextWhite = new(240, 240, 245);
+            public static readonly Color TextWhite = ModernHudTheme.TextWhite;
         }
 
         private static BloodCastleTimeControl _instance;

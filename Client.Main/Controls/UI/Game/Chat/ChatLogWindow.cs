@@ -35,6 +35,10 @@ namespace Client.Main.Controls.UI
         private Texture2D _texScrollBottom;
         private Texture2D _texScrollThumb; // SCROLLBAR_ON
         private Texture2D _texResizeHandle; // DRAG_BTN
+        /// <summary>
+        /// 捲軸的五張貼圖。<b>手機不載</b> —— 捲軸與縮放握把改由 MobileUi 直接畫
+        /// （見 <see cref="DrawScrollbar"/>）。清單見 docs/待清理素材.md。
+        /// </summary>
         private static readonly string[] s_chatLogTexturePaths =
         {
             "Interface/newui_scrollbar_up.tga",
@@ -102,7 +106,8 @@ namespace Client.Main.Controls.UI
             UpdateLayout(); // Initial layout calculation
         }
 
-        public IEnumerable<string> GetPreloadTexturePaths() => s_chatLogTexturePaths;
+        public IEnumerable<string> GetPreloadTexturePaths()
+            => MobileUi.IsMobile ? Array.Empty<string>() : s_chatLogTexturePaths;
 
         // --- Loading Resources ---
         public override async Task Load()
@@ -112,6 +117,17 @@ namespace Client.Main.Controls.UI
 
             CalculateLineHeight();
 
+            if (!MobileUi.IsMobile)
+            {
+                await LoadScrollbarTextures();
+            }
+
+            UpdateLayout();
+            await base.Load();
+        }
+
+        private async Task LoadScrollbarTextures()
+        {
             try
             {
                 TextureLoader tl = TextureLoader.Instance;
@@ -126,9 +142,6 @@ namespace Client.Main.Controls.UI
             {
                 _texScrollTop = _texScrollMiddle = _texScrollBottom = _texScrollThumb = _texResizeHandle = GraphicsManager.Instance.Pixel;
             }
-
-            UpdateLayout();
-            await base.Load();
         }
 
         // --- Public Control Methods ---
@@ -802,6 +815,12 @@ namespace Client.Main.Controls.UI
         {
             if (_scrollBarArea.IsEmpty) return;
 
+            if (MobileUi.IsMobile)
+            {
+                MobileUi.DrawScrollbar(spriteBatch, _scrollBarArea, _scrollThumbArea, _isDraggingScrollbar);
+                return;
+            }
+
             Color barColor = Color.White; // Use textures, so white tint
             Color thumbColor = _isDraggingScrollbar ? new Color(0.7f, 0.7f, 0.7f) : Color.White;
 
@@ -845,7 +864,15 @@ namespace Client.Main.Controls.UI
 
         private void DrawResizeHandle(SpriteBatch spriteBatch)
         {
-            if (_resizeHandleArea.IsEmpty || _texResizeHandle == null) return;
+            if (_resizeHandleArea.IsEmpty) return;
+
+            if (MobileUi.IsMobile)
+            {
+                MobileUi.DrawResizeGrip(spriteBatch, _resizeHandleArea, _isDraggingResize);
+                return;
+            }
+
+            if (_texResizeHandle == null) return;
             Color handleColor = _isDraggingResize ? new Color(0.7f, 0.7f, 0.7f) : Color.White;
             spriteBatch.Draw(_texResizeHandle, _resizeHandleArea, handleColor);
         }

@@ -26,23 +26,16 @@ namespace Client.Main.Controls.UI.Game.Inventory
 {
     public class InventoryControl : UIControl, IUiTexturePreloadable
     {
-        private const string LayoutJsonResource = "Client.Main.Controls.UI.Game.Layouts.InventoryLayout.json";
-        private const string TextureRectJsonResource = "Client.Main.Controls.UI.Game.Layouts.InventoryRect.json";
-        private const string LayoutTexturePath = "Interface/GFx/NpcShop_I3.ozd";
-
-        private static readonly string[] s_inventoryTexturePaths =
-        {
-            "Interface/newui_item_box.tga",
-            "Interface/newui_item_table01(L).tga",
-            "Interface/newui_item_table01(R).tga",
-            "Interface/newui_item_table02(L).tga",
-            "Interface/newui_item_table02(R).tga",
-            "Interface/newui_item_table03(Up).tga",
-            "Interface/newui_item_table03(Dw).tga",
-            "Interface/newui_item_table03(L).tga",
-            "Interface/newui_item_table03(R).tga",
-            "Interface/newui_msgbox_back.jpg"
-        };
+        /// <summary>
+        /// 找不到道具自己的圖示時的替代圖。這是本面板<b>唯一</b>還在用的貼圖。
+        ///
+        /// 這裡原本還預載 9 張視窗外框貼圖（newui_item_table*）、一張 msgbox 底圖，
+        /// 以及 NpcShop_I3.ozd 這張圖集 —— 全部只是載進來放著：面板改成程式繪製之後
+        /// 一次都沒有被畫出來。同樣被移除的還有兩份內嵌的版面 JSON
+        /// （InventoryLayout / InventoryRect），它們解析完就沒有任何人讀。
+        /// 清單見 docs/待清理素材.md。
+        /// </summary>
+        private const string DefaultItemIconPath = "Interface/newui_item_box.tga";
 
         // ═══════════════════════════════════════════════════════════════
         // WINDOW DIMENSIONS - REDESIGNED
@@ -102,54 +95,63 @@ namespace Client.Main.Controls.UI.Game.Inventory
         // ═══════════════════════════════════════════════════════════════
         // MODERN DARK THEME
         // ═══════════════════════════════════════════════════════════════
+        /// <summary>
+        /// 這個面板的顏色。每一個值都轉發到 <see cref="ModernHudTheme"/>：
+        /// 桌面拿到的是一模一樣的數值，<b>手機拿到的是扁平化後的那一組</b>
+        /// （金色點綴變中性灰、底色三階收斂成同一個半透明深藍灰）。
+        ///
+        /// 這裡原本是十份各自寫死的複本 —— 改一次配色要改十個檔案，
+        /// 而手機的面板也就永遠跟登入畫面長得不一樣。
+        /// 值和 ModernHudTheme 不同的欄位保留原本的字面值，並在該行說明原因。
+        /// </summary>
         private static class Theme
         {
             // Background layers
-            public static readonly Color BgDarkest = new(8, 10, 14, 252);
-            public static readonly Color BgDark = new(16, 20, 26, 250);
-            public static readonly Color BgMid = new(24, 30, 38, 248);
-            public static readonly Color BgLight = new(35, 42, 52, 245);
-            public static readonly Color BgLighter = new(48, 56, 68, 240);
+            public static readonly Color BgDarkest = ModernHudTheme.BgDarkest;
+            public static readonly Color BgDark = ModernHudTheme.BgDark;
+            public static readonly Color BgMid = ModernHudTheme.BgMid;
+            public static readonly Color BgLight = ModernHudTheme.BgLight;
+            public static readonly Color BgLighter = ModernHudTheme.BgLighter;
 
             // Accent - Warm Gold
-            public static readonly Color Accent = new(212, 175, 85);
-            public static readonly Color AccentBright = new(255, 215, 120);
-            public static readonly Color AccentDim = new(140, 115, 55);
-            public static readonly Color AccentGlow = new(255, 200, 80, 40);
+            public static readonly Color Accent = ModernHudTheme.Accent;
+            public static readonly Color AccentBright = ModernHudTheme.AccentBright;
+            public static readonly Color AccentDim = ModernHudTheme.AccentDim;
+            public static readonly Color AccentGlow = ModernHudTheme.AccentGlow;
 
             // Secondary accent - Cool Blue
-            public static readonly Color Secondary = new(90, 140, 200);
-            public static readonly Color SecondaryBright = new(130, 180, 240);
-            public static readonly Color SecondaryDim = new(50, 80, 120);
+            public static readonly Color Secondary = ModernHudTheme.Secondary;
+            public static readonly Color SecondaryBright = ModernHudTheme.SecondaryBright;
+            public static readonly Color SecondaryDim = ModernHudTheme.SecondaryDim;
 
             // Borders
-            public static readonly Color BorderOuter = new(5, 6, 8, 255);
-            public static readonly Color BorderInner = new(60, 70, 85, 200);
-            public static readonly Color BorderHighlight = new(100, 110, 130, 120);
+            public static readonly Color BorderOuter = ModernHudTheme.BorderOuter;
+            public static readonly Color BorderInner = ModernHudTheme.BorderInner;
+            public static readonly Color BorderHighlight = ModernHudTheme.BorderHighlight;
 
             // Slots
-            public static readonly Color SlotBg = new(12, 15, 20, 240);
-            public static readonly Color SlotBorder = new(45, 52, 65, 180);
-            public static readonly Color SlotHover = new(70, 85, 110, 150);
-            public static readonly Color SlotSelected = new(212, 175, 85, 100);
+            public static readonly Color SlotBg = ModernHudTheme.SlotBg;
+            public static readonly Color SlotBorder = ModernHudTheme.SlotBorder;
+            public static readonly Color SlotHover = ModernHudTheme.SlotHover;
+            public static readonly Color SlotSelected = ModernHudTheme.SlotSelected;
 
             // Item rarity glow
-            public static readonly Color GlowNormal = new(150, 150, 150, 25);
-            public static readonly Color GlowMagic = new(100, 150, 255, 50);
-            public static readonly Color GlowExcellent = new(120, 255, 120, 60);
-            public static readonly Color GlowAncient = new(80, 200, 255, 70);
-            public static readonly Color GlowLegendary = new(255, 180, 80, 70);
+            public static readonly Color GlowNormal = ModernHudTheme.GlowNormal;
+            public static readonly Color GlowMagic = ModernHudTheme.GlowMagic;
+            public static readonly Color GlowExcellent = ModernHudTheme.GlowExcellent;
+            public static readonly Color GlowAncient = ModernHudTheme.GlowAncient;
+            public static readonly Color GlowLegendary = ModernHudTheme.GlowLegendary;
 
             // Text
-            public static readonly Color TextWhite = new(240, 240, 245);
-            public static readonly Color TextGold = new(255, 220, 130);
-            public static readonly Color TextGray = new(160, 165, 175);
-            public static readonly Color TextDark = new(100, 105, 115);
+            public static readonly Color TextWhite = ModernHudTheme.TextWhite;
+            public static readonly Color TextGold = ModernHudTheme.TextGold;
+            public static readonly Color TextGray = ModernHudTheme.TextGray;
+            public static readonly Color TextDark = ModernHudTheme.TextDark;
 
             // Status colors
-            public static readonly Color Success = new(80, 200, 120);
-            public static readonly Color Warning = new(240, 180, 60);
-            public static readonly Color Danger = new(220, 80, 80);
+            public static readonly Color Success = ModernHudTheme.Success;
+            public static readonly Color Warning = ModernHudTheme.Warning;
+            public static readonly Color Danger = ModernHudTheme.Danger;
         }
 
         private static readonly ItemGlowPalette GlowPalette = new(
@@ -158,25 +160,6 @@ namespace Client.Main.Controls.UI.Game.Inventory
             Theme.GlowExcellent,
             Theme.GlowAncient,
             Theme.GlowLegendary);
-
-        private readonly struct LayoutInfo
-        {
-            public string Name { get; init; }
-            public float ScreenX { get; init; }
-            public float ScreenY { get; init; }
-            public int Width { get; init; }
-            public int Height { get; init; }
-            public int Z { get; init; }
-        }
-
-        private readonly struct TextureRectData
-        {
-            public string Name { get; init; }
-            public int X { get; init; }
-            public int Y { get; init; }
-            public int Width { get; init; }
-            public int Height { get; init; }
-        }
 
         private sealed class EquipSlotLayout
         {
@@ -221,18 +204,6 @@ namespace Client.Main.Controls.UI.Game.Inventory
             public bool Visible { get; set; } = true;
         }
 
-        private Texture2D _layoutTexture;
-        private Texture2D _slotTexture;
-        private Texture2D _texSquare;
-        private Texture2D _texTableTopLeft;
-        private Texture2D _texTableTopRight;
-        private Texture2D _texTableBottomLeft;
-        private Texture2D _texTableBottomRight;
-        private Texture2D _texTableTopPixel;
-        private Texture2D _texTableBottomPixel;
-        private Texture2D _texTableLeftPixel;
-        private Texture2D _texTableRightPixel;
-        private Texture2D _texBackground;
 
         private RenderTarget2D _staticSurface;
         private bool _staticSurfaceDirty = true;
@@ -290,8 +261,6 @@ namespace Client.Main.Controls.UI.Game.Inventory
 
         public readonly PickedItemRenderer _pickedItemRenderer;
 
-        private readonly List<LayoutInfo> _layoutInfos = new();
-        private readonly Dictionary<string, TextureRectData> _textureRectLookup = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<byte, EquipSlotLayout> _equipSlots = new();
         private Vector2 _layoutScale = Vector2.One;
 
@@ -305,8 +274,6 @@ namespace Client.Main.Controls.UI.Game.Inventory
             _networkManager = networkManager;
             var factory = loggerFactory ?? MuGame.AppLoggerFactory;
             _logger = factory?.CreateLogger<InventoryControl>();
-
-            LoadLayoutDefinitions();
 
             // 尺寸必須先決定 —— BuildLayoutMetrics 的每一欄都是從 WINDOW_WIDTH 推算的。
             // 順序反過來的話，版面會用預設的 396 去算，最右邊的資訊欄寬度剛好變成 0，
@@ -343,7 +310,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
         }
 
         public IEnumerable<string> GetPreloadTexturePaths()
-            => s_inventoryTexturePaths.Append(LayoutTexturePath);
+            => new[] { DefaultItemIconPath };
 
         public long ZenAmount
         {
@@ -362,24 +329,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
         {
             await base.Load();
 
-            var tl = TextureLoader.Instance;
-
-            var textureLoadTasks = s_inventoryTexturePaths.Select(path => tl.PrepareAndGetTexture(path)).ToList();
-            var loadedTextures = await Task.WhenAll(textureLoadTasks);
-
-            _texSquare = loadedTextures.ElementAtOrDefault(0);
-            _texTableTopLeft = loadedTextures.ElementAtOrDefault(1);
-            _texTableTopRight = loadedTextures.ElementAtOrDefault(2);
-            _texTableBottomLeft = loadedTextures.ElementAtOrDefault(3);
-            _texTableBottomRight = loadedTextures.ElementAtOrDefault(4);
-            _texTableTopPixel = loadedTextures.ElementAtOrDefault(5);
-            _texTableBottomPixel = loadedTextures.ElementAtOrDefault(6);
-            _texTableLeftPixel = loadedTextures.ElementAtOrDefault(7);
-            _texTableRightPixel = loadedTextures.ElementAtOrDefault(8);
-            _texBackground = loadedTextures.ElementAtOrDefault(9);
-
-            _layoutTexture = await tl.PrepareAndGetTexture(LayoutTexturePath);
-            _slotTexture = _layoutTexture;
+            await TextureLoader.Instance.PrepareAndGetTexture(DefaultItemIconPath);
 
             _font = GraphicsManager.Instance.Font;
 
@@ -809,47 +759,6 @@ namespace Client.Main.Controls.UI.Game.Inventory
             }
         }
 
-        private void LoadLayoutDefinitions()
-        {
-            try
-            {
-                var layoutData = LoadEmbeddedJson<List<LayoutInfo>>(LayoutJsonResource);
-                if (layoutData != null)
-                {
-                    _layoutInfos.Clear();
-                    _layoutInfos.AddRange(layoutData.OrderBy(info => info.Z));
-                }
-
-                var rectData = LoadEmbeddedJson<List<TextureRectData>>(TextureRectJsonResource);
-                if (rectData != null)
-                {
-                    _textureRectLookup.Clear();
-                    foreach (var rect in rectData)
-                    {
-                        _textureRectLookup[rect.Name] = rect;
-                    }
-                }
-
-                if (_layoutInfos.Count == 0)
-                {
-                    _layoutInfos.Add(new LayoutInfo
-                    {
-                        Name = "Board",
-                        ScreenX = 0,
-                        ScreenY = 0,
-                        Width = WINDOW_WIDTH,
-                        Height = WINDOW_HEIGHT,
-                        Z = 0
-                    });
-                }
-
-                RecalculateLayoutScale();
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "Failed to load inventory layout definitions.");
-            }
-        }
 
         private void RecalculateLayoutScale()
         {
@@ -1019,16 +928,6 @@ namespace Client.Main.Controls.UI.Game.Inventory
             _equipSlots[slot] = new EquipSlotLayout(slot, rect, size, ghostLabel, accentRed);
         }
 
-        private static T LoadEmbeddedJson<T>(string resourceName)
-        {
-            var assembly = Assembly.GetExecutingAssembly();
-            using Stream stream = assembly.GetManifestResourceStream(resourceName)
-                ?? throw new FileNotFoundException($"Resource not found: {resourceName}. Available: {string.Join(", ", assembly.GetManifestResourceNames())}");
-            using var reader = new StreamReader(stream);
-            string json = reader.ReadToEnd();
-            return System.Text.Json.JsonSerializer.Deserialize<T>(json);
-        }
-
         private void InvalidateStaticSurface()
         {
             _staticSurfaceDirty = true;
@@ -1073,6 +972,15 @@ namespace Client.Main.Controls.UI.Game.Inventory
             var pixel = GraphicsManager.Instance.Pixel;
             if (pixel == null) return;
 
+            if (s_mobile)
+            {
+                // 和登入、選伺服器、登入表單同一個面板：半透明底 + 一條細框 + 標題列。
+                // 桌面那套（外框 + 漸層 + 內框高光 + 四角托架）在手機上只是把
+                // 一個面板拆成五條互相干擾的線。
+                MobileUi.DrawPanel(spriteBatch, rect, HEADER_HEIGHT);
+                return;
+            }
+
             // Outer border
             spriteBatch.Draw(pixel, rect, Theme.BorderOuter);
 
@@ -1104,6 +1012,18 @@ namespace Client.Main.Controls.UI.Game.Inventory
 
             float scale = 0.36f;
             Vector2 textSize = _font.MeasureString(title) * scale;
+
+            if (s_mobile)
+            {
+                // 只留字，靠左。原本左右各一條漸層線加一個 3px 方點 ——
+                // 那是在替一個兩個字的標籤加四樣裝飾。
+                var flatPos = new Vector2(x, y);
+                spriteBatch.DrawString(_font, title, flatPos + Vector2.One, Color.Black * 0.55f,
+                                       0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+                spriteBatch.DrawString(_font, title, flatPos, MobileUi.TextDim,
+                                       0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+                return;
+            }
 
             // Decorative lines on sides
             int lineY = y + (int)(textSize.Y / 2);
@@ -1177,6 +1097,26 @@ namespace Client.Main.Controls.UI.Game.Inventory
             var pixel = GraphicsManager.Instance.Pixel;
             if (pixel == null) return;
 
+            if (s_mobile)
+            {
+                // 標題列本身已經由 DrawWindowBackground 畫好了（MobileUi.DrawPanel 的 titleHeight），
+                // 這裡只放字。沒有金線、沒有文字後面的光暈、沒有兩段漸層分隔線 ——
+                // 那些在手機上加起來就是使用者說的「很繁瑣」。
+                if (_font != null)
+                {
+                    const string title = "INVENTORY";
+                    const float scale = 0.5f;
+                    Vector2 size = _font.MeasureString(title) * scale;
+                    var pos = new Vector2((WINDOW_WIDTH - size.X) / 2f, (HEADER_HEIGHT - size.Y) / 2f);
+                    spriteBatch.DrawString(_font, title, pos + Vector2.One, Color.Black * 0.6f,
+                                           0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+                    spriteBatch.DrawString(_font, title, pos, MobileUi.TextPrimary,
+                                           0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+                }
+
+                return;
+            }
+
             // Header background
             var headerBg = new Rectangle(8, 6, WINDOW_WIDTH - 16, HEADER_HEIGHT - 8);
             DrawPanel(spriteBatch, headerBg, Theme.BgMid);
@@ -1232,6 +1172,18 @@ namespace Client.Main.Controls.UI.Game.Inventory
             spriteBatch.Draw(pixel, silhouetteRect, Theme.BgDarkest * 0.5f);
 
             // Draw vertical divider lines
+            // 手機不畫：paperdoll 的分組已經靠 silhouetteRect 的深底表達了，
+            // 再加兩條半透明豎線只是多兩條線。
+            if (s_mobile)
+            {
+                foreach (var mobileLayout in _equipSlots.Values)
+                {
+                    DrawModernEquipSlot(spriteBatch, mobileLayout);
+                }
+
+                return;
+            }
+
             int dividerX1 = silhouetteX - 30;
             int dividerX2 = silhouetteX + silhouetteWidth + 30;
             UiDrawHelper.DrawVerticalGradient(spriteBatch,
@@ -1419,7 +1371,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
             _bmdPreviewCache.Clear();
 
             var characterItems = _network_manager_getitems();
-            const string defaultItemIconTexturePath = "Interface/newui_item_box.tga";
+            const string defaultItemIconTexturePath = DefaultItemIconPath;
 
             foreach (var entry in characterItems.Where(e => e.Key <= 11))
             {

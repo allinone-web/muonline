@@ -11,6 +11,15 @@ namespace Client.Main.Controls.UI.Common
             var pixel = GraphicsManager.Instance.Pixel;
             if (pixel == null) return;
 
+            // 頭尾同色就沒有漸層可言，畫一次就好。
+            // 手機的 ModernHudTheme 把底色三階收斂成同一個值，所有面板都會走這條路 ——
+            // 每個面板省掉 63 次繪製。
+            if (top == bottom)
+            {
+                spriteBatch.Draw(pixel, rect, top);
+                return;
+            }
+
             int steps = Math.Min(rect.Height, Math.Max(1, maxSteps));
             int stepHeight = Math.Max(1, rect.Height / steps);
 
@@ -35,6 +44,12 @@ namespace Client.Main.Controls.UI.Common
             var pixel = GraphicsManager.Instance.Pixel;
             if (pixel == null) return;
 
+            if (left == right)
+            {
+                spriteBatch.Draw(pixel, rect, left);
+                return;
+            }
+
             int steps = Math.Min(rect.Width, Math.Max(1, maxSteps));
             int stepWidth = Math.Max(1, rect.Width / steps);
 
@@ -54,8 +69,17 @@ namespace Client.Main.Controls.UI.Common
             }
         }
 
+        /// <summary>
+        /// 四個角落的托架（每角兩條短線，共 8 個矩形）。
+        ///
+        /// 手機不畫。托架在 1280 寬的桌面視窗上是點綴，在手機面板上就只是
+        /// 一堆湊近了才看得清楚的碎線 —— 而且每個面板固定多 8 次繪製。
+        /// 手機的面板語言是「一塊半透明底 + 一條細框」，見 MobileUi.DrawPanel。
+        /// </summary>
         public static void DrawCornerAccents(SpriteBatch spriteBatch, Rectangle rect, Color color, int size = 12, int thickness = 2)
         {
+            if (MobileUi.IsMobile) return;
+
             var pixel = GraphicsManager.Instance.Pixel;
             if (pixel == null) return;
 

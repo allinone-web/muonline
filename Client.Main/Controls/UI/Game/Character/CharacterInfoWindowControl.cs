@@ -437,21 +437,36 @@ namespace Client.Main.Controls.UI.Game.Character
             }
 
             Rectangle window = new(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
-            spriteBatch.Draw(pixel, window, ModernHudTheme.BorderOuter);
-            UiDrawHelper.DrawVerticalGradient(
-                spriteBatch,
-                new Rectangle(2, 2, WINDOW_WIDTH - 4, WINDOW_HEIGHT - 4),
-                ModernHudTheme.BgDark,
-                ModernHudTheme.BgDarkest);
-            UiDrawHelper.DrawCornerAccents(spriteBatch, window, ModernHudTheme.Accent * 0.4f);
 
-            DrawModernPanel(spriteBatch, new Rectangle(8, 6, WINDOW_WIDTH - 16, 40), ModernHudTheme.BgMid, true);
-            spriteBatch.Draw(pixel, new Rectangle(20, 8, WINDOW_WIDTH - 40, 2), ModernHudTheme.Accent * 0.8f);
-            UiDrawHelper.DrawHorizontalGradient(spriteBatch, new Rectangle(20, 47, 120, 1), Color.Transparent, ModernHudTheme.BorderInner);
-            UiDrawHelper.DrawHorizontalGradient(spriteBatch, new Rectangle(140, 47, 120, 1), ModernHudTheme.BorderInner, Color.Transparent);
+            if (MobileUi.IsMobile)
+            {
+                // 和登入、選伺服器、背包同一個面板。標題列由 DrawPanel 一起畫掉，
+                // 原本那條金色橫槓與兩段漸層底線就不需要了。
+                MobileUi.DrawPanel(spriteBatch, window, 46);
+            }
+            else
+            {
+                spriteBatch.Draw(pixel, window, ModernHudTheme.BorderOuter);
+                UiDrawHelper.DrawVerticalGradient(
+                    spriteBatch,
+                    new Rectangle(2, 2, WINDOW_WIDTH - 4, WINDOW_HEIGHT - 4),
+                    ModernHudTheme.BgDark,
+                    ModernHudTheme.BgDarkest);
+                UiDrawHelper.DrawCornerAccents(spriteBatch, window, ModernHudTheme.Accent * 0.4f);
+
+                DrawModernPanel(spriteBatch, new Rectangle(8, 6, WINDOW_WIDTH - 16, 40), ModernHudTheme.BgMid, true);
+                spriteBatch.Draw(pixel, new Rectangle(20, 8, WINDOW_WIDTH - 40, 2), ModernHudTheme.Accent * 0.8f);
+                UiDrawHelper.DrawHorizontalGradient(spriteBatch, new Rectangle(20, 47, 120, 1), Color.Transparent, ModernHudTheme.BorderInner);
+                UiDrawHelper.DrawHorizontalGradient(spriteBatch, new Rectangle(140, 47, 120, 1), ModernHudTheme.BorderInner, Color.Transparent);
+            }
 
             DrawModernPanel(spriteBatch, new Rectangle(14, 53, WINDOW_WIDTH - 28, 78), ModernHudTheme.BgMid);
-            spriteBatch.Draw(pixel, new Rectangle(18, 58, 2, 68), ModernHudTheme.Secondary * 0.65f);
+
+            // 頭像區左側那條藍色豎槓：手機不畫。它是唯一一處把顏色用在裝飾上的地方。
+            if (!MobileUi.IsMobile)
+            {
+                spriteBatch.Draw(pixel, new Rectangle(18, 58, 2, 68), ModernHudTheme.Secondary * 0.65f);
+            }
 
             for (int i = 0; i < BTN_STAT_COUNT; i++)
             {
@@ -459,8 +474,14 @@ namespace Client.Main.Controls.UI.Game.Character
                 int rowBottom = i + 1 < BTN_STAT_COUNT ? (int)s_statRowY[i + 1] - 8 : 466;
                 Rectangle row = new(14, rowTop, WINDOW_WIDTH - 28, Math.Max(48, rowBottom - rowTop));
                 DrawModernPanel(spriteBatch, row, ModernHudTheme.SlotBg);
-                spriteBatch.Draw(pixel, new Rectangle(row.X + 4, row.Y + 5, 2, row.Height - 10), ModernHudTheme.AccentDim * 0.8f);
-                spriteBatch.Draw(pixel, new Rectangle(row.X + 10, (int)s_statRowY[i] + 13, row.Width - 20, 1), ModernHudTheme.BorderInner * 0.35f);
+
+                // 每一列原本再加一條左側豎槓與一條中線。列本身已經有底色和外框，
+                // 六列就是多出十二條線 —— 手機只留列。
+                if (!MobileUi.IsMobile)
+                {
+                    spriteBatch.Draw(pixel, new Rectangle(row.X + 4, row.Y + 5, 2, row.Height - 10), ModernHudTheme.AccentDim * 0.8f);
+                    spriteBatch.Draw(pixel, new Rectangle(row.X + 10, (int)s_statRowY[i] + 13, row.Width - 20, 1), ModernHudTheme.BorderInner * 0.35f);
+                }
             }
 
             DrawModernPanel(spriteBatch, new Rectangle(14, 472, WINDOW_WIDTH - 28, 38), ModernHudTheme.BgMid);

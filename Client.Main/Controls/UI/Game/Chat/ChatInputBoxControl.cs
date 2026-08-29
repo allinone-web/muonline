@@ -51,6 +51,14 @@ namespace Client.Main.Controls.UI
             "Interface/newui_chat_btn_alpha.jpg"
         };
 
+        /// <summary>
+        /// 聊天框底圖。<b>手機不載</b> —— 改用 MobileUi 自己畫的半透明面板，
+        /// 和登入、背包、角色面板同一套。清單見 docs/待清理素材.md。
+        ///
+        /// 上面那兩組（頻道分頁、開關按鈕）目前手機仍在用貼圖。它們是 27x27 的
+        /// 桌面尺寸小圖示，換掉等於要重新設計十個圖示 —— 併到之後的手機聊天
+        /// 介面改版一起做，不在這次的面板統一裡。
+        /// </summary>
         private static readonly string[] s_baseChatTextures =
         {
             "Interface/newui_chat_back.jpg"
@@ -112,9 +120,12 @@ namespace Client.Main.Controls.UI
         // Methods
         public IEnumerable<string> GetPreloadTexturePaths()
         {
-            foreach (var texture in s_baseChatTextures)
+            if (!MobileUi.IsMobile)
             {
-                yield return texture;
+                foreach (var texture in s_baseChatTextures)
+                {
+                    yield return texture;
+                }
             }
 
             foreach (var texture in s_typeButtonTextures)
@@ -131,14 +142,17 @@ namespace Client.Main.Controls.UI
         public override async Task Load()
         {
             // 1. Background
-            _background = new TextureControl
+            if (!MobileUi.IsMobile)
             {
-                TexturePath = "Interface/newui_chat_back.jpg",
-                BlendState = BlendState.AlphaBlend, // Assuming JPG might need alpha blend if it has a transparency layer, otherwise Opaque.
-                ViewSize = ViewSize,
-                AutoViewSize = false
-            };
-            Controls.Add(_background);
+                _background = new TextureControl
+                {
+                    TexturePath = "Interface/newui_chat_back.jpg",
+                    BlendState = BlendState.AlphaBlend, // Assuming JPG might need alpha blend if it has a transparency layer, otherwise Opaque.
+                    ViewSize = ViewSize,
+                    AutoViewSize = false
+                };
+                Controls.Add(_background);
+            }
 
             // 2. Text Input Fields
             _chatInput = TextFieldControl.Create();
@@ -684,9 +698,16 @@ namespace Client.Main.Controls.UI
             if (!Visible)
                 return;
 
-            base.Draw(gameTime);
-
             var sb = GraphicsManager.Instance.Sprite;
+
+            // 手機沒有 _background 這個子控制項，底自己畫。
+            // 必須畫在 base.Draw 之前 —— 子控制項（輸入框、按鈕）要蓋在底上面。
+            if (MobileUi.IsMobile && sb != null)
+            {
+                MobileUi.DrawPanel(sb, DisplayRectangle);
+            }
+
+            base.Draw(gameTime);
 
             for (int i = 0; i < _typeButtons.Length; i++)
             {

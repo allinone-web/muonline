@@ -51,46 +51,55 @@ namespace Client.Main.Controls.UI.Game
         // ═══════════════════════════════════════════════════════════════
         // MODERN DARK THEME (muonline-ui-design skill)
         // ═══════════════════════════════════════════════════════════════
+        /// <summary>
+        /// 這個面板的顏色。每一個值都轉發到 <see cref="ModernHudTheme"/>：
+        /// 桌面拿到的是一模一樣的數值，<b>手機拿到的是扁平化後的那一組</b>
+        /// （金色點綴變中性灰、底色三階收斂成同一個半透明深藍灰）。
+        ///
+        /// 這裡原本是十份各自寫死的複本 —— 改一次配色要改十個檔案，
+        /// 而手機的面板也就永遠跟登入畫面長得不一樣。
+        /// 值和 ModernHudTheme 不同的欄位保留原本的字面值，並在該行說明原因。
+        /// </summary>
         private static class Theme
         {
-            public static readonly Color BgDarkest = new(8, 10, 14, 252);
-            public static readonly Color BgDark = new(16, 20, 26, 250);
-            public static readonly Color BgMid = new(24, 30, 38, 248);
-            public static readonly Color BgLight = new(35, 42, 52, 245);
-            public static readonly Color BgLighter = new(48, 56, 68, 240);
+            public static readonly Color BgDarkest = ModernHudTheme.BgDarkest;
+            public static readonly Color BgDark = ModernHudTheme.BgDark;
+            public static readonly Color BgMid = ModernHudTheme.BgMid;
+            public static readonly Color BgLight = ModernHudTheme.BgLight;
+            public static readonly Color BgLighter = ModernHudTheme.BgLighter;
 
-            public static readonly Color Accent = new(212, 175, 85);
-            public static readonly Color AccentBright = new(255, 215, 120);
-            public static readonly Color AccentDim = new(140, 115, 55);
-            public static readonly Color AccentGlow = new(255, 200, 80, 40);
+            public static readonly Color Accent = ModernHudTheme.Accent;
+            public static readonly Color AccentBright = ModernHudTheme.AccentBright;
+            public static readonly Color AccentDim = ModernHudTheme.AccentDim;
+            public static readonly Color AccentGlow = ModernHudTheme.AccentGlow;
 
-            public static readonly Color Secondary = new(90, 140, 200);
-            public static readonly Color SecondaryBright = new(130, 180, 240);
-            public static readonly Color SecondaryDim = new(50, 80, 120);
+            public static readonly Color Secondary = ModernHudTheme.Secondary;
+            public static readonly Color SecondaryBright = ModernHudTheme.SecondaryBright;
+            public static readonly Color SecondaryDim = ModernHudTheme.SecondaryDim;
 
-            public static readonly Color BorderOuter = new(5, 6, 8, 255);
-            public static readonly Color BorderInner = new(60, 70, 85, 200);
-            public static readonly Color BorderHighlight = new(100, 110, 130, 120);
+            public static readonly Color BorderOuter = ModernHudTheme.BorderOuter;
+            public static readonly Color BorderInner = ModernHudTheme.BorderInner;
+            public static readonly Color BorderHighlight = ModernHudTheme.BorderHighlight;
 
-            public static readonly Color SlotBg = new(12, 15, 20, 240);
-            public static readonly Color SlotBorder = new(45, 52, 65, 180);
-            public static readonly Color SlotHover = new(70, 85, 110, 150);
-            public static readonly Color SlotSelected = new(212, 175, 85, 100);
+            public static readonly Color SlotBg = ModernHudTheme.SlotBg;
+            public static readonly Color SlotBorder = ModernHudTheme.SlotBorder;
+            public static readonly Color SlotHover = ModernHudTheme.SlotHover;
+            public static readonly Color SlotSelected = ModernHudTheme.SlotSelected;
 
-            public static readonly Color GlowNormal = new(150, 150, 150, 25);
-            public static readonly Color GlowMagic = new(100, 150, 255, 50);
-            public static readonly Color GlowExcellent = new(120, 255, 120, 60);
-            public static readonly Color GlowAncient = new(80, 200, 255, 70);
-            public static readonly Color GlowLegendary = new(255, 180, 80, 70);
+            public static readonly Color GlowNormal = ModernHudTheme.GlowNormal;
+            public static readonly Color GlowMagic = ModernHudTheme.GlowMagic;
+            public static readonly Color GlowExcellent = ModernHudTheme.GlowExcellent;
+            public static readonly Color GlowAncient = ModernHudTheme.GlowAncient;
+            public static readonly Color GlowLegendary = ModernHudTheme.GlowLegendary;
 
-            public static readonly Color TextWhite = new(240, 240, 245);
-            public static readonly Color TextGold = new(255, 220, 130);
-            public static readonly Color TextGray = new(160, 165, 175);
-            public static readonly Color TextDark = new(100, 105, 115);
+            public static readonly Color TextWhite = ModernHudTheme.TextWhite;
+            public static readonly Color TextGold = ModernHudTheme.TextGold;
+            public static readonly Color TextGray = ModernHudTheme.TextGray;
+            public static readonly Color TextDark = ModernHudTheme.TextDark;
 
-            public static readonly Color Success = new(80, 200, 120);
-            public static readonly Color Warning = new(240, 180, 60);
-            public static readonly Color Danger = new(220, 80, 80);
+            public static readonly Color Success = ModernHudTheme.Success;
+            public static readonly Color Warning = ModernHudTheme.Warning;
+            public static readonly Color Danger = ModernHudTheme.Danger;
         }
 
         private static readonly ItemGlowPalette GlowPalette = new(
@@ -411,6 +420,15 @@ namespace Client.Main.Controls.UI.Game
             var pixel = GraphicsManager.Instance.Pixel;
             if (pixel == null) return;
 
+            if (MobileUi.IsMobile)
+            {
+                // 和登入、選伺服器、背包同一個面板：半透明底 + 一條細框。
+                // 桌面那套（外框 + 漸層 + 內框高光 + 四角托架）在手機上
+                // 只是把一個面板拆成五條互相干擾的線。
+                MobileUi.DrawPanel(sb, rect);
+                return;
+            }
+
             sb.Draw(pixel, rect, Theme.BorderOuter);
 
             var inner = new Rectangle(rect.X + 2, rect.Y + 2, rect.Width - 4, rect.Height - 4);
@@ -442,8 +460,12 @@ namespace Client.Main.Controls.UI.Game
             var left = new Rectangle(x + 8, y + 10, textX - x - 12, 1);
             var right = new Rectangle(textX + (int)size.X + 4, y + 10, (x + width - 8) - (textX + (int)size.X + 4), 1);
 
-            if (left.Width > 0) UiDrawHelper.DrawHorizontalGradient(sb, left, Theme.Accent * 0.1f, Theme.Accent * 0.6f);
-            if (right.Width > 0) UiDrawHelper.DrawHorizontalGradient(sb, right, Theme.Accent * 0.6f, Theme.Accent * 0.1f);
+            // 標題左右各一條漸層線：手機不畫。那是在替一個兩個字的標籤加兩樣裝飾。
+            if (!MobileUi.IsMobile)
+            {
+                if (left.Width > 0) UiDrawHelper.DrawHorizontalGradient(sb, left, Theme.Accent * 0.1f, Theme.Accent * 0.6f);
+                if (right.Width > 0) UiDrawHelper.DrawHorizontalGradient(sb, right, Theme.Accent * 0.6f, Theme.Accent * 0.1f);
+            }
 
             sb.DrawString(_font, title, new Vector2(textX + 1, y + 2 + 1), Color.Black * 0.65f, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
             sb.DrawString(_font, title, new Vector2(textX, y + 2), Theme.TextGold, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
@@ -457,8 +479,12 @@ namespace Client.Main.Controls.UI.Game
             var headerBg = new Rectangle(8, 6, ControlSize.X - 16, HEADER_HEIGHT - 10);
             DrawPanel(sb, headerBg, Theme.BgMid);
 
-            sb.Draw(pixel, new Rectangle(20, 10, ControlSize.X - 40, 2), Theme.Accent * 0.85f);
-            sb.Draw(pixel, new Rectangle(30, 12, ControlSize.X - 60, 1), Theme.Accent * 0.25f);
+            // 標題上緣那兩條裝飾橫槓：手機不畫，標題列本身已經有底色了。
+            if (!MobileUi.IsMobile)
+            {
+                sb.Draw(pixel, new Rectangle(20, 10, ControlSize.X - 40, 2), Theme.Accent * 0.85f);
+                sb.Draw(pixel, new Rectangle(30, 12, ControlSize.X - 60, 1), Theme.Accent * 0.25f);
+            }
 
             if (_font != null)
             {
