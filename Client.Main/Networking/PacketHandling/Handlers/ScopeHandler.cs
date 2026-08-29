@@ -1664,9 +1664,11 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                                 DamageKind.IgnoreDefenseCyan => Color.Cyan,
                                 DamageKind.ExcellentLightGreen => Color.LightGreen,
                                 DamageKind.CriticalBlue => Color.DeepSkyBlue,
-                                DamageKind.LightPink => Color.LightPink,
+                                // 0.9.10 把這兩個列舉值改了名字（數值不變：4 與 6）：
+                                // LightPink -> ReflectedLightPink，ReflectedDarkPink -> DarkPink。
+                                DamageKind.ReflectedLightPink => Color.LightPink,
                                 DamageKind.PoisonDarkGreen => Color.DarkGreen,
-                                DamageKind.ReflectedDarkPink => Color.DeepPink,
+                                DamageKind.DarkPink => Color.DeepPink,
                                 DamageKind.White => Color.White,
                                 _ => Color.Red // fallback to normal red
                             };
