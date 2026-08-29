@@ -34,6 +34,7 @@ public class EditSession
     public Brush Brush => Tools.Brush;
     public byte PaintTileIndex { get => Tools.PaintTileIndex; set => Tools.PaintTileIndex = value; }
     public bool PaintLayer2AsEmpty { get => Tools.PaintLayer2AsEmpty; set => Tools.PaintLayer2AsEmpty = value; }
+    public bool AutoTransition { get => Tools.AutoTransition; set => Tools.AutoTransition = value; }
     public float PaintAlphaValue { get => Tools.PaintAlphaValue; set => Tools.PaintAlphaValue = value; }
     public HeightMode HeightMode { get => Tools.HeightMode; set => Tools.HeightMode = value; }
     public float HeightStep { get => Tools.HeightStep; set => Tools.HeightStep = value; }

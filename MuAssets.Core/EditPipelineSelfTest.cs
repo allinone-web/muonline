@@ -40,6 +40,7 @@ public static class EditPipelineSelfTest
             RoleAnnotations(session, document, world),
             BlankMap(),
             EyedropperPick(session, document),
+            AutoTransition(session, document),
             ExportToClientFormat(session, document),
             SpawnAreasAndOpenMuExport(session, document),
             Validation(session, document, world),
@@ -61,6 +62,11 @@ public static class EditPipelineSelfTest
     private static (string, bool, string) PaintTile(EditSession session, MapDocument document)
     {
         const byte target = 5; // TileWater01
+
+        // 這一項測的是「硬邊繪製」那條路：整個筆刷都換成同一個索引。
+        // 自動過渡是另一條路，由 AutoTransition() 那一項負責。
+        bool autoTransition = session.AutoTransition;
+        session.AutoTransition = false;
         int index = Index(OriginX, OriginY);
         byte before = document.Layer1[index];
 
@@ -73,6 +79,8 @@ public static class EditPipelineSelfTest
 
         int painted = CountInSquare(document.Layer1, OriginX, OriginY, 4, target);
         bool passed = document.Layer1[index] == target && painted == 81;
+
+        session.AutoTransition = autoTransition;
 
         return ("貼圖繪製", passed, $"9×9 = {painted} 格塗成索引 {target}（原本 {before}）");
     }
@@ -382,6 +390,82 @@ public static class EditPipelineSelfTest
             (session.Tool, session.PaintTileIndex, session.PaintAlphaValue,
              session.FlattenTarget, session.AttributeFlag, session.HeightMode,
              session.PaintLayer2AsEmpty) = before;
+        }
+    }
+
+    /// <summary>
+    /// 自動過渡：核心塗實、邊緣做漸層，而且一次撤銷要三樣一起還原。
+    /// </summary>
+    /// <remarks>
+    /// 撤銷那一項是重點。這支筆同時改第一層、第二層與混合值，
+    /// 而筆劃原本只記得一種目標 —— 那樣撤銷只會還原其中一樣，
+    /// 畫面看起來復原了、資料其實是壞的。
+    /// </remarks>
+    private static (string, bool, string) AutoTransition(EditSession session, MapDocument document)
+    {
+        const int x = OriginX + 80;
+        const int y = OriginY + 80;
+        const byte painted = 7;
+
+        var before = (session.Tool, session.PaintTileIndex, session.AutoTransition,
+                      session.Brush.Radius, session.Brush.Falloff, session.Brush.Shape);
+
+        try
+        {
+            // 先把這一帶鋪成別的貼圖，才看得出過渡。
+            for (int dy = -8; dy <= 8; dy++)
+            {
+                for (int dx = -8; dx <= 8; dx++)
+                {
+                    int i = Index(x + dx, y + dy);
+                    document.Layer1[i] = 1;
+                    document.Layer2[i] = TerrainTextureMapping.NoLayerIndex;
+                    document.Alpha[i] = 0;
+                }
+            }
+
+            session.Tool = EditorToolKind.PaintLayer1;
+            session.PaintTileIndex = painted;
+            session.AutoTransition = true;
+            session.Brush.Shape = BrushShape.Circle;
+            session.Brush.Radius = 5;
+            session.Brush.Falloff = 1f;
+
+            var stroke = new EditStroke(EditTarget.Layer1, "測試");
+            EditorTools.Apply(session.Tools, document, stroke, x, y);
+
+            int center = Index(x, y);
+            bool solidCore = document.Layer1[center] == painted
+                          && document.Layer2[center] == TerrainTextureMapping.NoLayerIndex;
+
+            // 邊緣：第一層保持原樣，新貼圖在第二層，混合值介於中間。
+            int edge = Index(x + 4, y);
+            bool blendedEdge = document.Layer1[edge] == 1
+                            && document.Layer2[edge] == painted
+                            && document.Alpha[edge] is > 0 and < 255;
+
+            // 由內往外混合值要遞減。
+            bool ramps = document.Alpha[Index(x + 2, y)] > document.Alpha[Index(x + 4, y)];
+
+            stroke.Apply(document, undo: true);
+
+            bool undone = document.Layer1[center] == 1
+                       && document.Layer2[edge] == TerrainTextureMapping.NoLayerIndex
+                       && document.Alpha[edge] == 0;
+
+            bool passed = solidCore && blendedEdge && ramps && undone;
+
+            return ("自動過渡", passed,
+                $"核心塗實 {solidCore}、邊緣混合 {blendedEdge}、漸層遞減 {ramps}、三樣一起撤銷 {undone}");
+        }
+        catch (Exception ex)
+        {
+            return ("自動過渡", false, ex.Message);
+        }
+        finally
+        {
+            (session.Tool, session.PaintTileIndex, session.AutoTransition,
+             session.Brush.Radius, session.Brush.Falloff, session.Brush.Shape) = before;
         }
     }
 

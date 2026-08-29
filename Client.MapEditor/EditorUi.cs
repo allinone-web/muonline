@@ -1005,6 +1005,23 @@ public sealed class EditorUi : IDisposable
         if (entry is null)
             return;
 
+        if (_session.Tool == EditorToolKind.PaintLayer1)
+        {
+            bool auto = _session.AutoTransition;
+            if (ImGui.Checkbox("自動過渡", ref auto))
+                _session.AutoTransition = auto;
+
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip(
+                    "中心塗實，邊緣用第二層 + 混合值做漸層 —— MU 的地形本來就是這樣做過渡的。\n" +
+                    "要硬邊就關掉它，或把筆刷衰減設成 0。");
+            }
+
+            if (auto && _session.Brush.Falloff <= 0.01f)
+                ImGui.TextColored(Warning, "筆刷衰減是 0，整個筆刷都算核心 —— 不會有過渡");
+        }
+
         if (_session.Tool == EditorToolKind.PaintLayer2)
         {
             bool empty = _session.PaintLayer2AsEmpty;

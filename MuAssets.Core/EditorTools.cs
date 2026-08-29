@@ -64,6 +64,10 @@ public static class EditorTools
 
         switch (session.Tool)
         {
+            case EditorToolKind.PaintLayer1 when session.AutoTransition:
+                PaintWithTransition(brush, document, stroke, centerX, centerY, session.PaintTileIndex);
+                break;
+
             case EditorToolKind.PaintLayer1:
                 PaintIndex(brush, document.Layer1, stroke, centerX, centerY, session.PaintTileIndex);
                 break;
@@ -84,6 +88,84 @@ public static class EditorTools
             case EditorToolKind.PaintAttribute:
                 PaintAttribute(session, document, stroke, centerX, centerY);
                 break;
+        }
+    }
+
+    /// <summary>
+    /// 帶自動過渡的第一層繪製。
+    /// </summary>
+    /// <remarks>
+    /// 分兩區處理，靠的是筆刷本來就有的衰減權重：
+    ///
+    /// <list type="bullet">
+    ///   <item><b>核心</b>（權重接近 1）第一層直接換成新貼圖，
+    ///         並清掉第二層 —— 這裡要的是純色，不是混合。</item>
+    ///   <item><b>邊緣</b>（權重 0–1）保留原本的第一層，
+    ///         把新貼圖放到第二層，混合值 = 權重 × 255。
+    ///         於是從核心往外，新貼圖逐漸淡出到原本的地面。</item>
+    /// </list>
+    ///
+    /// 邊緣那一格如果第一層本來就是同一個貼圖，就不必混合了 —— 直接清掉第二層，
+    /// 不然會出現「自己跟自己混合」這種看不出效果卻佔著第二層的格子。
+    ///
+    /// 筆刷衰減設成 0（等強度）時整個筆刷都算核心，行為就退回原本的硬邊繪製。
+    /// </remarks>
+    private static void PaintWithTransition(
+        Brush brush, MapDocument document, EditStroke stroke, int centerX, int centerY, byte value)
+    {
+        const float CoreWeight = 0.999f;
+
+        brush.ForEachCell(centerX, centerY, (x, y, weight) =>
+        {
+            int index = (y * MapDocument.Size) + x;
+
+            if (weight >= CoreWeight)
+            {
+                Set(stroke, document, index, EditTarget.Layer1, value);
+                Set(stroke, document, index, EditTarget.Layer2, TerrainTextureMapping.NoLayerIndex);
+                Set(stroke, document, index, EditTarget.Alpha, 0);
+                return;
+            }
+
+            // 底下本來就是同一個貼圖，混合沒有意義。
+            if (document.Layer1[index] == value)
+            {
+                Set(stroke, document, index, EditTarget.Layer2, TerrainTextureMapping.NoLayerIndex);
+                Set(stroke, document, index, EditTarget.Alpha, 0);
+                return;
+            }
+
+            byte alpha = (byte)Math.Clamp(MathF.Round(weight * 255f), 0f, 255f);
+
+            // 已經有一層更濃的同色過渡就別蓋淡 —— 來回塗會愈塗愈淡。
+            if (document.Layer2[index] == value && document.Alpha[index] >= alpha)
+                return;
+
+            Set(stroke, document, index, EditTarget.Layer2, value);
+            Set(stroke, document, index, EditTarget.Alpha, alpha);
+        });
+    }
+
+    /// <summary>寫一格並記進筆劃。多目標的筆劃靠這個保持「改了什麼就記什麼」。</summary>
+    private static void Set(EditStroke stroke, MapDocument document, int index, EditTarget target, byte value)
+    {
+        byte before = target switch
+        {
+            EditTarget.Layer1 => document.Layer1[index],
+            EditTarget.Layer2 => document.Layer2[index],
+            _ => document.Alpha[index],
+        };
+
+        if (before == value)
+            return;
+
+        stroke.Record(target, index, before, value);
+
+        switch (target)
+        {
+            case EditTarget.Layer1: document.Layer1[index] = value; break;
+            case EditTarget.Layer2: document.Layer2[index] = value; break;
+            default: document.Alpha[index] = value; break;
         }
     }
 

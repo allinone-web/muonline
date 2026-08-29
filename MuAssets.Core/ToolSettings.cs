@@ -22,6 +22,19 @@ public sealed class ToolSettings
     /// <summary>第二層筆刷改成塗「無第二層」（哨兵值 255）。</summary>
     public bool PaintLayer2AsEmpty { get; set; }
 
+    /// <summary>
+    /// 第一層筆刷開啟自動過渡：中心塗實，邊緣用第二層 + 混合值做漸層。
+    /// </summary>
+    /// <remarks>
+    /// MU 的地形本來就是「兩層貼圖 + 逐格混合值」，過渡是設計的一部分，
+    /// 不是後來加的技巧 —— 實測 World1 有 35% 的格子帶第二層，
+    /// 而它們的混合值是連續分布的（25–254，中位數 127），不是二元的。
+    ///
+    /// 沒有這個開關的時候，要畫出那種效果得手動切到混合筆刷、
+    /// 沿著邊界一格一格塗，畫一條路要花幾十分鐘。
+    /// </remarks>
+    public bool AutoTransition { get; set; } = true;
+
     /// <summary>混合筆刷要逼近的目標值。</summary>
     public float PaintAlphaValue { get; set; } = 255f;
 
