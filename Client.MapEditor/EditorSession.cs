@@ -38,6 +38,12 @@ public sealed class EditorSession : EditSession
     /// <summary>「圖層」面板正在看哪一層。</summary>
     public MapLayer VisibleLayer { get; set; } = MapLayer.Layer1;
 
+    /// <summary>框選的起點（螢幕座標）；null 表示沒在框。</summary>
+    public Microsoft.Xna.Framework.Vector2? BoxSelectStart { get; set; }
+
+    /// <summary>框選的目前位置（螢幕座標）。</summary>
+    public Microsoft.Xna.Framework.Vector2? BoxSelectCurrent { get; set; }
+
     /// <summary>在圖層俯視圖上拖曳生怪區時的起點；null 表示沒在拖。</summary>
     public (int X, int Y)? SpawnDragStart { get; set; }
 

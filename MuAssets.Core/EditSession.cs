@@ -54,20 +54,48 @@ public class EditSession
 
     public ObjectHistory ObjectHistory { get; } = new();
 
-    /// <summary>放置工具要放哪一種物件（.obj 的 type）。</summary>
-    public short PlaceObjectType { get; set; }
+    /// <summary>放置工具要放哪一種物件（.obj 的 type）。實際存在 <see cref="Tools"/>。</summary>
+    public short PlaceObjectType { get => Tools.PlaceObjectType; set => Tools.PlaceObjectType = value; }
 
-    /// <summary>目前選中的物件，沒有選取時為 null。</summary>
-    public MapObjectInstance? SelectedObject { get; set; }
+    /// <summary>目前選中的物件們。單選就是只有一個。</summary>
+    public List<MapObjectInstance> SelectedObjects { get; } = [];
+
+    /// <summary>
+    /// 主要選取對象 —— 手柄畫在它身上，屬性面板顯示它。沒有選取時為 null。
+    /// </summary>
+    /// <remarks>
+    /// 設定它等於「只選這一個」。多選是後來才加的，這樣既有的呼叫端不必全改，
+    /// 而且「主要對象」本來就是多選介面需要的概念（手柄總得畫在某一個身上）。
+    /// </remarks>
+    public MapObjectInstance? SelectedObject
+    {
+        get => SelectedObjects.Count > 0 ? SelectedObjects[0] : null;
+        set
+        {
+            SelectedObjects.Clear();
+
+            if (value is not null)
+                SelectedObjects.Add(value);
+        }
+    }
 
     /// <summary>放置時自動貼齊格子中心。</summary>
     public bool SnapToTile { get; set; } = true;
 
     /// <summary>放置時的隨機旋轉範圍（度），0 = 不隨機。</summary>
-    public float PlaceRandomYaw { get; set; }
+    public float PlaceRandomYaw { get => Tools.PlaceRandomYaw; set => Tools.PlaceRandomYaw = value; }
 
     /// <summary>放置時的縮放隨機比例，0 = 不隨機。</summary>
-    public float PlaceRandomScale { get; set; }
+    public float PlaceRandomScale { get => Tools.PlaceRandomScale; set => Tools.PlaceRandomScale = value; }
+
+    /// <summary>散佈筆刷一筆撒幾個。</summary>
+    public int ScatterCount { get => Tools.ScatterCount; set => Tools.ScatterCount = value; }
+
+    /// <summary>散佈的最小間距（格）。</summary>
+    public float ScatterSpacing { get => Tools.ScatterSpacing; set => Tools.ScatterSpacing = value; }
+
+    /// <summary>散佈時避開不可走／水的格子。</summary>
+    public bool ScatterAvoidBlocked { get => Tools.ScatterAvoidBlocked; set => Tools.ScatterAvoidBlocked = value; }
 
     // ── 生怪與 NPC ────────────────────────────────────────────
 
@@ -155,25 +183,83 @@ public class EditSession
 
     // ── 物件編輯 ──────────────────────────────────────────────
 
+    /// <summary>刪掉所有選中的物件，算一次撤銷。</summary>
     public void DeleteSelectedObject()
     {
         var document = Document;
-        var selected = SelectedObject;
 
-        if (document is null || selected is null)
+        if (document is null || SelectedObjects.Count == 0)
             return;
 
-        int index = document.Objects.IndexOf(selected);
-        if (index < 0)
+        var edits = new List<ObjectEdit>();
+
+        // 由後往前刪：先刪前面的會讓後面那些的索引全部往前移，
+        // 記下來的索引就對不上了，撤銷會插回錯的位置。
+        foreach (var instance in SelectedObjects
+            .Select(o => (Instance: o, Index: document.Objects.IndexOf(o)))
+            .Where(x => x.Index >= 0)
+            .OrderByDescending(x => x.Index))
+        {
+            document.Objects.RemoveAt(instance.Index);
+            edits.Add(ObjectEdit.Remove(instance.Instance, instance.Index));
+        }
+
+        if (edits.Count == 0)
             return;
 
-        document.Objects.RemoveAt(index);
-        ObjectHistory.Push(ObjectEdit.Remove(selected, index));
+        ObjectHistory.Push(edits.Count == 1
+            ? edits[0]
+            : ObjectEdit.Batch($"刪除 {edits.Count} 個物件", edits));
 
-        SelectedObject = null;
+        StatusMessage = edits.Count == 1
+            ? $"刪除 type {edits[0].Instance.Type}"
+            : $"刪除 {edits.Count} 個物件";
+
+        SelectedObjects.Clear();
         ObjectsDirty = true;
         HasUnsavedChanges = true;
-        StatusMessage = $"刪除 type {selected.Type}";
+    }
+
+    /// <summary>
+    /// 選取一個矩形範圍內的物件（格子座標，兩個角落任意順序）。
+    /// </summary>
+    /// <param name="additive">true 表示加進現有選取，而不是取代。</param>
+    public int SelectInRectangle(int ax, int ay, int bx, int by, bool additive = false)
+    {
+        var document = Document;
+        if (document is null)
+            return 0;
+
+        int minX = Math.Min(ax, bx);
+        int maxX = Math.Max(ax, bx);
+        int minY = Math.Min(ay, by);
+        int maxY = Math.Max(ay, by);
+
+        if (!additive)
+            SelectedObjects.Clear();
+
+        int added = 0;
+
+        foreach (var instance in document.Objects)
+        {
+            if (instance.TileX < minX || instance.TileX > maxX
+                || instance.TileY < minY || instance.TileY > maxY)
+            {
+                continue;
+            }
+
+            if (SelectedObjects.Contains(instance))
+                continue;
+
+            SelectedObjects.Add(instance);
+            added++;
+        }
+
+        StatusMessage = SelectedObjects.Count == 0
+            ? "框選範圍內沒有物件"
+            : $"選取 {SelectedObjects.Count} 個物件";
+
+        return added;
     }
 
     public void CommitObjectTransform(MapObjectInstance instance, MapObjectInstance before)
@@ -211,6 +297,42 @@ public class EditSession
     }
 
     // ── 生怪區 ────────────────────────────────────────────────
+
+    /// <summary>
+    /// 在一格附近撒一批物件，整批算一次撤銷。
+    /// </summary>
+    public int ScatterAt(int tileX, int tileY)
+    {
+        var document = Document;
+        if (document is null)
+            return 0;
+
+        var placed = ScatterBrush.Scatter(Tools, document, tileX, tileY, Random, document.Objects);
+
+        if (placed.Count == 0)
+        {
+            StatusMessage = "這一帶撒不下去（間距太大或都是不可走的格子）";
+            return 0;
+        }
+
+        var edits = new List<ObjectEdit>(placed.Count);
+
+        foreach (var instance in placed)
+        {
+            document.Objects.Add(instance);
+            edits.Add(ObjectEdit.Add(instance));
+        }
+
+        ObjectHistory.Push(edits.Count == 1
+            ? edits[0]
+            : ObjectEdit.Batch($"散佈 {edits.Count} 個物件", edits));
+
+        ObjectsDirty = true;
+        HasUnsavedChanges = true;
+        StatusMessage = $"撒了 {placed.Count} 個 type {PlaceObjectType}";
+
+        return placed.Count;
+    }
 
     /// <summary>用兩個角落建一個生怪區，種類取自 <see cref="SpawnTypeId"/>。</summary>
     public SpawnArea? AddSpawnArea(int startX, int startY, int endX, int endY)

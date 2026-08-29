@@ -35,6 +35,26 @@ public sealed class ToolSettings
     /// </remarks>
     public bool AutoTransition { get; set; } = true;
 
+    // ── 散佈筆刷 ──────────────────────────────────────────────
+
+    /// <summary>一筆撒幾個。</summary>
+    public int ScatterCount { get; set; } = 8;
+
+    /// <summary>物件之間的最小間距（格）。0 = 不限制，但那會撒出結塊。</summary>
+    public float ScatterSpacing { get; set; } = 1.5f;
+
+    /// <summary>避開不可走／無地面／水的格子。</summary>
+    public bool ScatterAvoidBlocked { get; set; } = true;
+
+    /// <summary>隨機朝向的範圍（度）。</summary>
+    public float PlaceRandomYaw { get; set; } = 360f;
+
+    /// <summary>隨機大小的比例，0.2 表示 0.8–1.2 倍。</summary>
+    public float PlaceRandomScale { get; set; } = 0.15f;
+
+    /// <summary>放置與散佈要用哪一種物件（.obj 的 type）。</summary>
+    public short PlaceObjectType { get; set; }
+
     /// <summary>混合筆刷要逼近的目標值。</summary>
     public float PaintAlphaValue { get; set; } = 255f;
 

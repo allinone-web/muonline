@@ -41,6 +41,7 @@ public static class EditPipelineSelfTest
             BlankMap(),
             EyedropperPick(session, document),
             AutoTransition(session, document),
+            BoxSelectAndScatter(session, document),
             ExportToClientFormat(session, document),
             SpawnAreasAndOpenMuExport(session, document),
             Validation(session, document, world),
@@ -466,6 +467,80 @@ public static class EditPipelineSelfTest
         {
             (session.Tool, session.PaintTileIndex, session.AutoTransition,
              session.Brush.Radius, session.Brush.Falloff, session.Brush.Shape) = before;
+        }
+    }
+
+    /// <summary>
+    /// 框選多選與散佈筆刷：整批動作要算一次撤銷。
+    /// </summary>
+    /// <remarks>
+    /// 「一次撤銷」是這兩個功能的重點，不是附帶條件：
+    /// 框選刪掉 30 個物件如果變成 30 筆歷史，使用者要按 30 次撤銷，
+    /// 而且中途停手會留下半毀的地圖。刪除還原是「插回原本的索引」，
+    /// 所以批次撤銷必須反序執行 —— 這裡連刪除後的順序一起驗。
+    /// </remarks>
+    private static (string, bool, string) BoxSelectAndScatter(EditSession session, MapDocument document)
+    {
+        const int x = OriginX + 100;
+        const int y = OriginY + 100;
+
+        var before = (session.Tool, session.PlaceObjectType, session.ScatterCount,
+                      session.ScatterSpacing, session.ScatterAvoidBlocked, session.Brush.Radius);
+
+        int originalCount = document.Objects.Count;
+        var originalOrder = document.Objects.ToArray();
+
+        try
+        {
+            session.PlaceObjectType = document.Objects.Count > 0 ? document.Objects[0].Type : (short)0;
+            session.ScatterCount = 12;
+            session.ScatterSpacing = 1f;
+            session.ScatterAvoidBlocked = false;
+            session.Brush.Radius = 6;
+
+            int scattered = session.ScatterAt(x, y);
+            bool scatterPlaced = scattered > 0 && document.Objects.Count == originalCount + scattered;
+
+            // 撒出來的東西應該散開，不是疊在同一點上。
+            var fresh = document.Objects.Skip(originalCount).ToArray();
+            bool spread = fresh.Length < 2 || fresh.Select(o => (o.TileX, o.TileY)).Distinct().Count() > 1;
+
+            // 隨機大小要真的隨機，不是全部 1.0。
+            bool varied = fresh.Length < 2 || fresh.Select(o => MathF.Round(o.Scale, 3)).Distinct().Count() > 1;
+
+            // 框選整個散佈範圍，應該至少抓到剛剛撒的那些。
+            session.SelectedObjects.Clear();
+            session.SelectInRectangle(x - 8, y - 8, x + 8, y + 8);
+            bool selected = session.SelectedObjects.Count >= scattered;
+
+            int selectedCount = session.SelectedObjects.Count;
+            session.DeleteSelectedObject();
+            bool deleted = document.Objects.Count == originalCount + scattered - selectedCount;
+
+            // 一次撤銷就要把整批放回來，而且順序與原本一致。
+            session.UndoObject();
+            bool restoredCount = document.Objects.Count == originalCount + scattered;
+
+            session.UndoObject();
+            bool backToStart = document.Objects.Count == originalCount
+                            && document.Objects.SequenceEqual(originalOrder);
+
+            bool passed = scatterPlaced && spread && varied && selected && deleted && restoredCount && backToStart;
+
+            return ("框選與散佈", passed,
+                $"撒了 {scattered} 個、散開 {spread}、大小有變化 {varied}、框選 {selectedCount} 個、" +
+                $"整批刪除 {deleted}、一次撤銷還原 {restoredCount}、順序一致 {backToStart}");
+        }
+        catch (Exception ex)
+        {
+            return ("框選與散佈", false, ex.Message);
+        }
+        finally
+        {
+            (session.Tool, session.PlaceObjectType, session.ScatterCount,
+             session.ScatterSpacing, session.ScatterAvoidBlocked, session.Brush.Radius) = before;
+
+            session.SelectedObjects.Clear();
         }
     }
 

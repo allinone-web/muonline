@@ -12,6 +12,7 @@ public enum EditorToolKind
     SculptHeight,
     PaintAttribute,
     PlaceObject,
+    Scatter,
     SelectObject,
     SpawnArea,
 }

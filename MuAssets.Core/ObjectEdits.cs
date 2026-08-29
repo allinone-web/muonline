@@ -1,6 +1,13 @@
 namespace MuAssets.Core;
 
-/// <summary>物件的一次可還原改動：新增、刪除，或變換。</summary>
+/// <summary>
+/// 物件的一次可還原改動：新增、刪除、變換，或以上的一整批。
+/// </summary>
+/// <remarks>
+/// 批次是必要的而不是方便：框選之後刪掉 30 個物件、散佈筆刷一次撒 20 棵樹，
+/// 那在使用者眼中是「一個動作」，撤銷就該一次還原。
+/// 分成 30 筆的話要按 30 次撤銷，而且中途停手會留下半毀的狀態。
+/// </remarks>
 public sealed class ObjectEdit
 {
     private ObjectEdit(string description, MapObjectInstance instance)
@@ -10,7 +17,11 @@ public sealed class ObjectEdit
     }
 
     public string Description { get; }
+
+    /// <summary>主要對象；批次時是第一個，給介面聚焦用。</summary>
     public MapObjectInstance Instance { get; }
+
+    private List<ObjectEdit>? _children;
 
     private bool _isAdd;
     private bool _isRemove;
@@ -28,8 +39,42 @@ public sealed class ObjectEdit
     public static ObjectEdit Transform(MapObjectInstance instance, MapObjectInstance before)
         => new("調整物件", instance) { _before = before, _after = instance.Clone() };
 
+    /// <summary>
+    /// 把好幾筆併成一筆，一次撤銷全部還原。
+    /// </summary>
+    /// <remarks>
+    /// 撤銷時是<b>反序</b>執行的。刪除的還原是「插回原本的索引」，
+    /// 正序還原會讓後面那幾筆插到錯的位置。
+    /// </remarks>
+    public static ObjectEdit Batch(string description, IReadOnlyList<ObjectEdit> edits)
+    {
+        if (edits.Count == 0)
+            throw new ArgumentException("批次不能是空的", nameof(edits));
+
+        return new(description, edits[0].Instance) { _children = [.. edits] };
+    }
+
+    /// <summary>這一筆包含幾個物件。</summary>
+    public int Count => _children?.Count ?? 1;
+
     public void Apply(MapDocument document, bool undo)
     {
+        if (_children is not null)
+        {
+            if (undo)
+            {
+                for (int i = _children.Count - 1; i >= 0; i--)
+                    _children[i].Apply(document, undo: true);
+            }
+            else
+            {
+                foreach (var child in _children)
+                    child.Apply(document, undo: false);
+            }
+
+            return;
+        }
+
         if (_isAdd)
         {
             if (undo)

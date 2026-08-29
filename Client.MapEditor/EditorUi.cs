@@ -16,6 +16,33 @@ namespace Client.MapEditor;
 public sealed class EditorUi : IDisposable
 {
     private static readonly NVector4 Warning = new(1f, 0.65f, 0.2f, 1f);
+    /// <summary>
+    /// 把框選的框畫出來。
+    /// </summary>
+    /// <remarks>
+    /// 畫在 ImGui 的前景層上，和手柄同一個做法 —— 不必寫 shader、不必管深度，
+    /// 而且框永遠在最上面。沒有這個框的話，框選等於閉著眼睛拉。
+    ///
+    /// 滑鼠座標與 ImGui 的版面座標一致（實測視窗與緩衝區是 1:1），
+    /// 所以可以直接拿來畫。
+    /// </remarks>
+    private void DrawBoxSelection()
+    {
+        if (_session.BoxSelectStart is not { } start || _session.BoxSelectCurrent is not { } current)
+            return;
+
+        var a = new NVector2(MathF.Min(start.X, current.X), MathF.Min(start.Y, current.Y));
+        var b = new NVector2(MathF.Max(start.X, current.X), MathF.Max(start.Y, current.Y));
+
+        if (b.X - a.X < 2f && b.Y - a.Y < 2f)
+            return;
+
+        var drawList = ImGui.GetForegroundDrawList();
+
+        drawList.AddRectFilled(a, b, ImGui.GetColorU32(new NVector4(0.35f, 0.6f, 1f, 0.15f)));
+        drawList.AddRect(a, b, ImGui.GetColorU32(new NVector4(0.5f, 0.75f, 1f, 0.9f)), 0f, 0, 1.5f);
+    }
+
     /// <summary>上一幀看的是哪張圖，用來偵測換圖。</summary>
     private int _cachedWorldIndex = -1;
 
@@ -101,6 +128,7 @@ public sealed class EditorUi : IDisposable
         ImGui.DockSpaceOverViewport(0, ImGui.GetMainViewport(), ImGuiDockNodeFlags.PassthruCentralNode);
 
         ReleaseCachesOnWorldChange();
+        DrawBoxSelection();
         _thumbnails.BeginFrame();
 
         DrawGizmo();
@@ -474,6 +502,7 @@ public sealed class EditorUi : IDisposable
         (EditorToolKind.SculptHeight, "高度"),
         (EditorToolKind.PaintAttribute, "屬性"),
         (EditorToolKind.PlaceObject, "放置"),
+        (EditorToolKind.Scatter, "散佈"),
         (EditorToolKind.SelectObject, "選取"),
         (EditorToolKind.SpawnArea, "生怪"),
     ];
@@ -529,6 +558,7 @@ public sealed class EditorUi : IDisposable
             return;
         }
 
+        // 散佈也吃筆刷半徑（撒的範圍），所以它要看得到筆刷設定。
         if (_session.Tool is not (EditorToolKind.PlaceObject or EditorToolKind.SelectObject or EditorToolKind.SpawnArea))
         {
             ImGui.Separator();
@@ -624,6 +654,10 @@ public sealed class EditorUi : IDisposable
                 DrawPlaceSettings();
                 break;
 
+            case EditorToolKind.Scatter:
+                DrawScatterSettings();
+                break;
+
             case EditorToolKind.SelectObject:
                 DrawSelectionSettings();
                 break;
@@ -658,14 +692,77 @@ public sealed class EditorUi : IDisposable
         DrawObjectUndoRedo();
     }
 
+    /// <summary>
+    /// 散佈筆刷的設定。
+    /// </summary>
+    /// <remarks>
+    /// 最小間距是這裡最不直覺但最重要的一項：隨機不等於均勻，
+    /// 沒有間距限制的話會撒出一叢一叢的結塊，看起來比手放還假。
+    /// </remarks>
+    private void DrawScatterSettings()
+    {
+        ImGui.TextColored(Muted, "按著拖過去，沿路一直撒");
+
+        int count = _session.ScatterCount;
+        if (ImGui.SliderInt("每筆數量", ref count, 1, 40))
+            _session.ScatterCount = count;
+
+        float spacing = _session.ScatterSpacing;
+        if (ImGui.SliderFloat("最小間距（格）", ref spacing, 0f, 8f, "%.1f"))
+            _session.ScatterSpacing = spacing;
+
+        if (spacing <= 0.01f)
+            ImGui.TextColored(Warning, "間距 0 會撒出結塊 —— 隨機不等於均勻");
+
+        bool avoid = _session.ScatterAvoidBlocked;
+        if (ImGui.Checkbox("避開不可走／水的格子", ref avoid))
+            _session.ScatterAvoidBlocked = avoid;
+
+        float yaw = _session.PlaceRandomYaw;
+        if (ImGui.SliderFloat("隨機朝向（度）", ref yaw, 0f, 360f, "%.0f"))
+            _session.PlaceRandomYaw = yaw;
+
+        float scale = _session.PlaceRandomScale;
+        if (ImGui.SliderFloat("隨機大小", ref scale, 0f, 0.6f, "%.2f"))
+            _session.PlaceRandomScale = scale;
+
+        ImGui.Separator();
+
+        int type = _session.PlaceObjectType;
+        if (ImGui.InputInt("物件 type", ref type))
+            _session.PlaceObjectType = (short)Math.Clamp(type, 0, 255);
+
+        ImGui.TextColored(Muted, "在素材庫點模型可以帶入 type");
+
+        ImGui.Separator();
+        DrawObjectUndoRedo();
+    }
+
     private void DrawSelectionSettings()
     {
         var scene = _game.ActiveScene as MapEditorScene;
         var selected = _session.SelectedObject;
 
+        if (_session.SelectedObjects.Count > 1)
+        {
+            ImGui.Text($"選取了 {_session.SelectedObjects.Count} 個物件");
+
+            if (ImGui.Button($"刪除這 {_session.SelectedObjects.Count} 個"))
+                scene?.DeleteSelectedObject();
+
+            ImGui.SameLine();
+            if (ImGui.Button("取消選取"))
+                _session.SelectedObjects.Clear();
+
+            ImGui.TextColored(Muted, "手柄畫在第一個上；多選時只支援整批刪除");
+            ImGui.Separator();
+            DrawObjectUndoRedo();
+            return;
+        }
+
         if (selected is null)
         {
-            ImGui.TextColored(Muted, "點一下地形選取最近的物件");
+            ImGui.TextColored(Muted, "點一下選最近的物件，拖出一個框選一群（Shift 加選）");
             ImGui.Separator();
             DrawObjectUndoRedo();
             return;

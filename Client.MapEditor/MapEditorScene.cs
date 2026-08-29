@@ -1,5 +1,6 @@
 using Client.Main;
 using Client.Main.Controls;
+using Client.Main.Graphics;
 using Client.Main.Objects;
 
 // MapObjectInstance 的向量是 System.Numerics（與 Client.Data 的結構一致），
@@ -331,11 +332,26 @@ public sealed class MapEditorScene : BaseScene
             return;
         }
 
-        // 物件工具是單次點擊，不是連續筆劃。
-        if (_session.Tool is EditorToolKind.PlaceObject or EditorToolKind.SelectObject)
+        // 散佈是「按著拖過去一路撒」，與地形筆刷同一種手感。
+        if (_session.Tool == EditorToolKind.Scatter)
+        {
+            if (pressed && acceptInput && HoveredTile.Valid)
+                _session.ScatterAt(HoveredTile.TileX, HoveredTile.TileY);
+
+            return;
+        }
+
+        // 選取：點一下選一個，拖出一個框選一群。
+        if (_session.Tool == EditorToolKind.SelectObject)
+        {
+            HandleSelection(document, mouse, pressed, wasPressed, acceptInput);
+            return;
+        }
+
+        if (_session.Tool == EditorToolKind.PlaceObject)
         {
             if (pressed && !wasPressed && acceptInput && HoveredTile.Valid)
-                HandleObjectClick(document);
+                PlaceObject(document);
 
             return;
         }
@@ -360,12 +376,97 @@ public sealed class MapEditorScene : BaseScene
         }
     }
 
-    private void HandleObjectClick(MapDocument document)
+    /// <summary>拖曳超過這麼多像素才算框選，否則當成單擊。</summary>
+    private const float BoxSelectThreshold = 6f;
+
+    /// <summary>
+    /// 選取工具：點一下選最近的一個，拖出一個框選一群。
+    /// </summary>
+    /// <remarks>
+    /// 框是畫在<b>螢幕空間</b>的，判定也在螢幕空間 —— 把每個物件投影到畫面上，
+    /// 看它落不落在框裡。用世界空間的矩形去框的話，斜角視角下框出來的東西
+    /// 和使用者看到的對不上（畫面上明明在框裡的，世界座標卻在框外）。
+    ///
+    /// 投影只在放開的時候做一次。每幀投影 2833 個物件沒有必要。
+    /// </remarks>
+    private void HandleSelection(
+        MapDocument document, MouseState mouse, bool pressed, bool wasPressed, bool acceptInput)
     {
-        if (_session.Tool == EditorToolKind.PlaceObject)
-            PlaceObject(document);
-        else
-            SelectObjectAt(document);
+        if (pressed && !wasPressed && acceptInput)
+        {
+            _session.BoxSelectStart = new Vector2(mouse.X, mouse.Y);
+            _session.BoxSelectCurrent = _session.BoxSelectStart;
+            return;
+        }
+
+        if (pressed && _session.BoxSelectStart is not null)
+        {
+            _session.BoxSelectCurrent = new Vector2(mouse.X, mouse.Y);
+            return;
+        }
+
+        if (!pressed && wasPressed && _session.BoxSelectStart is Vector2 start)
+        {
+            var end = new Vector2(mouse.X, mouse.Y);
+            _session.BoxSelectStart = null;
+            _session.BoxSelectCurrent = null;
+
+            if (!acceptInput)
+                return;
+
+            if (Vector2.Distance(start, end) < BoxSelectThreshold)
+            {
+                if (HoveredTile.Valid)
+                    SelectObjectAt(document);
+
+                return;
+            }
+
+            var keyboard = Keyboard.GetState();
+            bool additive = keyboard.IsKeyDown(Keys.LeftShift) || keyboard.IsKeyDown(Keys.RightShift);
+
+            SelectObjectsInScreenRectangle(document, start, end, additive);
+        }
+    }
+
+    private void SelectObjectsInScreenRectangle(MapDocument document, Vector2 start, Vector2 end, bool additive)
+    {
+        float minX = MathF.Min(start.X, end.X);
+        float maxX = MathF.Max(start.X, end.X);
+        float minY = MathF.Min(start.Y, end.Y);
+        float maxY = MathF.Max(start.Y, end.Y);
+
+        if (!additive)
+            _session.SelectedObjects.Clear();
+
+        var device = MuGame.Instance.GraphicsDevice;
+        int added = 0;
+
+        foreach (var instance in document.Objects)
+        {
+            var projected = device.Viewport.Project(
+                new Vector3(instance.Position.X, instance.Position.Y, instance.Position.Z),
+                Camera.Instance.Projection,
+                Camera.Instance.View,
+                Matrix.Identity);
+
+            // Project 的 Z 落在 0–1 之外表示點在near/far 平面外，X/Y 沒有意義。
+            if (projected.Z is < 0f or > 1f)
+                continue;
+
+            if (projected.X < minX || projected.X > maxX || projected.Y < minY || projected.Y > maxY)
+                continue;
+
+            if (_session.SelectedObjects.Contains(instance))
+                continue;
+
+            _session.SelectedObjects.Add(instance);
+            added++;
+        }
+
+        _session.StatusMessage = _session.SelectedObjects.Count == 0
+            ? "框裡沒有物件"
+            : $"選取 {_session.SelectedObjects.Count} 個物件（新增 {added}）";
     }
 
     private void PlaceObject(MapDocument document)
