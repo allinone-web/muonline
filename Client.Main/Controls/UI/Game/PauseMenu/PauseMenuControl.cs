@@ -932,7 +932,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             private const int OptionRowHeight = 30;
 
             // ── 手機版面 ──
-            private const int MobilePanelWidth = 900;
+            private const int MobilePanelWidth = 1040;
             private const int MobilePanelHeight = 560;
             private const int MobileHeaderHeight = 64;
             private const int MobilePadding = 16;
@@ -1597,7 +1597,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     int y = ContentTop + row * MobileOptionRowHeight;
 
                     option = new OptionToggle(label, getter, apply,
-                        x, y, MobileOptionColumnWidth, 120, 38, MobileOptionFontSize);
+                        x, y, MobileOptionColumnWidth, 104, 38, MobileOptionFontSize);
                     _mobileOptionIndex++;
                 }
                 else
