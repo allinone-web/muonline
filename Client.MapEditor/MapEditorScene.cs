@@ -48,6 +48,8 @@ public sealed class MapEditorScene : BaseScene
             _session.RequestWorld(initial.Index);
     }
 
+    private Vector3 _lastDrawDistanceFocus = new(float.MinValue, float.MinValue, float.MinValue);
+
     public override void Update(GameTime gameTime)
     {
         base.Update(gameTime);
@@ -75,6 +77,33 @@ public sealed class MapEditorScene : BaseScene
         }
 
         _session.Camera.Update(gameTime, acceptInput);
+
+        ApplyObjectDrawDistance();
+    }
+
+    /// <summary>
+    /// 相機焦點移動後，依設定重算哪些物件要顯示。
+    /// </summary>
+    /// <remarks>
+    /// 每幀都掃 2833 個物件太浪費，而焦點沒動時結果也不會變，所以只在移動超過一格時重算。
+    /// </remarks>
+    private void ApplyObjectDrawDistance()
+    {
+        if (World is not EditorWorldControl world)
+            return;
+
+        float distance = _session.Settings.ObjectDrawDistance;
+        var focus = _session.Camera.Focus;
+
+        if (world.ObjectDrawDistance == distance
+            && Vector3.DistanceSquared(focus, _lastDrawDistanceFocus) < MuConstants.TerrainScale * MuConstants.TerrainScale)
+        {
+            return;
+        }
+
+        world.ObjectDrawDistance = distance;
+        world.ApplyObjectDrawDistance(focus);
+        _lastDrawDistanceFocus = focus;
     }
 
     /// <summary>

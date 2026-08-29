@@ -54,6 +54,11 @@ public sealed class ImGuiRenderer : IDisposable
 
         ImGui.StyleColorsDark();
 
+        // 文字輸入必須走作業系統的 TextInput 事件，不能從按鍵狀態拼。
+        // 少了這一段，介面上每一個輸入框都打不出字（搜尋、部署路徑都是）——
+        // 鍵盤事件只讓 ImGui 知道「哪個鍵按著」，不會產生字元。
+        game.Window.TextInput += OnTextInput;
+
         // 字型必須在建字型圖集之前掛上去。
         LoadedFontPath = EditorFonts.LoadCjkFont(fontSize);
         if (LoadedFontPath is null)
@@ -120,6 +125,13 @@ public sealed class ImGuiRenderer : IDisposable
         _fontTextureId = BindTexture(texture);
         io.Fonts.SetTexID(_fontTextureId.Value);
         io.Fonts.ClearTexData();
+    }
+
+    /// <summary>作業系統送來的字元。控制字元（退格、Enter…）由按鍵事件處理，這裡濾掉。</summary>
+    private static void OnTextInput(object? sender, TextInputEventArgs args)
+    {
+        if (args.Character >= ' ' && args.Character != (char)127)
+            ImGui.GetIO().AddInputCharacter(args.Character);
     }
 
     private void UpdateInput()
@@ -318,6 +330,8 @@ public sealed class ImGuiRenderer : IDisposable
 
     public void Dispose()
     {
+        _game.Window.TextInput -= OnTextInput;
+
         _vertexBuffer?.Dispose();
         _indexBuffer?.Dispose();
         _effect.Dispose();

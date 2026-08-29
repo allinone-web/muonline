@@ -28,6 +28,16 @@ public sealed class EditorSettings
     /// </summary>
     public float FontSize { get; set; } = 17f;
 
+    /// <summary>
+    /// 只顯示相機焦點這個半徑（世界單位）內的物件；0 = 全部顯示。
+    /// </summary>
+    /// <remarks>
+    /// 俯視整張圖時遊戲的視錐裁切等於沒裁：勒瑞西亞 2833 個物件各一次 draw call，
+    /// 場景就吃掉 18ms。畫地形時把這個值調到 8000 左右（80 格）會明顯變順，
+    /// 代價是遠處的建築不顯示。預設 0（全部顯示），因為「看得到全貌」通常更重要。
+    /// </remarks>
+    public float ObjectDrawDistance { get; set; }
+
     public static string ConfigDirectory { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".mu-editor");
 

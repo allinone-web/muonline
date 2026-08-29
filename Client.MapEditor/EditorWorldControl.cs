@@ -1,4 +1,5 @@
 using Client.Main.Controls;
+using Microsoft.Xna.Framework;
 using MuAssets.Core;
 
 namespace Client.MapEditor;
@@ -23,6 +24,40 @@ public sealed class EditorWorldControl : WorldControl
     {
         _tileObjectTypes = tileObjectTypes;
         Interactive = true;
+    }
+
+    /// <summary>
+    /// 只顯示焦點附近這個半徑內的物件；0 表示全部顯示。
+    /// </summary>
+    /// <remarks>
+    /// 編輯器預設是俯視整張圖，遊戲的視錐裁切在這個視角下等於沒有裁 ——
+    /// 勒瑞西亞 2833 個物件全部各一次 draw call，量到場景就要 34ms（22 fps）。
+    /// 幀率低到這個程度時輸入是用輪詢的，一次正常點擊（按下到放開 60–80ms）
+    /// 有機會整個落在兩次取樣之間被漏掉，介面就變成「點了沒反應／點錯地方」。
+    ///
+    /// 所以這不是畫面問題，是**能不能用**的問題。
+    /// </remarks>
+    public float ObjectDrawDistance { get; set; }
+
+    /// <summary>依 <see cref="ObjectDrawDistance"/> 更新物件的顯示與否。相機移動後呼叫。</summary>
+    public void ApplyObjectDrawDistance(Vector3 focus)
+    {
+        bool unlimited = ObjectDrawDistance <= 0f;
+        float radiusSquared = ObjectDrawDistance * ObjectDrawDistance;
+
+        foreach (var obj in Objects)
+        {
+            if (unlimited)
+            {
+                obj.Hidden = false;
+                continue;
+            }
+
+            float dx = obj.Position.X - focus.X;
+            float dy = obj.Position.Y - focus.Y;
+
+            obj.Hidden = (dx * dx) + (dy * dy) > radiusSquared;
+        }
     }
 
     protected override void CreateMapTileObjects()

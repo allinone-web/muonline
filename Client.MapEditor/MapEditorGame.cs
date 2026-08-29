@@ -1,4 +1,6 @@
 using Client.Main;
+using Client.Main.Controllers;
+using Client.Main.Graphics;
 using Client.Main.Scenes;
 using ImGuiNET;
 using Microsoft.Xna.Framework;
@@ -23,6 +25,11 @@ public sealed class MapEditorGame : MuGame
     private ImGuiRenderer? _imgui;
     private EditorUi? _ui;
     private double _elapsedSeconds;
+    private double _lastDiagnosticSecond = -1.0;
+    private int _diagnosticFrames;
+    private double _sceneMs;
+
+    private double _uiMs;
 
     public MapEditorGame(EditorOptions options)
     {
@@ -64,20 +71,104 @@ public sealed class MapEditorGame : MuGame
         // MuGame.Initialize 會關掉系統游標（遊戲有自己的游標貼圖），編輯器要用回系統游標。
         IsMouseVisible = true;
 
+        // 編輯器不吃遊戲存下來的效能取捨。實測那份設定是 RENDER_SCALE = 0.9：
+        // 場景先畫成 0.9 倍再放大回來，畫面糊掉，而且因為每幀都得跑一次後製，
+        // 「場景沒變就重貼」的快取路徑永遠用不到。1:1 之後兩件事同時解決。
+        Constants.RENDER_SCALE = 1f;
+        Constants.MSAA_ENABLED = false;
+        GraphicsManager.Instance.UpdateRenderScale();
+
         _imgui = new ImGuiRenderer(this, _session.Settings.FontSize);
         _ui = new EditorUi(this, _imgui, _session);
     }
 
+    /// <summary>
+    /// MU_EDITOR_DIAG=1 時每秒印一次視窗與緩衝區的幾何。
+    /// 點擊錯位的成因全都在這幾個數字之間的不一致上，用猜的沒有意義。
+    /// </summary>
+    private void LogGeometry()
+    {
+        if (Environment.GetEnvironmentVariable("MU_EDITOR_DIAG") is null)
+            return;
+
+        _diagnosticFrames++;
+
+        if (_elapsedSeconds - _lastDiagnosticSecond < 1.0)
+            return;
+
+        double fps = _diagnosticFrames / Math.Max(1e-6, _elapsedSeconds - _lastDiagnosticSecond);
+        double sceneMs = _sceneMs / Math.Max(1, _diagnosticFrames);
+        double uiMs = _uiMs / Math.Max(1, _diagnosticFrames);
+        _diagnosticFrames = 0;
+        _sceneMs = 0;
+        _uiMs = 0;
+        _lastDiagnosticSecond = _elapsedSeconds;
+
+        var bounds = Window.ClientBounds;
+        var parameters = GraphicsDevice.PresentationParameters;
+        var viewport = GraphicsDevice.Viewport;
+        var mouse = Microsoft.Xna.Framework.Input.Mouse.GetState();
+        var io = ImGuiNET.ImGui.GetIO();
+
+        Console.WriteLine(
+            $"[diag] {fps:F1} fps（場景 {sceneMs:F1}ms、介面 {uiMs:F1}ms）  視窗 {bounds.Width}x{bounds.Height} @({bounds.X},{bounds.Y})  " +
+            $"緩衝區 {parameters.BackBufferWidth}x{parameters.BackBufferHeight}  " +
+            $"視區 {viewport.Width}x{viewport.Height}  " +
+            $"ImGui.DisplaySize {io.DisplaySize.X}x{io.DisplaySize.Y}  " +
+            $"滑鼠原始 ({mouse.X},{mouse.Y}) → ImGui ({io.MousePos.X:F0},{io.MousePos.Y:F0})");
+    }
+
+    /// <summary>
+    /// MU_EDITOR_DIAG=1 時，在 ImGui 認為的滑鼠位置畫一個十字準星。
+    /// </summary>
+    /// <remarks>
+    /// 「點擊錯位」有兩種完全不同的成因，而它們的修法無關：
+    /// 準星和實際游標對得上 → 座標沒問題，是那一幀根本沒取樣到這次點擊（幀率太低）；
+    /// 對不上 → 座標換算錯了，差多少一眼就看得出來。
+    /// 用猜的分不出來，所以直接畫出來。
+    /// </remarks>
+    private static void DrawCursorProbe()
+    {
+        if (Environment.GetEnvironmentVariable("MU_EDITOR_DIAG") is null)
+            return;
+
+        var io = ImGui.GetIO();
+        var position = io.MousePos;
+
+        if (!float.IsFinite(position.X) || !float.IsFinite(position.Y))
+            return;
+
+        var drawList = ImGui.GetForegroundDrawList();
+        uint color = ImGui.GetColorU32(new System.Numerics.Vector4(1f, 0.2f, 0.2f, 1f));
+
+        drawList.AddLine(position with { X = position.X - 24f }, position with { X = position.X + 24f }, color, 1.5f);
+        drawList.AddLine(position with { Y = position.Y - 24f }, position with { Y = position.Y + 24f }, color, 1.5f);
+        drawList.AddCircle(position, 9f, color, 24, 1.5f);
+        drawList.AddText(
+            position with { X = position.X + 14f, Y = position.Y + 10f },
+            color,
+            $"{position.X:F0},{position.Y:F0}");
+    }
+
     protected override void Draw(GameTime gameTime)
     {
+        long sceneStart = System.Diagnostics.Stopwatch.GetTimestamp();
+
         base.Draw(gameTime);
+
+        _sceneMs += System.Diagnostics.Stopwatch.GetElapsedTime(sceneStart).TotalMilliseconds;
 
         if (_imgui is null || _ui is null)
             return;
 
+        LogGeometry();
+
+        long uiStart = System.Diagnostics.Stopwatch.GetTimestamp();
         _imgui.BeginLayout(gameTime);
         _ui.Draw();
+        DrawCursorProbe();
         _imgui.EndLayout();
+        _uiMs += System.Diagnostics.Stopwatch.GetElapsedTime(uiStart).TotalMilliseconds;
 
         var io = ImGui.GetIO();
         if (ActiveScene is MapEditorScene scene)
