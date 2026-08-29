@@ -110,6 +110,13 @@ namespace Client.Main.Controllers
                 return false;
 
             SafeAreaInsets = insets;
+
+            // 直接寫 Console：這個值是「畫面邊緣的東西會不會被鏡頭挖孔蓋住」的唯一依據，
+            // 而它出錯的時候完全沒有徵兆 —— 必須在裝置的 console 上看得到。
+            // 值只有在啟動與轉向時會變，不會洗版。
+            Console.WriteLine(
+                $"[UiScaler] SafeAreaInsets (px) L={insets.X} T={insets.Y} R={insets.Z} B={insets.W}");
+
             return true;
         }
 
