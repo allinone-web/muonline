@@ -1,6 +1,7 @@
 // MU 地圖編輯器。
 //
 //   MuMapEditor [--data <Data目錄>] [--world N] [--size 1600x1000] [--seconds N] [--screenshot <path>]
+//   MuMapEditor --shots <契約.json> --shot <鏡位名> --screenshot <path>   拍黃金影像
 //
 // --seconds / --screenshot 讓它能在終端機裡跑完就退出，用於自動化驗證。
 
@@ -25,6 +26,21 @@ Constants.SOUND_EFFECTS = false;
 // 遊戲的除錯疊層（FPS / p95 / telemetry）會蓋在編輯器介面上。Debug 建置預設是開的。
 Constants.SHOW_DEBUG_PANEL = false;
 
+// 黃金影像：相機由契約檔決定，介面不畫，尺寸也由鏡位決定 ——
+// 這三件事任何一件由別處決定，基準圖就會隨環境漂移。
+GoldenShot? goldenShot = null;
+if (parsed.GetValueOrDefault("shots") is string shotsPath)
+{
+    string? shotName = parsed.GetValueOrDefault("shot");
+    goldenShot = GoldenShot.Load(shotsPath, shotName).First();
+
+    EditorSession.Current.GoldenShot = goldenShot;
+    EditorSession.Current.StartupWorldIndex = goldenShot.World;
+    (width, height) = (goldenShot.Width, goldenShot.Height);
+
+    Console.WriteLine($"鏡位：{goldenShot.Name}（World{goldenShot.World}、{width}×{height}）");
+}
+
 var options = new EditorOptions(
     Width: width,
     Height: height,
@@ -33,8 +49,15 @@ var options = new EditorOptions(
     FullScreen: parsed.ContainsKey("fullscreen"));
 
 EditorSession.Current.RunSelfTest = parsed.ContainsKey("selftest");
-if (parsed.GetValueOrDefault("world") is string startupWorld && int.TryParse(startupWorld, out int startupWorldIndex))
+
+// 鏡位自己帶世界編號，不讓 --world 蓋過去 —— 否則同一個鏡位在不同地圖上拍，
+// 基準圖對不上而且看不出原因。
+if (goldenShot is null
+    && parsed.GetValueOrDefault("world") is string startupWorld
+    && int.TryParse(startupWorld, out int startupWorldIndex))
+{
     EditorSession.Current.StartupWorldIndex = startupWorldIndex;
+}
 
 EditorSession.Current.AuditObjects = parsed.ContainsKey("audit-objects");
 EditorSession.Current.ExportOnStartPath = parsed.GetValueOrDefault("export-to");

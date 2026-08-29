@@ -13,9 +13,40 @@ namespace Client.MapEditor;
 /// <summary>
 /// 所有 ImGui 面板。每幀由 <see cref="MapEditorGame.Draw"/> 呼叫一次。
 /// </summary>
-public sealed class EditorUi
+public sealed class EditorUi : IDisposable
 {
     private static readonly NVector4 Warning = new(1f, 0.65f, 0.2f, 1f);
+    /// <summary>上一幀看的是哪張圖，用來偵測換圖。</summary>
+    private int _cachedWorldIndex = -1;
+
+    /// <summary>
+    /// 換地圖時把 GPU 上的預覽與縮圖丟掉。
+    /// </summary>
+    /// <remarks>
+    /// 貼圖與模型都是逐圖一套的（MU 沒有共用素材目錄），換圖之後上一張的
+    /// 再也用不到。原本兩個快取都只增不減，逛完 80 張圖就是幾百 MB 的
+    /// GPU 記憶體留在那裡不會回來 —— 而且沒有任何症狀，直到記憶體不夠。
+    /// </remarks>
+    private void ReleaseCachesOnWorldChange()
+    {
+        int current = _session.LoadedWorldIndex ?? -1;
+
+        if (current == _cachedWorldIndex)
+            return;
+
+        _cachedWorldIndex = current;
+        _thumbnails.Clear();
+        _previews.Clear();
+        _objectSummaryWorldIndex = -1;
+    }
+
+    public void Dispose()
+    {
+        _thumbnails.Dispose();
+        _previews.Dispose();
+        _layerView.Dispose();
+    }
+
     private static readonly NVector4 Danger = new(1f, 0.42f, 0.4f, 1f);
 
     // 新建地圖的欄位。200 起跳是為了離官方的 0–92 遠一點，不會撞號。
@@ -69,6 +100,7 @@ public sealed class EditorUi
         // PassthruCentralNode：中央留空讓 3D 視埠透出來，面板停靠在四周。
         ImGui.DockSpaceOverViewport(0, ImGui.GetMainViewport(), ImGuiDockNodeFlags.PassthruCentralNode);
 
+        ReleaseCachesOnWorldChange();
         _thumbnails.BeginFrame();
 
         DrawGizmo();

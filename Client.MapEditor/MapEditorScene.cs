@@ -103,7 +103,18 @@ public sealed class MapEditorScene : BaseScene
             _session.ObjectsDirty = false;
         }
 
-        _session.Camera.Update(gameTime, acceptInput);
+        // 黃金影像模式：相機由鏡位獨佔。
+        // 每一幀都套而不是載入時套一次 —— 世界載完之後有 FrameWholeMap 之類的動作會改相機，
+        // 只套一次的話基準圖會隨著「哪一幀截到」而變，那就不是基準了。
+        if (_session.GoldenShot is { } goldenShot)
+        {
+            goldenShot.ApplyTo(_session.Camera);
+            _session.Camera.Update(gameTime, acceptInput: false);
+        }
+        else
+        {
+            _session.Camera.Update(gameTime, acceptInput);
+        }
 
         ApplyObjectDrawDistance();
     }
@@ -495,6 +506,8 @@ public sealed class MapEditorScene : BaseScene
 
         var document = _session.Document;
 
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+
         World.Terrain.ApplyEditedTerrain(
             layer1: document.Layer1,
             layer2: document.Layer2,
@@ -504,6 +517,12 @@ public sealed class MapEditorScene : BaseScene
             lightData: null);
 
         _session.TerrainDirty = false;
+
+        if (Environment.GetEnvironmentVariable("MU_EDITOR_DIAG") is not null)
+        {
+            Console.WriteLine(
+                $"[編輯] 推進渲染端耗時 {System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:F1} ms");
+        }
     }
 
     /// <summary>在圖層俯視圖上拖出一個生怪區。</summary>

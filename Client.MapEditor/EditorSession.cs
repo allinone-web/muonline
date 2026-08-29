@@ -53,6 +53,12 @@ public sealed class EditorSession : EditSession
     public bool AuditObjects { get; set; }
 
     /// <summary>--selftest：地圖載入後跑一次編輯管線的自我測試。</summary>
+    /// <summary>
+    /// 正在拍黃金影像的鏡位。非 null 時相機由它獨佔（每幀套用），介面也不畫 ——
+    /// 基準圖裡有一個面板寬度變了就整張紅，那種比對沒有人會留著。
+    /// </summary>
+    public GoldenShot? GoldenShot { get; set; }
+
     public bool RunSelfTest { get; set; }
 
     /// <summary>自我測試是否全數通過；null 表示還沒跑。</summary>

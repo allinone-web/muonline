@@ -164,15 +164,22 @@ public sealed class MapEditorGame : MuGame
         LogGeometry();
 
         long uiStart = System.Diagnostics.Stopwatch.GetTimestamp();
-        _imgui.BeginLayout(gameTime);
-        _ui.Draw();
-        DrawCursorProbe();
-        _imgui.EndLayout();
-        _uiMs += System.Diagnostics.Stopwatch.GetElapsedTime(uiStart).TotalMilliseconds;
 
-        var io = ImGui.GetIO();
-        if (ActiveScene is MapEditorScene scene)
-            scene.UiCapturesInput = io.WantCaptureMouse || io.WantCaptureKeyboard || _ui.GizmoCapturesMouse;
+        // 拍黃金影像時不畫介面：基準圖要比的是「渲染」，不是面板佈局 ——
+        // 面板寬度改一格就整張紅的比對，沒有人會留著。
+        // 注意這裡不能提早 return：截圖與退出的邏輯就在下面同一個方法裡。
+        if (EditorSession.Current.GoldenShot is null)
+        {
+            _imgui.BeginLayout(gameTime);
+            _ui.Draw();
+            DrawCursorProbe();
+            _imgui.EndLayout();
+            _uiMs += System.Diagnostics.Stopwatch.GetElapsedTime(uiStart).TotalMilliseconds;
+
+            var io = ImGui.GetIO();
+            if (ActiveScene is MapEditorScene scene)
+                scene.UiCapturesInput = io.WantCaptureMouse || io.WantCaptureKeyboard || _ui.GizmoCapturesMouse;
+        }
 
         // 用「經過的時間」而不是幀數：關掉 vsync 後這支程式跑到兩千多 FPS，
         // 以幀數計時等於還沒等到世界載完就截圖了。
@@ -210,6 +217,8 @@ public sealed class MapEditorGame : MuGame
 
     protected override void UnloadContent()
     {
+        // 順序有意義：UI 要先把貼圖解綁並釋放，再讓 ImGuiRenderer 收掉剩下的。
+        _ui?.Dispose();
         _imgui?.Dispose();
         base.UnloadContent();
     }

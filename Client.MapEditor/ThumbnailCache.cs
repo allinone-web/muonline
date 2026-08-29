@@ -61,13 +61,32 @@ public sealed class ThumbnailCache : IDisposable
         return id;
     }
 
-    public void Dispose()
+    /// <summary>
+    /// 丟掉所有縮圖。切換地圖時呼叫。
+    /// </summary>
+    /// <remarks>
+    /// 縮圖是逐圖的 <c>Object{N}/</c>，換圖之後上一張的用不到了。
+    /// 一張 128×128 RGBA 是 64 KB，一張圖大約兩百個模型 ——
+    /// 不清的話逛完 80 張圖就是幾百 MB 的 GPU 記憶體再也不會回來。
+    /// </remarks>
+    public void Clear()
     {
+        foreach (var (_, id) in _cache)
+        {
+            if (id.HasValue)
+                _imgui.UnbindTexture(id.Value);
+        }
+
         foreach (var texture in _textures)
             texture.Dispose();
 
         _textures.Clear();
         _cache.Clear();
+    }
+
+    public void Dispose()
+    {
+        Clear();
         _renderer.Dispose();
     }
 }
