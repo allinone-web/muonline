@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Client.AssetStudio.Catalog;
 using Client.AssetStudio.Textures;
+using Client.Data;
 using Client.Data.MAP;
 using MuAssets.Core;
 
@@ -164,17 +165,21 @@ public static class GodotSceneExporter
             .Take(options.MaxObjectTypes)
             .ToArray();
 
+        // World1 用具名檔，型別編號要透過 ModelType 這個列舉才對得上檔名。
+        var namedFiles = worldIndex == 1 ? IndexObjectFiles(dataPath, worldIndex) : null;
+
         foreach (short type in byFrequency)
         {
-            string relative = $"Object{worldIndex}/Object{type + 1:00}.bmd";
-            string full = Path.Combine(dataPath, relative);
+            string? relative = ResolveModelPath(dataPath, worldIndex, type, namedFiles);
 
-            if (!File.Exists(full))
+            if (relative is null)
             {
-                warnings.Add($"物件 type {type} 找不到模型：{relative}"
-                           + (worldIndex == 1 ? "（World1 用具名檔，對不上通則）" : string.Empty));
+                warnings.Add($"物件 type {type} 找不到模型"
+                           + (worldIndex == 1 ? $"（ModelType 是 {(ModelType)type}，Object1 裡沒有對應檔案）" : string.Empty));
                 continue;
             }
+
+            string full = Path.Combine(dataPath, relative);
 
             try
             {
@@ -195,6 +200,105 @@ public static class GodotSceneExporter
         }
 
         return models;
+    }
+
+    /// <summary>
+    /// 型別編號 → 模型檔（相對於 Data）。
+    /// </summary>
+    /// <remarks>
+    /// 通則是 <c>Object{world}/Object{type+1:00}.bmd</c>，除了 World1（勒瑞西亞）——
+    /// 它用的是具名檔（<c>Tree01.bmd</c>、<c>Stone03.bmd</c>…）。
+    ///
+    /// 那個對應表其實一直都在：<c>Client.Data.ModelType</c> 這個列舉，
+    /// 而**列舉成員的名字就是檔名**（客戶端的 <c>TreeObject</c> 等類別就是這樣組路徑的）。
+    /// 少數對不上的靠三段後援補：加 <c>01</c> 後綴、去掉數字後綴加 <c>01</c>、
+    /// 以及大小寫不敏感的比對（資源包裡有 <c>DoungeonGate01.bmd</c> 這種拼錯的檔名）。
+    ///
+    /// 對不上就照實回報，不猜。
+    /// </remarks>
+    private static string? ResolveModelPath(
+        string dataPath, int worldIndex, short type, Dictionary<string, string>? namedFiles)
+    {
+        if (namedFiles is null)
+        {
+            string generic = $"Object{worldIndex}/Object{type + 1:00}.bmd";
+            return File.Exists(Path.Combine(dataPath, generic)) ? generic : null;
+        }
+
+        if (!ModelTypeNames.TryGetValue((ushort)type, out string? name))
+            return null;
+
+        foreach (var candidate in Candidates(name))
+        {
+            if (namedFiles.TryGetValue(candidate, out var file))
+                return $"Object{worldIndex}/{file}";
+        }
+
+        // 最後才用後綴比對：MuWall02 的實際檔名是 StoneMuWall02。
+        // 放最後是因為它最寬鬆，前面精確對得上就不該走到這裡。
+        foreach (var candidate in Candidates(name))
+        {
+            var hit = namedFiles.FirstOrDefault(
+                pair => pair.Key.EndsWith(candidate, StringComparison.OrdinalIgnoreCase));
+
+            if (hit.Value is not null)
+                return $"Object{worldIndex}/{hit.Value}";
+        }
+
+        return null;
+
+        static IEnumerable<string> Candidates(string name)
+        {
+            yield return name;                                  // Tree01
+            yield return name + "01";                           // Bonfire → Bonfire01
+            var trimmed = name.TrimEnd('0', '1', '2', '3', '4', '5', '6', '7', '8', '9');
+            if (trimmed.Length > 0 && trimmed != name)
+                yield return trimmed + "01";
+        }
+    }
+
+    /// <summary>
+    /// 型別編號 → <see cref="ModelType"/> 的成員名，取<b>宣告順序在前</b>的那一個。
+    /// </summary>
+    /// <remarks>
+    /// 不能直接用 <c>((ModelType)type).ToString()</c>：這個列舉有重複值 ——
+    /// <c>Tree01 = 0</c> 與 <c>ITEM_GROUP_SWORD = 0 * 512</c> 撞在一起，
+    /// 而 <c>ToString()</c> 挑哪一個是未定義行為（實測會挑到 ITEM_GROUP_SWORD）。
+    ///
+    /// <c>ITEM_GROUP_*</c> 是道具分類，跟地圖物件不是同一組編號，整批排除。
+    /// </remarks>
+    private static readonly Dictionary<ushort, string> ModelTypeNames = BuildModelTypeNames();
+
+    private static Dictionary<ushort, string> BuildModelTypeNames()
+    {
+        var map = new Dictionary<ushort, string>();
+        var names = Enum.GetNames(typeof(ModelType));
+        var values = (ModelType[])Enum.GetValues(typeof(ModelType));
+
+        for (int i = 0; i < names.Length; i++)
+        {
+            if (names[i].StartsWith("ITEM_GROUP_", StringComparison.Ordinal))
+                continue;
+
+            map.TryAdd((ushort)values[i], names[i]);
+        }
+
+        return map;
+    }
+
+    /// <summary>Object{N} 目錄裡的 <c>.bmd</c>，鍵是不含副檔名的檔名（大小寫不敏感）。</summary>
+    private static Dictionary<string, string> IndexObjectFiles(string dataPath, int worldIndex)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        string directory = Path.Combine(dataPath, $"Object{worldIndex}");
+
+        if (!Directory.Exists(directory))
+            return map;
+
+        foreach (var file in Directory.EnumerateFiles(directory, "*.bmd"))
+            map[Path.GetFileNameWithoutExtension(file)] = Path.GetFileName(file);
+
+        return map;
     }
 
     // ── scene.json ───────────────────────────────────────────────
