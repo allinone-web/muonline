@@ -63,7 +63,17 @@ namespace Client.Main.Controls.UI.Game.Inventory
         /// （右邊比較寬是因為翅膀那格有 3 格寬），合計 8.5 格 + 40。
         /// 先前寫成 9 格 + 40，多出來的 32 px 是純粹的留白。
         /// </summary>
-        private static int MobileEquipColumnWidth => (INVENTORY_SQUARE_WIDTH * 17) / 2 + 40;
+        /// <summary>
+        /// 裝備欄的寬度。
+        ///
+        /// 這一欄橫向是五段：左欄(2格) ｜ 項鍊戒指(1格) ｜ 中欄(2格) ｜ 戒指(1格) ｜ 右欄(2格)
+        /// = 8 格，加上四道間隙。8x64 + 24 = 536。
+        ///
+        /// 原本是 8.5 格 + 40 = 584：多出來的半格是「翅膀」欄位比別人寬一格
+        /// 又往右偏移造成的懸空，間隙也開得比需要的大。收窄的 48 px 直接讓給
+        /// 最右邊的道具資訊欄 —— 那裡才是真的不夠用的地方。
+        /// </summary>
+        private static int MobileEquipColumnWidth => INVENTORY_SQUARE_WIDTH * 8 + 24;
 
         // 手機的四欄：立體圖 | 裝備 | 背包 | 資訊
         private Rectangle _previewPanelRect;
@@ -569,13 +579,17 @@ namespace Client.Main.Controls.UI.Game.Inventory
                     return;
                 }
 
-                // 丟到地上必須是點在<b>視窗外面</b>，不能只是「不在背包格子上」。
+                // 放開的位置在<b>視窗外面</b>才算「丟出去」，不能只是「不在背包格子上」。
                 //
                 // 原本的條件是 !IsMouseOverGrid()，等於視窗裡除了格子以外的任何地方
-                // ——標題列、裝備欄的空白、以及新加的立體圖／資訊欄——都會把手上的
-                // 道具丟到地上。滑鼠時代不容易誤觸，觸控上點一下就沒了：
-                // 實測「選一件裝備、再點左邊的立體圖」就會把那件裝備丟掉。
-                if (_itemDragMoved && !IsMouseOver)
+                // ——標題列、裝備欄的空白、立體圖與資訊欄——都會把手上的道具丟到地上。
+                //
+                // 這裡刻意直接測 DisplayRectangle，而不是用 IsMouseOver 這個旗標：
+                // 旗標是 GameControl.Update 算出來的，只要哪天 Interactive 被關掉
+                // （手機上好幾個控制項都是這樣做的，為了不搶場景焦點），它就會恆為
+                // false —— 而 false 在這裡的意思是「把道具丟掉」。用一個會預設成
+                // 「銷毀」的旗標來守著不可逆的動作，是不能接受的。
+                if (_itemDragMoved && !DisplayRectangle.Contains(MuGame.Instance.UiMouseState.Position))
                 {
                     HandleDropOutsideInventory();
                 }
@@ -874,14 +888,20 @@ namespace Client.Main.Controls.UI.Game.Inventory
             _headerRect = new Rectangle(0, 0, WINDOW_WIDTH, HEADER_HEIGHT);
             _footerRect = Rectangle.Empty;
 
-            // 金幣移到標題列左側
-            _zenIconRect = new Rectangle(PANEL_PADDING + 6, 14, 24, 24);
-            _zenFieldRect = new Rectangle(_zenIconRect.Right + 10, 10, 200, 32);
-
-            // 按鈕加大到手指按得到的尺寸，全部收進標題列右側
+            // 關閉鈕放<b>左上角</b>，不是右上角。
+            //
+            // 螢幕右上角是六顆介面按鈕（MENU / CHAR / BAG …）。視窗的關閉鈕如果也在
+            // 右上角，兩者就疊在同一塊區域 —— 想關視窗結果開了另一個，或反過來。
+            // 這在滑鼠上不成問題（指標很精準），在拇指上每天都會發生。
+            // 遊戲內所有視窗一律左上角關閉，見 docs/手機遊戲界面規格.md。
             int btnSize = 46;
-            _closeButtonRect = new Rectangle(WINDOW_WIDTH - btnSize - 12, 3, btnSize, btnSize);
-            _footerRightButtonRect = new Rectangle(_closeButtonRect.X - btnSize - 10, 3, btnSize, btnSize);
+            _closeButtonRect = new Rectangle(12, 3, btnSize, btnSize);
+            _footerRightButtonRect = new Rectangle(_closeButtonRect.Right + 10, 3, btnSize, btnSize);
+
+            // 金幣改到標題列右側，補上左邊讓出來的位置
+            const int zenFieldWidth = 200;
+            _zenFieldRect = new Rectangle(WINDOW_WIDTH - PANEL_PADDING - zenFieldWidth, 10, zenFieldWidth, 32);
+            _zenIconRect = new Rectangle(_zenFieldRect.X - 34, 14, 24, 24);
 
             // 底列原本還有一顆重複的關閉鈕，標題列已經有了，手機不再重複
             _footerLeftButtonRect = Rectangle.Empty;
@@ -898,7 +918,9 @@ namespace Client.Main.Controls.UI.Game.Inventory
             int baseY = HEADER_HEIGHT + 20;
 
             // Left column (pet, left-hand weapon, gloves)
-            int leftColX = panelCenterX - cell * 4 - 24;
+            // 間隙由 24 收成 8：這一欄的寬度是被最外側的兩個欄位撐出來的，
+            // 每收 1 px 兩邊就各省 1 px。
+            int leftColX = panelCenterX - cell * 4 - 8;
             AddEquipSlot(8, new Point(leftColX, baseY), new Point(2, 2), "PET");
             AddEquipSlot(0, new Point(leftColX, baseY + cell * 2 + 8), new Point(2, 3), "L.HAND");
             AddEquipSlot(5, new Point(leftColX, baseY + cell * 5 + 16), new Point(2, 2), "GLOVES");
@@ -916,8 +938,11 @@ namespace Client.Main.Controls.UI.Game.Inventory
             AddEquipSlot(11, new Point(centerColX + cell * 2 + accessoryOffset, baseY + cell * 5 + 28), new Point(1, 1), "RING");
 
             // Right column (wings, right-hand weapon, boots)
-            int rightColX = panelCenterX + cell * 2 + 16;
-            AddEquipSlot(7, new Point(rightColX - cell / 2, baseY - 4), new Point(3, 2), "WINGS");
+            int rightColX = panelCenterX + cell * 2 + 8;
+
+            // 翅膀原本是 3 格寬、而且還往左偏半格，右緣因此比同欄的武器多出 32 px ——
+            // 整個裝備欄的寬度就是被它一個人撐出來的。改成和其他欄位一樣 2 格寬。
+            AddEquipSlot(7, new Point(rightColX, baseY - 4), new Point(2, 2), "WINGS");
             AddEquipSlot(1, new Point(rightColX, baseY + cell * 2 + 8), new Point(2, 3), "R.HAND");
             AddEquipSlot(6, new Point(rightColX, baseY + cell * 5 + 16), new Point(2, 2), "BOOTS");
         }
@@ -1878,6 +1903,20 @@ namespace Client.Main.Controls.UI.Game.Inventory
                     ReleasePickedItem();
                 }
             }
+            else if (s_mobile)
+            {
+                // 手機不從這裡丟東西到地上。
+                //
+                // 桌面是「按住拖到視窗外再放開」，那是一個有意識的動作。觸控沒有
+                // 「按住」這個狀態：點一下裝備就會把它拿在手上（見 HandleInventoryInteraction），
+                // 手指離開螢幕並不會放回去，於是道具就一直懸在手上 —— 接下來只要
+                // 在視窗外點任何一下（ATK、搖桿、空白處），就會被當成「拖到視窗外放開」，
+                // 一件穿在身上的裝備就這樣沒了，而且沒有任何確認。
+                //
+                // 使用者已經遇到兩次。丟棄是不可逆的，它不該是「沒點中任何東西」的預設結果。
+                // 手機要丟東西的話，之後在道具資訊欄放一個明確的按鈕，不走這條路。
+                RestorePickedItemToOriginalLocation();
+            }
             else if (Scene?.World is Controls.WalkableWorldControl world && _network_manager_exists())
             {
                 byte tileX = world.MouseTileX;
@@ -2669,6 +2708,15 @@ namespace Client.Main.Controls.UI.Game.Inventory
             if (pixel == null) return;
 
             bool hovered = _closeHovered;
+
+            if (s_mobile)
+            {
+                // 一塊底 + 一個叉，沒有紅色、沒有高光、沒有外框。
+                // 整個面板只有這一顆按鈕是飽和色的話，眼睛會一直被它拉過去 ——
+                // 而關閉鈕不是玩家開背包時要找的東西。
+                MobileUi.DrawCloseGlyph(spriteBatch, rect, hovered);
+                return;
+            }
 
             // Hover glow
             if (hovered)

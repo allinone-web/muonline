@@ -33,8 +33,21 @@ namespace Client.Main.Controls.UI.Game
         private const float MainButtonRadius = 64f;
         private const float SkillButtonRadius = 40f;
 
-        /// <summary>主按鈕圓心與畫面右下角的距離（虛擬座標）。</summary>
-        private const float MarginRight = 120f;
+        /// <summary>
+        /// 主按鈕圓心與畫面右下角的距離（虛擬座標）。
+        ///
+        /// 右邊距不是隨手挑的：它要讓整個按鈕群（主按鈕 + 左上方那條技能弧線）
+        /// 的最右緣落在 <see cref="MobileUi.RightEdge"/> 上，和右上角的介面按鈕
+        /// 同一條線。弧線上最靠右的是第四顆技能鈕（288 度），它的圓心在主按鈕
+        /// 右邊 41 px，半徑 40 —— 所以整群的最右緣是「圓心 + 81」。
+        ///
+        /// 額外再退 24 px，是給橫置時的鏡頭挖孔留的餘裕：安全區域雖然已經由
+        /// UiScaler 扣掉（見 MuGame.PollSafeArea），但挖孔周圍的圓角仍會斜切，
+        /// 貼著安全區邊界的圓形按鈕還是會被啃掉一角。
+        /// </summary>
+        private const float NotchClearance = 24f;
+        private const float SkillArcRightOverhang = 81f;
+        private static float MarginRight => MobileUi.CornerInset + SkillArcRightOverhang + NotchClearance;
         private const float MarginBottom = 120f;
 
         /// <summary>技能鈕排在主按鈕左上方的弧線上。</summary>
@@ -489,9 +502,16 @@ namespace Client.Main.Controls.UI.Game
             int remainingMs = SkillCooldownTracker.GetRemainingMs(skill.SkillId, nowMs);
             if (_font != null && remainingMs > 0)
             {
+                // 一秒以上顯示整數秒（無條件進位，最後一秒才會看到 1）；
+                // 一秒以內顯示到小數一位，且無條件<b>捨去</b>到十分位 —— 顯示的數字
+                // 永遠不會大於真正剩下的時間。
+                //
+                // 原本的寫法是 (remainingMs + 99) / 100f，少除了一個 10：
+                // 剩 999 ms 時算出 10.98，於是最後一秒不是從 1.0 數到 0，
+                // 而是從 11.0 一路數回 1.0 —— 看起來就像數字突然跳掉。
                 string text = remainingMs >= 1000
-                    ? $"{(remainingMs + 999) / 1000}"
-                    : $"{(remainingMs + 99) / 100f:F1}";
+                    ? ((remainingMs + 999) / 1000).ToString()
+                    : (MathF.Floor(remainingMs / 100f) / 10f).ToString("F1");
                 DrawCenteredLabel(sb, text, center, CooldownTextScale, Color.White);
             }
         }

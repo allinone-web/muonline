@@ -789,6 +789,8 @@ namespace Client.Main
             LastSimulationAcceptedElapsedMs = simStep.AcceptedElapsed.TotalMilliseconds;
             LastSimulationAccumulationAlpha = simStep.InterpolationAlpha;
 
+            PollSafeArea(gameTime);
+
             // Keep background/main-thread work on a fixed budget. Scaling it after a slow
             // frame creates a feedback loop that makes the next frame even slower.
             ProcessMainThreadActions();
@@ -1871,6 +1873,40 @@ namespace Client.Main
 
             GraphicsManager.Instance.Sprite.Draw(sourceTarget, GraphicsDevice.Viewport.Bounds, Color.White);
             GraphicsManager.Instance.Sprite.End();
+        }
+
+        private double _safeAreaPollElapsed = double.MaxValue;
+
+        /// <summary>
+        /// 定期向平台端重新查詢安全區域，值有變就重新配置 UiScaler。
+        ///
+        /// 之前是在 <c>FinishedLaunching</c> 讀一次就算了。那個時間點 UIKit 還沒做完
+        /// 第一次 layout，key window 往往還不存在 —— 讀到的是全零，等於安全區域從來
+        /// 沒有生效過，畫面邊緣的東西就這樣被鏡頭挖孔蓋住。轉向之後也不會有人更新。
+        ///
+        /// 每 0.5 秒查一次：這是一次 UIKit 屬性讀取，成本可以忽略，而且只有在值真的
+        /// 改變時才會走重新配置那條路。
+        /// </summary>
+        private void PollSafeArea(GameTime gameTime)
+        {
+            if (UiScaler.SafeAreaProvider == null)
+                return;
+
+            _safeAreaPollElapsed += gameTime.ElapsedGameTime.TotalSeconds;
+            if (_safeAreaPollElapsed < 0.5)
+                return;
+
+            _safeAreaPollElapsed = 0;
+
+            if (UiScaler.RefreshSafeArea())
+            {
+                _logger?.LogInformation(
+                    "Safe area changed to L={Left} T={Top} R={Right} B={Bottom}; reconfiguring the UI scaler.",
+                    UiScaler.SafeAreaInsets.X, UiScaler.SafeAreaInsets.Y,
+                    UiScaler.SafeAreaInsets.Z, UiScaler.SafeAreaInsets.W);
+
+                ApplyGraphicsConfiguration(AppSettings.Graphics);
+            }
         }
 
         public void ApplyGraphicsConfiguration(GraphicsSettings graphics)

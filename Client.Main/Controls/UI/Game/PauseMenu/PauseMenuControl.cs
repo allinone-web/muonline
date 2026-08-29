@@ -228,6 +228,37 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     return;
 
                 var rect = DisplayRectangle;
+
+                if (MobileUi.IsMobile)
+                {
+                    // 分類清單是一列九個項目。每一個都畫外框的話，畫面左側就是九個
+                    // 疊在一起的方框 —— 框線的數量比文字還多。
+                    //
+                    // 清單本來就是靠位置和間距讀的，不需要框；只有<b>目前選中的</b>
+                    // 那一項需要被指出來，用一塊底色加左側一條短槓就夠了。
+                    if (Active)
+                    {
+                        sprite.Draw(pixel, rect, MobileUi.TitleBarFill * MobileUi.PanelAlpha);
+                        sprite.Draw(pixel, new Rectangle(rect.X, rect.Y + 6, 3, rect.Height - 12), MobileUi.TextPrimary * 0.75f);
+                    }
+                    else if (IsMouseOver)
+                    {
+                        sprite.Draw(pixel, rect, MobileUi.TitleBarFill * 0.45f);
+                    }
+
+                    float mobileScale = 12.5f / Constants.BASE_FONT_SIZE;
+                    string mobileLabel = Text ?? string.Empty;
+                    Vector2 mobileSize = font.MeasureString(mobileLabel) * mobileScale;
+
+                    // 靠左對齊：清單項目置中的話，每一行的起點都不一樣，
+                    // 眼睛要重新找一次左緣才讀得下去。
+                    var mobilePosition = new Vector2(rect.X + 16, rect.Y + (rect.Height - mobileSize.Y) * 0.5f);
+                    sprite.DrawString(font, mobileLabel, mobilePosition,
+                        (Active ? MobileUi.TextPrimary : MobileUi.TextDim) * Alpha,
+                        0f, Vector2.Zero, mobileScale, SpriteEffects.None, 0f);
+                    return;
+                }
+
                 Color fill = Active
                     ? new Color(64, 55, 34, 225)
                     : IsMouseOver

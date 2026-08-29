@@ -15,7 +15,29 @@ namespace Client.Main.Controls.UI
     {
         // Fields
         private const int CHATBOX_WIDTH = 281;
-        public const int CHATBOX_HEIGHT = 47;
+
+        // ── 手機的輸入列 ──
+        //
+        // 桌面是 281x47，輸入欄 176x14、字級 10。那是滑鼠加實體鍵盤的尺寸：
+        // 在手機上輸入欄只有一根手指的三分之一高，字小到看不清自己打了什麼 ——
+        // 使用者的說法是「根本沒法用」。
+        //
+        // 手機改成一整條橫跨畫面下緣的列：左邊一顆頻道鈕（點一下換頻道，
+        // 取代原本四個 27x27 的分頁貼圖）、中間是輸入欄、右邊一顆送出鈕。
+        // 高度 72，輸入欄 48 —— 都在拇指按得到的範圍。
+        private const int MobileBarHeight = 72;
+        private const int MobileBarPadding = 10;
+        private const int MobileChannelButtonWidth = 132;
+        private const int MobileSendButtonWidth = 120;
+        private const int MobileInnerHeight = MobileBarHeight - MobileBarPadding * 2;
+        private const float MobileFontSize = 19f;
+
+        public static int MobileWidth => Math.Max(320, UiScaler.VirtualSize.X - MobileUi.CornerInset * 2);
+
+        public static int ChatBoxHeight => MobileUi.IsMobile ? MobileBarHeight : 47;
+
+        /// <summary>桌面沿用原本的 47；手機是一整條 72 高的輸入列。</summary>
+        public static int CHATBOX_HEIGHT => ChatBoxHeight;
         private const int BUTTON_WIDTH = 27;
         private const int BUTTON_HEIGHT = 26;
         private const int GROUP_SEPARATING_WIDTH = 6;
@@ -111,7 +133,9 @@ namespace Client.Main.Controls.UI
 
             _chatLogWindowRef = chatLogWindow ?? throw new ArgumentNullException(nameof(chatLogWindow));
             AutoViewSize = false;
-            ViewSize = new Point(CHATBOX_WIDTH, CHATBOX_HEIGHT);
+            ViewSize = MobileUi.IsMobile
+                ? new Point(MobileWidth, MobileBarHeight)
+                : new Point(CHATBOX_WIDTH, CHATBOX_HEIGHT);
             ControlSize = ViewSize;
             Visible = false; // Start hidden.
             Interactive = true; // Needs mouse interaction.
@@ -156,20 +180,29 @@ namespace Client.Main.Controls.UI
 
             // 2. Text Input Fields
             _chatInput = TextFieldControl.Create();
-            _chatInput.X = 72;
-            _chatInput.Y = 30;
-            _chatInput.ViewSize = new Point(176, 14);
-            _chatInput.FontSize = 10f;
-            _chatInput.BackgroundColor = Color.Black * 0.1f;
-            _chatInput.TextColor = new Color(230, 210, 255);
-
             _whisperIdInput = TextFieldControl.Create();
-            _whisperIdInput.X = 5;
-            _whisperIdInput.Y = 30;
-            _whisperIdInput.ViewSize = new Point(60, 14);
-            _whisperIdInput.FontSize = 10f;
-            _whisperIdInput.BackgroundColor = Color.Black * 0.1f;
-            _whisperIdInput.TextColor = new Color(200, 200, 200, 255);
+
+            if (MobileUi.IsMobile)
+            {
+                LayoutMobileFields();
+            }
+            else
+            {
+                _chatInput.X = 72;
+                _chatInput.Y = 30;
+                _chatInput.ViewSize = new Point(176, 14);
+                _chatInput.FontSize = 10f;
+                _chatInput.BackgroundColor = Color.Black * 0.1f;
+                _chatInput.TextColor = new Color(230, 210, 255);
+
+                _whisperIdInput.X = 5;
+                _whisperIdInput.Y = 30;
+                _whisperIdInput.ViewSize = new Point(60, 14);
+                _whisperIdInput.FontSize = 10f;
+                _whisperIdInput.BackgroundColor = Color.Black * 0.1f;
+                _whisperIdInput.TextColor = new Color(200, 200, 200, 255);
+            }
+
             _whisperIdInput.Visible = false;
 
             Controls.Add(_chatInput);
@@ -302,11 +335,21 @@ namespace Client.Main.Controls.UI
         public void Show()
         {
             Visible = true;
+
+            // 手機的輸入列橫跨畫面下緣，會壓到藥水鈕與 ATK ——
+            // 必須在最上層，否則點擊會被下面的東西先吃掉。
+            BringToFront();
+
             _chatInput.Visible = true;
             _whisperIdInput.Visible = _isWhisperSendMode;
 
             _suppressNextEnter = true;
-            foreach (var btn in GetAllButtons()) btn.Visible = true;
+            // 手機的頻道與開關改由輸入列自己畫（見 DrawMobileBar），
+            // 那 10 顆 27x27 的貼圖鈕一律不顯示。
+            if (!MobileUi.IsMobile)
+            {
+                foreach (var btn in GetAllButtons()) btn.Visible = true;
+            }
 
             _chatInput.Value = string.Empty; // Clear text on show.
             _chatInput.Focus();
@@ -365,11 +408,179 @@ namespace Client.Main.Controls.UI
             SoundController.Instance.PlayBuffer("Sound/iButtonClick.wav");
         }
 
+        // ── 手機輸入列 ──
+        private Rectangle _mobileChannelRect;
+        private Rectangle _mobileFieldRect;
+        private Rectangle _mobileSendRect;
+        private int _mobilePressedButton = -1;   // 0 = 頻道，1 = 送出
+        private bool _mobileWasPressed;
+        private Point _mobileLastCanvas = Point.Zero;
+
+        private static readonly string[] MobileChannelLabels = { "ALL", "PARTY", "GUILD", "GENS" };
+
+        /// <summary>
+        /// 依畫布重新計算手機輸入列的三個區塊：頻道 ｜ 輸入欄 ｜ 送出。
+        /// </summary>
+        private void LayoutMobileFields()
+        {
+            var canvas = UiScaler.VirtualSize;
+            _mobileLastCanvas = canvas;
+
+            int width = MobileWidth;
+            ViewSize = new Point(width, MobileBarHeight);
+            ControlSize = ViewSize;
+            AutoViewSize = false;
+
+            X = MobileUi.CornerInset;
+            Y = canvas.Y - MobileBarHeight - MobileUi.CornerInset;
+
+            _mobileChannelRect = new Rectangle(
+                MobileBarPadding, MobileBarPadding, MobileChannelButtonWidth, MobileInnerHeight);
+
+            _mobileSendRect = new Rectangle(
+                width - MobileBarPadding - MobileSendButtonWidth, MobileBarPadding,
+                MobileSendButtonWidth, MobileInnerHeight);
+
+            int fieldX = _mobileChannelRect.Right + MobileBarPadding;
+            _mobileFieldRect = new Rectangle(
+                fieldX, MobileBarPadding,
+                Math.Max(80, _mobileSendRect.X - MobileBarPadding - fieldX), MobileInnerHeight);
+
+            // 輸入欄的內距：文字不要貼著框線。
+            _chatInput.X = _mobileFieldRect.X + 12;
+            _chatInput.Y = _mobileFieldRect.Y + (MobileInnerHeight - 26) / 2;
+            _chatInput.ViewSize = new Point(_mobileFieldRect.Width - 24, 26);
+            _chatInput.FontSize = MobileFontSize;
+            _chatInput.BackgroundColor = Color.Transparent;   // 底由 DrawMobileBar 畫
+            _chatInput.TextColor = MobileUi.TextPrimary;
+
+            // 悄悄話的收件人欄疊在輸入欄的左段，開啟時才顯示
+            _whisperIdInput.X = _chatInput.X;
+            _whisperIdInput.Y = _chatInput.Y;
+            _whisperIdInput.ViewSize = new Point(Math.Min(200, _chatInput.ViewSize.X / 3), 26);
+            _whisperIdInput.FontSize = MobileFontSize;
+            _whisperIdInput.BackgroundColor = Color.Transparent;
+            _whisperIdInput.TextColor = MobileUi.TextDim;
+        }
+
+        /// <summary>手機輸入列：頻道鈕、輸入欄的底、送出鈕。</summary>
+        private void DrawMobileBar(SpriteBatch sb)
+        {
+            var pixel = GraphicsManager.Instance.Pixel;
+            var font = GraphicsManager.Instance.Font;
+            if (pixel == null || font == null)
+                return;
+
+            var origin = DisplayRectangle.Location;
+
+            // 輸入欄：比面板再深一階，才看得出「這裡可以打字」
+            var field = new Rectangle(origin.X + _mobileFieldRect.X, origin.Y + _mobileFieldRect.Y,
+                                      _mobileFieldRect.Width, _mobileFieldRect.Height);
+            sb.Draw(pixel, field, MobileUi.FieldFill * 0.92f);
+            sb.Draw(pixel, new Rectangle(field.X, field.Bottom - 1, field.Width, 1), MobileUi.PanelBorder * 0.35f);
+
+            DrawMobileBarButton(sb, font, origin, _mobileChannelRect,
+                MobileChannelLabels[Math.Clamp((int)_currentInputType, 0, MobileChannelLabels.Length - 1)],
+                _mobilePressedButton == 0, emphasis: false);
+
+            DrawMobileBarButton(sb, font, origin, _mobileSendRect, "SEND",
+                _mobilePressedButton == 1, emphasis: true);
+        }
+
+        private static void DrawMobileBarButton(SpriteBatch sb, SpriteFont font, Point origin,
+                                                Rectangle local, string label, bool pressed, bool emphasis)
+        {
+            var pixel = GraphicsManager.Instance.Pixel;
+            if (pixel == null)
+                return;
+
+            var rect = new Rectangle(origin.X + local.X, origin.Y + local.Y, local.Width, local.Height);
+
+            float fill = pressed ? 0.95f : (emphasis ? 0.75f : 0.5f);
+            sb.Draw(pixel, rect, MobileUi.TitleBarFill * fill);
+            sb.Draw(pixel, new Rectangle(rect.X, rect.Y, rect.Width, 1), MobileUi.PanelBorder * 0.3f);
+            sb.Draw(pixel, new Rectangle(rect.X, rect.Bottom - 1, rect.Width, 1), MobileUi.PanelBorder * 0.3f);
+
+            const float scale = 0.56f;
+            Vector2 size = font.MeasureString(label) * scale;
+            var pos = new Vector2(rect.X + (rect.Width - size.X) * 0.5f, rect.Y + (rect.Height - size.Y) * 0.5f);
+            sb.DrawString(font, label, pos + Vector2.One, Color.Black * 0.6f, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+            sb.DrawString(font, label, pos, emphasis ? MobileUi.TextPrimary : MobileUi.TextDim,
+                          0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+        }
+
+        /// <summary>
+        /// 手機輸入列自己處理觸控。
+        ///
+        /// 不走 SpriteControl 那套子控制項按鈕：那些是 27x27 的貼圖鈕，
+        /// 在手機上既按不到也看不清（見 s_typeButtonTextures 的註解）。
+        /// </summary>
+        private void UpdateMobileTouch()
+        {
+            var mouse = MuGame.Instance.UiMouseState;
+            bool pressed = mouse.LeftButton == ButtonState.Pressed;
+            var origin = DisplayRectangle.Location;
+            var position = mouse.Position;
+
+            int Hit()
+            {
+                if (new Rectangle(origin.X + _mobileChannelRect.X, origin.Y + _mobileChannelRect.Y,
+                                  _mobileChannelRect.Width, _mobileChannelRect.Height).Contains(position))
+                    return 0;
+                if (new Rectangle(origin.X + _mobileSendRect.X, origin.Y + _mobileSendRect.Y,
+                                  _mobileSendRect.Width, _mobileSendRect.Height).Contains(position))
+                    return 1;
+                return -1;
+            }
+
+            if (pressed && !_mobileWasPressed)
+            {
+                _mobilePressedButton = Hit();
+            }
+            else if (!pressed && _mobileWasPressed)
+            {
+                int button = _mobilePressedButton;
+                _mobilePressedButton = -1;
+                _mobileWasPressed = false;
+
+                if (button >= 0 && button == Hit())
+                {
+                    SoundController.Instance.PlayBuffer("Sound/iButtonClick.wav");
+
+                    if (button == 0)
+                    {
+                        // 一顆鈕輪流切換四個頻道，取代四個分頁。
+                        int next = ((int)_currentInputType + 1) % MobileChannelLabels.Length;
+                        SetInputType((InputMessageType)next);
+                    }
+                    else
+                    {
+                        ProcessEnterKey();
+                    }
+                }
+
+                return;
+            }
+
+            _mobileWasPressed = pressed;
+        }
+
         public override void Update(GameTime gameTime)
         {
             if (!Visible) return;
 
+            if (MobileUi.IsMobile && UiScaler.VirtualSize != _mobileLastCanvas)
+            {
+                LayoutMobileFields();
+            }
+
             base.Update(gameTime); // Update children (buttons, text fields).
+
+            if (MobileUi.IsMobile)
+            {
+                UpdateMobileTouch();
+            }
+
             HandleKeyboardInput();
             UpdateVisualStates(); // Keep visual state consistent.
         }
@@ -705,6 +916,14 @@ namespace Client.Main.Controls.UI
             if (MobileUi.IsMobile && sb != null)
             {
                 MobileUi.DrawPanel(sb, DisplayRectangle);
+            }
+
+            if (MobileUi.IsMobile && sb != null)
+            {
+                // 先畫輸入欄與兩顆鈕的底，再讓 base.Draw 把文字欄畫在上面
+                DrawMobileBar(sb);
+                base.Draw(gameTime);
+                return;
             }
 
             base.Draw(gameTime);

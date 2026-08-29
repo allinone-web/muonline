@@ -354,8 +354,10 @@ namespace Client.Main.Controls.UI.Game.Trade
                 gridFrameWidth - 80,
                 TRADE_BUTTON_HEIGHT);
 
-            // Close button
-            _closeButtonRect = new Rectangle(WINDOW_WIDTH - 30, 10, 20, 20);
+            // 關閉鈕放<b>左上角</b>：螢幕右上角是六顆介面按鈕（MENU / CHAR / BAG …），
+            // 視窗的關閉鈕再放右上角就會疊在同一塊區域，拇指分不開。
+            // 遊戲內所有視窗一致，見 docs/手機遊戲界面規格.md。
+            _closeButtonRect = new Rectangle(12, 10, 26, 22);
         }
 
         // ═══════════════════════════════════════════════════════════════

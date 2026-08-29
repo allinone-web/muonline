@@ -61,29 +61,46 @@ namespace MuIos
         /// </summary>
         private static void ConfigureSafeArea()
         {
+            // 註冊查詢器，讓 MuGame 每 0.5 秒重新問一次。
+            //
+            // 這裡原本是在 FinishedLaunching 讀一次就結束。那個時間點 UIKit 還沒有做完
+            // 第一次 layout，key window 通常還不存在 —— 早退，SafeAreaInsets 保持全零，
+            // 安全區域等於從來沒生效過，畫面邊緣的 UI 就被鏡頭挖孔蓋住而且點不到。
+            // 就算讀到了，那也只是啟動當下的方向，轉向之後同樣沒有人更新。
+            Client.Main.Controllers.UiScaler.SafeAreaProvider = ReadSafeAreaInsets;
+
+            // 啟動時先問一次。此時多半仍是全零，但如果剛好已經 layout 完，
+            // 第一幀就會是對的，不必等到第一次輪詢。
+            Client.Main.Controllers.UiScaler.RefreshSafeArea();
+        }
+
+        /// <summary>
+        /// 讀 UIKit 的安全區域並換算成像素（SafeAreaInsets 的單位是 point）。
+        /// 讀不到時回傳目前的值，不要退回全零 —— 那會讓已經正確的版面在
+        /// 某一次查詢失敗時整個跳掉。
+        /// </summary>
+        private static Microsoft.Xna.Framework.Vector4 ReadSafeAreaInsets()
+        {
             try
             {
                 var window = UIApplication.SharedApplication?.Windows?.FirstOrDefault(w => w.IsKeyWindow)
                              ?? UIApplication.SharedApplication?.Windows?.FirstOrDefault();
                 if (window == null)
-                    return;
+                    return Client.Main.Controllers.UiScaler.SafeAreaInsets;
 
                 var insets = window.SafeAreaInsets;
                 nfloat scale = window.Screen?.NativeScale ?? UIScreen.MainScreen.NativeScale;
 
-                Client.Main.Controllers.UiScaler.SafeAreaInsets = new Microsoft.Xna.Framework.Vector4(
+                return new Microsoft.Xna.Framework.Vector4(
                     (float)(insets.Left * scale),
                     (float)(insets.Top * scale),
                     (float)(insets.Right * scale),
                     (float)(insets.Bottom * scale));
-
-                Console.WriteLine(
-                    $"[MuIos] SafeAreaInsets (px) L={insets.Left * scale} T={insets.Top * scale} " +
-                    $"R={insets.Right * scale} B={insets.Bottom * scale}");
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[MuIos] Failed to read safe area insets: {ex.Message}");
+                return Client.Main.Controllers.UiScaler.SafeAreaInsets;
             }
         }
 

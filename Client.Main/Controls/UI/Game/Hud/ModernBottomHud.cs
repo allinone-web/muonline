@@ -658,6 +658,15 @@ namespace Client.Main.Controls.UI.Game.Hud
 
             if (pressed && !_mobileWasPressed)
             {
+                // 聊天輸入列蓋住的地方不算 HUD（見 ContainsInteractivePoint）
+                if (!ContainsInteractivePoint(position))
+                {
+                    _mobilePressedButton = -1;
+                    _avatarPressed = false;
+                    _mobileWasPressed = true;
+                    return;
+                }
+
                 _mobilePressedButton = HitTestButton(position);
                 _avatarPressed = AvatarContains(position);
             }
@@ -1228,6 +1237,15 @@ namespace Client.Main.Controls.UI.Game.Hud
         {
             if (!Visible)
                 return false;
+
+            // 聊天輸入列開著的時候橫跨整個畫面下緣，會蓋住藥水鈕。
+            // 蓋住的部分不算 HUD —— 否則想點輸入欄會變成喝藥水。
+            if (MuGame.Instance.ActiveScene is Scenes.GameScene scene &&
+                scene.ChatInput is { Visible: true } chat &&
+                chat.DisplayRectangle.Contains(position))
+            {
+                return false;
+            }
 
             if (_potionPickerOpen && _potionPickerRect.Contains(position))
                 return true;

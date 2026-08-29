@@ -255,6 +255,24 @@ namespace Client.Main.Controls.UI
         /// </summary>
         public const int RightColumnWidth = 300;
 
+        /// <summary>
+        /// 右側對齊線（虛擬座標）。畫面右側的每一個元件 —— 介面按鈕、經驗條、
+        /// 狀態列、撿取清單、增益圖示、ATK 與技能弧線 —— 右緣都要落在這裡。
+        ///
+        /// 為什麼不是「盡量靠右」：靠右的結果是每個元件各自貼著螢幕邊緣，
+        /// 而螢幕邊緣是圓角、是鏡頭挖孔、是手掌握住的地方。對齊到同一條線之後，
+        /// 右側讀起來是一整欄，而不是七個各自為政的方塊。
+        /// </summary>
+        public static int RightEdge => UiScaler.VirtualSize.X - CornerInset;
+
+        /// <summary>左側對齊線。與 <see cref="RightEdge"/> 對稱。</summary>
+        public static int LeftEdge => CornerInset;
+
+        /// <summary>
+        /// 這個矩形的右緣是否已經對齊 <see cref="RightEdge"/>。除錯用。
+        /// </summary>
+        public static bool IsRightAligned(Rectangle rect) => rect.Right == RightEdge;
+
         // ───────────────────────── 介面樣式 ─────────────────────────
         //
         // 登入、選伺服器、選角色、遊戲內的面板全部共用這一組值。
@@ -301,6 +319,49 @@ namespace Client.Main.Controls.UI
             sb.Draw(pixel, new Rectangle(rect.X, rect.Bottom - 1, rect.Width, 1), border);
             sb.Draw(pixel, new Rectangle(rect.X, rect.Y, 1, rect.Height), border);
             sb.Draw(pixel, new Rectangle(rect.Right - 1, rect.Y, 1, rect.Height), border);
+        }
+
+        /// <summary>
+        /// 視窗的關閉鈕：一塊底 + 一個用兩條線畫出來的叉。
+        ///
+        /// 沒有紅色。整個面板只要有一顆飽和色的按鈕，眼睛就會一直被它拉過去 ——
+        /// 而關閉鈕從來不是玩家打開視窗時要找的東西。
+        ///
+        /// <b>位置一律在視窗左上角。</b>螢幕右上角是那六顆介面按鈕，視窗的關閉鈕
+        /// 再放右上角就會疊在同一塊區域，拇指分不開。
+        /// </summary>
+        public static void DrawCloseGlyph(SpriteBatch sb, Rectangle rect, bool pressed)
+        {
+            var pixel = Controllers.GraphicsManager.Instance?.Pixel;
+            if (pixel == null)
+                return;
+
+            sb.Draw(pixel, rect, (pressed ? TitleBarFill * 1.6f : TitleBarFill) * PanelAlpha);
+            sb.Draw(pixel, new Rectangle(rect.X, rect.Y, rect.Width, 1), PanelBorder * 0.35f);
+            sb.Draw(pixel, new Rectangle(rect.X, rect.Bottom - 1, rect.Width, 1), PanelBorder * 0.35f);
+            sb.Draw(pixel, new Rectangle(rect.X, rect.Y, 1, rect.Height), PanelBorder * 0.35f);
+            sb.Draw(pixel, new Rectangle(rect.Right - 1, rect.Y, 1, rect.Height), PanelBorder * 0.35f);
+
+            // 叉：兩條 45 度的線，用 1x1 的 pixel 旋轉出來。
+            var color = (pressed ? TextPrimary : TextDim) * 0.95f;
+            var center = new Vector2(rect.Center.X, rect.Center.Y);
+            float arm = rect.Width * 0.30f;
+            const int thickness = 2;
+
+            for (int i = 0; i < 2; i++)
+            {
+                float rotation = i == 0 ? MathHelper.PiOver4 : -MathHelper.PiOver4;
+                sb.Draw(
+                    pixel,
+                    center,
+                    null,
+                    color,
+                    rotation,
+                    new Vector2(0.5f, 0.5f),
+                    new Vector2(arm * 2f, thickness),
+                    SpriteEffects.None,
+                    0f);
+            }
         }
 
         /// <summary>

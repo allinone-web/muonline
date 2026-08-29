@@ -1,3 +1,4 @@
+#nullable enable
 using System;
 using Microsoft.Xna.Framework;
 
@@ -73,6 +74,44 @@ namespace Client.Main.Controllers
         /// 由平台端（MuIos）在取得 UIKit 的 SafeAreaInsets 後設定。
         /// </summary>
         public static Vector4 SafeAreaInsets { get; set; } = Vector4.Zero; // Left, Top, Right, Bottom
+
+        /// <summary>
+        /// 由平台端提供、可重複查詢的安全區域來源（以像素為單位）。
+        ///
+        /// 為什麼不能只在啟動時讀一次：<c>FinishedLaunching</c> 執行時 UIKit 還沒有
+        /// 完成第一次 layout，key window 可能根本還不存在，讀到的是全零；就算讀到了，
+        /// 那也是啟動當下的方向。裝置轉向、動態島換邊之後就再也沒有人更新它 ——
+        /// 結果是安全區域形同關閉，畫面邊緣的元素被鏡頭挖孔蓋住而且點不到。
+        ///
+        /// 由 <see cref="MuGame"/> 定期查詢，值有變才重新配置。
+        /// </summary>
+        public static Func<Vector4>? SafeAreaProvider { get; set; }
+
+        /// <summary>
+        /// 向平台端重新查詢安全區域。回傳值是否改變（呼叫端據此決定要不要重新配置）。
+        /// </summary>
+        public static bool RefreshSafeArea()
+        {
+            var provider = SafeAreaProvider;
+            if (provider == null)
+                return false;
+
+            Vector4 insets;
+            try
+            {
+                insets = provider();
+            }
+            catch
+            {
+                return false;
+            }
+
+            if (insets == SafeAreaInsets)
+                return false;
+
+            SafeAreaInsets = insets;
+            return true;
+        }
 
         public static void Configure(int actualWidth, int actualHeight, int virtualWidth, int virtualHeight,
             ScaleMode mode = ScaleMode.Uniform)
