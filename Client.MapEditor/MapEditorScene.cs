@@ -111,8 +111,15 @@ public sealed class MapEditorScene : BaseScene
     /// <summary>物件數連續這麼多幀沒變，就當作載完了。</summary>
     private const int ObjectSettleFrames = 90;
 
+    /// <summary>
+    /// 最多等這麼多幀。有些圖的物件數永遠不會停 —— 環境特效會持續生滅，
+    /// 所以「連續 N 幀不變」在那些圖上永遠不成立，稽核會卡死在那裡。
+    /// </summary>
+    private const int ObjectSettleTimeoutFrames = 600;
+
     private bool _pendingReport;
     private int _settleFrames;
+    private int _waitedFrames;
     private int _lastObjectCount = -1;
 
     /// <summary>等世界的物件數穩定下來，再對帳。</summary>
@@ -122,21 +129,31 @@ public sealed class MapEditorScene : BaseScene
             return;
 
         int count = world.Objects.Count;
+        _waitedFrames++;
 
         if (count != _lastObjectCount)
         {
             _lastObjectCount = count;
             _settleFrames = 0;
-            return;
+        }
+        else
+        {
+            _settleFrames++;
         }
 
-        if (++_settleFrames < ObjectSettleFrames)
+        if (_settleFrames < ObjectSettleFrames && _waitedFrames < ObjectSettleTimeoutFrames)
             return;
 
+        bool settled = _settleFrames >= ObjectSettleFrames;
         _pendingReport = false;
 
         if (_session.LoadedWorld is WorldEntry entry)
+        {
+            if (!settled)
+                Console.WriteLine($"[物件] World{entry.Index}：物件數一直在變（環境特效），等到上限就先對帳");
+
             ReportObjectLoading(entry, world);
+        }
 
         if (_auditQueue is null)
             return;
@@ -737,6 +754,7 @@ public sealed class MapEditorScene : BaseScene
             // 所以只標記待對帳，等數量不再變動再算。
             _pendingReport = true;
             _settleFrames = 0;
+            _waitedFrames = 0;
             _lastObjectCount = -1;
 
             if (_session.RunSelfTest)
