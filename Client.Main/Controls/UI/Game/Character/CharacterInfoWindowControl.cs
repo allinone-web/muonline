@@ -90,6 +90,9 @@ namespace Client.Main.Controls.UI.Game.Character
             public Rectangle? PressedRect { get; }
             public Point FrameSize { get; }
             public Action OnClick { get; }
+
+            /// <summary>手機用的文字標籤。貼圖按鈕在手機上太小也太模糊，改畫文字。</summary>
+            public string Label { get; set; } = string.Empty;
             public bool Visible { get; set; } = true;
             public bool Enabled { get; set; } = true;
         }
@@ -291,6 +294,18 @@ namespace Client.Main.Controls.UI.Game.Character
                 _logger.LogInformation("Master Level button clicked.");
                 SoundController.Instance.PlayBuffer("Sound/iButtonClick.wav");
             });
+
+            // 手機的按鈕是自己畫的，需要文字（見 DrawMobileTextButton）
+            _exitButton.Label = "CLOSE";
+            _questButton.Label = "QUEST";
+            _petButton.Label = "PET";
+            _masterButton.Label = "MASTER";
+
+            foreach (var statButton in _statButtons)
+            {
+                if (statButton != null)
+                    statButton.Label = "+";
+            }
         }
 
         private CharacterInfoTextEntry CreateText(Vector2 basePosition, float fontSize, Color color, TextAlignment alignment = TextAlignment.Left)
@@ -301,8 +316,25 @@ namespace Client.Main.Controls.UI.Game.Character
             return entry;
         }
 
+        /// <summary>手機的底部按鈕尺寸。桌面用貼圖的原尺寸（約 36x29，換算不到 20 pt）。</summary>
+        private const int MobileBottomButtonWidth = 120;
+        private const int MobileBottomButtonHeight = 46;
+        private const int MobileBottomButtonGap = 10;
+
         private static Rectangle CreateBottomBounds(int xOffset, Texture2D texture)
         {
+            if (MobileUi.IsMobile)
+            {
+                // xOffset 原本是 20/70/120/170（貼圖寬度決定的間距）。
+                // 換算成「第幾顆」再照手機的尺寸重排，才不必動四個呼叫點。
+                int index = Math.Max(0, (xOffset - 20) / 50);
+                return new Rectangle(
+                    20 + index * (MobileBottomButtonWidth + MobileBottomButtonGap),
+                    WINDOW_HEIGHT - MobileBottomButtonHeight - 14,
+                    MobileBottomButtonWidth,
+                    MobileBottomButtonHeight);
+            }
+
             if (texture == null)
             {
                 return new Rectangle(xOffset, WINDOW_HEIGHT - 40, 36, 29);
@@ -376,7 +408,9 @@ namespace Client.Main.Controls.UI.Game.Character
 
         private CharacterInfoButton CreateButton(Rectangle baseBounds, Texture2D texture, Rectangle? normalRect, Rectangle? hoverRect, Rectangle? pressedRect, Action onClick)
         {
-            if (normalRect.HasValue)
+            // 手機的 bounds 是自己算的（見 CreateBottomBounds），不要被貼圖的
+            // 影格尺寸覆蓋回去 —— 那才是按鈕小到按不到的原因。
+            if (normalRect.HasValue && !MobileUi.IsMobile)
             {
                 baseBounds.Width = normalRect.Value.Width;
                 baseBounds.Height = normalRect.Value.Height;
@@ -679,6 +713,15 @@ namespace Client.Main.Controls.UI.Game.Character
                 Rectangle destRect = GetButtonRectangle(button, controlScale);
                 Rectangle panelRect = new(destRect.X - 2, destRect.Y - 2, destRect.Width + 4, destRect.Height + 4);
                 bool highlighted = (_hoveredButtonIndex == i || _pressedButtonIndex == i) && button.Enabled;
+
+                if (MobileUi.IsMobile)
+                {
+                    // 一塊底 + 一行字。原本是 36x29 的貼圖（在 iPhone 上不到 20 pt），
+                    // 而且是為 1024x768 畫的點陣圖，放大必糊。
+                    DrawMobileTextButton(spriteBatch, destRect, button, highlighted);
+                    continue;
+                }
+
                 UiDrawHelper.DrawVerticalGradient(
                     spriteBatch,
                     panelRect,
@@ -724,6 +767,36 @@ namespace Client.Main.Controls.UI.Game.Character
             }
         }
 
+        private void DrawMobileTextButton(SpriteBatch spriteBatch, Rectangle rect, CharacterInfoButton button, bool highlighted)
+        {
+            var pixel = GraphicsManager.Instance.Pixel;
+            var font = GraphicsManager.Instance.Font;
+            if (pixel == null || font == null)
+                return;
+
+            float fill = !button.Enabled ? 0.35f : (highlighted ? 0.95f : 0.62f);
+            spriteBatch.Draw(pixel, rect, MobileUi.TitleBarFill * (fill * Alpha));
+
+            string label = button.Label;
+            if (string.IsNullOrEmpty(label))
+                return;
+
+            const float scale = 0.46f;
+            var size = font.MeasureString(label) * scale;
+            var position = new Vector2(
+                rect.X + (rect.Width - size.X) * 0.5f,
+                rect.Y + (rect.Height - size.Y) * 0.5f);
+
+            Color color = !button.Enabled
+                ? MobileUi.TextDim * 0.6f
+                : (highlighted ? MobileUi.TextPrimary : MobileUi.TextDim);
+
+            spriteBatch.DrawString(font, label, position + Vector2.One, Color.Black * (0.6f * Alpha),
+                                   0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+            spriteBatch.DrawString(font, label, position, color * Alpha,
+                                   0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+        }
+
         private void DrawHeaderCloseButton(SpriteBatch spriteBatch)
         {
             Rectangle rectangle = GetHeaderCloseRectangle(Scale);
@@ -764,6 +837,16 @@ namespace Client.Main.Controls.UI.Game.Character
 
         private Rectangle GetHeaderCloseRectangle(float controlScale)
         {
+            if (MobileUi.IsMobile)
+            {
+                // 左上角，46 見方（拇指按得到）。右上角是螢幕那六顆介面按鈕的位置。
+                int size = Math.Max(40, (int)MathF.Round(46f * controlScale));
+                return new Rectangle(
+                    DisplayRectangle.X + (int)MathF.Round(10f * controlScale),
+                    DisplayRectangle.Y + (int)MathF.Round(6f * controlScale),
+                    size, size);
+            }
+
             return new Rectangle(
                 DisplayRectangle.X + (int)MathF.Round((WINDOW_WIDTH - 34) * controlScale),
                 DisplayRectangle.Y + (int)MathF.Round(12f * controlScale),

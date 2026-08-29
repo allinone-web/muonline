@@ -32,7 +32,21 @@ namespace Client.Main.Controls.UI
         private const int MobileInnerHeight = MobileBarHeight - MobileBarPadding * 2;
         private const float MobileFontSize = 19f;
 
-        public static int MobileWidth => Math.Max(320, UiScaler.VirtualSize.X - MobileUi.CornerInset * 2);
+        /// <summary>
+        /// 輸入列的寬度。
+        ///
+        /// 原本是整條畫面寬。橫置的手機很寬（虛擬座標常常超過 1600），
+        /// 一個只打幾個字的輸入欄沒有理由那麼長 —— 而且它橫跨下緣就會壓在
+        /// 藥水鈕與 ATK 上面。收成畫面的六成、上限 900。
+        /// </summary>
+        public static int MobileWidth
+        {
+            get
+            {
+                int canvas = UiScaler.VirtualSize.X;
+                return Math.Clamp((int)(canvas * 0.6f), 320, 900);
+            }
+        }
 
         public static int ChatBoxHeight => MobileUi.IsMobile ? MobileBarHeight : 47;
 
@@ -352,9 +366,18 @@ namespace Client.Main.Controls.UI
             }
 
             _chatInput.Value = string.Empty; // Clear text on show.
-            _chatInput.Focus();
-            Scene.FocusControl = _chatInput;
-            _chatInput.MoveCursorToEnd();
+
+            // 手機<b>不要</b>自動聚焦。
+            //
+            // 聚焦會立刻叫出 iOS 的系統鍵盤，鍵盤佔掉半個畫面 —— 但玩家按 CHAT
+            // 常常只是想看一下聊天內容，並不是要打字。想打字的時候點一下輸入欄
+            // 就好，那一下正是「我要開始打字了」的明確意思。
+            if (!MobileUi.IsMobile)
+            {
+                _chatInput.Focus();
+                Scene.FocusControl = _chatInput;
+                _chatInput.MoveCursorToEnd();
+            }
 
             // Reset history navigation.
             _currentChatHistoryIndex = _chatHistory.Count;
@@ -431,8 +454,13 @@ namespace Client.Main.Controls.UI
             ControlSize = ViewSize;
             AutoViewSize = false;
 
-            X = MobileUi.CornerInset;
-            Y = canvas.Y - MobileBarHeight - MobileUi.CornerInset;
+            // 水平置中；垂直放在畫面中下段而不是貼著下緣。
+            //
+            // 貼下緣有兩個問題：它正好蓋在藥水鈕與 ATK 上，而且軟鍵盤彈出來
+            // 之後輸入欄會被鍵盤本身擋住。0.62 的高度大約在畫面下三分之一，
+            // 拇指構得到，也還在鍵盤上緣之上。
+            X = (canvas.X - width) / 2;
+            Y = (int)(canvas.Y * 0.62f);
 
             _mobileChannelRect = new Rectangle(
                 MobileBarPadding, MobileBarPadding, MobileChannelButtonWidth, MobileInnerHeight);
