@@ -142,7 +142,10 @@ namespace Client.Main.Controls.UI.Game.Buffs
             int tooltipHeight = (int)textSize.Y + padding * 2 + 2;
 
             Point mouse = MuGame.Instance.UiMouseState.Position;
-            int x = Math.Clamp(mouse.X + 12, 2, Math.Max(2, UiScaler.VirtualSize.X - tooltipWidth - 2));
+            // 夾到對齊線，不是螢幕邊緣 —— 畫布滿版之後兩者不再相同
+            int x = Math.Clamp(mouse.X + 12,
+                MobileUi.LeftEdge,
+                Math.Max(MobileUi.LeftEdge, MobileUi.RightEdge - tooltipWidth));
             int y = Math.Clamp(mouse.Y + 12, 2, Math.Max(2, UiScaler.VirtualSize.Y - tooltipHeight - 2));
 
             var tooltipRect = new Rectangle(x, y, tooltipWidth, tooltipHeight);

@@ -1117,7 +1117,11 @@ namespace Client.Main.Controls.UI.Game
                 (int)MathF.Ceiling(textSize.X),
                 (int)MathF.Ceiling(textSize.Y));
 
-            rectangle.X = Math.Clamp(rectangle.X, 4, UiScaler.VirtualSize.X - rectangle.Width - 4);
+            // 畫布是滿版的，夾到 4 就等於貼著實體螢幕邊緣（可能在鏡頭挖孔底下）。
+            // 夾到對齊線才是可見又可點的範圍。
+            rectangle.X = Math.Clamp(rectangle.X,
+                MobileUi.LeftEdge,
+                Math.Max(MobileUi.LeftEdge, MobileUi.RightEdge - rectangle.Width));
             rectangle.Y = Math.Clamp(rectangle.Y, 4, UiScaler.VirtualSize.Y - rectangle.Height - 4);
             DrawTextWithShadow(
                 spriteBatch,

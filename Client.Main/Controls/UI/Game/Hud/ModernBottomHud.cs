@@ -2286,7 +2286,10 @@ namespace Client.Main.Controls.UI.Game.Hud
             int pickerY = slotRect.Y - pickerH - 4;
 
             // Clamp to screen
-            pickerX = Math.Clamp(pickerX, 2, _lastVirtualSize.X - pickerW - 2);
+            // 夾到對齊線，不是螢幕邊緣
+            pickerX = Math.Clamp(pickerX,
+                MobileUi.LeftEdge,
+                Math.Max(MobileUi.LeftEdge, MobileUi.RightEdge - pickerW));
             pickerY = Math.Max(2, pickerY);
 
             _potionPickerRect = new Rectangle(pickerX, pickerY, pickerW, pickerH);

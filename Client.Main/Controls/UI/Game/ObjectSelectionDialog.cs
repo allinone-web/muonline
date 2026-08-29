@@ -115,7 +115,8 @@ namespace Client.Main.Controls.UI.Game
             Y = y;
 
             // Clamp to screen bounds
-            int maxX = UiScaler.VirtualSize.X - ViewSize.X;
+            // 對齊線，不是螢幕邊緣（畫布滿版，見 UiScaler.ConfigureStretch）
+            int maxX = MobileUi.RightEdge - ViewSize.X;
             int maxY = UiScaler.VirtualSize.Y - ViewSize.Y;
             X = Math.Clamp(X, 0, maxX);
             Y = Math.Clamp(Y, 0, maxY);
