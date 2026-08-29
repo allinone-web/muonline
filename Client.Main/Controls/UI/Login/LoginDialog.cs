@@ -20,7 +20,8 @@ namespace Client.Main.Controls.UI.Login
     {
         // ── 版面（設計單位，實際尺寸 = 設計單位 x Scale）──
         private const int DesignWidth = 320;
-        private const int DesignHeight = 234;
+        // 224 -> 262：底部多留一行給登入結果訊息（見 ShowMessage）。
+        private const int DesignHeight = 262;
         private const int TitleHeight = 40;
         private const int SidePadding = 20;
         private const int FieldHeight = 30;
@@ -33,6 +34,12 @@ namespace Client.Main.Controls.UI.Login
         private readonly ButtonControl _submitButton;
 
         private string _serverName = string.Empty;
+
+        // 登入結果訊息。原本是跳一個 MessageWindow ——
+        // 在手機上為了一句「帳號或密碼錯誤」而彈出一個要再點一次才能關掉的視窗，
+        // 只是把重試變成三個動作。訊息直接寫在按鈕下面，看完就可以繼續打字。
+        private string _message = string.Empty;
+        private Color _messageColor = MobileUi.TextDim;
 
         // 送出登入後到伺服器回應之間約 1-2 秒沒有任何回饋，實測使用者會以為沒反應
         // 而重複點擊 —— 第一次其實已經登入成功，第二次就收到 AccountAlreadyConnected。
@@ -156,6 +163,19 @@ namespace Client.Main.Controls.UI.Login
         /// <summary>由 LoginScene 在登入失敗、連線錯誤或狀態回復時呼叫，解除送出鎖定。</summary>
         public void ResetSubmitState() => SetSubmitting(false);
 
+        /// <summary>
+        /// 在按鈕下方顯示一行訊息，並解除送出鎖定讓使用者可以直接重試。
+        /// </summary>
+        public void ShowMessage(string text, bool isError = true)
+        {
+            _message = text ?? string.Empty;
+            _messageColor = isError ? new Color(226, 116, 108) : MobileUi.TextDim;
+            SetSubmitting(false);
+        }
+
+        /// <summary>使用者重新輸入時清掉上一次的錯誤訊息。</summary>
+        public void ClearMessage() => _message = string.Empty;
+
         public override void Update(GameTime gameTime)
         {
             // 逾時保護：伺服器沒有回應時解除鎖定，否則按鈕會永久按不下去
@@ -199,13 +219,72 @@ namespace Client.Main.Controls.UI.Login
 
             DrawCentered(sprite, font, "SIGN IN", rect, S(12), 0.62f * _scale, MobileUi.TextPrimary);
 
+            // 伺服器名稱放在標題列<b>同一行</b>的右側，而不是自己佔一行。
+            // 它是「我要登入哪裡」的補充說明，和標題是同一件事。
             if (!string.IsNullOrEmpty(_serverName))
-                DrawCentered(sprite, font, _serverName, rect, S(50), 0.46f * _scale, MobileUi.TextDim);
+            {
+                float serverScale = 0.42f * _scale;
+                var serverSize = font.MeasureString(_serverName) * serverScale;
+                var serverPos = new Vector2(
+                    rect.Right - S(SidePadding) - serverSize.X,
+                    rect.Y + S(TitleHeight) * 0.5f - serverSize.Y * 0.5f);
+                sprite.DrawString(font, _serverName, serverPos + Vector2.One, Color.Black * 0.7f,
+                                  0f, Vector2.Zero, serverScale, SpriteEffects.None, 0f);
+                sprite.DrawString(font, _serverName, serverPos, MobileUi.TextDim,
+                                  0f, Vector2.Zero, serverScale, SpriteEffects.None, 0f);
+            }
 
             DrawLabel(sprite, font, "ACCOUNT", rect, S(SidePadding), S(70));
             DrawLabel(sprite, font, "PASSWORD", rect, S(SidePadding), S(126));
 
+            if (!string.IsNullOrEmpty(_message))
+            {
+                float messageScale = 0.40f * _scale;
+                var lines = WrapMessage(font, _message, rect.Width - S(SidePadding) * 2, messageScale);
+                float y = rect.Y + S(230);
+                foreach (var line in lines)
+                {
+                    var size = font.MeasureString(line) * messageScale;
+                    var pos = new Vector2(rect.X + (rect.Width - size.X) * 0.5f, y);
+                    sprite.DrawString(font, line, pos + Vector2.One, Color.Black * 0.7f,
+                                      0f, Vector2.Zero, messageScale, SpriteEffects.None, 0f);
+                    sprite.DrawString(font, line, pos, _messageColor,
+                                      0f, Vector2.Zero, messageScale, SpriteEffects.None, 0f);
+                    y += size.Y + S(2);
+                }
+            }
+
             base.Draw(gameTime);
+        }
+
+        /// <summary>訊息可能比面板寬（伺服器的錯誤字串沒有長度上限），按空白斷行。</summary>
+        private static System.Collections.Generic.List<string> WrapMessage(SpriteFont font, string text, int maxWidth, float scale)
+        {
+            var lines = new System.Collections.Generic.List<string>();
+            var current = string.Empty;
+
+            foreach (var word in text.Split(' '))
+            {
+                var candidate = current.Length == 0 ? word : current + " " + word;
+                if (font.MeasureString(candidate).X * scale <= maxWidth || current.Length == 0)
+                {
+                    current = candidate;
+                }
+                else
+                {
+                    lines.Add(current);
+                    current = word;
+                }
+
+                // 兩行就夠了；再長的訊息不會有人在登入畫面讀完
+                if (lines.Count == 2)
+                    break;
+            }
+
+            if (lines.Count < 2 && current.Length > 0)
+                lines.Add(current);
+
+            return lines;
         }
 
         private void DrawCentered(SpriteBatch sprite, SpriteFont font, string text, Rectangle rect, int offsetY, float scale, Color color)

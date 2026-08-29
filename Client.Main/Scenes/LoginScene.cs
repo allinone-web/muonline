@@ -350,7 +350,8 @@ namespace Client.Main.Scenes
                 string password = _loginDialog.Password;
                 if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
                 {
-                    MessageWindow.Show("Please enter Username and Password.");
+                    // 訊息寫在登入面板上，不彈視窗 —— 見 LoginDialog.ShowMessage
+                    _loginDialog.ShowMessage("Enter your account and password.");
                     return;
                 }
                 _logger.LogInformation("Login attempt from dialog for user: {Username}", username);
@@ -359,7 +360,7 @@ namespace Client.Main.Scenes
             else
             {
                 _logger.LogWarning("Login attempt ignored, invalid state: {State}", _networkManager.CurrentState);
-                MessageWindow.Show($"Cannot login in state: {_networkManager.CurrentState}");
+                _loginDialog?.ShowMessage($"Not connected ({_networkManager.CurrentState}).");
             }
         }
 
@@ -468,10 +469,13 @@ namespace Client.Main.Scenes
                 if (_statusLabel != null) _statusLabel.Text = "Status: Login Failed!";
 
                 string messageToShow = reason == LoginResponse.LoginResult.AccountAlreadyConnected
-                    ? "Account is already connected."
-                    : "Login Failed. Check credentials or server status.";
-                MessageWindow.Show(messageToShow);
-                _loginDialog?.ResetSubmitState();   // 解除送出鎖定，讓使用者能重試
+                    ? "That account is already connected."
+                    : "Login failed. Check your account and password.";
+
+                // ShowMessage 內含 ResetSubmitState，按鈕會一併解鎖讓使用者直接重試。
+                // 這裡不彈 MessageWindow：為了一句錯誤訊息而開一個要再點一次才關得掉的
+                // 視窗，等於把「重打密碼」變成三個動作。
+                _loginDialog?.ShowMessage(messageToShow);
                 // Visibility of login dialog, etc., is handled by HandleConnectionStateChange after state update
             });
         }
@@ -481,8 +485,7 @@ namespace Client.Main.Scenes
             MuGame.ScheduleOnMainThread(() =>
             {
                 _logger.LogError("UI received NetworkError: {Error}", errorMessage);
-                MessageWindow.Show($"Network Error: {errorMessage}");
-                _loginDialog?.ResetSubmitState();
+                _loginDialog?.ShowMessage($"Network error: {errorMessage}");
                 UpdateStatusLabel(ClientConnectionState.Disconnected); // This will trigger UI updates via HandleConnectionStateChange
             });
         }

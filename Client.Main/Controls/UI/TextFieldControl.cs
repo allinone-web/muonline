@@ -47,7 +47,14 @@ namespace Client.Main.Controls.UI
         private float _scrollMetricsFontSize = float.NaN;
         private bool _scrollMetricsMaskValue;
 
-        private const int TextMargin = 5;
+        /// <summary>
+        /// 文字與輸入框左右邊界的距離。
+        ///
+        /// 桌面的 5 px 是配著 1280 寬的版面畫的，在手機上換算不到 2 pt ——
+        /// 字幾乎貼在框線上，看起來像是排版壞掉。手機用 18：字級大了三倍，
+        /// 內距也要跟著放大，文字才「住在」框裡而不是「黏在」框上。
+        /// </summary>
+        private static int TextMargin => MobileUi.IsMobile ? 18 : 5;
         private const int CursorBlinkInterval = 500;
 
         private static readonly RasterizerState s_scissorRasterizerState = new()
