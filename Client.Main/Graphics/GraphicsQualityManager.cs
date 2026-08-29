@@ -108,8 +108,17 @@ namespace Client.Main.Graphics
             // MuOnlineSettings:Graphics:QualityPreset = "High" 覆寫。
             // 實測 iPhone Air（iOS 26.1）在登入場景 draw 僅 5.1 ms，每幀尚餘
             // 約 11 ms，確實有拉到 High 的空間。
+            // 先前選 Medium 是因為當時 iOS 的材質 shader 是錯的（沿用了 DesktopGL 版），
+            // Medium 剛好避開部分問題。shader 已由 Windows CI 正確編譯後，這個顧慮消失。
+            //
+            // 改用 High 的關鍵理由是畫質：Medium 會把 HIGH_QUALITY_TEXTURES 設為 false，
+            // 而那會讓貼圖取樣退回 SamplerState.PointClamp（最近鄰、完全無濾波）——
+            // 盔甲與裝備的細節因此糊掉、邊緣鋸齒，明顯不如 Windows 版。
+            // High 用 AnisotropicClamp（各向異性濾波），也是 Windows 版的預設。
+            //
+            // 效能上負擔得起：iPhone Air 實機每幀 draw 僅 5.1 ms，尚有約 11 ms 餘裕。
             if (OperatingSystem.IsIOS())
-                return GraphicsQualityPreset.Medium;
+                return GraphicsQualityPreset.High;
 
             LastAdapterInfo = GetAdapterInfo(adapter);
 

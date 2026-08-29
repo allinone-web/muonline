@@ -13,7 +13,9 @@ namespace Client.Main
         public const float TERRAIN_SCALE = 100f;
 
         // Camera control
-        public const float MIN_CAMERA_DISTANCE = 800f;
+        // 原本 800 是照桌面螢幕訂的。手機螢幕小，角色需要更大才看得清楚，
+        // 因此放寬下限讓 Graphics.Mobile.CameraDistance 能設得更近。
+        public const float MIN_CAMERA_DISTANCE = 500f;
         public const float MAX_CAMERA_DISTANCE = 1800f;
         public const float ZOOM_SPEED = 4f;
 

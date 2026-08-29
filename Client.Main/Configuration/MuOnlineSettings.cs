@@ -73,10 +73,10 @@ namespace Client.Main.Configuration
         public int UiVirtualHeight { get; set; } = 720;
 
         /// <summary>
-        /// 預設鏡頭距離，<b>數值越小角色越大</b>。桌面為 1700，
-        /// 可用範圍見 Constants.MIN/MAX_CAMERA_DISTANCE（800–1800）。
+        /// 預設鏡頭距離，<b>數值越小角色越大</b>。桌面為 1700。
+        /// 680 約為桌面的 2.5 倍大；下限 500（約 3.4 倍）。
         /// </summary>
-        public float CameraDistance { get; set; } = 850f;
+        public float CameraDistance { get; set; } = 680f;
 
         /// <summary>
         /// 手機的畫面縮放比例。
