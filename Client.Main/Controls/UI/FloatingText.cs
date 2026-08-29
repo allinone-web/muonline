@@ -76,9 +76,20 @@ namespace Client.Main.Controls.UI
             UpdatePosition();
         }
 
+        /// <summary>
+        /// 靠左對齊（<c>_center.X</c> 改為解讀成左緣）。
+        ///
+        /// 手機的公告排在畫面左欄。置中對齊的話，一句長公告會從欄位中心往兩邊
+        /// 長出去，右半邊仍然會伸進畫面中央 —— 而畫面中央正是所有視窗的位置。
+        /// 靠左之後，公告的長度只會往右延伸，起點永遠在左欄。
+        /// </summary>
+        public bool LeftAligned { get; set; }
+
         private void UpdatePosition()
         {
-            X = (int)(_center.X - ControlSize.X * 0.5f);
+            X = LeftAligned
+                ? (int)_center.X
+                : (int)(_center.X - ControlSize.X * 0.5f);
             Y = (int)(_center.Y - ControlSize.Y * 0.5f);
         }
 

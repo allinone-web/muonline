@@ -56,11 +56,12 @@ namespace Client.Main.Controls.UI
 
             if (MobileUi.IsMobile)
             {
-                // 左欄，聊天記錄下方。X 是文字的<b>中心</b>（FloatingText 置中對齊），
-                // 所以取欄寬的一半。
-                _spawnCenter = new Vector2(
-                    MobileUi.LeftEdge + MobileNoticeColumnWidth * 0.5f,
-                    canvas.Y * MobileNoticeTop);
+                // 左欄，<b>靠左對齊</b>（見 FloatingText.LeftAligned）。
+                //
+                // 上一版是「左欄的中心」，但公告是置中對齊的 —— 一句長公告會從
+                // 欄位中心往兩邊長，右半邊照樣伸進畫面中央，也就照樣蓋在地圖上。
+                // 靠左之後，文字只會往右延伸，起點永遠在左欄。
+                _spawnCenter = new Vector2(MobileUi.LeftEdge, canvas.Y * MobileNoticeTop);
             }
             else
             {
@@ -72,9 +73,14 @@ namespace Client.Main.Controls.UI
             _spawnAnchorFor = canvas;
         }
 
-        /// <summary>手機公告欄的寬度與上緣（畫面高度的比例）。與聊天記錄同一欄。</summary>
-        private const int MobileNoticeColumnWidth = 560;
-        private const float MobileNoticeTop = 0.62f;
+        /// <summary>
+        /// 手機公告的上緣（畫面高度的比例）。
+        ///
+        /// 0.62 太靠中間：置中的視窗（地圖、技能、背包）高度大多超過畫面的一半，
+        /// 0.62 仍然落在它們的範圍裡。改成 0.78 —— 那已經在視窗下緣之外，
+        /// 又還沒低到和左下角的搖桿打架。
+        /// </summary>
+        private const float MobileNoticeTop = 0.78f;
 
         private Point _spawnAnchorFor = Point.Zero;
 
@@ -119,7 +125,10 @@ namespace Client.Main.Controls.UI
                 _active.RemoveAt(0);
             }
 
-            var note = new FloatingText(text, color, _spawnCenter, creationTime);
+            var note = new FloatingText(text, color, _spawnCenter, creationTime)
+            {
+                LeftAligned = MobileUi.IsMobile
+            };
             _active.Add(note);
 
             if (Parent != null)

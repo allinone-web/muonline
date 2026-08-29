@@ -105,10 +105,31 @@ namespace Client.Main.Controls.UI.Game.Map
 
         public override void Draw(GameTime gameTime)
         {
-            if (Status != GameControlStatus.Ready || !Visible || Texture == null)
+            if (Status != GameControlStatus.Ready || !Visible)
                 return;
 
             var sb = GraphicsManager.Instance.Sprite;
+
+            if (MobileUi.IsMobile)
+            {
+                // 自己畫的半透明面板，和其他視窗同一套。
+                // MapName_I2.ozd 是為 1280 寬畫的點陣圖，放大會糊 —— 見 docs/待清理素材.md。
+                using (new SpriteBatchScope(
+                       sb,
+                       SpriteSortMode.Deferred,
+                       BlendState.AlphaBlend,
+                       SamplerState.LinearClamp,
+                       transform: UiScaler.SpriteTransform))
+                {
+                    MobileUi.DrawPanel(sb, DisplayRectangle, 0, MobileUi.PanelAlpha * Alpha);
+                }
+
+                _label.Draw(gameTime);
+                return;
+            }
+
+            if (Texture == null)
+                return;
 
             using (new SpriteBatchScope(
                    sb,
@@ -126,8 +147,27 @@ namespace Client.Main.Controls.UI.Game.Map
             _label.Draw(gameTime);
         }
 
+        /// <summary>
+        /// 手機：水平置中。
+        ///
+        /// X 來自 MapNameLayout.json，那是為 1280 寬的桌面版面畫的固定座標。
+        /// 手機的畫布依螢幕比例推算（滿版之後常常超過 1600 寬），固定座標因此
+        /// 偏在中央的左邊 —— 使用者回報的「地圖名稱不居中」就是這個。
+        /// </summary>
+        private void ApplyMobileCentering()
+        {
+            if (!MobileUi.IsMobile)
+                return;
+
+            int centered = (UiScaler.VirtualSize.X - ViewSize.X) / 2;
+            if (X != centered)
+                X = centered;
+        }
+
         private void UpdateLabelPosition()
         {
+            ApplyMobileCentering();
+
             _label.X = X + (ViewSize.X - _label.ControlSize.X) / 2 + 10;
             _label.Y = Y + (ViewSize.Y - _label.ControlSize.Y) / 2;
         }

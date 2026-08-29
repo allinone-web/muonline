@@ -30,7 +30,13 @@ namespace Client.Main.Controls.UI.Game.Trade
         // ═══════════════════════════════════════════════════════════════
         // WINDOW DIMENSIONS
         // ═══════════════════════════════════════════════════════════════
-        private const int WINDOW_WIDTH = 396;
+        /// <summary>
+        /// 視窗寬度。桌面固定 396；手機由格線寬度推算 —— 格子放大到 64 之後
+        /// 8 欄就是 512，寫死的 396 會讓格線直接長到視窗外面。
+        /// </summary>
+        private static int WINDOW_WIDTH => MobileUi.IsMobile
+            ? TRADE_COLUMNS * TRADE_SQUARE_WIDTH + WINDOW_MARGIN * 2 + 20
+            : 396;
         private const int WINDOW_HEIGHT = 650;
 
         private const int HEADER_HEIGHT = 52;

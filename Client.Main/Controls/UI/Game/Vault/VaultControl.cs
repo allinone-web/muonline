@@ -39,8 +39,8 @@ namespace Client.Main.Controls.UI.Game
         /// 會是三種尺寸 —— 玩家每換一個視窗就要重新認一次。
         /// 視窗寬度是從這個值推算的，改了會一起變寬。
         /// </summary>
-        private static int VAULT_SQUARE_WIDTH => MobileUi.IsMobile ? 64 : 32;
-        private static int VAULT_SQUARE_HEIGHT => MobileUi.IsMobile ? 64 : 32;
+        private static int VAULT_SQUARE_WIDTH => MobileUi.FitCellSize(Rows, HEADER_HEIGHT + SECTION_HEADER_HEIGHT + GRID_PADDING * 2 + FOOTER_HEIGHT + WINDOW_MARGIN, 64);
+        private static int VAULT_SQUARE_HEIGHT => VAULT_SQUARE_WIDTH;
 
         private const int HEADER_HEIGHT = 46;
         private const int SECTION_HEADER_HEIGHT = 22;

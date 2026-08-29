@@ -359,6 +359,26 @@ namespace Client.Main.Controls.UI
         }
 
         /// <summary>
+        /// 在給定的列數與視窗其餘高度之下，格子最大可以多大而視窗仍然放得進畫面。
+        ///
+        /// 為什麼需要這個：把格子統一放大到 64 之後，商店與倉庫（都是 8 x 15）
+        /// 的視窗變成 960 px 高，比畫布還高 —— 標題列被推到畫面外，關閉鈕點不到。
+        /// 格子大小不能只看「手指好不好按」，還要看那個視窗有幾列。
+        ///
+        /// <paramref name="chromeHeight"/> 是標題列、區塊標題、內距、底列、邊界的總和。
+        /// 下限 40：再小就和原本的 32 沒有差別了；上限交給呼叫端（一般是 64，和背包一致）。
+        /// </summary>
+        public static int FitCellSize(int rows, int chromeHeight, int max, int min = 40)
+        {
+            if (!IsMobile || rows <= 0)
+                return max;
+
+            int available = UiScaler.VirtualSize.Y - chromeHeight - CornerInset * 2;
+            int fitted = available / rows;
+            return Math.Clamp(fitted, min, max);
+        }
+
+        /// <summary>
         /// 視窗的關閉鈕：一塊底 + 一個用兩條線畫出來的叉。
         ///
         /// 沒有紅色。整個面板只要有一顆飽和色的按鈕，眼睛就會一直被它拉過去 ——
