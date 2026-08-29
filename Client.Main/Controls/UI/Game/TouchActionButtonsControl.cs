@@ -45,10 +45,23 @@ namespace Client.Main.Controls.UI.Game
         /// UiScaler 扣掉（見 MuGame.PollSafeArea），但挖孔周圍的圓角仍會斜切，
         /// 貼著安全區邊界的圓形按鈕還是會被啃掉一角。
         /// </summary>
-        private const float NotchClearance = 24f;
         private const float SkillArcRightOverhang = 81f;
-        private static float MarginRight => MobileUi.CornerInset + SkillArcRightOverhang + NotchClearance;
         private const float MarginBottom = 120f;
+
+        /// <summary>
+        /// 主按鈕圓心與畫面右緣的距離。
+        ///
+        /// 這一群（主按鈕 + 左上方的技能弧線）縱向跨得很高，正好落在鏡頭挖孔
+        /// 那一段 —— 使用者回報被擋住的就是 ATK 上方的技能鈕。所以這裡要退掉
+        /// <b>整個</b>安全區域，而不是像右上角那些按鈕只退圓角的餘裕。
+        /// 判定交給 MobileUi.EdgeInsetForBand。
+        /// </summary>
+        private float ResolveMarginRight()
+        {
+            int bottom = UiScaler.VirtualSize.Y - (int)(MarginBottom - MainButtonRadius);
+            int top = bottom - (int)(MainButtonRadius * 2 + SkillArcRadius);
+            return MobileUi.EdgeInsetForBand(top, bottom) + SkillArcRightOverhang;
+        }
 
         /// <summary>技能鈕排在主按鈕左上方的弧線上。</summary>
         private const float SkillArcRadius = 132f;
@@ -194,7 +207,7 @@ namespace Client.Main.Controls.UI.Game
         private void RefreshLayout()
         {
             var size = UiScaler.VirtualSize;
-            _mainCenter = new Vector2(size.X - MarginRight, size.Y - MarginBottom);
+            _mainCenter = new Vector2(size.X - ResolveMarginRight(), size.Y - MarginBottom);
 
             for (int i = 0; i < MaxSkillButtons; i++)
             {

@@ -257,16 +257,53 @@ namespace Client.Main.Controls.UI
 
         /// <summary>
         /// 右側對齊線（虛擬座標）。畫面右側的每一個元件 —— 介面按鈕、經驗條、
-        /// 狀態列、撿取清單、增益圖示、ATK 與技能弧線 —— 右緣都要落在這裡。
+        /// 狀態列、撿取清單、增益圖示 —— 右緣都要落在這裡。
         ///
         /// 為什麼不是「盡量靠右」：靠右的結果是每個元件各自貼著螢幕邊緣，
-        /// 而螢幕邊緣是圓角、是鏡頭挖孔、是手掌握住的地方。對齊到同一條線之後，
+        /// 而螢幕邊緣是圓角、是手掌握住的地方。對齊到同一條線之後，
         /// 右側讀起來是一整欄，而不是七個各自為政的方塊。
+        ///
+        /// <b>這條線只退圓角的餘裕，不退整個安全區域。</b>畫布是滿版的
+        /// （見 UiScaler.ConfigureStretch），而 iOS 橫置時左右各回報 68 pt ——
+        /// 那是為了避開鏡頭挖孔，但挖孔在畫面側邊的<b>中段</b>，四個角落並不在
+        /// 它下面。整條邊都退 68 pt 的結果就是兩側各空掉一大條。
+        /// 真正落在挖孔那一段的元件請改用 <see cref="EdgeInsetForBand"/>。
         /// </summary>
         public static int RightEdge => UiScaler.VirtualSize.X - CornerInset;
 
         /// <summary>左側對齊線。與 <see cref="RightEdge"/> 對稱。</summary>
         public static int LeftEdge => CornerInset;
+
+        /// <summary>
+        /// 鏡頭挖孔在橫置時佔畫面側邊的中段。這裡把它視為畫面高度的中間 60%。
+        /// </summary>
+        private const float IslandBandStart = 0.20f;
+        private const float IslandBandEnd = 0.80f;
+
+        /// <summary>
+        /// 垂直範圍 <paramref name="top"/>..<paramref name="bottom"/> 的元件，
+        /// 距離左右螢幕邊緣應該退多少。
+        ///
+        /// 落在挖孔那一段的話要退掉整個安全區域再加一點餘裕（貼著安全區邊界的
+        /// 圓形按鈕仍會被圓角啃掉一角）；在上下角落的話只需要圓角的餘裕。
+        /// </summary>
+        public static int EdgeInsetForBand(int top, int bottom)
+        {
+            if (!IsMobile)
+                return CornerInset;
+
+            int height = UiScaler.VirtualSize.Y;
+            float bandTop = height * IslandBandStart;
+            float bandBottom = height * IslandBandEnd;
+
+            bool overlapsIsland = bottom > bandTop && top < bandBottom;
+            if (!overlapsIsland)
+                return CornerInset;
+
+            var safe = UiScaler.SafeAreaVirtual;
+            int worst = (int)MathF.Ceiling(MathF.Max(safe.X, safe.Z));
+            return worst + 16;
+        }
 
         /// <summary>
         /// 這個矩形的右緣是否已經對齊 <see cref="RightEdge"/>。除錯用。

@@ -45,12 +45,12 @@ namespace Client.Main.Controls.UI.Game.Skills
         // 手機的格子尺寸。桌面的 28x48 是配著滑鼠與底部快捷列設計的直立小格，
         // 在 iPhone 上換算後只有約 13x19 pt —— 遠低於可以放心點的大小（44 pt）。
         // 手機改成正方形大格：形狀更適合圓角觸控目標，也讓 20x28 的圖示放得更大。
-        // 一行 4 格。更多欄數雖然能讓每格更大，但面板會橫向撐滿整個手機螢幕，
-        // 反而不好用 —— 眼睛要掃過整個畫面才找得到一個技能。
-        private const int MOBILE_COLUMNS = 4;
+        // 一行 5 格。和背包同一個數字 —— 遊戲裡每一個格狀清單都是 5 欄，
+        // 玩家不必為了每個視窗重新建立「一行有幾個」的直覺。
+        private const int MOBILE_COLUMNS = 5;
 
-        // 技能非常多（例如 GM 角色學了整棵樹）時，4 欄會排到畫面外。
-        // 那種情況才允許加欄，一般角色永遠是 4 欄。
+        // 技能非常多（例如 GM 角色學了整棵樹）時，5 欄會排到畫面外。
+        // 那種情況才允許加欄，一般角色永遠是 5 欄。
         private const int MOBILE_COLUMNS_MAX = 8;
 
         private const int MOBILE_SLOT_GAP = 14;
@@ -314,8 +314,12 @@ namespace Client.Main.Controls.UI.Game.Skills
                     _detailRectLocal.Width - ASSIGN_BUTTON_MARGIN * 2,
                     ASSIGN_BUTTON_HEIGHT);
 
+                // 關閉鈕放<b>左上角</b>。放右上角的話會正好落在螢幕右上那六顆
+                // 介面按鈕（MENU / CHAR / BAG / SKILL / MAP / CHAT）上面 ——
+                // 實測按下去是關掉技能視窗的同時又把它重新打開，永遠關不掉。
+                // 遊戲內所有視窗一律左上角，見 docs/手機遊戲界面規格.md。
                 _closeRectLocal = new Rectangle(
-                    totalWidth - OUTER_PADDING - CLOSE_BUTTON_SIZE,
+                    OUTER_PADDING,
                     (HEADER_HEIGHT - CLOSE_BUTTON_SIZE) / 2,
                     CLOSE_BUTTON_SIZE,
                     CLOSE_BUTTON_SIZE);

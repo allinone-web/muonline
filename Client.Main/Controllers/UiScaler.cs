@@ -88,6 +88,15 @@ namespace Client.Main.Controllers
         public static Func<Vector4>? SafeAreaProvider { get; set; }
 
         /// <summary>
+        /// 安全區域，換算成<b>虛擬座標</b>（Left, Top, Right, Bottom）。
+        ///
+        /// 畫布是滿版的（見 ConfigureStretch），所以虛擬座標的 0 就是螢幕的 0 ——
+        /// 要避開挖孔與圓角是各個元件自己的事，這個值就是它們要退的量。
+        /// 桌面為 0。
+        /// </summary>
+        public static Vector4 SafeAreaVirtual { get; private set; } = Vector4.Zero;
+
+        /// <summary>
         /// 向平台端重新查詢安全區域。回傳值是否改變（呼叫端據此決定要不要重新配置）。
         /// </summary>
         public static bool RefreshSafeArea()
@@ -181,7 +190,21 @@ namespace Client.Main.Controllers
 
         private static void ConfigureStretch()
         {
-            // 扣掉安全區域後才是 UI 真正可用的範圍（iPhone 圓角、動態島、home indicator）
+            // ── 滿版（full bleed），不是把畫布塞進安全區域 ──
+            //
+            // 先前的做法是把整個虛擬畫布縮排到安全區域裡面。那樣安全是安全，
+            // 但 iPhone 橫置時左右各回報 68 pt（實測 204 px），畫布因此在兩側
+            // 各讓出一大條 —— 使用者的說法是「兩側大量空白，多了兩三倍」。
+            //
+            // 而且那樣連「讓某個元件貼近螢幕邊緣」都做不到：畫布的 0 已經不是
+            // 螢幕的 0 了。左上角的圓形頭像正好是應該貼邊的例子（圓形貼合圓角，
+            // 見「圓角安全邊距」）。
+            //
+            // 改成：縮放仍然照安全區域的比例算（UI 的大小不變），但畫布<b>撐滿
+            // 整個 back buffer</b>，虛擬座標 0 就是螢幕的 0。安全區域改以
+            // SafeAreaVirtual 對外提供，由各個元件自己決定要退多少 ——
+            // 挖孔真正會蓋到的是畫面側邊的中段，四個角落只需要圓角的餘裕。
+            // 規則見 MobileUi.RightEdge 與 docs/手機遊戲界面規格.md。
             float usableWidth = MathF.Max(ActualSize.X - SafeAreaInsets.X - SafeAreaInsets.Z, 1f);
             float usableHeight = MathF.Max(ActualSize.Y - SafeAreaInsets.Y - SafeAreaInsets.W, 1f);
 
@@ -193,14 +216,22 @@ namespace Client.Main.Controllers
             InverseScaleY = 1f / ScaleY;
             InverseScale = 1f / Scale;
 
-            Offset = new Vector2(SafeAreaInsets.X, SafeAreaInsets.Y);
+            // 畫布長到整個螢幕，原點回到螢幕左上角。
+            VirtualSize = new Point(
+                Math.Max(1, (int)MathF.Round(ActualSize.X / ScaleX)),
+                Math.Max(1, (int)MathF.Round(ActualSize.Y / ScaleY)));
 
-            // Create non-uniform scale transform
+            Offset = Vector2.Zero;
+
+            SafeAreaVirtual = new Vector4(
+                SafeAreaInsets.X / ScaleX,
+                SafeAreaInsets.Y / ScaleY,
+                SafeAreaInsets.Z / ScaleX,
+                SafeAreaInsets.W / ScaleY);
+
             float finalScaleX = ScaleX * Constants.RENDER_SCALE;
             float finalScaleY = ScaleY * Constants.RENDER_SCALE;
-            // 縮放後還要平移到安全區域起點，否則 UI 只是變小、仍然貼在螢幕左上角
-            SpriteTransform = Matrix.CreateScale(finalScaleX, finalScaleY, 1f)
-                            * Matrix.CreateTranslation(Offset.X, Offset.Y, 0f);
+            SpriteTransform = Matrix.CreateScale(finalScaleX, finalScaleY, 1f);
         }
 
         /// <summary>

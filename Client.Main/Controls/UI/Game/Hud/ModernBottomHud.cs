@@ -374,6 +374,7 @@ namespace Client.Main.Controls.UI.Game.Hud
                     DrawAvatar(spriteBatch);
                     DrawVitalsText(spriteBatch);
                     DrawStatusReadout(spriteBatch);
+                    DrawZenReadout(spriteBatch);
                 }
                 else
                 {
@@ -658,7 +659,23 @@ namespace Client.Main.Controls.UI.Game.Hud
 
             if (pressed && !_mobileWasPressed)
             {
-                // 聊天輸入列蓋住的地方不算 HUD（見 ContainsInteractivePoint）
+                // 開著的視窗蓋住的地方不算 HUD。
+                //
+                // HUD 直接讀觸控狀態，不走 UI 的點擊路由，所以視窗<b>不會</b>自動
+                // 擋住它下面的 HUD 按鈕 —— 少了這個判斷，視窗就是可以穿透的：
+                // 點視窗左上角的關閉鈕，同一下也按到了螢幕右上角的 SKILL，
+                // 於是視窗關掉又立刻打開，永遠關不掉（實測）。
+                //
+                // 聊天輸入列同理，它橫跨畫面下緣、蓋在藥水鈕上面。
+                if (MuGame.Instance.ActiveScene is Scenes.GameScene windowScene &&
+                    windowScene.IsPointOverOpenWindow(position))
+                {
+                    _mobilePressedButton = -1;
+                    _avatarPressed = false;
+                    _mobileWasPressed = true;
+                    return;
+                }
+
                 if (!ContainsInteractivePoint(position))
                 {
                     _mobilePressedButton = -1;
@@ -1146,7 +1163,13 @@ namespace Client.Main.Controls.UI.Game.Hud
             // 底下不再需要四條彩色長條，畫面乾淨很多。
             const int AvatarRadius = 48;
             const int TopMargin = 16;
-            _avatarCenter = new Vector2(Corner + AvatarRadius, TopMargin + AvatarRadius);
+
+            // 頭像是特例，可以比對齊線更靠邊。
+            // 它是圓的 —— 圓形正好貼合螢幕圓角，不會被斜切掉一角（見界面規格 2.x），
+            // 而且它在左上角，不在鏡頭挖孔那一段。旁邊的文字就沒有這個豁免：
+            // 方形的字塊貼邊一定會被啃到，所以文字仍然從頭像右緣起算。
+            const int AvatarEdgeInset = 10;
+            _avatarCenter = new Vector2(AvatarEdgeInset + AvatarRadius, TopMargin + AvatarRadius);
             _avatarRadius = AvatarRadius;
             _avatarRect = new Rectangle(
                 (int)(_avatarCenter.X - AvatarRadius), (int)(_avatarCenter.Y - AvatarRadius),
@@ -1195,6 +1218,13 @@ namespace Client.Main.Controls.UI.Game.Hud
 
             // ── 狀態列：時間、電量、FPS、延遲，同樣靠右對齊到按鈕區塊 ──
             _statusReadoutRect = new Rectangle(btnLeft, _expBarRect.Bottom + 7, btnBlockW, 20);
+
+            // ── 金幣：狀態列的下一行 ──
+            // 放在這裡而不是塞回背包裡，是因為錢是<b>隨時要知道</b>的數字：
+            // 撿到東西、賣掉東西、買補品，全都會動。要為了看一眼餘額而開背包，
+            // 等於每次交易都要多兩次點擊。
+            // 和裝備按鈕（BAG）同一欄、同一條右對齊線，讀起來是一組。
+            _zenReadoutRect = new Rectangle(btnLeft, _statusReadoutRect.Bottom + 4, btnBlockW, 22);
 
             // ── 右下：三個藥水鈕，排在技能弧線的左側 ──
             // 右邊界留給 TouchActionButtonsControl 的 ATK 與技能弧線，
@@ -1739,6 +1769,38 @@ namespace Client.Main.Controls.UI.Game.Hud
                 new Vector2(_statusReadoutRect.Right - size.X, _statusReadoutRect.Y),
                 MobileText * 0.72f, scale);
         }
+
+        /// <summary>金幣。狀態列的下一行，同一條右對齊線。</summary>
+        private void DrawZenReadout(SpriteBatch sb)
+        {
+            if (_font == null || _zenReadoutRect.Width <= 0)
+                return;
+
+            long zen = MuGame.Network?.GetCharacterState()?.InventoryZen ?? 0L;
+
+            if (zen != _zenValueBuiltFrom || _zenText == null)
+            {
+                _zenValueBuiltFrom = zen;
+                // 千分位：七位數以上不分節就只是一串數字，看不出量級。
+                _zenText = zen.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            const float scale = 0.52f;
+            var size = _font.MeasureString(_zenText) * scale;
+
+            // 右對齊，和上面的狀態列與按鈕區塊同一條線
+            var position = new Vector2(_zenReadoutRect.Right - size.X, _zenReadoutRect.Y);
+            DrawTextWithShadow(sb, _zenText, position, MobileText * 0.92f, scale);
+
+            // 左邊一個小圓點當作幣值記號。不畫金色的硬幣 ——
+            // 整個 HUD 只有這裡出現飽和色的話，眼睛會一直被它拉走。
+            var dotCenter = new Vector2(position.X - 16, _zenReadoutRect.Y + size.Y * 0.5f);
+            MobileUi.DrawDisc(sb, dotCenter, 5f, Color.White * 0.55f);
+        }
+
+        private Rectangle _zenReadoutRect;
+        private string _zenText;
+        private long _zenValueBuiltFrom = -1;
 
         private bool AvatarContains(Point position)
             => _avatarRadius > 0f
