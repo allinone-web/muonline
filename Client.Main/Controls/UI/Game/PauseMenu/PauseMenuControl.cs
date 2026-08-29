@@ -918,9 +918,35 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             private readonly PauseMenuControl _owner;
             private readonly List<IOptionRow> _options = new();
             private readonly List<GameControl> _dynamicControls = new();
+            // 桌面：直式，分類按鈕橫排在標題下方，選項一欄。
+            // 手機：橫式兩欄 —— 左邊分類、右邊選項（選項再分兩個子欄）。
+            //
+            // 桌面版的面板是 560x700，在 720 高的畫布上等於整片蓋滿，
+            // 而分類鈕只有 28 高、開關 26 高，都貼著可點擊尺寸的下限。
+            // 手機把橫向空間用起來，列高才拉得開。
+            private static bool IsMobile => MobileUi.IsMobile;
+
             private const int ContentStartY = 202;
             private const int ContentPaddingX = 30;
             private const int OptionRowHeight = 30;
+
+            // ── 手機版面 ──
+            private const int MobilePanelWidth = 900;
+            private const int MobilePanelHeight = 560;
+            private const int MobileHeaderHeight = 64;
+            private const int MobilePadding = 16;
+            private const int MobileCategoryWidth = 250;
+            private const int MobileCategoryHeight = 42;
+            private const int MobileCategoryGap = 4;
+            private const int MobileOptionRowHeight = 52;
+            private const int MobileOptionColumns = 2;
+
+            private int MobileOptionAreaX => MobilePadding + MobileCategoryWidth + MobilePadding;
+            private int MobileOptionAreaWidth => MobilePanelWidth - MobileOptionAreaX - MobilePadding;
+            private int MobileOptionColumnWidth => (MobileOptionAreaWidth - MobilePadding) / MobileOptionColumns;
+
+            /// <summary>手機的選項是兩欄由上而下填，這裡記錄已經放了幾個。</summary>
+            private int _mobileOptionIndex;
             private readonly ButtonControl _closeButton;
             private readonly int _panelWidth;
             private MenuTabButtonControl _activeCategoryButton;
@@ -929,38 +955,44 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             {
                 _owner = owner;
                 AutoViewSize = false;
-                ControlSize = new Point(560, 700);
+                ControlSize = IsMobile
+                    ? new Point(MobilePanelWidth, MobilePanelHeight)
+                    : new Point(560, 700);
                 ViewSize = ControlSize;
                 Align = Models.ControlAlign.HorizontalCenter | Models.ControlAlign.VerticalCenter;
                 Interactive = true;
-                HeaderHeight = 184;
-                ContentTop = 190;
+                HeaderHeight = IsMobile ? MobileHeaderHeight : 184;
+                ContentTop = IsMobile ? MobileHeaderHeight + 6 : 190;
                 DrawContentSurface = true;
                 _panelWidth = ControlSize.X;
 
                 var title = new LabelControl
                 {
                     Text = "SETTINGS",
-                    FontSize = 22f,
+                    FontSize = IsMobile ? 18f : 22f,
                     TextColor = ModernHudTheme.TextGold,
                     IsBold = true,
                     Align = Models.ControlAlign.HorizontalCenter,
                     X = 0,
-                    Y = 18
+                    Y = IsMobile ? 20 : 18
                 };
                 Controls.Add(title);
 
-                var subtitle = new LabelControl
+                // 手機不放副標：一句沒有資訊的句子換走 30 px 的垂直空間不划算
+                if (!IsMobile)
                 {
-                    Text = "Tune the client without leaving the game",
-                    FontSize = 10f,
-                    TextColor = ModernHudTheme.TextGray,
-                    HasShadow = false,
-                    Align = Models.ControlAlign.HorizontalCenter,
-                    X = 0,
-                    Y = 50
-                };
-                Controls.Add(subtitle);
+                    var subtitle = new LabelControl
+                    {
+                        Text = "Tune the client without leaving the game",
+                        FontSize = 10f,
+                        TextColor = ModernHudTheme.TextGray,
+                        HasShadow = false,
+                        Align = Models.ControlAlign.HorizontalCenter,
+                        X = 0,
+                        Y = 50
+                    };
+                    Controls.Add(subtitle);
+                }
 
                 int categoryStartY = 78;
                 int categoryX = 20;
@@ -995,10 +1027,11 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     Subtitle = string.Empty,
                     Compact = true,
                     AccentColor = ModernHudTheme.Accent,
-                    ControlSize = new Point(190, 38),
-                    ViewSize = new Point(190, 38),
-                    X = (ControlSize.X - 190) / 2,
-                    Y = ContentStartY,
+                    ControlSize = new Point(IsMobile ? MobileCategoryWidth : 190, IsMobile ? 44 : 38),
+                    ViewSize = new Point(IsMobile ? MobileCategoryWidth : 190, IsMobile ? 44 : 38),
+                    X = IsMobile ? MobilePadding : (ControlSize.X - 190) / 2,
+                    // 手機放在左欄分類清單的下方，不要疊在選項欄上
+                    Y = IsMobile ? MobilePanelHeight - 44 - MobilePadding : ContentStartY,
                     AutoViewSize = false,
                     FontSize = 12f,
                     TextColor = ModernHudTheme.TextWhite
@@ -1013,6 +1046,8 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
 
             private void ClearDynamicControls()
             {
+                _mobileOptionIndex = 0;   // 換分類時兩欄的填入位置要從頭算
+
                 foreach (var ctrl in _dynamicControls)
                 {
                     Controls.Remove(ctrl);
@@ -1431,10 +1466,22 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             private void AddCategoryButton(string label, Action onClick, int startY,
                 ref int currentX, int width, int height, int spacing, int perRow, ref int index)
             {
-                int row = index / perRow;
-                int col = index % perRow;
-                int x = 20 + col * (width + spacing);
-                int y = startY + row * (height + spacing);
+                int x, y;
+                if (IsMobile)
+                {
+                    // 左側一整欄，由上而下。橫排的窄條在觸控上很難按準。
+                    x = MobilePadding;
+                    y = ContentTop + index * (MobileCategoryHeight + MobileCategoryGap);
+                    width = MobileCategoryWidth;
+                    height = MobileCategoryHeight;
+                }
+                else
+                {
+                    int row = index / perRow;
+                    int col = index % perRow;
+                    x = 20 + col * (width + spacing);
+                    y = startY + row * (height + spacing);
+                }
 
                 var button = new MenuTabButtonControl
                 {
@@ -1444,7 +1491,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     ControlSize = new Point(width, height),
                     ViewSize = new Point(width, height),
                     AutoViewSize = false,
-                    FontSize = 10.5f,
+                    FontSize = IsMobile ? 13f : 10.5f,
                     TextColor = ModernHudTheme.TextGray
                 };
                 button.Click += (s, e) =>
@@ -1492,19 +1539,43 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
 
             private void AddOption(string label, Func<bool> getter, Action<bool> setter, ref int currentY, int rowHeight, Action onChanged = null)
             {
-                var option = new OptionToggle(label, getter, value =>
+                Action<bool> apply = value =>
                 {
                     setter(value);
                     onChanged?.Invoke();
-                }, currentY, _panelWidth);
+                };
+
+                OptionToggle option;
+                if (IsMobile)
+                {
+                    // 兩欄由上而下填：先填滿左欄再換右欄。
+                    int perColumn = Math.Max(1, (MobilePanelHeight - ContentTop - MobilePadding) / MobileOptionRowHeight);
+                    int column = Math.Min(_mobileOptionIndex / perColumn, MobileOptionColumns - 1);
+                    int row = _mobileOptionIndex - column * perColumn;
+
+                    int x = MobileOptionAreaX + column * (MobileOptionColumnWidth + MobilePadding);
+                    int y = ContentTop + row * MobileOptionRowHeight;
+
+                    option = new OptionToggle(label, getter, apply,
+                        x, y, MobileOptionColumnWidth, 120, 38, 13f);
+                    _mobileOptionIndex++;
+                }
+                else
+                {
+                    option = new OptionToggle(label, getter, apply, currentY, _panelWidth);
+                    currentY += rowHeight;
+                }
+
                 option.AddTo(Controls);
                 option.CollectControls(_dynamicControls);
                 _options.Add(option);
-                currentY += rowHeight;
             }
 
             private void AddHeading(string label, ref int currentY)
             {
+                if (IsMobile)
+                    return;   // 手機的分類已經在左欄，右欄再放小標只是雜訊
+
                 var heading = new LabelControl
                 {
                     Text = label,
@@ -1552,6 +1623,16 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 private readonly Action<bool> _setter;
 
                 public OptionToggle(string label, Func<bool> getter, Action<bool> setter, int y, int panelWidth)
+                    : this(label, getter, setter, ContentPaddingX, y, panelWidth - ContentPaddingX - 40, 110, 26, 11.5f)
+                {
+                }
+
+                /// <summary>
+                /// 明確指定位置與尺寸的版本。手機把選項排成兩欄、列高加大，
+                /// 需要自己決定 x 與欄寬，不能沿用「靠面板右緣」的假設。
+                /// </summary>
+                public OptionToggle(string label, Func<bool> getter, Action<bool> setter,
+                                    int x, int y, int width, int buttonWidth, int buttonHeight, float fontSize)
                 {
                     _getter = getter;
                     _setter = setter;
@@ -1559,24 +1640,24 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     _label = new LabelControl
                     {
                         Text = label,
-                        X = ContentPaddingX,
+                        X = x,
                         Y = y,
-                        FontSize = 11.5f,
+                        FontSize = fontSize,
                         TextColor = ModernHudTheme.TextWhite,
                         HasShadow = false
                     };
 
                     _button = new ButtonControl
                     {
-                        ControlSize = new Point(110, 26),
-                        ViewSize = new Point(110, 26),
+                        ControlSize = new Point(buttonWidth, buttonHeight),
+                        ViewSize = new Point(buttonWidth, buttonHeight),
                         AutoViewSize = false,
-                        X = panelWidth - 150,
+                        X = x + width - buttonWidth,
                         Y = y - 4,
                         BackgroundColor = new Color(28, 35, 46, 230),
                         HoverBackgroundColor = new Color(48, 58, 73, 240),
                         PressedBackgroundColor = new Color(18, 23, 31, 245),
-                        FontSize = 11f,
+                        FontSize = fontSize * 0.95f,
                         TextColor = ModernHudTheme.TextWhite,
                         HoverTextColor = ModernHudTheme.TextGold
                     };

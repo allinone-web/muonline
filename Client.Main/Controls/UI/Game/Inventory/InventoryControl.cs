@@ -58,11 +58,16 @@ namespace Client.Main.Controls.UI.Game.Inventory
         private int WINDOW_HEIGHT = 700;
 
         /// <summary>手機視窗的上緣。要讓開右上角的介面按鈕、經驗條與狀態列。</summary>
-        private const int MobileWindowTop = 158;
+        private const int MobileWindowTop = 112;
 
-        private const int MobilePreviewWidth = 200;
-        private const int MobileInfoWidth = 270;
+        private const int MobileInfoColumnWidth = 320;
         private const int MobileColumnGap = 14;
+
+        /// <summary>
+        /// 裝備欄的寬度。人偶的擺放需要中心點左右各約 4.75 個格子
+        /// （見 BuildEquipSlots：最左是 4 格 + 24，最右是 4.5 格 + 16）。
+        /// </summary>
+        private static int MobileEquipColumnWidth => INVENTORY_SQUARE_WIDTH * 9 + 40;
 
         // 手機的四欄：立體圖 | 裝備 | 背包 | 資訊
         private Rectangle _previewPanelRect;
@@ -78,8 +83,8 @@ namespace Client.Main.Controls.UI.Game.Inventory
         private const int PANEL_PADDING = 12;
         private static readonly int EQUIP_SECTION_HEIGHT = s_mobile ? 400 : 270;
 
-        public static readonly int INVENTORY_SQUARE_WIDTH = s_mobile ? 48 : 34;
-        public static readonly int INVENTORY_SQUARE_HEIGHT = s_mobile ? 48 : 34;
+        public static readonly int INVENTORY_SQUARE_WIDTH = s_mobile ? 64 : 34;
+        public static readonly int INVENTORY_SQUARE_HEIGHT = s_mobile ? 64 : 34;
 
         /// <summary>裝備欄那一欄的水平中心。桌面是整個視窗的中心，手機是左半欄的中心。</summary>
         private int _equipCenterX;
@@ -424,7 +429,10 @@ namespace Client.Main.Controls.UI.Game.Inventory
             // 水平與垂直都置中。少掉底列之後高度剛好落在右上角按鈕區塊的下方，
             // 置中比硬釘在某個 Y 好看，也不會壓到那六顆按鈕。
             X = Math.Max(PANEL_PADDING, (canvas.X - WINDOW_WIDTH) / 2);
-            Y = Math.Max(12, (canvas.Y - WINDOW_HEIGHT) / 2);
+            // 上緣必須讓開頂部的 HUD 區塊（左上頭像與數值、右上按鈕與經驗條），
+            // 否則 HUD 畫在最上層，文字會透出來蓋在視窗上。
+            // 讓開之後高度不足以置中就靠上，這比壓住 HUD 好。
+            Y = Math.Max(MobileWindowTop, (canvas.Y - WINDOW_HEIGHT) / 2);
         }
 
         /// <summary>左上角的頭像與數值文字底下的第一個安全 Y 座標。</summary>
@@ -713,12 +721,15 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 // 依內容決定寬度，不要鋪滿畫布 —— 鋪滿的話沒有選道具時，
                 // 右邊會出現一大片空白，看起來像壞掉。
                 var canvas = Controllers.UiScaler.VirtualSize;
+
+                // 三欄：裝備 ｜ 背包 ｜ 資訊（立體圖放在資訊欄上方）。
+                // 格子放大到 64 之後四欄放不下 —— 與其縮小格子，不如少一欄：
+                // 格子看得清楚比多一欄重要，而立體圖疊在資訊上方反而更大。
                 int content = PANEL_PADDING * 2
-                    + MobilePreviewWidth
-                    + MobileInfoWidth
-                    + (INVENTORY_SQUARE_WIDTH * 9 + 32)          // 裝備欄
+                    + MobileEquipColumnWidth
                     + (Columns * INVENTORY_SQUARE_WIDTH + 20)    // 背包欄（含外框）
-                    + MobileColumnGap * 3;
+                    + MobileInfoColumnWidth
+                    + MobileColumnGap * 2;
 
                 width = Math.Min(content, canvas.X - 24);
 
@@ -907,17 +918,10 @@ namespace Client.Main.Controls.UI.Game.Inventory
 
             // 四欄由左到右：立體圖 | 裝備 | 背包 | 資訊
             const int ColumnGap = MobileColumnGap;
-            int equipWidth = INVENTORY_SQUARE_WIDTH * 9 + 32;   // 裝備欄需要的最小寬度，見 BuildEquipSlots
+            int equipWidth = MobileEquipColumnWidth;
             int gridColumnWidth = gridTotalWidth + 20;          // 含外框
 
-            // 裝備與背包是固定寬度，立體圖與資訊分剩下的。
-            // 畫布窄的時候先犧牲立體圖 —— 資訊讀不到比圖小更糟。
-            int flexible = WINDOW_WIDTH - PANEL_PADDING * 2 - equipWidth - gridColumnWidth - ColumnGap * 3;
-            int previewWidth = Math.Clamp(flexible - MobileInfoWidth, 130, MobilePreviewWidth);
-
             int x = PANEL_PADDING;
-            _previewPanelRect = new Rectangle(x, contentTop, previewWidth, contentHeight);
-            x += previewWidth + ColumnGap;
 
             _paperdollPanelRect = new Rectangle(x, contentTop, equipWidth, EQUIP_SECTION_HEIGHT);
             _equipCenterX = _paperdollPanelRect.Center.X;
@@ -929,9 +933,12 @@ namespace Client.Main.Controls.UI.Game.Inventory
             _gridFrameRect = new Rectangle(gridX - 10, gridY - 10, gridTotalWidth + 20, gridTotalHeight + 20);
             x += gridColumnWidth + ColumnGap;
 
-            // 最右欄：資訊。剩下的寬度全給它。
+            // 最右欄：立體圖在上、文字在下，共用一欄。
             int infoWidth = Math.Max(0, WINDOW_WIDTH - PANEL_PADDING - x);
-            _infoPanelRect = new Rectangle(x, contentTop, infoWidth, contentHeight);
+            int previewHeight = Math.Min(infoWidth, contentHeight / 2);
+            _previewPanelRect = new Rectangle(x, contentTop, infoWidth, previewHeight);
+            _infoPanelRect = new Rectangle(x, contentTop + previewHeight + 8,
+                                           infoWidth, contentHeight - previewHeight - 8);
 
             BuildEquipSlots();
 
