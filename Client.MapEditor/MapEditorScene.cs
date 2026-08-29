@@ -313,6 +313,24 @@ public sealed class MapEditorScene : BaseScene
         if (document is null || _session.Tool == EditorToolKind.None)
             return;
 
+        // 按住 Option（Alt）點一下 = 吸管。與 Photoshop、Tiled 一致：
+        // 吸管不是獨立的模式，是「用目前這支筆去取樣」，所以不必離開手上的工具。
+        var keyboard = Keyboard.GetState();
+        bool eyedropper = keyboard.IsKeyDown(Keys.LeftAlt) || keyboard.IsKeyDown(Keys.RightAlt);
+
+        if (eyedropper)
+        {
+            if (pressed && !wasPressed && acceptInput && HoveredTile.Valid)
+            {
+                _session.StatusMessage =
+                    Eyedropper.Pick(_session.Tools, document, HoveredTile.TileX, HoveredTile.TileY)
+                    ?? "這支筆沒有可以吸的東西";
+            }
+
+            // 吸的時候不要順手畫下去。
+            return;
+        }
+
         // 物件工具是單次點擊，不是連續筆劃。
         if (_session.Tool is EditorToolKind.PlaceObject or EditorToolKind.SelectObject)
         {

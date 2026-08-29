@@ -207,4 +207,93 @@ public static class EditorTools
             document.Attributes[index] = after;
         });
     }
+
+}
+
+/// <summary>
+/// 吸管：把游標下那一格的值吸回筆刷設定。
+/// </summary>
+/// <remarks>
+/// 吸什麼取決於目前是哪支筆 —— 畫第一層就吸第一層的貼圖索引，
+/// 畫高度就吸高度。這與 Photoshop、Tiled 的行為一致：
+/// 吸管不是獨立的模式，是「用目前這支筆去取樣」。
+///
+/// 沒有它的話，畫一片混合地形要在面板與畫面之間來回幾十次 ——
+/// 看到一塊想用的地面，得先猜它是哪個索引，再去清單裡找。
+/// </remarks>
+public static class Eyedropper
+{
+    /// <summary>吸一格。回傳給使用者看的描述；這支筆沒有可吸的東西時回 null。</summary>
+    public static string? Pick(ToolSettings settings, MapDocument document, int tileX, int tileY)
+    {
+        if ((uint)tileX >= MapDocument.Size || (uint)tileY >= MapDocument.Size)
+            return null;
+
+        int index = (tileY * MapDocument.Size) + tileX;
+
+        switch (settings.Tool)
+        {
+            case EditorToolKind.PaintLayer1:
+                settings.PaintTileIndex = document.Layer1[index];
+                return $"吸到第一層索引 {settings.PaintTileIndex}";
+
+            case EditorToolKind.PaintLayer2:
+            {
+                byte value = document.Layer2[index];
+
+                // 255 是「這一格沒有第二層」的哨兵值，不是索引。
+                settings.PaintLayer2AsEmpty = value == TerrainTextureMapping.NoLayerIndex;
+
+                if (!settings.PaintLayer2AsEmpty)
+                    settings.PaintTileIndex = value;
+
+                return settings.PaintLayer2AsEmpty ? "吸到第二層：無" : $"吸到第二層索引 {value}";
+            }
+
+            case EditorToolKind.PaintAlpha:
+                settings.PaintAlphaValue = document.Alpha[index];
+                return $"吸到混合值 {settings.PaintAlphaValue:F0}";
+
+            case EditorToolKind.SculptHeight:
+                // 高度筆刷吸到的是「壓平的目標高度」—— 吸一格地面，
+                // 再用壓平模式把旁邊抹到同一高度，這是最常見的用法。
+                settings.FlattenTarget = document.HeightAt(index);
+                settings.HeightMode = HeightMode.Flatten;
+                return $"吸到高度 {settings.FlattenTarget:F0}，已切到壓平模式";
+
+            case EditorToolKind.PaintAttribute:
+            {
+                var flags = document.Attributes[index];
+
+                if (flags == 0)
+                    return "這一格沒有任何屬性";
+
+                // 一格可能有多個旗標，吸最低的那一個 —— 屬性筆刷一次只畫一種。
+                foreach (var candidate in new[]
+                {
+                    Client.Data.ATT.TWFlags.SafeZone,
+                    Client.Data.ATT.TWFlags.Character,
+                    Client.Data.ATT.TWFlags.NoMove,
+                    Client.Data.ATT.TWFlags.NoGround,
+                    Client.Data.ATT.TWFlags.Water,
+                    Client.Data.ATT.TWFlags.Action,
+                    Client.Data.ATT.TWFlags.Height,
+                    Client.Data.ATT.TWFlags.CameraUp,
+                })
+                {
+                    if ((flags & candidate) != 0)
+                    {
+                        settings.AttributeFlag = candidate;
+                        settings.AttributeErase = false;
+                        return $"吸到屬性 {candidate}";
+                    }
+                }
+
+                return "這一格的屬性不在已知的旗標裡";
+            }
+
+            default:
+                return null;
+        }
+    }
 }

@@ -39,6 +39,7 @@ public static class EditPipelineSelfTest
             SaveAndReloadProject(session, document),
             RoleAnnotations(session, document, world),
             BlankMap(),
+            EyedropperPick(session, document),
             ExportToClientFormat(session, document),
             SpawnAreasAndOpenMuExport(session, document),
             Validation(session, document, world),
@@ -311,6 +312,76 @@ public static class EditPipelineSelfTest
         {
             if (Directory.Exists(directory))
                 Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// 吸管：畫下去、換掉筆刷設定、再吸回來，要拿到原本畫的值。
+    /// </summary>
+    /// <remarks>
+    /// 每支筆吸的東西不同，所以逐一驗。第二層要特別驗哨兵值 255：
+    /// 吸到「沒有第二層」時要設 PaintLayer2AsEmpty，而不是把 255 當成索引。
+    /// </remarks>
+    private static (string, bool, string) EyedropperPick(EditSession session, MapDocument document)
+    {
+        const int x = OriginX + 60;
+        const int y = OriginY + 60;
+        int index = Index(x, y);
+
+        var before = (session.Tool, session.PaintTileIndex, session.PaintAlphaValue,
+                      session.FlattenTarget, session.AttributeFlag, session.HeightMode,
+                      session.PaintLayer2AsEmpty);
+
+        try
+        {
+            document.Layer1[index] = 42;
+            document.Layer2[index] = TerrainTextureMapping.NoLayerIndex;
+            document.Alpha[index] = 200;
+            document.Attributes[index] = TWFlags.SafeZone;
+
+            session.Tool = EditorToolKind.PaintLayer1;
+            session.PaintTileIndex = 0;
+            Eyedropper.Pick(session.Tools, document, x, y);
+            bool layer1 = session.PaintTileIndex == 42;
+
+            session.Tool = EditorToolKind.PaintLayer2;
+            session.PaintLayer2AsEmpty = false;
+            Eyedropper.Pick(session.Tools, document, x, y);
+            bool layer2 = session.PaintLayer2AsEmpty;
+
+            session.Tool = EditorToolKind.PaintAlpha;
+            session.PaintAlphaValue = 0f;
+            Eyedropper.Pick(session.Tools, document, x, y);
+            bool alpha = Math.Abs(session.PaintAlphaValue - 200f) < 0.01f;
+
+            session.Tool = EditorToolKind.PaintAttribute;
+            session.AttributeFlag = TWFlags.NoMove;
+            Eyedropper.Pick(session.Tools, document, x, y);
+            bool attribute = session.AttributeFlag == TWFlags.SafeZone;
+
+            session.Tool = EditorToolKind.SculptHeight;
+            session.FlattenTarget = -1f;
+            Eyedropper.Pick(session.Tools, document, x, y);
+            bool height = Math.Abs(session.FlattenTarget - document.HeightAt(index)) < 0.01f
+                       && session.HeightMode == HeightMode.Flatten;
+
+            // 邊界外不該吸到東西，也不該炸掉。
+            bool outside = Eyedropper.Pick(session.Tools, document, -1, 999) is null;
+
+            bool passed = layer1 && layer2 && alpha && attribute && height && outside;
+
+            return ("吸管", passed,
+                $"第一層 {layer1}、第二層哨兵 {layer2}、混合 {alpha}、屬性 {attribute}、高度 {height}、界外安全 {outside}");
+        }
+        catch (Exception ex)
+        {
+            return ("吸管", false, ex.Message);
+        }
+        finally
+        {
+            (session.Tool, session.PaintTileIndex, session.PaintAlphaValue,
+             session.FlattenTarget, session.AttributeFlag, session.HeightMode,
+             session.PaintLayer2AsEmpty) = before;
         }
     }
 

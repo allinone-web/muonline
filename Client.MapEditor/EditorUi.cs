@@ -524,6 +524,7 @@ public sealed class EditorUi : IDisposable
         if (_session.Tool == EditorToolKind.None)
         {
             ImGui.TextColored(Muted, "選一個工具開始編輯。");
+        ImGui.TextColored(Muted, "按住 Option 點一下 = 吸管（用目前這支筆取樣）");
             ImGui.End();
             return;
         }
