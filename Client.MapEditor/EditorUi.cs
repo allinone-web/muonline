@@ -1549,9 +1549,14 @@ public sealed class EditorUi
     /// 泛用的 <c>MapTileObject.Load</c> 組出來的路徑是 <c>Object{world}/Object{type+1:00}.bmd</c>，
     /// 但 <b>Object1（Lorencia）裡全是具名檔案</b>（Tree01.bmd、Bonfire01.bmd…），
     /// 一個 ObjectNN.bmd 都沒有 —— 所以沒有語意類別的 type 在 Lorencia 一定載不到，
-    /// <c>WorldControl.RemoveFailed</c> 會把它們從世界移除。實測 Lorencia 2833 個物件裡有 1028 個是這種。
+    /// <c>WorldControl.RemoveFailed</c> 會把它們從世界移除。
     ///
     /// 有語意類別的就當作載得到：那些類別各自在 Load() 裡寫死自己的路徑，這裡驗不了。
+    ///
+    /// <b>這只是靜態推測，真正的答案要載入之後對帳</b> ——
+    /// 見 <c>MapEditorScene.ReportObjectLoading</c> 與 <c>--audit-objects</c>。
+    /// （早期的筆記說 Lorencia 有 1028 個物件載不到，那是錯的：
+    /// 實測 2833 個全部載入，107 種 type 都有語意類別。）
     /// </remarks>
     private static bool ResolvesModel(WorldEntry entry, short type, string? className)
     {

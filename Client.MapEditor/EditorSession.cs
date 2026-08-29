@@ -49,6 +49,9 @@ public sealed class EditorSession : EditSession
     /// <summary>檔案操作正在進行中，避免重複觸發。</summary>
     public bool FileBusy { get; set; }
 
+    /// <summary>--audit-objects：把每張圖都載一次，對帳物件有沒有全部活下來。</summary>
+    public bool AuditObjects { get; set; }
+
     /// <summary>--selftest：地圖載入後跑一次編輯管線的自我測試。</summary>
     public bool RunSelfTest { get; set; }
 

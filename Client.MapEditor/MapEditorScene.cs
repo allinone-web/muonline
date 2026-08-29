@@ -52,9 +52,26 @@ public sealed class MapEditorScene : BaseScene
         initial ??= _session.Worlds.FirstOrDefault(w => w.Index == 1 && w.IsPlayable)
                     ?? _session.Worlds.FirstOrDefault(w => w.IsPlayable);
 
+        // --audit-objects：把每張圖都載一次，對帳物件有沒有全部活下來。
+        if (_session.AuditObjects)
+        {
+            _auditQueue = new Queue<int>(_session.Worlds.Where(w => w.IsPlayable).Select(w => w.Index).Order());
+            Console.WriteLine($"[稽核] 要走過 {_auditQueue.Count} 張圖");
+
+            if (_auditQueue.TryDequeue(out int first))
+                _session.RequestWorld(first);
+
+            return;
+        }
+
         if (initial is not null)
             _session.RequestWorld(initial.Index);
     }
+
+    /// <summary>--audit-objects 還沒走到的圖。</summary>
+    private Queue<int>? _auditQueue;
+
+    private readonly List<string> _auditLosses = [];
 
     private Vector3 _lastDrawDistanceFocus = new(float.MinValue, float.MinValue, float.MinValue);
 
@@ -74,6 +91,8 @@ public sealed class MapEditorScene : BaseScene
             ? TerrainPicker.Pick(World, MuGame.Instance.MouseRay)
             : default;
 
+        UpdateObjectReport();
+
         HandleEditing(acceptInput);
         HandleShortcuts(acceptInput);
         PushPendingEdits();
@@ -87,6 +106,94 @@ public sealed class MapEditorScene : BaseScene
         _session.Camera.Update(gameTime, acceptInput);
 
         ApplyObjectDrawDistance();
+    }
+
+    /// <summary>物件數連續這麼多幀沒變，就當作載完了。</summary>
+    private const int ObjectSettleFrames = 90;
+
+    private bool _pendingReport;
+    private int _settleFrames;
+    private int _lastObjectCount = -1;
+
+    /// <summary>等世界的物件數穩定下來，再對帳。</summary>
+    private void UpdateObjectReport()
+    {
+        if (!_pendingReport || _session.IsLoading || World is not EditorWorldControl world)
+            return;
+
+        int count = world.Objects.Count;
+
+        if (count != _lastObjectCount)
+        {
+            _lastObjectCount = count;
+            _settleFrames = 0;
+            return;
+        }
+
+        if (++_settleFrames < ObjectSettleFrames)
+            return;
+
+        _pendingReport = false;
+
+        if (_session.LoadedWorld is WorldEntry entry)
+            ReportObjectLoading(entry, world);
+
+        if (_auditQueue is null)
+            return;
+
+        if (_auditQueue.TryDequeue(out int next))
+        {
+            _session.RequestWorld(next);
+        }
+        else
+        {
+            Console.WriteLine("[稽核] 走完。掉物件的圖："
+                + (_auditLosses.Count == 0 ? "沒有" : string.Join("、", _auditLosses)));
+            MuGame.Instance.Exit();
+        }
+    }
+
+    /// <summary>
+    /// 載入後對一次帳：文件裡有幾個物件，世界裡真的活下來幾個。
+    /// </summary>
+    /// <remarks>
+    /// 模型載不到的物件會被 <c>WorldControl.RemoveFailed</c> 靜靜地從世界移除 ——
+    /// 畫面上就是少了東西，但沒有任何錯誤。編輯器如果不對帳，
+    /// 使用者會以為自己畫的圖是對的，進遊戲才發現不見了一半。
+    /// </remarks>
+    private void ReportObjectLoading(WorldEntry entry, EditorWorldControl world)
+    {
+        var document = _session.Document;
+        if (document is null)
+            return;
+
+        // 逐 type 比對，不能比總數：世界會自己加東西（鳥、環境特效、草），
+        // 那些不在 .obj 裡。實測 World8 的世界物件比文件還多 845 個。
+        var alive = world.Objects
+            .GroupBy(o => o.Type)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var lost = document.Objects
+            .GroupBy(o => o.Type)
+            .Select(g => (Type: g.Key, Missing: g.Count() - alive.GetValueOrDefault(g.Key)))
+            .Where(x => x.Missing > 0)
+            .OrderByDescending(x => x.Missing)
+            .ToArray();
+
+        int missing = lost.Sum(x => x.Missing);
+
+        if (missing == 0)
+        {
+            Console.WriteLine($"[物件] World{entry.Index}：{document.Objects.Count} 個全部載入");
+            return;
+        }
+
+        _auditLosses.Add($"World{entry.Index}（少 {missing}／{document.Objects.Count}）");
+
+        Console.WriteLine(
+            $"[物件] World{entry.Index}：{document.Objects.Count} 個裡有 {missing} 個沒進到世界，" +
+            $"涉及 {lost.Length} 種 type：" +
+            string.Join("、", lost.Take(10).Select(x => $"{x.Type}×{x.Missing}")));
     }
 
     /// <summary>
@@ -624,6 +731,13 @@ public sealed class MapEditorScene : BaseScene
             World = world;
             _session.LoadedWorldIndex = worldIndex;
             _session.Camera.FrameWholeMap();
+
+            // 物件是非同步載入的：Initialize() 回來時模型還在排隊，
+            // 載不到的也還沒被 RemoveFailed 移掉。這時候數是數不準的，
+            // 所以只標記待對帳，等數量不再變動再算。
+            _pendingReport = true;
+            _settleFrames = 0;
+            _lastObjectCount = -1;
 
             if (_session.RunSelfTest)
             {

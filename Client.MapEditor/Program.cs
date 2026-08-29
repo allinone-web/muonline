@@ -36,6 +36,7 @@ EditorSession.Current.RunSelfTest = parsed.ContainsKey("selftest");
 if (parsed.GetValueOrDefault("world") is string startupWorld && int.TryParse(startupWorld, out int startupWorldIndex))
     EditorSession.Current.StartupWorldIndex = startupWorldIndex;
 
+EditorSession.Current.AuditObjects = parsed.ContainsKey("audit-objects");
 EditorSession.Current.ExportOnStartPath = parsed.GetValueOrDefault("export-to");
 EditorSession.Current.ExportOpenMuOnStartPath = parsed.GetValueOrDefault("export-openmu-to");
 
