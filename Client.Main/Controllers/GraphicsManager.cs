@@ -15,13 +15,9 @@ namespace Client.Main.Controllers
 
         public GraphicsDevice GraphicsDevice => _graphicsDevice;
 
-        /// <summary>
-        /// FXAA 後處理抗鋸齒。
-        ///
-        /// 手機預設開啟：MU 是低面數模型，邊緣鋸齒在高 DPI 小螢幕上特別明顯。
-        /// 成本約 0.3-0.5 ms，而 iPhone Air 實機每幀尚有約 11 ms 餘裕。
-        /// 桌面維持原本的關閉狀態（桌面解析度高、觀看距離遠，需求較低）。
-        /// </summary>
+        // 手機預設開啟：2736x1260 這種超高 DPI 上，MU 的細長幾何（欄杆、屋簷、武器邊緣）
+        // 鋸齒非常明顯，而全螢幕 FXAA 只多一個 pass，實測仍有充足的 frame 餘裕。
+        // 桌面維持關閉（原本行為）。玩家在設定選單改過的值會覆寫這個預設。
         public bool IsFXAAEnabled { get; set; }
             = OperatingSystem.IsIOS() || OperatingSystem.IsAndroid();
         public bool IsAlphaRGBEnabled { get; set; } = false;

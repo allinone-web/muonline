@@ -1955,6 +1955,17 @@ namespace Client.Main
 
                 Camera.Instance.AspectRatio = (float)screenSize.X / screenSize.Y;
 
+                // 診斷：確認實際渲染解析度是「像素」而非「點」。
+                // 若 backbuffer 只有螢幕點數（例如 912x420 而非 2736x1260），畫面等於
+                // 用三分之一解析度渲染再放大 —— 那會是 iOS 畫質輸給 Windows 的主因。
+                var ppIos = GraphicsDevice.PresentationParameters;
+                Console.WriteLine(
+                    $"[MuIos] screen={screenSize.X}x{screenSize.Y} " +
+                    $"backbuffer={ppIos.BackBufferWidth}x{ppIos.BackBufferHeight} " +
+                    $"viewport={GraphicsDevice.Viewport.Width}x{GraphicsDevice.Viewport.Height} " +
+                    $"aspect={(float)screenSize.X / screenSize.Y:F3} " +
+                    $"canvas={mobileCanvas.X}x{mobileCanvas.Y}");
+
                 _logger?.LogDebug("iOS graphics configured: {Width}x{Height}, UiScaler: {ScaleX:F4}x{ScaleY:F4}",
                     screenSize.X, screenSize.Y,
                     UiScaler.ScaleX, UiScaler.ScaleY);

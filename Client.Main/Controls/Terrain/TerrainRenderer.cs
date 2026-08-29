@@ -534,8 +534,6 @@ namespace Client.Main.Controls.Terrain
                 _graphicsDevice.RasterizerState = RasterizerState.CullNone;
                 _graphicsDevice.DepthStencilState = DepthStencilState.Default;
                 _graphicsDevice.BlendState = BlendState.Opaque;
-                // 原本硬寫 LinearWrap，繞過了畫質設定 —— 角色套用了各向異性濾波、地形卻沒有，
-                // 這是地圖看起來比角色粗糙的主因。
                 _graphicsDevice.SamplerStates[0] = GraphicsManager.GetQualityLinearWrapSamplerState();
                 _lastBlendState = BlendState.Opaque;
 
@@ -1585,8 +1583,6 @@ namespace Client.Main.Controls.Terrain
                 _graphicsDevice.BlendState = WaterCausticsBlendState;
                 _graphicsDevice.DepthStencilState = WaterCausticsDepthState;
                 _graphicsDevice.RasterizerState = WaterCausticsRasterizerState;
-                // 原本硬寫 LinearWrap，繞過了畫質設定 —— 角色套用了各向異性濾波、地形卻沒有，
-                // 這是地圖看起來比角色粗糙的主因。
                 _graphicsDevice.SamplerStates[0] = GraphicsManager.GetQualityLinearWrapSamplerState();
                 _graphicsDevice.Indices = null;
 
