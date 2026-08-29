@@ -181,11 +181,33 @@ namespace Client.Main.Controllers
         /// <summary>
         /// Gets the appropriate SamplerState based on quality settings.
         /// </summary>
+        // MonoGame 內建的 AnisotropicClamp/Wrap 只用 4x。地面以掠角觀看時 4x 仍然糊，
+        // 而 16x 在 A19 這級的 GPU 上幾乎不花額外時間 —— 實測沒有影響幀時間。
+        private static readonly SamplerState Anisotropic16Clamp = new SamplerState
+        {
+            Filter = TextureFilter.Anisotropic,
+            AddressU = TextureAddressMode.Clamp,
+            AddressV = TextureAddressMode.Clamp,
+            AddressW = TextureAddressMode.Clamp,
+            MaxAnisotropy = 16,
+            Name = nameof(Anisotropic16Clamp),
+        };
+
+        private static readonly SamplerState Anisotropic16Wrap = new SamplerState
+        {
+            Filter = TextureFilter.Anisotropic,
+            AddressU = TextureAddressMode.Wrap,
+            AddressV = TextureAddressMode.Wrap,
+            AddressW = TextureAddressMode.Wrap,
+            MaxAnisotropy = 16,
+            Name = nameof(Anisotropic16Wrap),
+        };
+
         public static SamplerState GetQualitySamplerState()
         {
             if (Constants.HIGH_QUALITY_TEXTURES)
             {
-                return SamplerState.AnisotropicClamp;
+                return Anisotropic16Clamp;
             }
             return SamplerState.PointClamp;
         }
@@ -197,7 +219,7 @@ namespace Client.Main.Controllers
         {
             if (Constants.HIGH_QUALITY_TEXTURES)
             {
-                return SamplerState.AnisotropicClamp;
+                return Anisotropic16Clamp;
             }
             return SamplerState.LinearClamp;
         }
@@ -206,7 +228,7 @@ namespace Client.Main.Controllers
         {
             if (Constants.HIGH_QUALITY_TEXTURES)
             {
-                return SamplerState.AnisotropicWrap;
+                return Anisotropic16Wrap;
             }
             return SamplerState.LinearWrap;
         }
@@ -242,6 +264,10 @@ namespace Client.Main.Controllers
                         renderTargetFormat,
                         sampleCount);
                 }
+
+                Console.WriteLine(
+                    $"[RenderTarget] {targetWidth}x{targetHeight} " +
+                    $"(backbuffer {backBufferWidth}x{backBufferHeight}, RENDER_SCALE={Constants.RENDER_SCALE:F3})");
 
                 InitializeSceneTarget(MainRenderTarget, targetWidth, targetHeight);
                 if (RecoveryRenderTarget != null)

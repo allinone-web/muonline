@@ -88,6 +88,31 @@ namespace Client.Main.Configuration
         public float RenderScale { get; set; } = 1.0f;
 
         /// <summary>
+        /// 手機的雙指縮放下限（越小角色越大）。
+        ///
+        /// 桌面的 MIN_CAMERA_DISTANCE 是 500，但在 6.5 吋的橫向螢幕上放到最大仍嫌小。
+        /// </summary>
+        public float CameraMinDistance { get; set; } = 350f;
+
+        /// <summary>
+        /// 手機的雙指縮放上限（越大視野越廣，但角色與怪物會小到失去意義）。
+        ///
+        /// 桌面允許到 1800，實測在手機上拉到那麼遠時建築與角色都太小，
+        /// 畫面雖然寬廣卻不能玩，因此收窄。
+        /// </summary>
+        public float CameraMaxDistance { get; set; } = 1100f;
+
+        /// <summary>
+        /// 注視點沿世界 Z 抬高的比例（相對於當前鏡頭距離）。
+        ///
+        /// 鏡頭正對角色腳底時，身體整個往畫面中心以上延伸，拉近後頭部會頂出螢幕。
+        /// 把注視點抬高，角色隨之下移，腳落在畫面中心略下方 —— 橫向手機螢幕垂直
+        /// 空間很窄，這個偏移相當有感。0 表示維持原本對準腳底的行為。
+        /// </summary>
+        public float CameraTargetLift { get; set; } = 0.12f;
+
+
+        /// <summary>
         /// UI 是否維持等比縮放。
         ///
         /// 原本用 Stretch 把 1280x720 硬拉滿螢幕，在 2868x1320 上橫向 2.241 倍、

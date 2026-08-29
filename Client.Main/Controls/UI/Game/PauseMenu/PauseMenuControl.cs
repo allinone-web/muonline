@@ -1044,8 +1044,14 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
 
                 AddCategoryButton("Audio", () => BuildAudioCategory(), categoryStartY,
                     ref categoryX, categoryWidth, categoryHeight, categorySpacing, categoriesPerRow, ref categoryIndex);
-                AddCategoryButton("Display", () => BuildDisplayCategory(), categoryStartY,
-                    ref categoryX, categoryWidth, categoryHeight, categorySpacing, categoriesPerRow, ref categoryIndex);
+                // Display 在手機上整組無效：解析度與全螢幕都由系統決定，MuGame 一律
+                // 強制使用螢幕原生尺寸（iPhone Air 上是 2736x1260），選單裡的
+                // 1280x720 之類選項按了不會有任何作用。
+                if (!IsMobile)
+                {
+                    AddCategoryButton("Display", () => BuildDisplayCategory(), categoryStartY,
+                        ref categoryX, categoryWidth, categoryHeight, categorySpacing, categoriesPerRow, ref categoryIndex);
+                }
                 AddCategoryButton("Quality Preset", () => BuildQualityPresetCategory(), categoryStartY,
                     ref categoryX, categoryWidth, categoryHeight, categorySpacing, categoriesPerRow, ref categoryIndex);
                 AddCategoryButton("World & Visibility", () => BuildWorldCategory(), categoryStartY,
@@ -1056,8 +1062,15 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     ref categoryX, categoryWidth, categoryHeight, categorySpacing, categoriesPerRow, ref categoryIndex);
                 AddCategoryButton("Lighting", () => BuildLightingCategory(), categoryStartY,
                     ref categoryX, categoryWidth, categoryHeight, categorySpacing, categoriesPerRow, ref categoryIndex);
-                AddCategoryButton("Shadow Quality", () => BuildShadowQualityCategory(), categoryStartY,
-                    ref categoryX, categoryWidth, categoryHeight, categorySpacing, categoriesPerRow, ref categoryIndex);
+                // Shadow Quality 在 iOS 上是壞的：開啟 Shadow Mapping 後角色陰影變成一個
+                // 黑色方塊，Medium 以上整片地面變黑。陰影貼圖在 OpenGL ES 上需要可取樣的
+                // 深度材質，這條路徑從未在手機上驗證過。角色腳下那圈陰影來自另一套
+                // 機制，不受影響，所以整組隱藏不會失去任何目前可用的效果。
+                if (!IsMobile)
+                {
+                    AddCategoryButton("Shadow Quality", () => BuildShadowQualityCategory(), categoryStartY,
+                        ref categoryX, categoryWidth, categoryHeight, categorySpacing, categoriesPerRow, ref categoryIndex);
+                }
                 AddCategoryButton("Performance", () => BuildPerformanceCategory(), categoryStartY,
                     ref categoryX, categoryWidth, categoryHeight, categorySpacing, categoriesPerRow, ref categoryIndex);
 

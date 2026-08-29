@@ -34,6 +34,33 @@ internal sealed class MainPlayerCameraController
     /// <summary>兩指距離小於此值視為誤觸，不進行縮放。</summary>
     private const float MinPinchDistance = 24f;
 
+    private static readonly bool IsMobile = OperatingSystem.IsIOS() || OperatingSystem.IsAndroid();
+
+    private static Configuration.MobileGraphicsSettings MobileSettings
+        => MuGame.AppSettings?.Graphics?.Mobile;
+
+    /// <summary>縮放下限。手機用自己的設定 —— 桌面的 500 在手機上還不夠近。</summary>
+    private static float ZoomMinDistance
+    {
+        get
+        {
+            if (!IsMobile) return Constants.MIN_CAMERA_DISTANCE;
+            float v = MobileSettings?.CameraMinDistance ?? 350f;
+            return MathHelper.Clamp(v, 200f, Constants.MAX_CAMERA_DISTANCE);
+        }
+    }
+
+    /// <summary>縮放上限。手機收窄 —— 拉到桌面的 1800 時角色小到不能玩。</summary>
+    private static float ZoomMaxDistance
+    {
+        get
+        {
+            if (!IsMobile) return Constants.MAX_CAMERA_DISTANCE;
+            float v = MobileSettings?.CameraMaxDistance ?? 1100f;
+            return MathHelper.Clamp(v, ZoomMinDistance, Constants.MAX_CAMERA_DISTANCE);
+        }
+    }
+
     public bool MouseScrollToZoom
     {
         get => _mouseScrollToZoom;
@@ -144,8 +171,8 @@ internal sealed class MainPlayerCameraController
         {
             _targetCameraDistance = MathHelper.Clamp(
                 _targetCameraDistance - distanceDelta * PinchZoomSensitivity,
-                Constants.MIN_CAMERA_DISTANCE,
-                Constants.MAX_CAMERA_DISTANCE);
+                ZoomMinDistance,
+                ZoomMaxDistance);
         }
 
         // 旋轉：兩指一起平移
@@ -166,6 +193,15 @@ internal sealed class MainPlayerCameraController
 
     public void Apply(Vector3 target)
     {
+        // 角色模型的原點在腳底，因此鏡頭原本正對腳底 —— 身體整個往畫面中心以上長，
+        // 拉近時頭部會頂出螢幕上緣。手機是橫向螢幕，垂直空間本來就窄。
+        // 把注視點沿世界 Z 抬高，角色整體下移，腳落在畫面中心略下方。
+        if (IsMobile)
+        {
+            float lift = MathHelper.Clamp(MobileSettings?.CameraTargetLift ?? 0.12f, 0f, 0.5f);
+            target.Z += _currentCameraDistance * lift;
+        }
+
         float x = _currentCameraDistance * MathF.Cos(_cameraPitch) * MathF.Sin(_cameraYaw);
         float y = _currentCameraDistance * MathF.Cos(_cameraPitch) * MathF.Cos(_cameraYaw);
         float z = _currentCameraDistance * MathF.Sin(_cameraPitch);
