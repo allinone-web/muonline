@@ -2003,6 +2003,27 @@ namespace Client.Main.Controls.UI.Game.Hud
                 var rect = _btnRects[i];
                 bool isHovered = i == _hoveredButton;
 
+                if (IsMobile)
+                {
+                    // 沒有邊框。六顆按鈕排成 3x2 的話，框線會兩兩相鄰疊在一起 ——
+                    // 中間那幾條會比外圍的粗一倍，看起來像沒對齊。
+                    // 一塊底色就足以說明「這裡可以按」，按下去再亮一階。
+                    sb.Draw(pixel, rect, (isHovered ? MobileUi.TitleBarFill * 1.5f : MobileUi.TitleBarFill) * MobileUi.PanelAlpha);
+
+                    if (_font != null)
+                    {
+                        string mobileLabel = ActiveButtonLabels[i];
+                        var mobileSize = _font.MeasureString(mobileLabel) * _btnFontScale;
+                        DrawTextWithShadow(sb, mobileLabel,
+                            new Vector2(rect.X + (rect.Width - mobileSize.X) / 2f,
+                                        rect.Y + (rect.Height - mobileSize.Y) / 2f),
+                            isHovered ? MobileUi.TextPrimary : MobileUi.TextDim,
+                            _btnFontScale);
+                    }
+
+                    continue;
+                }
+
                 // Button border
                 sb.Draw(pixel, rect, isHovered ? ModernHudTheme.BorderInner : ModernHudTheme.BorderOuter);
 

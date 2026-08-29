@@ -34,8 +34,17 @@ namespace Client.Main.Controls.UI.Game
         // ═══════════════════════════════════════════════════════════════
         private const int SHOP_COLUMNS = 8;
         private const int SHOP_ROWS = 15;
-        private const int SHOP_SQUARE_WIDTH = 32;
-        private const int SHOP_SQUARE_HEIGHT = 32;
+        /// <summary>
+        /// 格子邊長。桌面 32，手機 64 —— 和背包同一個數字。
+        ///
+        /// 32 px 在 iPhone 上換算後約 15 pt，遠低於可以放心點的 44 pt，
+        /// 而且 20x28 的道具圖示縮到那個尺寸根本認不出是什麼東西。
+        /// 每個視窗自己訂一個格子大小的話，同一件道具在背包、商店、倉庫裡
+        /// 會是三種尺寸 —— 玩家每換一個視窗就要重新認一次。
+        /// 視窗寬度是從這個值推算的，改了會一起變寬。
+        /// </summary>
+        private static int SHOP_SQUARE_WIDTH => MobileUi.IsMobile ? 64 : 32;
+        private static int SHOP_SQUARE_HEIGHT => MobileUi.IsMobile ? 64 : 32;
 
         private const int HEADER_HEIGHT = 46;
         private const int SECTION_HEADER_HEIGHT = 22;
@@ -207,7 +216,10 @@ namespace Client.Main.Controls.UI.Game
 
             _buttonAreaRect = new Rectangle(WINDOW_MARGIN, _gridFrameRect.Bottom + 2, _gridFrameRect.Width, buttonAreaHeight);
             _footerRect = new Rectangle(WINDOW_MARGIN, _buttonAreaRect.Bottom + 4, _gridFrameRect.Width, FOOTER_HEIGHT - 8);
-            _closeButtonRect = new Rectangle(WINDOW_WIDTH - 30, 10, 20, 20);
+            // 關閉鈕放<b>左上角</b>：螢幕右上角是六顆介面按鈕（MENU / CHAR / BAG …），
+            // 視窗的關閉鈕再放右上角就會疊在同一塊區域，拇指分不開。
+            // 遊戲內所有視窗一致，見 docs/手機遊戲界面規格.md。
+            _closeButtonRect = new Rectangle(12, 10, 26, 22);
 
             // Repair buttons in button area
             int buttonWidth = 100;

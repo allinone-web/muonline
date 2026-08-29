@@ -43,8 +43,17 @@ namespace Client.Main.Controls.UI.Game.Trade
 
         private const int TRADE_COLUMNS = 8;
         private const int TRADE_ROWS = 4;
-        private const int TRADE_SQUARE_WIDTH = 34;
-        private const int TRADE_SQUARE_HEIGHT = 34;
+        /// <summary>
+        /// 格子邊長。桌面 34，手機 64 —— 和背包同一個數字。
+        ///
+        /// 34 px 在 iPhone 上換算後約 15 pt，遠低於可以放心點的 44 pt，
+        /// 而且 20x28 的道具圖示縮到那個尺寸根本認不出是什麼東西。
+        /// 每個視窗自己訂一個格子大小的話，同一件道具在背包、商店、倉庫裡
+        /// 會是三種尺寸 —— 玩家每換一個視窗就要重新認一次。
+        /// 視窗寬度是從這個值推算的，改了會一起變寬。
+        /// </summary>
+        private static int TRADE_SQUARE_WIDTH => MobileUi.IsMobile ? 64 : 34;
+        private static int TRADE_SQUARE_HEIGHT => MobileUi.IsMobile ? 64 : 34;
         // Matches the original client behavior (~150 frames @ 60fps).
         private const int TRADE_RED_SECONDS = 3;
 

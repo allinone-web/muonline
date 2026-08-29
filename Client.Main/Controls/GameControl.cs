@@ -658,8 +658,19 @@ namespace Client.Main.Controls
             );
         }
 
+        /// <summary>
+        /// 控制項的外框。
+        ///
+        /// 手機不畫。按鈕一多，框線就會兩兩相鄰疊在一起，相接處看起來比別處粗一倍 ——
+        /// 而且每個控制項各自畫一圈的話，面板裡很快就會有三四層平行線。
+        /// 手機的做法是用底色深淺區分層次（見 MobileUi），框只留給面板最外緣。
+        /// 需要在手機上保留外框的控制項請自行繪製，不要走這個共用路徑。
+        /// </summary>
         protected void DrawBorder()
         {
+            if (Client.Main.Controls.UI.MobileUi.IsMobile)
+                return;
+
             if (BorderThickness <= 0 || BorderColor.A == 0) // Check alpha for transparency
                 return;
 
