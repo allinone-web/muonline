@@ -1269,7 +1269,13 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 var skillAnim = new SkillAnimation(packet);
                 ushort playerId = skillAnim.PlayerId;
                 ushort skillId = skillAnim.SkillId;
-                ushort targetId = skillAnim.TargetId;
+
+                // 伺服器在「效果真的套用了」時，會把目標 ID 的最高位設起來
+                // （ShowSkillAnimationPlugIn：`t.GetId() | 0x8000`）。
+                // 不遮掉的話 TryGetWalkerById 一定找不到目標 ——
+                // 也就是「打中的時候」反而定位不到目標位置，需要目標座標的特效
+                // （例如憤怒之錘）就會落在錯的地方或不生成。
+                ushort targetId = (ushort)(skillAnim.TargetId & 0x7FFF);
 
                 _logger.LogDebug("SkillAnimation: Player={PlayerId}, Skill={SkillId}, Target={TargetId}",
                     playerId, skillId, targetId);
@@ -1283,6 +1289,12 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     if (playerId == _characterState.Id)
                     {
                         activeScene.NotifyLocalSkillAnimation(skillId);
+
+                        // 技能 59 不是技能，是「這一次連擊成立」的通知
+                        // （ShowSkillAnimationPlugIn.ComboSkillId）。沒有動作、音效與特效，
+                        // 繼續往下跑只會白白觸發一次坐騎的施法動作。
+                        if (skillId == Core.Client.SkillComboTracker.ComboAchievedSkillId)
+                            return;
 
                         int animationId = ArrowProjectileSpawner.IsArrowSkill(skillId)
                             ? (int)activeScene.Hero.GetArrowSkillAnimation(skillId)

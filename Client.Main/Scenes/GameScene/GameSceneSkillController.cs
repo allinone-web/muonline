@@ -45,6 +45,15 @@ namespace Client.Main.Scenes
         private byte _nextAreaSkillAnimationCounter;
         private bool _novaCharging;
 
+        /// <summary>
+        /// 最近一次出手失敗的原因，供手機的技能鈕顯示。
+        ///
+        /// 桌面失敗時只寫 Debug 記錄 —— 玩家看得到滑鼠、看得到目標、看得到資源條，
+        /// 大致猜得出來。手機上按鈕就在拇指底下，失敗只閃一下紅色，
+        /// 玩家完全無從得知是沒目標、魔力不足、AG 不足還是在冷卻。
+        /// </summary>
+        public string LastFailureReason { get; private set; }
+
         public GameSceneSkillController(
             GameScene scene,
             ModernBottomHud hud,
@@ -65,6 +74,12 @@ namespace Client.Main.Scenes
 
         public void ClearPending()
         {
+            // 換地圖／換角色／死亡都會走到這裡。SkillCooldownTracker 是 static，
+            // 不清掉的話冷卻會跨角色留下來 —— 地裂 62 的 10 秒、龍斬 265 的 3 秒
+            // 會讓剛換過去的角色莫名其妙按不動。ResetAll 原本全專案沒有任何呼叫者。
+            Core.Client.SkillCooldownTracker.ResetAll();
+            _nextSkillAllowedMs.Clear();
+
             ClearPendingSkill();
             if (_scene.World is WalkableWorldControl world && _scene.Hero != null)
                 ForceReleaseNovaCharge(world, _scene.Hero);
@@ -194,6 +209,12 @@ namespace Client.Main.Scenes
                 {
                     QueueSkillCast(skill, skillTarget, allowedRange, isAreaSkill: true);
                 }
+            }
+            else if (SkillDatabase.IsSelfSkill(skill.SkillId))
+            {
+                // 自身／隊伍增益不需要滑鼠指到誰。原本沒有這條分支，
+                // 於是防禦、生命增幅這類技能必須「指著一隻怪」才放得出來。
+                UseSelfSkill(skill);
             }
             else
             {
@@ -619,43 +640,201 @@ namespace Client.Main.Scenes
         /// <summary>
         /// 手機用：自動鎖定最近的敵人並施放指定技能（技能為 null 則普通攻擊）。
         ///
-        /// 桌面的流程是「先選技能、再點目標」，手機上要點兩次而且要點準небольш的怪物，
+        /// 桌面的流程是「先選技能、再點目標」，手機上要點兩次而且得點準怪物，
         /// 體驗很差。手遊 MMO 的標準做法是按鈕直接對最近的敵人出手，這裡照做。
+        ///
+        /// <b>必須依技能型別分派</b>。原本一律走 <see cref="UseSkillOnTarget"/>，
+        /// 也就是一律送「指定目標」的技能封包，於是：
+        /// <list type="bullet">
+        ///   <item>範圍技（戰士的旋風斬 41、憤怒之錘 42…）被當成單體技送出，
+        ///         伺服器只打得到一個目標，而且客戶端等不到 AreaSkillAnimation（0x1E），
+        ///         技能特效永遠不會生成 —— 這正是「戰士的魔法沒有播放」。</item>
+        ///   <item>自身增益（防禦 18、生命增幅 48…）需要一個怪物在附近才送得出去，
+        ///         而且會把自己指定成「攻擊那隻怪物」。安全區裡完全無法施放。</item>
+        /// </list>
+        /// 桌面沒有這個問題，因為 <see cref="HandleRightClickSkillUsage"/> 本來就有分派。
         /// </summary>
-        /// <returns>是否成功出手（找不到目標或超出射程時回傳 false）。</returns>
+        /// <returns>是否成功出手。false 代表這一次什麼都沒送出，
+        /// 原因記在 <see cref="LastFailureReason"/>。</returns>
         public bool AttackNearestEnemy(Core.Client.SkillEntryState skill)
+        {
+            LastFailureReason = null;
+
+            var hero = _scene.Hero;
+            if (hero == null || hero.IsDead)
+            {
+                LastFailureReason = hero == null ? null : "You are dead";
+                return false;
+            }
+
+            if (skill == null)
+            {
+                // 沒有指定技能就普通攻擊
+                var meleeTarget = FindNearestTarget(hero);
+                if (meleeTarget == null)
+                {
+                    LastFailureReason = "No target nearby";
+                    return false;
+                }
+
+                // 走 PlayerObject.Attack 而不是自己組封包 —— 桌面就是走這條。
+                // 它會處理射程（不夠就走過去）、出手動作、弓箭的實體投射物、
+                // 武器揮擊音效，以及客戶端方向到伺服器方向的轉換。
+                // 原本手機自己送 SendHitRequestAsync 並寫死 attackAnimation 0x78，
+                // 所以手機的普通攻擊<b>沒有箭、沒有音效</b>，動作代號也是錯的。
+                if (meleeTarget is MonsterObject meleeMonster)
+                    hero.Attack(meleeMonster);
+                else if (meleeTarget is PlayerObject meleePlayer)
+                    hero.Attack(meleePlayer);
+                else
+                    return false;
+
+                return true;
+            }
+
+            // 傳送需要玩家自己指定落點，不能用「最近的敵人」代替。
+            if (skill.SkillId == TeleportSkillId)
+            {
+                LastFailureReason = "Tap the map to teleport";
+                return false;
+            }
+
+            // 安全區內伺服器會直接丟掉技能封包（TargetedSkillDefaultPlugin 的
+            // IsAtSafezone 判斷）。桌面的右鍵路徑本來就有擋，手機這條沒有 ——
+            // 玩家在城裡按技能會完全沒有反應，也沒有任何訊息。
+            if (_scene.World is WalkableWorldControl safeZoneWorld)
+            {
+                var flags = safeZoneWorld.Terrain.RequestTerrainFlag((int)hero.Location.X, (int)hero.Location.Y);
+                if (flags.HasFlag(TWFlags.SafeZone))
+                {
+                    LastFailureReason = "Not in a safe zone";
+                    return false;
+                }
+            }
+
+            var skillType = SkillDatabase.GetSkillType(skill.SkillId);
+
+            if (skillType == Client.Data.BMD.SkillType.Self)
+                return UseSelfSkill(skill);
+
+            var target = FindNearestTarget(hero);
+            uint allowedRange = SkillDatabase.GetSkillRange(skill.SkillId);
+
+            if (skillType == Client.Data.BMD.SkillType.Area)
+            {
+                // 沒有目標時仍然可以放 —— 範圍技本來就不必指定敵人。
+                if (target == null)
+                    return UseAreaSkill(skill, 0, TileInFrontOfHero(hero, allowedRange));
+
+                if (!IsInSkillRange(target.Location, allowedRange))
+                {
+                    // 走過去再放，而不是靜默失敗（原本連走都不會走）。
+                    QueueAreaSkillCast(skill, target.Location, allowedRange);
+                    return true;
+                }
+
+                return UseAreaSkill(skill, target.NetworkId, target.Location);
+            }
+
+            if (target == null)
+            {
+                LastFailureReason = "No target nearby";
+                return false;
+            }
+
+            if (!IsInSkillRange(target.Location, allowedRange))
+            {
+                QueueSkillCast(skill, target, allowedRange, isAreaSkill: false);
+                return true;
+            }
+
+            return target switch
+            {
+                MonsterObject monster => UseSkillOnTarget(skill, monster),
+                PlayerObject player => UseSkillOnPlayerTarget(skill, player),
+                _ => false
+            };
+        }
+
+        /// <summary>
+        /// 自身／隊伍增益。OpenMU 走的是同一個「指定目標」的處理器，
+        /// 目標填自己即可（<c>TargetedSkillHandlerPlugIn</c>：「target 也可以是玩家本人」）。
+        /// </summary>
+        private bool UseSelfSkill(Core.Client.SkillEntryState skill)
         {
             var hero = _scene.Hero;
             if (hero == null || hero.IsDead)
                 return false;
 
-            var target = FindNearestEnemy(hero);
-            if (target == null)
+            if (!TryBeginSkillCast(skill, hero))
                 return false;
 
-            if (skill != null)
-                return UseSkillOnTarget(skill, target);
+            _logger?.LogInformation("Using self skill {SkillId} (Level {Level})",
+                skill.SkillId, skill.SkillLevel);
 
-            // 沒有指定技能就普通攻擊
-            hero.FaceTowards(target.Location, immediate: true);
-            _ = MuGame.Network.GetCharacterService().SendHitRequestAsync(
-                target.NetworkId,
-                attackAnimation: 0x78,
-                lookingDirection: (byte)hero.Direction);
+            _ = MuGame.Network.GetCharacterService().SendSkillRequestAsync(
+                skill.SkillId,
+                hero.NetworkId);
+
             return true;
         }
 
         /// <summary>
-        /// 找出最近且存活的怪物。只看格子距離，夠用且成本低。
+        /// 角色面前的格子，供「附近沒有敵人時仍要放範圍技」使用。
+        /// 距離取射程的一半，讓特效落在畫面裡而不是踩在自己腳下。
         /// </summary>
-        private MonsterObject FindNearestEnemy(Objects.Player.PlayerObject hero)
+        private static Vector2 TileInFrontOfHero(PlayerObject hero, uint allowedRange)
+        {
+            float distance = allowedRange > 0 ? MathF.Max(1f, allowedRange * 0.5f) : 2f;
+
+            // Angle.Z 是「畫面朝向」，與地圖格子的對應見 DirectionExtensions.ToAngle：
+            // 0 度 = (0,-1)、90 度 = (+1,0)、180 度 = (0,+1)、270 度 = (-1,0)。
+            // 也就是 dx = sin(angle)、dy = -cos(angle)，不是一般的 (cos, sin)。
+            float angle = hero.Angle.Z;
+            var ahead = hero.Location + new Vector2(MathF.Sin(angle), -MathF.Cos(angle)) * distance;
+
+            return new Vector2(
+                Math.Clamp(ahead.X, 0, Constants.TERRAIN_SIZE - 1),
+                Math.Clamp(ahead.Y, 0, Constants.TERRAIN_SIZE - 1));
+        }
+
+        /// <summary>
+        /// 找出最近且可以攻擊的對象。只看格子距離，夠用且成本低。
+        ///
+        /// <b>玩家優先於怪物。</b>客戶端唯一允許攻擊玩家的情況是決鬥中的對手
+        /// （<c>GameSceneDuelController.IsDuelAttackTarget</c>），那是一個明確的
+        /// 一對一狀態 —— 決鬥中按攻擊鍵想打的一定是對手，不是旁邊的怪。
+        ///
+        /// 原本這個方法只掃 <c>World.Monsters</c>，所以<b>手機上完全無法對玩家出手</b>，
+        /// 決鬥等於沒有。桌面因為是滑鼠點目標，沒有這個問題。
+        /// </summary>
+        /// <summary>
+        /// 自動選敵的最大距離（格）。
+        ///
+        /// <b>沒有這個上限會出事</b>：超出射程時會走過去再放（QueueSkillCast），
+        /// 所以「最近的敵人在四十格外」時，按一下技能鈕角色就會自己橫越整張地圖。
+        /// 桌面沒有這個問題 —— 目標是玩家用滑鼠點的。
+        /// 10 格略小於視野範圍，畫面上看得到的敵人都在內。
+        /// </summary>
+        private const float AutoTargetRangeTiles = 10f;
+
+        private WalkerObject FindNearestTarget(Objects.Player.PlayerObject hero)
+        {
+            var duelTarget = FindNearestDuelPlayer(hero);
+            if (duelTarget != null)
+                return duelTarget;
+
+            return FindNearestMonster(hero);
+        }
+
+        private MonsterObject FindNearestMonster(Objects.Player.PlayerObject hero)
         {
             var monsters = _scene.World?.Monsters;
             if (monsters == null || monsters.Count == 0)
                 return null;
 
             MonsterObject best = null;
-            float bestDistanceSquared = float.MaxValue;
+            float bestDistanceSquared = AutoTargetRangeTiles * AutoTargetRangeTiles;
 
             for (int i = 0; i < monsters.Count; i++)
             {
@@ -668,6 +847,39 @@ namespace Client.Main.Scenes
                 {
                     bestDistanceSquared = distanceSquared;
                     best = monster;
+                }
+            }
+
+            return best;
+        }
+
+        private PlayerObject FindNearestDuelPlayer(Objects.Player.PlayerObject hero)
+        {
+            var players = _scene.World?.Players;
+            if (players == null || players.Count == 0)
+                return null;
+
+            PlayerObject best = null;
+            float bestDistanceSquared = AutoTargetRangeTiles * AutoTargetRangeTiles;
+
+            for (int i = 0; i < players.Count; i++)
+            {
+                var player = players[i];
+                if (player == null || ReferenceEquals(player, hero))
+                    continue;
+
+                if (player.IsDead || !player.Visible || player.World != _scene.World)
+                    continue;
+
+                // 與桌面同一條規則，不另外發明 PvP 政策
+                if (!_isDuelAttackTarget(player))
+                    continue;
+
+                float distanceSquared = Vector2.DistanceSquared(hero.Location, player.Location);
+                if (distanceSquared < bestDistanceSquared)
+                {
+                    bestDistanceSquared = distanceSquared;
+                    best = player;
                 }
             }
 
@@ -851,10 +1063,16 @@ namespace Client.Main.Scenes
         private bool TryBeginSkillCast(Core.Client.SkillEntryState skill, PlayerObject hero)
         {
             if (hero.IsAttackOrSkillAnimationPlaying())
+            {
+                LastFailureReason = null;   // 動作還沒演完，不是錯誤，不必回報
                 return false;
+            }
 
             if (!TryConsumeSkillDelay(skill.SkillId))
+            {
+                LastFailureReason = "Cooling down";
                 return false;
+            }
 
             // Check player resources and stat requirements (mirrors SourceMain CSkillManager checks)
             var characterState = MuGame.Network?.GetCharacterState();
@@ -867,60 +1085,34 @@ namespace Client.Main.Scenes
                 {
                     _logger?.LogDebug("Not enough mana to use skill {SkillId}. Required: {Required}, Current: {Current}",
                         skill.SkillId, manaCost, characterState.CurrentMana);
+                    LastFailureReason = $"Need {manaCost} MP";
                     return false;
                 }
 
+                // 戰士技能幾乎都要 AG，法師技能幾乎都不要 —— 這是「法師正常、戰士不正常」
+                // 的另一個來源。AG 回得慢，空了就整排技能全部按不動。
                 if (characterState.CurrentAbility < agCost)
                 {
                     _logger?.LogDebug("Not enough AG to use skill {SkillId}. Required: {Required}, Current: {Current}",
                         skill.SkillId, agCost, characterState.CurrentAbility);
+                    LastFailureReason = $"Need {agCost} AG";
                     return false;
                 }
 
-                // Stat requirement check (SourceMain: DemendConditionCheckSkill)
-                var def = SkillDatabase.GetSkillDefinition(skill.SkillId);
-                if (def != null)
-                {
-                    if (def.RequiredLevel > 0 && characterState.Level < def.RequiredLevel)
-                    {
-                        _logger?.LogDebug("Level too low for skill {SkillId}. Required: {Required}, Current: {Current}",
-                            skill.SkillId, def.RequiredLevel, characterState.Level);
-                        return false;
-                    }
-
-                    if (def.RequiredStrength > 0 && characterState.TotalStrength < def.RequiredStrength)
-                    {
-                        _logger?.LogDebug("Not enough Strength for skill {SkillId}. Required: {Required}, Current: {Current}",
-                            skill.SkillId, def.RequiredStrength, characterState.TotalStrength);
-                        return false;
-                    }
-
-                    if (def.RequiredDexterity > 0 && characterState.TotalAgility < def.RequiredDexterity)
-                    {
-                        _logger?.LogDebug("Not enough Dexterity for skill {SkillId}. Required: {Required}, Current: {Current}",
-                            skill.SkillId, def.RequiredDexterity, characterState.TotalAgility);
-                        return false;
-                    }
-
-                    if (def.RequiredEnergy > 0)
-                    {
-                        int requiredEnergy = Core.Client.SkillManager.CalculateRequiredEnergy(def, characterState.Class);
-
-                        if (characterState.TotalEnergy < requiredEnergy)
-                        {
-                            _logger?.LogDebug("Not enough Energy for skill {SkillId}. Required: {Required}, Current: {Current}",
-                                skill.SkillId, requiredEnergy, characterState.TotalEnergy);
-                            return false;
-                        }
-                    }
-
-                    if (def.RequiredLeadership > 0 && characterState.TotalLeadership < def.RequiredLeadership)
-                    {
-                        _logger?.LogDebug("Not enough Leadership for skill {SkillId}. Required: {Required}, Current: {Current}",
-                            skill.SkillId, def.RequiredLeadership, characterState.TotalLeadership);
-                        return false;
-                    }
-                }
+                // 這裡原本還檢查等級、力量、敏捷、能量、統率，全部依 skill_eng.bmd 的欄位。
+                // 已移除，因為那組數字對不上伺服器，而且對不上的方向是「客戶端比較嚴格」——
+                // 結果是玩家永遠放不出來，而且沒有任何訊息。實測（284 筆技能對照）：
+                //
+                //   * 能量：64 個技能對不上。CalculateRequiredEnergy 是
+                //     `20 + 能量 x 等級 x 4 / 100`，但大師技的「等級」欄位存的不是角色等級 ——
+                //     380 智慧擴張強化算出來要 138245 點能量，伺服器只要 118。
+                //   * 等級：40 個技能伺服器根本沒有等級需求（OpenMU 把等級門檻放在「學習」而不是「施放」）。
+                //     337、380 兩個的客戶端值是 29285，明顯是垃圾資料。
+                //
+                // 這個檢查本來也沒有保護作用：伺服器每次施放都會重新驗，
+                // 而且技能是伺服器發的，學得到就代表條件已經滿足。
+                // 魔力與 AG 保留 —— 284 筆裡只有新星 40 對不上，而且那兩條資源
+                // 玩家在畫面上看得到，擋下來是有意義的回饋。
             }
 
             bool isInSafeZone = false;

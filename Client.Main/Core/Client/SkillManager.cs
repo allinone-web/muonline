@@ -230,23 +230,10 @@ namespace Client.Main.Core.Client
         /// </summary>
         public ushort MasterSkillToBaseSkillIndex(ushort masterSkillId)
         {
-            var def = SkillDatabase.GetSkillDefinition(masterSkillId);
-            if (def == null) return masterSkillId;
-
-            // Master skills in SourceMain always map to specific base skills.
-            // The SkillBMD stores this information implicitly.
-            // For skills with MasteryType > 0, the base skill is typically at a lower ID range.
-            //
-            // The SkillBMD's SkillBrand and SkillUseType fields encode the base skill info.
-            // We use the stored values; if not a master skill, return unchanged.
-            if (def.MasteryType == 0 && def.SkillUseType == 0)
-                return masterSkillId;
-
-            // Master skills: the base skill index is typically encoded in SkillBrand
-            // For now we return the base mapping from the skill database
-            // This is a simplified version - a complete mapping would use an explicit table
-            // like the SourceMain switch statement with AT_SKILL_* constants.
-            return masterSkillId;
+            // 對照表在 SkillDefinitions.MasterSkillBase，內容取自伺服器設定的
+            // MasterSkillDefinition.ReplacedSkill，鏈路（強化 → 精通 → 基礎）已經展開。
+            // 原本這個方法是空殼 —— 一律把輸入原樣回傳，等於沒有換算。
+            return (ushort)global::Client.Data.BMD.SkillDefinitions.ResolveBaseSkill(masterSkillId);
         }
 
         /// <summary>

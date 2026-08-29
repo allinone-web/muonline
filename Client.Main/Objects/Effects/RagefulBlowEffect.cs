@@ -22,7 +22,10 @@ namespace Client.Main.Objects.Effects
     {
         private const string WaveModelPath = "Skill/flashing.bmd";
         private const string TailModelPath = "Skill/tail.bmd";
-        private const string EarthQuakeBasePath = "Skill/EarthQuake.bmd";
+        // Season 20 的資源包裡沒有 Skill/EarthQuake.bmd，只有 EarthQuake01..08。
+        // 這個常數是「路徑還沒解析完就要生成」時的預設值，指到不存在的檔案
+        // 等於那一次的模型靜默消失。改指到一定存在的 01。
+        private const string EarthQuakeBasePath = "Skill/EarthQuake01.bmd";
 
         private const string ExplosionTexturePath = "Effect/Explotion01.jpg";
         private const string JointSparkTexturePath = "Effect/Spark01.jpg";

@@ -1755,9 +1755,13 @@ namespace Client.Main.Objects.Effects
             return true;
         }
 
-        public static bool IsArrowSkill(ushort skillId) => skillId is 24 or 25 or 46 or 51 or 52 or 235;
+        // 大師級的強化技（三重箭強化 414、貫穿強化 416…）也要生成箭矢，
+        // 所以先換算成基礎技再判斷 —— 否則精靈練到大師之後箭就不見了。
+        public static bool IsArrowSkill(ushort skillId)
+            => global::Client.Data.BMD.SkillDefinitions.ResolveBaseSkill(skillId) is 24 or 25 or 46 or 51 or 52 or 235;
 
-        public static ArrowVolleyKind GetVolleyKind(ushort skillId) => skillId switch
+        public static ArrowVolleyKind GetVolleyKind(ushort skillId)
+            => global::Client.Data.BMD.SkillDefinitions.ResolveBaseSkill(skillId) switch
         {
             24 => ArrowVolleyKind.TripleShot,
             46 => ArrowVolleyKind.DeepImpact,

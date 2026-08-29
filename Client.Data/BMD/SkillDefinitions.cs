@@ -40,7 +40,7 @@ namespace Client.Data.BMD
             { 21, SkillType.Target },  // Uppercut
             { 22, SkillType.Target },    // Cyclone
             { 23, SkillType.Target },  // Slash
-            { 24, SkillType.Target },  // Triple Shot
+            { 24, SkillType.Area },  // Triple Shot
             { 26, SkillType.Target },  // Heal
 
             // ID 27-52: Elf/Summoner Skills
@@ -66,12 +66,12 @@ namespace Client.Data.BMD
             { 48, SkillType.Self },    // Swell Life
             { 49, SkillType.Target },  // Fire Breath
             { 51, SkillType.Target },  // Ice Arrow
-            { 52, SkillType.Target },  // Penetration
+            { 52, SkillType.Area },  // Penetration
 
             // ID 55-79: Dark Lord/Mixed Skills
             { 55, SkillType.Area },    // Fire Slash
-            { 56, SkillType.Target },  // Power Slash
-            { 57, SkillType.Area },    // Spiral Slash
+            { 56, SkillType.Area },  // Power Slash
+            { 57, SkillType.Target },    // Spiral Slash
             { 60, SkillType.Self },    // Force
             { 61, SkillType.Target },  // Fire Burst
             { 508, SkillType.Target }, // Fire Burst Strength
@@ -79,7 +79,7 @@ namespace Client.Data.BMD
             { 62, SkillType.Area },    // Earthshake
             { 63, SkillType.Self },    // Summon
             { 64, SkillType.Self },    // Increase Critical Damage
-            { 65, SkillType.Target },  // Electric Spike
+            { 65, SkillType.Area },  // Electric Spike
             { 66, SkillType.Target },  // Force Wave
             { 67, SkillType.Area },    // Stun
             { 68, SkillType.Self },    // Cancel Stun
@@ -92,7 +92,7 @@ namespace Client.Data.BMD
             { 76, SkillType.Area },    // Plasma Storm
             { 77, SkillType.Self },    // Infinity Arrow
             { 78, SkillType.Area },    // Fire Scream
-            { 79, SkillType.Area },    // Explosion
+            { 79, SkillType.Target },    // Explosion
 
             // ID 200-225: Summoner Skills
             { 200, SkillType.Self },   // Summon Monster
@@ -104,7 +104,7 @@ namespace Client.Data.BMD
             { 211, SkillType.Self },   // Spell of Restriction
             { 212, SkillType.Self },   // Spell of Pursuit
             { 213, SkillType.Target }, // Shield-Burn
-            { 214, SkillType.Target }, // Drain Life
+            { 214, SkillType.Area }, // Drain Life
             { 215, SkillType.Area },   // Chain Lightning
             { 217, SkillType.Self },   // Damage Reflection
             { 218, SkillType.Self },   // Berserker
@@ -112,7 +112,7 @@ namespace Client.Data.BMD
             { 221, SkillType.Target }, // Weakness
             { 222, SkillType.Target }, // Innovation
             { 223, SkillType.Area },   // Explosion
-            { 224, SkillType.Target }, // Requiem
+            { 224, SkillType.Area }, // Requiem
             { 225, SkillType.Area },   // Pollution
 
             // ID 230-270: Dark Lord/Rage Fighter Skills
@@ -121,20 +121,20 @@ namespace Client.Data.BMD
             { 233, SkillType.Self },   // Expansion of Wizardry
             { 234, SkillType.Self },   // Recovery
             { 235, SkillType.Area },   // Multi-Shot
-            { 236, SkillType.Target }, // Flame Strike
+            { 236, SkillType.Area }, // Flame Strike
             { 237, SkillType.Area },   // Gigantic Storm
             { 238, SkillType.Area },   // Chaotic Diseier
             { 260, SkillType.Target }, // Killing Blow
             { 261, SkillType.Target }, // Beast Uppercut
             { 262, SkillType.Target }, // Chain Drive
             { 263, SkillType.Target }, // Dark Side
-            { 264, SkillType.Target }, // Dragon Roar
-            { 265, SkillType.Area },   // Dragon Slasher
+            { 264, SkillType.Area }, // Dragon Roar
+            { 265, SkillType.Target },   // Dragon Slasher
             { 266, SkillType.Self },   // Ignore Defense
             { 267, SkillType.Self },   // Increase Health
             { 268, SkillType.Self },   // Increase Block
             { 269, SkillType.Target }, // Charge
-            { 270, SkillType.Target }, // Phoenix Shot
+            { 270, SkillType.Area }, // Phoenix Shot
 
             // Ice Storm master variants (Ice Up I-V)
             { 302, SkillType.Area },   // Ice Up
@@ -144,9 +144,9 @@ namespace Client.Data.BMD
             { 306, SkillType.Area },   // Ice Up V
 
             // Earthquake master variants (Earth Shake I-V)
-            { 515, SkillType.Area },
+            { 515, SkillType.Self },
             { 516, SkillType.Area },
-            { 517, SkillType.Area },
+            { 517, SkillType.Self },
             { 518, SkillType.Area },
             { 519, SkillType.Area },
 
@@ -155,6 +155,78 @@ namespace Client.Data.BMD
 
             // ID 565: Blood Howling
             { 565, SkillType.Self },   // Blood Howling
+
+            // ── 對照 OpenMU Season 6 設定補齊（2026-08-29）──
+            // Area / 非 Area 決定的是<b>封包格式</b>，弄錯就是靜默失敗：
+            // 送錯型別 → 伺服器回的是另一種動畫封包 → 特效註冊表不會被觸發。
+            // 大師級的強化技（330+）原本整批不在表裡，一律被當成單體技送出。
+            // 對照來源：config."Skill"."SkillType"（3/4/5 = 各種 AreaSkill）。
+            { 50, SkillType.Target },       // Flame of Evil (Monster)
+            { 239, SkillType.Target },      // Doppelganger Self Explosion
+            { 326, SkillType.Target },      // Cyclone Strengthener
+            { 327, SkillType.Target },      // Slash Strengthener
+            { 328, SkillType.Target },      // Falling Slash Streng
+            { 329, SkillType.Target },      // Lunge Strengthener
+            { 330, SkillType.Area },        // Twisting Slash Streng
+            { 331, SkillType.Area },        // Rageful Blow Streng
+            { 332, SkillType.Area },        // Twisting Slash Mastery
+            { 333, SkillType.Area },        // Rageful Blow Mastery
+            { 336, SkillType.Target },      // Death Stab Strengthener
+            { 337, SkillType.Area },        // Strike of Destr Str
+            { 356, SkillType.Self },        // Swell Life Strengt
+            { 360, SkillType.Self },        // Swell Life Proficiency
+            { 378, SkillType.Area },        // Flame Strengthener
+            { 379, SkillType.Target },      // Lightning Strengthener
+            { 380, SkillType.Self },        // Expansion of Wiz Streng
+            { 381, SkillType.Area },        // Inferno Strengthener
+            { 382, SkillType.Area },        // Blast Strengthener
+            { 383, SkillType.Self },        // Expansion of Wiz Mas
+            { 384, SkillType.Target },      // Poison Strengthener
+            { 385, SkillType.Area },        // Evil Spirit Streng
+            { 387, SkillType.Area },        // Decay Strengthener
+            { 388, SkillType.Area },        // Hellfire Strengthener
+            { 389, SkillType.Target },      // Ice Strengthener
+            { 403, SkillType.Self },        // Soul Barrier Strength
+            { 404, SkillType.Self },        // Soul Barrier Proficie
+            { 413, SkillType.Self },        // Heal Strengthener
+            { 414, SkillType.Area },        // Triple Shot Strengthener
+            { 416, SkillType.Area },        // Penetration Strengthener
+            { 417, SkillType.Self },        // Defense Increase Str
+            { 418, SkillType.Area },        // Triple Shot Mastery
+            { 420, SkillType.Self },        // Attack Increase Str
+            { 422, SkillType.Self },        // Attack Increase Mastery
+            { 423, SkillType.Self },        // Defense Increase Mastery
+            { 424, SkillType.Target },      // Ice Arrow Strengthener
+            { 441, SkillType.Self },        // Infinity Arrow Str
+            { 454, SkillType.Self },        // Sleep Strengthener
+            { 455, SkillType.Area },        // Chain Lightning Str
+            { 456, SkillType.Area },        // Lightning Shock Str
+            { 458, SkillType.Area },        // Drain Life Strengthener
+            { 469, SkillType.Self },        // Berserker Strengthener
+            { 470, SkillType.Self },        // Berserker Proficiency
+            { 479, SkillType.Target },      // Cyclone Strengthener
+            { 480, SkillType.Target },      // Lightning Strengthener
+            { 481, SkillType.Area },        // Twisting Slash Stren
+            { 482, SkillType.Area },        // Power Slash Streng
+            { 483, SkillType.Area },        // Flame Strengthener
+            { 484, SkillType.Area },        // Blast Strengthener
+            { 486, SkillType.Area },        // Inferno Strengthener
+            { 487, SkillType.Area },        // Evil Spirit Strengthen
+            { 489, SkillType.Target },      // Ice Strengthener
+            { 490, SkillType.Area },        // Blood Attack Strengthen
+            { 509, SkillType.Target },      // Force Wave Streng
+            { 511, SkillType.Self },        // Critical DMG Inc PowUp
+            { 512, SkillType.Area },        // Earthshake Streng
+            { 551, SkillType.Target },      // Killing Blow Strengthener
+            { 552, SkillType.Target },      // Beast Uppercut Strengthener
+            { 554, SkillType.Target },      // Killing Blow Mastery
+            { 555, SkillType.Target },      // Beast Uppercut Mastery
+            { 558, SkillType.Target },      // Chain Drive Strengthener
+            { 559, SkillType.Target },      // Dark Side Strengthener
+            { 560, SkillType.Area },        // Dragon Roar Strengthener
+            { 569, SkillType.Self },        // Def SuccessRate IncPowUp
+            { 572, SkillType.Self },        // DefSuccessRate IncMastery
+            { 573, SkillType.Self },        // Stamina Increase Strengthener
         };
 
         /// <summary>
@@ -176,16 +248,129 @@ namespace Client.Data.BMD
         /// </summary>
         public static SkillType GetSkillType(int skillId)
         {
-            return SkillTypes.TryGetValue(skillId, out var type) ? type : SkillType.Target;
+            if (SkillTypes.TryGetValue(skillId, out var type))
+                return type;
+
+            // 大師技與基礎技的型別一定相同（伺服器的 ReplacedSkill 就是這個意思），
+            // 表裡漏了也還有這條退路。
+            int baseSkill = ResolveBaseSkill(skillId);
+            if (baseSkill != skillId && SkillTypes.TryGetValue(baseSkill, out type))
+                return type;
+
+            return SkillType.Target;
         }
 
         /// <summary>
         /// Gets the animation ID for a given skill ID.
         /// Returns -1 if the skill uses generic magic/attack animation.
         /// </summary>
+
+        /// <summary>
+        /// 大師級技能 → 對應的基礎技能。
+        ///
+        /// 原版客戶端是 <c>CSkillManager::MasterSkillToBaseSkillIndex</c>：大師技沒有自己的
+        /// 動作、音效與特效，一律沿用基礎技的（見 <c>SkillCast.cpp:343</c>）。
+        /// 這裡的內容取自伺服器設定 <c>MasterSkillDefinition.ReplacedSkill</c>，
+        /// 並且已經把「強化 → 精通 → 基礎」的鏈路展開成一步到位。
+        ///
+        /// 少了這張表，所有 300 以上的大師技都查不到動作、音效與特效，
+        /// 而查不到動作就會退回施法手勢 —— 對戰士就是「技能沒放出去」的樣子。
+        /// </summary>
+        private static readonly Dictionary<int, int> MasterSkillBase = new()
+        {
+            { 326, 22 },      // Cyclone Strengthener → Cyclone
+            { 327, 23 },      // Slash Strengthener → Slash
+            { 328, 19 },      // Falling Slash Streng → Falling Slash
+            { 329, 20 },      // Lunge Strengthener → Lunge
+            { 330, 41 },      // Twisting Slash Streng → Twisting Slash
+            { 331, 42 },      // Rageful Blow Streng → Rageful Blow
+            { 332, 41 },      // Twisting Slash Mastery → Twisting Slash
+            { 333, 42 },      // Rageful Blow Mastery → Rageful Blow
+            { 336, 43 },      // Death Stab Strengthener → Death Stab
+            { 337, 232 },     // Strike of Destr Str → Strike of Destruction
+            { 356, 48 },      // Swell Life Strengt → Swell Life
+            { 360, 48 },      // Swell Life Proficiency → Swell Life
+            { 378, 5 },       // Flame Strengthener → Flame
+            { 379, 3 },       // Lightning Strengthener → Lightning
+            { 380, 233 },     // Expansion of Wiz Streng → Expansion of Wizardry
+            { 381, 14 },      // Inferno Strengthener → Inferno
+            { 382, 13 },      // Blast Strengthener → Cometfall
+            { 383, 233 },     // Expansion of Wiz Mas → Expansion of Wizardry
+            { 384, 1 },       // Poison Strengthener → Poison
+            { 385, 9 },       // Evil Spirit Streng → Evil Spirit
+            { 387, 38 },      // Decay Strengthener → Decay
+            { 388, 10 },      // Hellfire Strengthener → Hellfire
+            { 389, 7 },       // Ice Strengthener → Ice
+            { 403, 16 },      // Soul Barrier Strength → Soul Barrier
+            { 404, 16 },      // Soul Barrier Proficie → Soul Barrier
+            { 413, 26 },      // Heal Strengthener → Heal
+            { 414, 24 },      // Triple Shot Strengthener → Triple Shot
+            { 416, 52 },      // Penetration Strengthener → Penetration
+            { 417, 27 },      // Defense Increase Str → Greater Defense
+            { 418, 24 },      // Triple Shot Mastery → Triple Shot
+            { 420, 28 },      // Attack Increase Str → Greater Damage
+            { 422, 28 },      // Attack Increase Mastery → Greater Damage
+            { 423, 27 },      // Defense Increase Mastery → Greater Defense
+            { 424, 51 },      // Ice Arrow Strengthener → Ice Arrow
+            { 441, 77 },      // Infinity Arrow Str → Infinity Arrow
+            { 454, 219 },     // Sleep Strengthener → Sleep
+            { 455, 215 },     // Chain Lightning Str → Chain Lightning
+            { 456, 230 },     // Lightning Shock Str → Lightning Shock
+            { 458, 214 },     // Drain Life Strengthener → Drain Life
+            { 469, 218 },     // Berserker Strengthener → Berserker
+            { 470, 218 },     // Berserker Proficiency → Berserker
+            { 479, 22 },      // Cyclone Strengthener → Cyclone
+            { 480, 3 },       // Lightning Strengthener → Lightning
+            { 481, 41 },      // Twisting Slash Stren → Twisting Slash
+            { 482, 56 },      // Power Slash Streng → Power Slash
+            { 483, 5 },       // Flame Strengthener → Flame
+            { 484, 13 },      // Blast Strengthener → Cometfall
+            { 486, 14 },      // Inferno Strengthener → Inferno
+            { 487, 9 },       // Evil Spirit Strengthen → Evil Spirit
+            { 489, 7 },       // Ice Strengthener → Ice
+            { 490, 55 },      // Blood Attack Strengthen → Fire Slash
+            { 508, 61 },      // Fire Burst Streng → Fire Burst
+            { 509, 66 },      // Force Wave Streng → Force Wave
+            { 511, 64 },      // Critical DMG Inc PowUp → Increase Critical Damage
+            { 512, 62 },      // Earthshake Streng → Earthshake
+            { 514, 61 },      // Fire Burst Mastery → Fire Burst
+            { 515, 64 },      // Crit DMG Inc PowUp (2) → Increase Critical Damage
+            { 516, 62 },      // Earthshake Mastery → Earthshake
+            { 517, 64 },      // Crit DMG Inc PowUp (3) → Increase Critical Damage
+            { 518, 78 },      // Fire Scream Stren → Fire Scream
+            { 551, 260 },     // Killing Blow Strengthener → Killing Blow
+            { 552, 261 },     // Beast Uppercut Strengthener → Beast Uppercut
+            { 554, 260 },     // Killing Blow Mastery → Killing Blow
+            { 555, 261 },     // Beast Uppercut Mastery → Beast Uppercut
+            { 558, 262 },     // Chain Drive Strengthener → Chain Drive
+            { 559, 263 },     // Dark Side Strengthener → Dark Side
+            { 560, 264 },     // Dragon Roar Strengthener → Dragon Roar
+            { 569, 268 },     // Def SuccessRate IncPowUp → Increase Block
+            { 572, 268 },     // DefSuccessRate IncMastery → Increase Block
+            { 573, 267 },     // Stamina Increase Strengthener → Increase Health
+        };
+
+        /// <summary>
+        /// 把大師技換算成基礎技；不是大師技就原樣回傳。
+        /// 等同原版的 <c>MasterSkillToBaseSkillIndex</c>。
+        /// </summary>
+        public static int ResolveBaseSkill(int skillId)
+            => MasterSkillBase.TryGetValue(skillId, out var baseSkill) ? baseSkill : skillId;
+
+        /// <summary>這個技能編號是否為大師級的強化／精通技。</summary>
+        public static bool IsMasterSkill(int skillId) => MasterSkillBase.ContainsKey(skillId);
+
         public static int GetSkillAnimation(int skillId)
         {
-            return SkillAnimations.TryGetValue(skillId, out var animId) ? animId : -1;
+            if (SkillAnimations.TryGetValue(skillId, out var animId))
+                return animId;
+
+            // 大師技沿用基礎技的動作（原版 SkillCast.cpp:343 就是這樣做的）
+            int baseSkill = ResolveBaseSkill(skillId);
+            if (baseSkill != skillId && SkillAnimations.TryGetValue(baseSkill, out animId))
+                return animId;
+
+            return -1;
         }
 
         /// <summary>
@@ -194,7 +379,14 @@ namespace Client.Data.BMD
         /// </summary>
         public static string? GetSkillSound(int skillId)
         {
-            return SkillSounds.TryGetValue(skillId, out var soundPath) ? soundPath : null;
+            if (SkillSounds.TryGetValue(skillId, out var soundPath))
+                return soundPath;
+
+            int baseSkill = ResolveBaseSkill(skillId);
+            if (baseSkill != skillId && SkillSounds.TryGetValue(baseSkill, out soundPath))
+                return soundPath;
+
+            return null;
         }
 
         private static Dictionary<int, int> BuildSkillAnimations()
@@ -211,11 +403,43 @@ namespace Client.Data.BMD
             }
 
             // WARRIOR/KNIGHT SKILLS
-            Add(22, 63);    // Cyclone → PlayerAttackSkillSword4
-            Add(19, 62);    // Falling Slash → PlayerAttackSkillWheel
+            //
+            // The five combo skills are a contiguous block in the original client:
+            //   SetAction(PLAYER_ATTACK_SKILL_SWORD1 + skillId - AT_SKILL_FALLING_SLASH)
+            // (MuMain WSclient.cpp, AT_SKILL_FALLING_SLASH..AT_SKILL_SLASH = 19..23).
+            // Any skill missing from this table falls through to GetDefaultSkillAction,
+            // which plays PlayerSkillHand1/2 — a two-handed *spellcasting* gesture.
+            // On a knight that reads as "the skill did not fire", which is why the four
+            // unmapped combo skills looked broken while every wizard skill looked fine.
+            Add(19, 60);    // Falling Slash → PlayerAttackSkillSword1
+            Add(20, 61);    // Lunge         → PlayerAttackSkillSword2
+            Add(21, 62);    // Uppercut      → PlayerAttackSkillSword3
+            Add(22, 63);    // Cyclone       → PlayerAttackSkillSword4
+            Add(23, 64);    // Slash         → PlayerAttackSkillSword5
             Add(43, 71);    // Death Stab → PlayerAttackDeathstab
             Add(41, 65);    // Twisting Slash → PlayerAttackSkillWheel
             Add(42, 66);    // Rageful Blow → PlayerAttackSkillFuryStrike
+            Add(44, 137);   // Crescent Moon Slash → PlayerAttackRush (AT_SKILL_RUSH)
+            Add(47, 70);    // Impale → PlayerAttackSkillSpear
+            Add(55, 65);    // Fire Slash → PlayerAttackSkillWheel
+
+            // RAGE FIGHTER SKILLS
+            // 來源：mumain 的 CMonkSystem::SetRageSkillAni（MonkSystem.cpp:389）。
+            // 這幾個原本整批不在表裡 —— 拳王的每一個攻擊技都在演法師的施法手勢。
+            Add(260, 247);  // Killing Blow    → PlayerSkillThrust
+            Add(261, 248);  // Beast Uppercut  → PlayerSkillStamp
+            Add(262, 249);  // Chain Drive     → PlayerSkillGiantswing
+            Add(263, 250);  // Dark Side       → PlayerSkillDarksideReady
+            Add(264, 253);  // Dragon Roar     → PlayerSkillDragonlore
+            Add(265, 252);  // Dragon Slasher  → PlayerSkillDragonkick（原版的 AT_SKILL_DRAGON_KICK）
+            Add(269, 137);  // Charge          → PlayerAttackRush（原版的 AT_SKILL_OCCUPY，WSclient.cpp:5041）
+            Add(266, 255);  // Ignore Defense  → PlayerSkillAttUpOurforces
+            Add(267, 256);  // Increase Health → PlayerSkillHpUpOurforces
+            Add(268, 256);  // Increase Block  → PlayerSkillHpUpOurforces
+            // 原版這三個增益是在兩個動作之間隨機挑（SkillCast.cpp:920），
+            // 這裡固定下來 —— 一張靜態表存不了隨機，而且固定的動作比較好認。
+            // 鳳凰擊 270 在原版裡沒有指定玩家動作（SetRageSkillAni 對它回傳 false），
+            // 只生成特效，因此這裡也不猜。
 
             // WIZARD/SUMMONER SKILLS
             Add(6, 151);    // Teleport → PlayerSkillTeleport
@@ -304,6 +528,11 @@ namespace Client.Data.BMD
             map[20] = "Sound/sKnightSkill2.wav";         // Lunge (ID 20)
             map[21] = "Sound/sKnightSkill3.wav";         // Uppercut (ID 21)
             map[22] = "Sound/sKnightSkill4.wav";         // Cyclone (ID 22)
+            map[23] = "Sound/sKnightSkill4.wav";         // Slash (ID 23)
+
+            // DARK LORD —— Force / Force Wave 與 Fire Burst 同一組（WSclient.cpp:4259）
+            map[60] = "Sound/sKnightSkill1.wav";         // Force (ID 60)
+            map[66] = "Sound/sKnightSkill1.wav";         // Force Wave (ID 66)
             map[41] = "Sound/sKnightSkill4.wav";         // Twisting Slash (ID 41)
 
             // ELF SKILLS

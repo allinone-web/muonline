@@ -30,15 +30,40 @@ namespace Client.Main.Controls.UI.Game.Skills
         public const string Skill3TexturePath = "Interface/newui_skill3.jpg";
         public const string CommandTexturePath = "Interface/newui_command.jpg";
 
+        /// <summary>
+        /// 大師級技能（編號 300 以上）的圖示表。
+        ///
+        /// 這是一張<b>獨立的 512x512 圖集，一列 25 格</b>，索引用 <c>SkillBMD.MagicIcon</c>，
+        /// 與前面四張 256x256 的圖集規則完全不同：
+        /// <code>
+        /// RenderImage(new_Master_Icon, x, y, w, h,
+        ///             (20/512) * (Skill_Icon % 25),
+        ///             (28/512) * (Skill_Icon / 25), 20/512, 28/512);
+        /// </code>
+        /// （mumain <c>NewUIMuHelper.cpp:1806</c>；載入處 <c>NewUIMasterLevel.cpp:490</c>）
+        ///
+        /// 少了這條分支，<c>MagicIcon</c> 會被套進 256 的算式，算出來的列數最大到 26，
+        /// 遠超出圖集高度而被邊界檢查擋掉 —— 結果是 60 個大師技全部沒有圖示，
+        /// 按鈕上只剩一個技能編號。
+        /// </summary>
+        public const string MasterTexturePath = "Interface/new_Master_Icon.jpg";
+
         public static readonly string[] TexturePaths =
         [
             Skill1TexturePath,
             Skill2TexturePath,
             Skill3TexturePath,
-            CommandTexturePath
+            CommandTexturePath,
+            MasterTexturePath
         ];
 
         private const int AtlasSize = 256;
+
+        private const int MasterAtlasSize = 512;
+        private const int MasterAtlasColumns = 25;
+
+        /// <summary>大師技能的編號起點（原版的 <c>AT_SKILL_MASTER_BEGIN</c>）。</summary>
+        private const int MasterSkillFirstId = 300;
 
         private const int PetCommandDefaultSkillId = 120;
         private const int PetCommandLastSkillId = 123;
@@ -181,6 +206,21 @@ namespace Client.Main.Controls.UI.Game.Skills
                 column = 8;
                 row = 2;
                 texturePath = Skill2TexturePath;
+            }
+            else if (skill >= MasterSkillFirstId && definition != null)
+            {
+                // 大師技用自己的 512x512 圖集，一列 25 格，索引是 MagicIcon
+                int masterIcon = definition.MagicIcon;
+                int mx = (masterIcon % MasterAtlasColumns) * IconWidth;
+                int my = (masterIcon / MasterAtlasColumns) * IconHeight;
+
+                if (mx < 0 || my < 0 || mx + IconWidth > MasterAtlasSize || my + IconHeight > MasterAtlasSize)
+                {
+                    return false;
+                }
+
+                frame = new SkillIconFrame(MasterTexturePath, new Rectangle(mx, my, IconWidth, IconHeight));
+                return true;
             }
             else if (definition?.SkillUseType == (byte)SkillUseType.MasterActive)
             {

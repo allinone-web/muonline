@@ -1542,7 +1542,11 @@ namespace Client.Main.Objects.Player
         {
             // Fire Burst uses the Dark Lord strike family rather than the generic magic cast.
             // Strength and Mastery share the same visual/animation path in the original client.
-            if (skillId is 61 or 508 or 514)
+            //
+            // Force 60 與 Force Wave 66（含強化 509）走的是同一個分支 ——
+            // 見 mumain WSclient.cpp:4243，三者的 case 是連在一起的。
+            // 原本沒有列進來，於是暗黑之神用這兩個技能時演的是法師的施法手勢。
+            if (skillId is 61 or 508 or 514 or 60 or 66 or 509)
             {
                 if (_isRiding && !isInSafeZone)
                 {

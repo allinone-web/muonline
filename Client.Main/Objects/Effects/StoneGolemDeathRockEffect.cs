@@ -27,8 +27,10 @@ namespace Client.Main.Objects.Effects
             if (Status != GameControlStatus.Ready)
                 return;
 
-            var stone1Model = await BMDLoader.Instance.Prepare("Skill/BigStone1.bmd");
-            var stone2Model = await BMDLoader.Instance.Prepare("Skill/BigStone2.bmd");
+            // Season 20 的檔名是 BigStone01/02，沒有 BigStone1/2 ——
+            // 原本硬寫後者且沒有退路，石人死亡的碎石特效整個不會出現。
+            var stone1Model = await PrepareFirstAsync("Skill/BigStone01.bmd", "Skill/BigStone1.bmd");
+            var stone2Model = await PrepareFirstAsync("Skill/BigStone02.bmd", "Skill/BigStone2.bmd");
             if (stone1Model == null || stone2Model == null)
                 return;
 
@@ -37,6 +39,21 @@ namespace Client.Main.Objects.Effects
                 await AddPieceAsync(stone1Model, i);
                 await AddPieceAsync(stone2Model, i + 8);
             }
+        }
+
+        private static async Task<Client.Data.BMD.BMD> PrepareFirstAsync(params string[] candidates)
+        {
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                if (!await BMDLoader.Instance.AssestExist(candidates[i]))
+                    continue;
+
+                var model = await BMDLoader.Instance.Prepare(candidates[i]);
+                if (model != null)
+                    return model;
+            }
+
+            return null;
         }
 
         public override void Update(GameTime gameTime)

@@ -48,6 +48,15 @@ namespace Client.Main.Objects.Effects.Skills
             if (!_initialized)
                 Initialize();
 
+            // 大師技沒有自己的特效，沿用基礎技的（原版 MasterSkillToBaseSkillIndex 的用途之一）。
+            // 少了這一步，旋風斬強化 330 之類的技能施放時完全沒有特效。
+            if (!_effects.ContainsKey(skillId))
+            {
+                ushort baseSkill = (ushort)global::Client.Data.BMD.SkillDefinitions.ResolveBaseSkill(skillId);
+                if (baseSkill != skillId)
+                    skillId = baseSkill;
+            }
+
             if (_effects.TryGetValue(skillId, out var factory))
             {
                 try
@@ -78,7 +87,8 @@ namespace Client.Main.Objects.Effects.Skills
             if (!_initialized)
                 Initialize();
 
-            return _effects.ContainsKey(skillId);
+            return _effects.ContainsKey(skillId)
+                || _effects.ContainsKey((ushort)global::Client.Data.BMD.SkillDefinitions.ResolveBaseSkill(skillId));
         }
 
         /// <summary>
