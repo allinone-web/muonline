@@ -476,12 +476,15 @@ namespace Client.Main.Controls.UI.Game.Inventory
 
         public void Hide()
         {
-            if (_pickedItemRenderer.Item != null)
-            {
-                InventoryItem itemToReturn = _pickedItemRenderer.Item;
-                AddItem(itemToReturn);
-                ReleasePickedItem();
-            }
+            // 手上還拿著東西就關視窗 —— 一定要放回<b>原來的位置</b>。
+            //
+            // 原本是 AddItem()，那是「放進背包格線裡的任何空位」。從裝備欄拿起來的
+            // 東西因此會被塞進格線（畫面上等於脫掉了），格線滿了的話連塞都塞不進去，
+            // 直接從客戶端消失 —— 而伺服器那邊它還好好地穿在身上。
+            // 使用者回報的「背包偶爾會丟失裝備，重登又回來」就是這個。
+            //
+            // RestorePickedItemToOriginalLocation 認得來源是格子還是裝備欄。
+            RestorePickedItemToOriginalLocation();
 
             Visible = false;
             if (Scene?.FocusControl == this)
@@ -1510,7 +1513,15 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 _ = Task.WhenAll(preloadTasks);
             }
 
-            InvalidateStaticSurface();
+            // 這裡<b>不要</b>作廢靜態表面。
+            //
+            // 靜態表面畫的是面板的框、格線、裝備欄的空槽 —— 全部只跟版面有關，
+            // 跟背包裡有什麼東西無關。每次收到背包更新（撿到、移動、賣掉都會發）
+            // 就整張重畫一次，等於把 render target 還回池子再租一張新的：
+            // 那一幀面板會閃一下。使用者回報的「點擊道具，UI 會閃爍一次」就是這個。
+            //
+            // 真正需要重畫的是版面改變時（Load、Show、OnScreenSizeChanged、
+            // 切換修理模式），那幾處各自有呼叫。
         }
 
         private Dictionary<byte, byte[]> _network_manager_getitems()

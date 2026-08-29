@@ -450,6 +450,15 @@ namespace Client.Main.Scenes
             {
                 X = UseVirtualJoystick ? MobileCharWindowLeft : 20,
                 Y = UseVirtualJoystick ? InventoryControl.MobileTopSafeY : 50,
+
+                // 手機放大 1.35 倍。
+                //
+                // 這個視窗的版面是照 280x520 寫死的（每個數值、每一列的 Y 都是
+                // 常數），在 1600 寬的畫布上又小又擠，字距行距全部黏在一起。
+                // 整體縮放會把文字、行距、按鈕一起放大，比逐一改常數安全得多 ——
+                // 繪製本來就已經全程乘上 Scale（見 CharacterInfoWindowControl 的
+                // controlScale）。1.35 之後是 378x702，756 高的畫布剛好放得下。
+                Scale = UseVirtualJoystick ? 1.35f : 1f,
                 Visible = false
             };
             Controls.Add(_characterInfoWindow);
@@ -1157,7 +1166,7 @@ namespace Client.Main.Scenes
                 return;
             }
 
-            if (_initialWorldLoadInProgress || _mapController?.IsChangingWorld == true || _pendingWorldActivation != null || _initialWorldActivationCooldown || World == null || !World.Visible || World.Status != GameControlStatus.Ready)
+            if (IsShowingLoadingScreen)
             {
                 GraphicsDevice.Clear(new Color(12, 12, 20));
                 DrawBackground();
@@ -1185,8 +1194,29 @@ namespace Client.Main.Scenes
             base.Draw(gameTime);
         }
 
+        /// <summary>
+        /// 這一幀是不是還停在載入畫面上。
+        /// </summary>
+        private bool IsShowingLoadingScreen
+            => !_sceneShellInitialized
+            || _initialWorldLoadInProgress
+            || _mapController?.IsChangingWorld == true
+            || _pendingWorldActivation != null
+            || _initialWorldActivationCooldown
+            || World == null
+            || !World.Visible
+            || World.Status != GameControlStatus.Ready;
+
         public override void DrawUi(GameTime gameTime)
         {
+            // 載入畫面期間不要畫 UI。
+            //
+            // Draw() 在載入時會提早 return，但 DrawUi 是引擎另外呼叫的一趟 ——
+            // 它沒有被擋住，於是 HUD、按鈕、聊天視窗全部畫在載入畫面上面。
+            // 使用者看到的是「還在讀條，介面就已經出現了」。
+            if (IsShowingLoadingScreen)
+                return;
+
             base.DrawUi(gameTime);
 
             // Final top-most pass: draw dragged item previews above all UI windows
