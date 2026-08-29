@@ -59,9 +59,10 @@
     差別只在 ClientOnly 排掉了 Network/PlugIns/ 以及對 MUnique.OpenMU.PlugIns 的參考。
     PlugIns 為了在執行期產生外掛代理而相依 Roslyn（Microsoft.CodeAnalysis.CSharp），
     伺服器需要，客戶端一行都沒用到 —— 但在 iOS 上，相依就等於打包：
-    AOT 會把整個 Roslyn 編成原生碼，實測 128.6 MB，佔執行檔的 81%、.app 的 45%。
+    AOT 會把整個 Roslyn 編成原生碼。實測 MuIos.app 從 285 MB 降到 181 MB，
+    原生執行檔從 157.8 MB 降到 91.3 MB。
 
-    退回 NuGet 的路徑仍然可以正常編譯與執行，只是 app 會大 128 MB。
+    退回 NuGet 的路徑仍然可以正常編譯與執行，只是 app 會大 104 MB。
     保留它是為了讓 muonline 這個 repo 單獨 clone 時依然能建置。
     詳見 repos/openmu/src/ClientOnly/README.md。
   -->
@@ -75,11 +76,11 @@
     <HasOpenMuClientOnly Condition="Exists('$(OpenMuClientOnlyDir)Packets\MUnique.OpenMU.Network.Packets.ClientOnly.csproj')">true</HasOpenMuClientOnly>
   </PropertyGroup>
 
-  <!-- 退回 NuGet 不會有任何錯誤，只是 app 大 128 MB —— 那正是最難察覺的失敗。
+  <!-- 退回 NuGet 不會有任何錯誤，只是 app 大 104 MB —— 那正是最難察覺的失敗。
        行動端建置時明講一聲。 -->
   <Target Name="WarnOpenMuFallback" BeforeTargets="ResolveReferences"
           Condition="'$(HasOpenMuClientOnly)' != 'true' AND ('$(TargetFramework)' == 'net10.0-ios' OR '$(TargetFramework)' == 'net10.0-android')">
-    <Warning Text="找不到 $(OpenMuClientOnlyDir)，改用 NuGet 的 MUnique.OpenMU.Network。這會讓 app 多出約 128 MB 的 Roslyn 原生碼。用 -p:OpenMuRepoDir= 指到 openmu fork 即可避免。" />
+    <Warning Text="找不到 $(OpenMuClientOnlyDir)，改用 NuGet 的 MUnique.OpenMU.Network。這會讓 app 多出約 104 MB 的 Roslyn 相關內容。用 -p:OpenMuRepoDir= 指到 openmu fork 即可避免。" />
   </Target>
 
   <ItemGroup Condition="'$(HasOpenMuClientOnly)' == 'true'">
