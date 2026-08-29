@@ -4,6 +4,11 @@
 
 float2 Resolution;
 
+// SpriteBatch 送進來的頂點是螢幕像素座標，不是裁剪空間座標。
+// 少了這個變換，四邊形會有絕大部分落在 -1..1 之外被裁掉，畫面只剩原點附近一小塊。
+// AlphaRGB.fx 本來就是這樣寫的，這裡先前漏了。
+float4x4 WorldViewProjection;
+
 #if SM4 || SM6
 // -------------------- DX11 / WindowsDX --------------------
 Texture2D SceneTexture : register(t0);
@@ -22,7 +27,7 @@ struct VS_OUT { float4 Pos:SV_POSITION; float2 Tex:TEXCOORD0; };
 VS_OUT VS_Pass(VS_IN v)
 {
     VS_OUT o;
-    o.Pos = float4(v.Pos, 1);
+    o.Pos = mul(float4(v.Pos, 1), WorldViewProjection);
     o.Tex = v.Tex;
     return o;
 }
@@ -106,7 +111,7 @@ struct VS_OUT { float4 Pos:POSITION0; float2 Tex:TEXCOORD0; };
 VS_OUT VS_Pass(VS_IN v)
 {
     VS_OUT o;
-    o.Pos = v.Pos;
+    o.Pos = mul(v.Pos, WorldViewProjection);
     o.Tex = v.Tex;
     return o;
 }
@@ -154,7 +159,7 @@ float4 PS_FXAA(VS_OUT IN) : COLOR0
                          SAMPLE(uv + dir*(2.0/3.0 - 0.5)).rgb);
 
     float3 rgbB = rgbA*0.5 + 0.25 * (SAMPLE(uv + dir*-0.5).rgb +
-                                     SAMPLE(uv + dir* 0.5)).rgb;
+                                     SAMPLE(uv + dir* 0.5).rgb);
 
     float lumaB = dot(rgbB,lumaC);
 

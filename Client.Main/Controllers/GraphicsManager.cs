@@ -15,11 +15,10 @@ namespace Client.Main.Controllers
 
         public GraphicsDevice GraphicsDevice => _graphicsDevice;
 
-        // 手機預設開啟：2736x1260 這種超高 DPI 上，MU 的細長幾何（欄杆、屋簷、武器邊緣）
-        // 鋸齒非常明顯，而全螢幕 FXAA 只多一個 pass，實測仍有充足的 frame 餘裕。
-        // 桌面維持關閉（原本行為）。玩家在設定選單改過的值會覆寫這個預設。
-        public bool IsFXAAEnabled { get; set; }
-            = OperatingSystem.IsIOS() || OperatingSystem.IsAndroid();
+        // 手機預設維持關閉。實測在 iPhone 上開啟後畫面只剩左上角一小塊純色 ——
+        // iOS 版 FXAA.xnb 雖然編得出來（平台位元組是 XNBi），但這條後處理路徑
+        // 在 iOS 上從未被執行過，shader 本身有問題。查清楚之前不要預設開啟。
+        public bool IsFXAAEnabled { get; set; } = false;
         public bool IsAlphaRGBEnabled { get; set; } = false;
 
         public SpriteBatch Sprite { get; private set; }
