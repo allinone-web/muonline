@@ -67,8 +67,9 @@
   -->
   <PropertyGroup>
     <!-- OpenMuRepoDir 可以從外面覆寫（-p:OpenMuRepoDir=... 或同名環境變數）。
-         必須可覆寫：tools/client/run_iphone-air.sh 的 --committed 會在
-         /private/tmp/mu-stable 開 worktree 建置，那裡的相對路徑指不到 openmu。 -->
+         必須可覆寫：tools/client/run_iphone-air.sh 的 committed 模式會在
+         /private/tmp/mu-stable 開 worktree 建置，那裡的相對路徑指不到 openmu。
+         （XML 註解裡不能出現兩個連續的減號，所以旗標名稱這裡只寫 committed。） -->
     <OpenMuRepoDir Condition="'$(OpenMuRepoDir)' == ''">$(MSBuildThisFileDirectory)..\..\openmu\</OpenMuRepoDir>
     <OpenMuClientOnlyDir>$(OpenMuRepoDir)src\ClientOnly\</OpenMuClientOnlyDir>
     <HasOpenMuClientOnly Condition="Exists('$(OpenMuClientOnlyDir)Packets\MUnique.OpenMU.Network.Packets.ClientOnly.csproj')">true</HasOpenMuClientOnly>
