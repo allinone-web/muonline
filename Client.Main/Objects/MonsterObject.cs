@@ -14,6 +14,9 @@ namespace Client.Main.Objects
 {
     public abstract class MonsterObject : WalkerObject
     {
+
+        // 倍率刻意低於玩家：MU 的怪物本來就是巨人與野獸，已經比人類大。
+        protected override float RenderScaleMultiplier => ActorScale.Monster;
         // --- Fields ---
         private int _lastActionForIdleSound = -1;
         private bool _isFading = false;

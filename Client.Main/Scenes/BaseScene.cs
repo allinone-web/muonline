@@ -592,7 +592,23 @@ namespace Client.Main.Scenes
 #endif
 
             // --- Pass 3: Render standard 2D UI (HUD overlays) ---
-            // This batch ignores the depth buffer and draws on top of everything.
+            // 走 MuGame.DeferSceneUi 時，這一趟改由 MuGame 在畫面縮放貼回
+            // back buffer 之後才呼叫，HUD 因此維持螢幕原生解析度。
+            if (!MuGame.DeferSceneUi)
+            {
+                DrawUi(gameTime);
+            }
+        }
+
+        /// <summary>
+        /// 純 2D 的 HUD 疊層。這一批忽略深度緩衝，畫在所有東西之上。
+        ///
+        /// 從 <see cref="Draw"/> 拆出來，是為了讓它能在「縮放後的場景貼回
+        /// back buffer 之後」才執行 —— 否則低 Render Scale 會連 HUD 一起
+        /// 被降取樣再放大，數字與圖示跟著糊掉。
+        /// </summary>
+        public virtual void DrawUi(GameTime gameTime)
+        {
             using (new SpriteBatchScope(
                        GraphicsManager.Instance.Sprite,
                        SpriteSortMode.Deferred,

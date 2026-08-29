@@ -15,6 +15,9 @@ namespace Client.Main.Objects
 {
     public abstract class NPCObject : WalkerObject
     {
+
+        // 人形 NPC 與玩家相當；但這個基底底下也掛著櫻花樹之類的場景物件，因此保守。
+        protected override float RenderScaleMultiplier => ActorScale.Npc;
         protected new ILogger _logger;
         private DateTime _lastClickTime = DateTime.MinValue;
         private const double CLICK_COOLDOWN_SECONDS = 0.5; // Global debounce for all NPCs

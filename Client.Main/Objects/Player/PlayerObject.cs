@@ -40,6 +40,9 @@ namespace Client.Main.Objects.Player
 
     public class PlayerObject : WalkerObject
     {
+
+        // 手機上放大角色，取代把鏡頭拉近 —— 見 ActorScale 的說明。
+        protected override float RenderScaleMultiplier => ActorScale.Player;
         protected override bool RequiresPerFrameAnimation => IsMainWalker;
         private CharacterClassNumber _characterClass;
         // Cached gender flag – avoids evaluating gender every frame

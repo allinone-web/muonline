@@ -143,6 +143,16 @@ namespace Client.Main
         private const int PassiveDetailedProfileIntervalFrames = 15;
         private const double DetailedProfileContinuationThresholdMs = 16.0d;
         private static readonly Color FallbackClearColor = new(12, 12, 20);
+        /// <summary>
+        /// 場景的 2D HUD 是否延後到「縮放後的畫面貼回 back buffer 之後」才畫。
+        ///
+        /// 走中間渲染目標時，整個畫面（含 HUD）原本都畫進一張被 RENDER_SCALE
+        /// 縮放過的目標，再放大貼回螢幕 —— Render Scale 調低時連血量數字、
+        /// 技能圖示、搖桿都跟著糊。開啟後 3D 仍走縮放路徑，HUD 則以螢幕原生
+        /// 解析度直接畫在 back buffer 上。
+        /// </summary>
+        public static bool DeferSceneUi { get; private set; }
+
         private string _currentDrawPhase = "Idle";
         private bool _detailedPassProfilingThisFrame;
 
@@ -959,7 +969,9 @@ namespace Client.Main
                 }
 #endif
                 bool recoveredFrame = false;
-                if (ShouldUseIntermediateRenderTarget())
+                bool useIntermediateTarget = ShouldUseIntermediateRenderTarget();
+                DeferSceneUi = useIntermediateTarget;
+                if (useIntermediateTarget)
                 {
                     _currentDrawPhase = "RenderTargets.Ensure";
                     bool alphaRgbEnabled = GraphicsManager.Instance.IsAlphaRGBEnabled && GraphicsManager.Instance.AlphaRGBEffect != null;
@@ -994,6 +1006,15 @@ namespace Client.Main
                 else
                 {
                     DrawSceneDirectToBackBuffer(gameTime);
+                }
+
+                // HUD 畫在 back buffer 上，不經過 RENDER_SCALE 的縮放路徑。
+                // 必須在後處理與最終貼回之後 —— 那時 render target 已是 null。
+                if (DeferSceneUi)
+                {
+                    _currentDrawPhase = "Scene.DrawUi";
+                    DeferSceneUi = false;
+                    ActiveScene?.DrawUi(gameTime);
                 }
 
                 _currentDrawPhase = "FrameworkDraw";
@@ -1909,6 +1930,49 @@ namespace Client.Main
             }
         }
 
+
+        /// <summary>
+        /// 依目前平台與實際螢幕尺寸重新設定 UI 縮放。
+        ///
+        /// 手機與桌面用的虛擬畫布與縮放模式並不一樣，先前有兩處各自寫了一份：
+        /// 啟動時（ApplyGraphicsConfiguration）iOS 用 ResolveMobileVirtualCanvas
+        /// 算出的畫布加 ScaleMode.Stretch，但 GraphicsManager.UpdateRenderScale
+        /// 用的是桌面的 UiVirtualWidth/Height，而且沒有傳 ScaleMode —— 預設值是
+        /// Uniform。於是玩家只要動一次 Render Scale，iOS 的 UI 就從
+        /// Stretch/1397x720 被換成 Uniform/1280x720，左右各浮出一大條留白，
+        /// 調好的 UI 位置全部跑掉。這裡收成單一來源。
+        /// </summary>
+        public void ConfigureUiScalerForCurrentDisplay()
+        {
+            var graphics = AppSettings?.Graphics;
+            if (graphics == null)
+                return;
+
+            if (OperatingSystem.IsIOS() || OperatingSystem.IsAndroid())
+            {
+                var screenSize = GetActualScreenSize();
+                var mobileGfx = graphics.Mobile ?? new Configuration.MobileGraphicsSettings();
+                var canvas = ResolveMobileVirtualCanvas(screenSize, mobileGfx);
+
+                // iOS 固定 Stretch —— 畫布寬度已依螢幕長寬比算過，Stretch 不會變形。
+                var mode = OperatingSystem.IsIOS()
+                    ? ScaleMode.Stretch
+                    : (mobileGfx.UniformUiScale ? ScaleMode.Uniform : ScaleMode.Stretch);
+
+                UiScaler.Configure(screenSize.X, screenSize.Y, canvas.X, canvas.Y, mode);
+                return;
+            }
+
+            int actualWidth = Math.Max(1, GraphicsDevice.PresentationParameters.BackBufferWidth);
+            int actualHeight = Math.Max(1, GraphicsDevice.PresentationParameters.BackBufferHeight);
+            UiScaler.Configure(
+                actualWidth,
+                actualHeight,
+                Math.Max(1, graphics.UiVirtualWidth),
+                Math.Max(1, graphics.UiVirtualHeight),
+                ScaleMode.Uniform);
+        }
+
         public void ApplyGraphicsConfiguration(GraphicsSettings graphics)
         {
             if (graphics == null)
@@ -1926,11 +1990,7 @@ namespace Client.Main
 
                 // 與初始化時一致採用 Mobile 區塊，否則這裡會用桌面的 1280x720
                 // 把手機的 UI 縮放覆寫回去（畫面上的 UI 會突然變小）。
-                var mobileGfx = graphics?.Mobile ?? new Configuration.MobileGraphicsSettings();
-                var mobileCanvas = ResolveMobileVirtualCanvas(screenSize, mobileGfx);
-
-                var uiMode2 = mobileGfx.UniformUiScale ? ScaleMode.Uniform : ScaleMode.Stretch;
-                UiScaler.Configure(screenSize.X, screenSize.Y, mobileCanvas.X, mobileCanvas.Y, uiMode2);
+                ConfigureUiScalerForCurrentDisplay();
 
                 Camera.Instance.AspectRatio = (float)screenSize.X / screenSize.Y;
 
@@ -1948,10 +2008,7 @@ namespace Client.Main
 
                 // 與初始化時一致採用 Mobile 區塊，否則這裡會用桌面的 1280x720
                 // 把手機的 UI 縮放覆寫回去（畫面上的 UI 會突然變小）。
-                var mobileGfx = graphics?.Mobile ?? new Configuration.MobileGraphicsSettings();
-                var mobileCanvas = ResolveMobileVirtualCanvas(screenSize, mobileGfx);
-
-                UiScaler.Configure(screenSize.X, screenSize.Y, mobileCanvas.X, mobileCanvas.Y, ScaleMode.Stretch);
+                ConfigureUiScalerForCurrentDisplay();
 
                 Camera.Instance.AspectRatio = (float)screenSize.X / screenSize.Y;
 
@@ -1964,7 +2021,8 @@ namespace Client.Main
                     $"backbuffer={ppIos.BackBufferWidth}x{ppIos.BackBufferHeight} " +
                     $"viewport={GraphicsDevice.Viewport.Width}x{GraphicsDevice.Viewport.Height} " +
                     $"aspect={(float)screenSize.X / screenSize.Y:F3} " +
-                    $"canvas={mobileCanvas.X}x{mobileCanvas.Y}");
+                    $"canvas={UiScaler.VirtualSize.X}x{UiScaler.VirtualSize.Y} " +
+                    $"uiMode={UiScaler.Mode}");
 
                 _logger?.LogDebug("iOS graphics configured: {Width}x{Height}, UiScaler: {ScaleX:F4}x{ScaleY:F4}",
                     screenSize.X, screenSize.Y,
@@ -1989,12 +2047,7 @@ namespace Client.Main
                 // Update viewport to match actual back buffer size (required for correct mouse ray casting)
                 GraphicsDevice.Viewport = new Viewport(0, 0, actualWidth, actualHeight);
 
-                UiScaler.Configure(
-                    actualWidth,
-                    actualHeight,
-                    Math.Max(1, graphics.UiVirtualWidth),
-                    Math.Max(1, graphics.UiVirtualHeight),
-                    ScaleMode.Uniform);
+                ConfigureUiScalerForCurrentDisplay();
 
                 // Update camera aspect ratio after resolution change
                 Camera.Instance.AspectRatio = (float)actualWidth / actualHeight;

@@ -164,18 +164,11 @@ namespace Client.Main.Controllers
 
             // Targets are recreated lazily on the next frame if required.
 
-            // Update UiScaler with new render scale
-            var settings = MuGame.AppSettings?.Graphics;
-            if (settings != null)
-            {
-                int actualWidth = Math.Max(1, _graphicsDevice.PresentationParameters.BackBufferWidth);
-                int actualHeight = Math.Max(1, _graphicsDevice.PresentationParameters.BackBufferHeight);
-                UiScaler.Configure(
-                    actualWidth,
-                    actualHeight,
-                    settings.UiVirtualWidth,
-                    settings.UiVirtualHeight);
-            }
+            // 這裡原本自己寫了一份 UiScaler.Configure，用桌面的 UiVirtualWidth/Height
+            // 且沒傳 ScaleMode（預設 Uniform）—— 在 iOS 上會把啟動時設好的
+            // Stretch/1397x720 換成 Uniform/1280x720，UI 左右浮出留白、位置全跑掉。
+            // 改為呼叫平台判斷的單一來源。
+            MuGame.Instance?.ConfigureUiScalerForCurrentDisplay();
         }
 
         /// <summary>

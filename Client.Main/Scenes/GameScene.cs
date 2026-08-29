@@ -1177,29 +1177,17 @@ namespace Client.Main.Scenes
                 return;
             }
 
-            using (new SpriteBatchScope(
-                       GraphicsManager.Instance.Sprite,
-                       SpriteSortMode.Deferred,
-                       BlendState.AlphaBlend,
-                       SamplerState.LinearClamp,
-                       DepthStencilState.None,
-                       transform: UiScaler.SpriteTransform))
-            {
-                var controls = Controls.GetSnapshotArray();
-                for (int i = 0; i < controls.Length; i++)
-                {
-                    var ctrl = controls[i];
-                    if (ctrl == null || ctrl == World || ctrl == _fpsLabel || ctrl == _pingLabel || !ctrl.Visible)
-                    {
-                        continue;
-                    }
-
-                    ctrl.Draw(gameTime);
-                }
-
-            }
+            // 這裡原本還有一趟「先畫一次所有 UI 控制項」。那一趟完全是浪費：
+            // 緊接著的 base.Draw 會先畫 3D 世界（帶深度寫入）把它整片蓋掉，
+            // 然後 Pass 3 又把同一批控制項重畫一次。等於每幀多畫一整個 HUD
+            // 卻看不到。移除後畫面完全相同。
 
             base.Draw(gameTime);
+        }
+
+        public override void DrawUi(GameTime gameTime)
+        {
+            base.DrawUi(gameTime);
 
             // Final top-most pass: draw dragged item previews above all UI windows
             using (new SpriteBatchScope(

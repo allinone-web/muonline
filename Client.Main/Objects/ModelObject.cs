@@ -985,7 +985,7 @@ namespace Client.Main.Objects
 
         protected override void RecalculateWorldPosition()
         {
-            Matrix localMatrix = Matrix.CreateScale(Scale) *
+            Matrix localMatrix = Matrix.CreateScale(Scale * RenderScaleMultiplier) *
                                  Matrix.CreateFromQuaternion(MathUtils.AngleQuaternion(Angle)) *
                                  Matrix.CreateTranslation(Position);
 

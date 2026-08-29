@@ -119,6 +119,30 @@ namespace Client.Main.Configuration
         /// </summary>
         public int MaxAnisotropy { get; set; } = 8;
 
+        /// <summary>
+        /// 玩家角色的顯示倍率。
+        ///
+        /// 放大角色而不是拉近鏡頭 —— 拉近鏡頭會把只有 128x128 的地磚一起放大
+        /// 而變糊，放大角色則讓地面維持在清晰的取樣距離。
+        /// 上限受限於與建築的比例：MU 的門與房子是照原比例做的，
+        /// 超過約 1.4 角色就會開始像進錯場景。
+        /// </summary>
+        public float PlayerScale { get; set; } = 1.25f;
+
+        /// <summary>
+        /// 怪物的顯示倍率。刻意低於 <see cref="PlayerScale"/> ——
+        /// MU 的怪物多半是巨人與野獸，本來就比人類大，
+        /// 用同一個倍率會大得誇張。
+        /// </summary>
+        public float MonsterScale { get; set; } = 1.1f;
+
+        /// <summary>
+        /// NPC 的顯示倍率。人形 NPC 與玩家相當，但 NPCObject 底下也掛著
+        /// 櫻花樹之類的場景物件，因此保守一點。
+        /// </summary>
+        public float NpcScale { get; set; } = 1.1f;
+
+
 
 
         /// <summary>

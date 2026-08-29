@@ -86,6 +86,18 @@ namespace Client.Main.Objects
         public BoundingBox BoundingBoxLocal { get => _boundingBoxLocal; set { if (_boundingBoxLocal != value) { _boundingBoxLocal = value; OnBoundingBoxLocalChanged(); } } }
         public BoundingBox BoundingBoxWorld { get; protected set; }
 
+        /// <summary>
+        /// 疊在 <see cref="Scale"/> 之上的顯示倍率，預設 1（不改變任何東西）。
+        ///
+        /// 用「乘」而不是覆寫 Scale，是因為有些物件在建構時就設了自己的 Scale
+        /// （例如 GoblinGate、Charon、ElfSoldier），直接覆寫會把那些調整弄丟。
+        ///
+        /// 因為它併進了世界矩陣，<see cref="UpdateWorldBoundingBox"/> 算出來的
+        /// 碰撞盒會自動跟著放大 —— 點擊判定不會落後於看到的大小；
+        /// 名牌與血條的錨點又是由碰撞盒推導的，也會自動往上讓開。
+        /// </summary>
+        protected virtual float RenderScaleMultiplier => 1f;
+
         public event EventHandler StatusChanged;
         public GameControlStatus Status { get => _status; protected set { if (_status != value) { _status = value; OnStatusChanged(); } } }
         public event EventHandler HiddenChanged;
@@ -537,7 +549,7 @@ namespace Client.Main.Objects
                 return;
             }
 
-            Matrix localMatrix = Matrix.CreateScale(Scale)
+            Matrix localMatrix = Matrix.CreateScale(Scale * RenderScaleMultiplier)
                 * Matrix.CreateFromQuaternion(MathUtils.AngleQuaternion(Angle))
                 * Matrix.CreateTranslation(Position);
 
