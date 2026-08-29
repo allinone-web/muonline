@@ -73,6 +73,9 @@ namespace Client.Main.Controls.UI.Game.Inventory
         private Rectangle _previewPanelRect;
         private Rectangle _infoPanelRect;
 
+        /// <summary>開啟時的滑入動畫（見 MobileUi.OpenAnimation）。</summary>
+        private readonly MobileUi.OpenAnimation _openAnimation = new();
+
         // 資訊欄字級的快取（見 DrawMobileItemDetail）
         private InventoryItem _infoScaleItem;
         private int _infoScaleWidth = -1;
@@ -393,6 +396,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
         {
             // Force correct position BEFORE first draw to prevent flash on wrong side
             PositionForMobile();
+            _openAnimation.Restart();
             ForceAlignNow();
             Align = ControlAlign.None; // Prevent auto-realignment
             _networkManager?.GetCharacterState()?.ClearPendingInventoryMove(); // ensure no stale hides
@@ -429,11 +433,16 @@ namespace Client.Main.Controls.UI.Game.Inventory
             // 水平與垂直都置中。少掉底列之後高度剛好落在右上角按鈕區塊的下方，
             // 置中比硬釘在某個 Y 好看，也不會壓到那六顆按鈕。
             X = Math.Max(PANEL_PADDING, (canvas.X - WINDOW_WIDTH) / 2);
+            _mobileBaseY = 0;   // 由下一行決定
             // 上緣必須讓開頂部的 HUD 區塊（左上頭像與數值、右上按鈕與經驗條），
             // 否則 HUD 畫在最上層，文字會透出來蓋在視窗上。
             // 讓開之後高度不足以置中就靠上，這比壓住 HUD 好。
-            Y = Math.Max(MobileWindowTop, (canvas.Y - WINDOW_HEIGHT) / 2);
+            _mobileBaseY = Math.Max(MobileWindowTop, (canvas.Y - WINDOW_HEIGHT) / 2);
+            Y = _mobileBaseY;
         }
+
+        /// <summary>視窗定位之後的 Y（滑入動畫會在它之上加偏移）。</summary>
+        private int _mobileBaseY;
 
         /// <summary>左上角的頭像與數值文字底下的第一個安全 Y 座標。</summary>
         internal const int MobileTopSafeY = 112;
@@ -513,6 +522,12 @@ namespace Client.Main.Controls.UI.Game.Inventory
         public override void Update(GameTime gameTime)
         {
             _currentGameTime = gameTime;
+
+            if (s_mobile && _mobileBaseY > 0)
+            {
+                _openAnimation.Update((float)gameTime.ElapsedGameTime.TotalSeconds);
+                Y = _mobileBaseY + _openAnimation.OffsetPixels;
+            }
 
             if (MuGame.Instance.Keyboard.IsKeyDown(Keys.Escape) &&
                 MuGame.Instance.PrevKeyboard.IsKeyUp(Keys.Escape))

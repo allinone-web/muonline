@@ -504,6 +504,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             if (show)
             {
                 _optionsPanel.Refresh();
+                _optionsPanel.PlayOpenAnimation();
                 _optionsPanel.BringToFront();
             }
         }
@@ -951,6 +952,10 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             private readonly int _panelWidth;
             private MenuTabButtonControl _activeCategoryButton;
 
+            /// <summary>開啟時的滑入動畫（見 MobileUi.OpenAnimation）。</summary>
+            private readonly MobileUi.OpenAnimation _openAnimation = new();
+            private int _baseY = int.MinValue;
+
             public OptionsPanelControl(PauseMenuControl owner)
             {
                 _owner = owner;
@@ -1064,7 +1069,15 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 AddHeading(categoryName, ref currentY);
                 builder(ref currentY);
 
-                _closeButton.Y = currentY + 10;
+                if (IsMobile)
+                {
+                    LayoutMobileOptions();
+                }
+                else
+                {
+                    _closeButton.Y = currentY + 10;
+                }
+
                 _closeButton.BringToFront();
             }
 
@@ -1463,6 +1476,29 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 RefreshOptions();
             }
 
+            /// <summary>由外部在顯示面板時呼叫，重新播放滑入。</summary>
+            public void PlayOpenAnimation()
+            {
+                _baseY = int.MinValue;
+                _openAnimation.Restart();
+            }
+
+            public override void Update(GameTime gameTime)
+            {
+                base.Update(gameTime);
+
+                if (!IsMobile || !Visible)
+                    return;
+
+                // Align 會在 base.Update 之後把 Y 算成置中；記下它當作基準，
+                // 動畫的偏移疊在上面。
+                if (_baseY == int.MinValue || _openAnimation.OffsetPixels == 0)
+                    _baseY = Y - _openAnimation.OffsetPixels;
+
+                _openAnimation.Update((float)gameTime.ElapsedGameTime.TotalSeconds);
+                Y = _baseY + _openAnimation.OffsetPixels;
+            }
+
             private void AddCategoryButton(string label, Action onClick, int startY,
                 ref int currentX, int width, int height, int spacing, int perRow, ref int index)
             {
@@ -1571,6 +1607,38 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 _options.Add(option);
             }
 
+            /// <summary>
+            /// 手機：建完整個分類之後才排版，這樣才知道總共有幾個選項。
+            ///
+            /// 邊建邊排的話「先填滿左欄再換右欄」會讓 10 個選項變成 9 + 1，
+            /// 右欄只有一列、看起來像沒排好。知道總數之後可以平均分配：
+            /// 2 個選項用一欄，10 個選項用兩欄各 5 個。
+            /// </summary>
+            private void LayoutMobileOptions()
+            {
+                int count = _options.Count;
+                if (count == 0)
+                    return;
+
+                int available = MobilePanelHeight - ContentTop - MobilePadding;
+                int perColumnMax = Math.Max(1, available / MobileOptionRowHeight);
+
+                int columns = Math.Min(MobileOptionColumns, (count + perColumnMax - 1) / perColumnMax);
+                columns = Math.Max(1, columns);
+                int rowsPerColumn = (count + columns - 1) / columns;
+
+                for (int i = 0; i < count; i++)
+                {
+                    int column = Math.Min(i / rowsPerColumn, columns - 1);
+                    int row = i - column * rowsPerColumn;
+
+                    _options[i].SetPosition(
+                        MobileOptionAreaX + column * (MobileOptionColumnWidth + MobilePadding),
+                        ContentTop + row * MobileOptionRowHeight,
+                        MobileOptionColumnWidth);
+                }
+            }
+
             private void AddHeading(string label, ref int currentY)
             {
                 if (IsMobile)
@@ -1613,6 +1681,9 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 void AddTo(ChildrenCollection<GameControl> controls);
                 void Refresh();
                 void CollectControls(List<GameControl> controls);
+
+                /// <summary>建完之後重新定位，供手機的欄位平衡使用。</summary>
+                void SetPosition(int x, int y, int width);
             }
 
             private sealed class OptionToggle : IOptionRow
@@ -1691,6 +1762,14 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 {
                     controls.Add(_label);
                     controls.Add(_button);
+                }
+
+                public void SetPosition(int x, int y, int width)
+                {
+                    _label.X = x;
+                    _label.Y = y;
+                    _button.X = x + width - _button.ViewSize.X;
+                    _button.Y = y - 4;
                 }
             }
 
@@ -1808,6 +1887,16 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     controls.Add(_valueLabel);
                     controls.Add(_minusButton);
                     controls.Add(_plusButton);
+                }
+
+                public void SetPosition(int x, int y, int width)
+                {
+                    int dy = y - _label.Y;
+                    int dx = x - _label.X;
+                    _label.X = x; _label.Y = y;
+                    _valueLabel.X += dx; _valueLabel.Y += dy;
+                    _minusButton.X += dx; _minusButton.Y += dy;
+                    _plusButton.X += dx; _plusButton.Y += dy;
                 }
             }
         }

@@ -267,6 +267,15 @@ namespace Client.Main.Controls.UI
         public static readonly Color TextDim = new(150, 158, 172);
         public static readonly Color FieldFill = new(10, 13, 19);
 
+        /// <summary>生命。<b>只用在生命上。</b></summary>
+        public static readonly Color Hp = new(206, 62, 58);
+
+        /// <summary>魔力。<b>只用在魔力上。</b></summary>
+        public static readonly Color Mp = new(72, 132, 208);
+
+        /// <summary>進度條／弧線的底槽。</summary>
+        public static readonly Color Track = new(58, 64, 76);
+
         /// <summary>面板的預設不透明度。半透明才看得到後面的場景，畫面比較有層次。</summary>
         public const float PanelAlpha = 0.88f;
 
@@ -292,6 +301,48 @@ namespace Client.Main.Controls.UI
             sb.Draw(pixel, new Rectangle(rect.X, rect.Bottom - 1, rect.Width, 1), border);
             sb.Draw(pixel, new Rectangle(rect.X, rect.Y, 1, rect.Height), border);
             sb.Draw(pixel, new Rectangle(rect.Right - 1, rect.Y, 1, rect.Height), border);
+        }
+
+        /// <summary>
+        /// 視窗開啟時的滑入動畫。
+        ///
+        /// 視窗瞬間出現是最明顯的「沒做完」的感覺。位移只要 18 px、時間 0.18 秒，
+        /// 眼睛就會把它讀成「這個面板是滑進來的」而不是「畫面閃了一下」。
+        ///
+        /// 只動<b>位置</b>不動透明度：面板裡的每個元素都是相對視窗座標繪製的，
+        /// 一起移動就會一起動；透明度則要每個繪製點都乘上去，漏一個就會出現
+        /// 「框在淡入、內容已經全亮」的破綻。
+        /// </summary>
+        public sealed class OpenAnimation
+        {
+            private const float DurationSeconds = 0.18f;
+            private const float OffsetY = 18f;
+
+            private float _elapsed = DurationSeconds;
+
+            /// <summary>視窗開啟時呼叫，重新播放。</summary>
+            public void Restart() => _elapsed = 0f;
+
+            public void Update(float deltaSeconds)
+            {
+                if (_elapsed < DurationSeconds)
+                    _elapsed = MathF.Min(_elapsed + deltaSeconds, DurationSeconds);
+            }
+
+            /// <summary>目前要加在視窗 Y 上的偏移（結束時為 0）。</summary>
+            public int OffsetPixels
+            {
+                get
+                {
+                    if (!IsMobile || _elapsed >= DurationSeconds)
+                        return 0;
+
+                    float t = _elapsed / DurationSeconds;
+                    // ease-out：一開始快、接近定位時慢下來
+                    float eased = 1f - (1f - t) * (1f - t);
+                    return (int)MathF.Round(OffsetY * (1f - eased));
+                }
+            }
         }
 
         /// <summary>手機的可用區域（虛擬座標）。UiScaler 已把安全區域併入縮放，因此就是整個虛擬畫布。</summary>

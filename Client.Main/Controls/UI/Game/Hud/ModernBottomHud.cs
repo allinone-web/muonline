@@ -63,6 +63,7 @@ namespace Client.Main.Controls.UI.Game.Hud
 
         // Resource bar display values (lerped for animation)
         private float _displayHpPct, _displayMpPct, _displaySdPct, _displayAgPct;
+        private float _displayExpPct;
         private float _targetHpPct, _targetMpPct, _targetSdPct, _targetAgPct;
         private uint _lastCurrentHealth = uint.MaxValue;
         private uint _lastMaximumHealth = uint.MaxValue;
@@ -300,6 +301,12 @@ namespace Client.Main.Controls.UI.Game.Hud
             _targetSdPct = _state.MaximumShield > 0 ? _state.CurrentShield / (float)_state.MaximumShield : 0f;
             _targetAgPct = _state.MaximumAbility > 0 ? _state.CurrentAbility / (float)_state.MaximumAbility : 0f;
             RefreshResourceTexts();
+
+            // 經驗值只會往前，升級時才會歸零重來 —— 歸零要立刻，往前才補間
+            float targetExp = MathHelper.Clamp((float)(CalculateExpPercent() / 100.0), 0f, 1f);
+            _displayExpPct = targetExp < _displayExpPct
+                ? targetExp
+                : MathHelper.Lerp(_displayExpPct, targetExp, MathHelper.Clamp(4f * dt, 0f, 1f));
 
             if (IsMobile)
             {
@@ -1576,13 +1583,13 @@ namespace Client.Main.Controls.UI.Game.Hud
             }
         }
 
-        // 手機的配色刻意只用「白／灰 + 生命紅 + 魔力藍」。
-        // 顏色一多，畫面就變成干擾而不是資訊。
-        private static readonly Color MobileText = new(238, 240, 245);
-        private static readonly Color MobileTextDim = new(150, 156, 168);
-        private static readonly Color MobileHp = new(206, 62, 58);
-        private static readonly Color MobileMp = new(72, 132, 208);
-        private static readonly Color MobileTrack = new(58, 64, 76);
+        // 色票只有一份，在 MobileUi。這裡曾經另外定義一組幾乎相同但不完全相同的
+        // 值（灰色差了 2-4）—— 兩份真相遲早會走散，改成直接引用。
+        private static Color MobileText => MobileUi.TextPrimary;
+        private static Color MobileTextDim => MobileUi.TextDim;
+        private static Color MobileHp => MobileUi.Hp;
+        private static Color MobileMp => MobileUi.Mp;
+        private static Color MobileTrack => MobileUi.Track;
 
         /// <summary>
         /// 左上角的圓形頭像框。
@@ -2065,9 +2072,9 @@ namespace Client.Main.Controls.UI.Game.Hud
         {
             sb.Draw(pixel, _expBarRect, new Color(8, 10, 14) * 0.55f);
 
-            double expPercent = CalculateExpPercent();
-            float pct = MathHelper.Clamp((float)(expPercent / 100.0), 0f, 1f);
-            int fillWidth = (int)(_expBarRect.Width * pct);
+            // 經驗值用補間，不要跳。打完一隻怪條子往前推一小段，
+            // 那個動作本身就是回饋 —— 直接跳到新長度等於把回饋丟掉。
+            int fillWidth = (int)(_expBarRect.Width * _displayExpPct);
 
             if (fillWidth > 0)
             {
