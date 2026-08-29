@@ -215,7 +215,8 @@ namespace Client.Main.Controls.UI.Game
             // 原本是由下往上（最近的一件離拇指最近），但那樣清單會往下長，
             // 越接近 ATK 與技能弧線 —— 想撿東西卻按到攻擊是更糟的誤觸。
             // 改成從固定的上緣往下長，清單再長也不會侵入動作區。
-            int right = canvas.X - MobileUi.CornerInset;
+            // 和右上角的介面按鈕、經驗條、狀態列、金幣同一條右對齊線
+            int right = MobileUi.RightEdge;
 
             for (int i = 0; i < _entries.Count; i++)
             {

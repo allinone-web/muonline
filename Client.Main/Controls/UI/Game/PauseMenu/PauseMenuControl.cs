@@ -254,6 +254,12 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
         {
             public bool Active { get; set; }
 
+            /// <summary>動作列（Continue / Exit …），不是設定分類。不顯示選中狀態。</summary>
+            public bool IsAction { get; set; }
+
+            /// <summary>不可逆的動作（離開遊戲）。左側一條紅槓，只有這裡用飽和色。</summary>
+            public bool IsDanger { get; set; }
+
             public MenuTabButtonControl()
             {
                 BackgroundColor = Color.Transparent;
@@ -281,7 +287,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     //
                     // 清單本來就是靠位置和間距讀的，不需要框；只有<b>目前選中的</b>
                     // 那一項需要被指出來，用一塊底色加左側一條短槓就夠了。
-                    if (Active)
+                    if (Active && !IsAction)
                     {
                         sprite.Draw(pixel, rect, MobileUi.TitleBarFill * MobileUi.PanelAlpha);
                         sprite.Draw(pixel, new Rectangle(rect.X, rect.Y + 6, 3, rect.Height - 12), MobileUi.TextPrimary * 0.75f);
@@ -290,6 +296,14 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     {
                         sprite.Draw(pixel, rect, MobileUi.TitleBarFill * 0.45f);
                     }
+                    else if (IsAction)
+                    {
+                        // 動作列給一層很淡的底，和下面的設定分類分開
+                        sprite.Draw(pixel, rect, MobileUi.TitleBarFill * 0.28f);
+                    }
+
+                    if (IsDanger)
+                        sprite.Draw(pixel, new Rectangle(rect.X, rect.Y + 6, 3, rect.Height - 12), ModernHudTheme.Danger * 0.85f);
 
                     float mobileScale = 12.5f / Constants.BASE_FONT_SIZE;
                     string mobileLabel = Text ?? string.Empty;
@@ -299,7 +313,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     // 眼睛要重新找一次左緣才讀得下去。
                     var mobilePosition = new Vector2(rect.X + 16, rect.Y + (rect.Height - mobileSize.Y) * 0.5f);
                     sprite.DrawString(font, mobileLabel, mobilePosition,
-                        (Active ? MobileUi.TextPrimary : MobileUi.TextDim) * Alpha,
+                        ((Active || IsAction) ? MobileUi.TextPrimary : MobileUi.TextDim) * Alpha,
                         0f, Vector2.Zero, mobileScale, SpriteEffects.None, 0f);
                     return;
                 }
@@ -543,6 +557,53 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
         /// <summary>
         /// 切換組隊面板。與 ModernBottomHud 的 PARTY 鈕走同一條路（在場景的控制項裡找它）。
         /// </summary>
+        // ── 手機的合併選單直接呼叫這幾個 ──
+        //
+        // 桌面的六顆按鈕各自帶著一段 Click 內容（防重入旗標、事件通知、等待非同步）。
+        // 那些邏輯不該複製一份到左欄的動作列去，所以抽成方法，兩邊共用。
+
+        internal void TogglePartyPanelFromMenu()
+        {
+            TogglePartyPanel();
+            Visible = false;
+        }
+
+        internal async Task LeaveToCharacterSelectAsync()
+        {
+            if (_returnInProgress) return;
+            _returnInProgress = true;
+            try
+            {
+                CharacterSelectClicked?.Invoke(this, EventArgs.Empty);
+                await HandleReturnToCharacterSelectAsync();
+            }
+            finally
+            {
+                _returnInProgress = false;
+            }
+        }
+
+        internal async Task LeaveToServerSelectAsync()
+        {
+            ServerSelectClicked?.Invoke(this, EventArgs.Empty);
+            await HandleReturnToServerSelectAsync();
+        }
+
+        internal async Task ExitGameAsync()
+        {
+            if (_exitInProgress) return;
+            _exitInProgress = true;
+            try
+            {
+                ExitClicked?.Invoke(this, EventArgs.Empty);
+                await HandleExitAsync();
+            }
+            finally
+            {
+                _exitInProgress = false;
+            }
+        }
+
         private void TogglePartyPanel()
         {
             if (MuGame.Instance?.ActiveScene is not GameScene gs)
@@ -561,17 +622,22 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             }
         }
 
+        private void EnsureOptionsPanel()
+        {
+            if (_optionsPanel != null)
+                return;
+
+            _optionsPanel = new OptionsPanelControl(this)
+            {
+                Visible = false
+            };
+            Controls.Add(_optionsPanel);
+            _optionsPanel.BringToFront();
+        }
+
         private void ToggleOptionsPanel()
         {
-            if (_optionsPanel == null)
-            {
-                _optionsPanel = new OptionsPanelControl(this)
-                {
-                    Visible = false
-                };
-                Controls.Add(_optionsPanel);
-                _optionsPanel.BringToFront();
-            }
+            EnsureOptionsPanel();
 
             bool show = !_optionsPanel.Visible;
             _optionsPanel.Visible = show;
@@ -956,8 +1022,33 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
 
             if (!Visible)
             {
+                _wasVisible = false;
                 return;
             }
+
+            if (MobileUi.IsMobile)
+            {
+                // 手機只有一層選單。MENU 直接開左右分欄的那個面板 ——
+                // 動作（繼續／組隊／換角色／換伺服器／離開）已經排在它的左欄上半部，
+                // 見 OptionsPanelControl 的 AddActionRow。
+                //
+                // 第一層那六顆按鈕的面板不再出現：多一層等於多一次點擊，
+                // 而且多一個要關的視窗。
+                if (!_wasVisible)
+                {
+                    _wasVisible = true;
+                    EnsureOptionsPanel();
+                    _panel.Visible = false;
+                    _optionsPanel.Visible = true;
+                    _optionsPanel.Refresh();
+                    _optionsPanel.PlayOpenAnimation();
+                    _optionsPanel.BringToFront();
+                }
+
+                return;
+            }
+
+            _wasVisible = true;
 
             if (_optionsPanel == null || !_optionsPanel.Visible)
             {
@@ -967,6 +1058,9 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 }
             }
         }
+
+        /// <summary>從隱藏變成顯示的那一幀要做初始化，記錄上一幀的狀態。</summary>
+        private bool _wasVisible;
 
         public override void Dispose()
         {
@@ -1019,7 +1113,10 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
 
             // ── 手機版面 ──
             private const int MobilePanelWidth = 1040;
-            private const int MobilePanelHeight = 560;
+            // 560 -> 660：左欄現在是「5 個動作 + 7 個設定分類」共 12 列。
+            // 12 x 46 = 552，加上標題列 70 與群組間隔 14 就是 636，560 裝不下。
+            // 畫布高度約 756（滿版之後），660 還留得下上下的餘裕。
+            private const int MobilePanelHeight = 660;
             private const int MobileHeaderHeight = 64;
             private const int MobilePadding = 16;
             private const int MobileCategoryWidth = 250;
@@ -1089,6 +1186,20 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     Controls.Add(subtitle);
                 }
 
+                // ── 手機：左欄最上面是動作，下面才是設定分類 ──
+                //
+                // 桌面是兩層選單：MENU 開一個有六顆按鈕的面板，其中「設定」再開
+                // 這個左右分欄的面板。手機不需要那一層 —— 左欄本來就是一份清單，
+                // 把動作直接排進去，MENU 一按就到位，少一次點擊也少一個要關的視窗。
+                if (IsMobile)
+                {
+                    AddActionRow("Continue", () => _owner.Visible = false);
+                    AddActionRow("Party", () => _owner.TogglePartyPanelFromMenu());
+                    AddActionRow("Character Select", () => _ = _owner.LeaveToCharacterSelectAsync());
+                    AddActionRow("Server Select", () => _ = _owner.LeaveToServerSelectAsync());
+                    AddActionRow("Exit Game", () => _ = _owner.ExitGameAsync(), isDanger: true);
+                }
+
                 int categoryStartY = 78;
                 int categoryX = 20;
                 int categoryWidth = 166;
@@ -1144,7 +1255,21 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     FontSize = 12f,
                     TextColor = ModernHudTheme.TextWhite
                 };
-                _closeButton.Click += (s, e) => _owner.ToggleOptionsPanel();
+                // 手機沒有第一層選單可以返回 —— 左欄第一列的 Continue 就是離開。
+                // 這顆保留成第二個出口（面板左下角），一樣是直接關掉。
+                _closeButton.Text = IsMobile ? "Close" : "Back to Pause Menu";
+                _closeButton.Click += (s, e) =>
+                {
+                    if (IsMobile)
+                        _owner.Visible = false;
+                    else
+                        _owner.ToggleOptionsPanel();
+                };
+
+                // 手機不顯示這一顆：左欄第一列的 Continue 已經是出口，
+                // 面板底部再放一顆「關閉」只是同一件事的第二個按鈕，
+                // 而且會和最後一個設定分類擠在一起。
+                _closeButton.Visible = !IsMobile;
                 Controls.Add(_closeButton);
 
                 BuildAudioCategory(); // default category
@@ -1614,6 +1739,46 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 Y = _baseY + _openAnimation.OffsetPixels;
             }
 
+            /// <summary>動作群組佔用的列數（Continue / Party / Character / Server / Exit）。</summary>
+            private const int MobileActionRowCount = 5;
+
+            /// <summary>動作群組與設定分類之間的分隔。</summary>
+            private const int MobileActionGroupGap = 14;
+
+            /// <summary>設定分類清單的上緣：動作群組之下。</summary>
+            private int MobileCategoryListTop
+                => ContentTop
+                 + MobileActionRowCount * (MobileCategoryHeight + MobileCategoryGap)
+                 + MobileActionGroupGap;
+
+            private int _mobileActionIndex;
+
+            /// <summary>
+            /// 左欄上半部的動作列。外觀和設定分類一樣（同一份清單），
+            /// 但不參與分類的選中狀態 —— 它們是「做一件事」，不是「看一組設定」。
+            /// </summary>
+            private void AddActionRow(string label, Action onClick, bool isDanger = false)
+            {
+                int y = ContentTop + _mobileActionIndex * (MobileCategoryHeight + MobileCategoryGap);
+                _mobileActionIndex++;
+
+                var button = new MenuTabButtonControl
+                {
+                    Text = label,
+                    IsAction = true,
+                    IsDanger = isDanger,
+                    X = MobilePadding,
+                    Y = y,
+                    ControlSize = new Point(MobileCategoryWidth, MobileCategoryHeight),
+                    ViewSize = new Point(MobileCategoryWidth, MobileCategoryHeight),
+                    AutoViewSize = false,
+                    FontSize = 14f,
+                    TextColor = ModernHudTheme.TextGray
+                };
+                button.Click += (s, e) => onClick();
+                Controls.Add(button);
+            }
+
             private void AddCategoryButton(string label, Action onClick, int startY,
                 ref int currentX, int width, int height, int spacing, int perRow, ref int index)
             {
@@ -1622,7 +1787,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 {
                     // 左側一整欄，由上而下。橫排的窄條在觸控上很難按準。
                     x = MobilePadding;
-                    y = ContentTop + index * (MobileCategoryHeight + MobileCategoryGap);
+                    y = MobileCategoryListTop + index * (MobileCategoryHeight + MobileCategoryGap);
                     width = MobileCategoryWidth;
                     height = MobileCategoryHeight;
                 }
