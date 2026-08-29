@@ -841,6 +841,16 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             {
                 var adapter = GraphicsManager.Instance?.GraphicsDevice?.Adapter ?? GraphicsAdapter.DefaultAdapter;
                 GraphicsQualityManager.ApplyPreset(preset, adapter, _logger);
+
+                // 畫質預設會直接寫 RENDER_SCALE（Low 0.75 / Medium 0.9 / High 1.0）。
+                // 玩家若已經在 Render Scale 分頁明確選過值，那個選擇要蓋回來 ——
+                // 否則兩組設定互相打架：選單上還顯示著玩家選的倍率，實際已被改掉。
+                // 這與 MuGame 啟動時的順序一致（預設先套，玩家的個別設定後蓋）。
+                if (MuGame.AppSettings?.Graphics?.RenderScale is float userScale && userScale > 0.05f)
+                {
+                    Constants.RENDER_SCALE = MathHelper.Clamp(userScale, 0.3f, 3.0f);
+                }
+
                 MuGame.Instance?.ApplyGraphicsOptions();
                 GraphicsManager.Instance?.UpdateRenderScale();
                 onComplete?.Invoke();
@@ -1250,6 +1260,18 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 BuildCategory("Graphics", (ref int currentY) =>
                 {
                     AddOption("High Quality Textures", () => Constants.HIGH_QUALITY_TEXTURES, value => { Constants.HIGH_QUALITY_TEXTURES = value; MuGame.PersistRenderToggle("HIGH_QUALITY_TEXTURES", value); }, ref currentY, OptionRowHeight);
+
+                    // FXAA 先前沒有選單入口，只能靠鍵盤快捷鍵切換 —— 手機上等於無法使用。
+                    // 這個 shader 的頂點著色器原本缺少變換矩陣，開啟後畫面只剩左上角一小塊，
+                    // 修好後需要實機確認，因此保留為預設關閉、由玩家自行開啟。
+                    if (GraphicsManager.Instance?.FXAAEffect != null)
+                    {
+                        AddOption("FXAA (Anti-aliasing)", () => GraphicsManager.Instance.IsFXAAEnabled, value =>
+                        {
+                            GraphicsManager.Instance.IsFXAAEnabled = value;
+                            MuGame.PersistRenderToggle("FXAA", value);
+                        }, ref currentY, OptionRowHeight);
+                    }
                     AddOption("V-Sync", () => !Constants.DISABLE_VSYNC, value =>
                     {
                         _owner.SetVSync(value);

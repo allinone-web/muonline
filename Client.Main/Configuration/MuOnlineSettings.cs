@@ -92,7 +92,7 @@ namespace Client.Main.Configuration
         ///
         /// 桌面的 MIN_CAMERA_DISTANCE 是 500，但在 6.5 吋的橫向螢幕上放到最大仍嫌小。
         /// </summary>
-        public float CameraMinDistance { get; set; } = 350f;
+        public float CameraMinDistance { get; set; } = 450f;
 
         /// <summary>
         /// 手機的雙指縮放上限（越大視野越廣，但角色與怪物會小到失去意義）。
@@ -100,7 +100,7 @@ namespace Client.Main.Configuration
         /// 桌面允許到 1800，實測在手機上拉到那麼遠時建築與角色都太小，
         /// 畫面雖然寬廣卻不能玩，因此收窄。
         /// </summary>
-        public float CameraMaxDistance { get; set; } = 1100f;
+        public float CameraMaxDistance { get; set; } = 950f;
 
         /// <summary>
         /// 注視點沿世界 Z 抬高的比例（相對於當前鏡頭距離）。
@@ -110,6 +110,15 @@ namespace Client.Main.Configuration
         /// 空間很窄，這個偏移相當有感。0 表示維持原本對準腳底的行為。
         /// </summary>
         public float CameraTargetLift { get; set; } = 0.12f;
+
+        /// <summary>
+        /// 地面等貼圖的各向異性過濾倍數。
+        ///
+        /// MonoGame 內建的取樣器只有 4x，掠角地面會糊；16x 最銳利但在行動 GPU 上
+        /// 要多吃記憶體頻寬。8x 是實測上的折衷。想比較畫質與幀率就改這個值。
+        /// </summary>
+        public int MaxAnisotropy { get; set; } = 8;
+
 
 
         /// <summary>

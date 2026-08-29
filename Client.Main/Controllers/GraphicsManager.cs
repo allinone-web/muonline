@@ -181,33 +181,49 @@ namespace Client.Main.Controllers
         /// <summary>
         /// Gets the appropriate SamplerState based on quality settings.
         /// </summary>
-        // MonoGame 內建的 AnisotropicClamp/Wrap 只用 4x。地面以掠角觀看時 4x 仍然糊，
-        // 而 16x 在 A19 這級的 GPU 上幾乎不花額外時間 —— 實測沒有影響幀時間。
-        private static readonly SamplerState Anisotropic16Clamp = new SamplerState
-        {
-            Filter = TextureFilter.Anisotropic,
-            AddressU = TextureAddressMode.Clamp,
-            AddressV = TextureAddressMode.Clamp,
-            AddressW = TextureAddressMode.Clamp,
-            MaxAnisotropy = 16,
-            Name = nameof(Anisotropic16Clamp),
-        };
+        // MonoGame 內建的 AnisotropicClamp/Wrap 只用 4x，掠角地面仍然糊。
+        // 倍數在手機上由 Graphics.Mobile.MaxAnisotropy 控制（預設 8）——
+        // 16x 最銳利，但行動 GPU 是分塊架構，多出來的取樣要吃記憶體頻寬。
+        private static SamplerState _anisotropicClamp;
+        private static SamplerState _anisotropicWrap;
 
-        private static readonly SamplerState Anisotropic16Wrap = new SamplerState
+        private static int MaxAnisotropyLevel
         {
-            Filter = TextureFilter.Anisotropic,
-            AddressU = TextureAddressMode.Wrap,
-            AddressV = TextureAddressMode.Wrap,
-            AddressW = TextureAddressMode.Wrap,
-            MaxAnisotropy = 16,
-            Name = nameof(Anisotropic16Wrap),
-        };
+            get
+            {
+                if (OperatingSystem.IsIOS() || OperatingSystem.IsAndroid())
+                    return Math.Clamp(MuGame.AppSettings?.Graphics?.Mobile?.MaxAnisotropy ?? 8, 1, 16);
+                return 16;
+            }
+        }
+
+        private static SamplerState AnisotropicClampSampler
+            => _anisotropicClamp ??= new SamplerState
+            {
+                Filter = TextureFilter.Anisotropic,
+                AddressU = TextureAddressMode.Clamp,
+                AddressV = TextureAddressMode.Clamp,
+                AddressW = TextureAddressMode.Clamp,
+                MaxAnisotropy = MaxAnisotropyLevel,
+                Name = nameof(AnisotropicClampSampler),
+            };
+
+        private static SamplerState AnisotropicWrapSampler
+            => _anisotropicWrap ??= new SamplerState
+            {
+                Filter = TextureFilter.Anisotropic,
+                AddressU = TextureAddressMode.Wrap,
+                AddressV = TextureAddressMode.Wrap,
+                AddressW = TextureAddressMode.Wrap,
+                MaxAnisotropy = MaxAnisotropyLevel,
+                Name = nameof(AnisotropicWrapSampler),
+            };
 
         public static SamplerState GetQualitySamplerState()
         {
             if (Constants.HIGH_QUALITY_TEXTURES)
             {
-                return Anisotropic16Clamp;
+                return AnisotropicClampSampler;
             }
             return SamplerState.PointClamp;
         }
@@ -219,7 +235,7 @@ namespace Client.Main.Controllers
         {
             if (Constants.HIGH_QUALITY_TEXTURES)
             {
-                return Anisotropic16Clamp;
+                return AnisotropicClampSampler;
             }
             return SamplerState.LinearClamp;
         }
@@ -228,7 +244,7 @@ namespace Client.Main.Controllers
         {
             if (Constants.HIGH_QUALITY_TEXTURES)
             {
-                return Anisotropic16Wrap;
+                return AnisotropicWrapSampler;
             }
             return SamplerState.LinearWrap;
         }

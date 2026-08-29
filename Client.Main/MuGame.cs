@@ -2355,6 +2355,14 @@ namespace Client.Main
                     case nameof(Constants.SOUND_EFFECTS): Constants.SOUND_EFFECTS = value; break;
                     case nameof(Constants.ENABLE_LOW_QUALITY_SWITCH): Constants.ENABLE_LOW_QUALITY_SWITCH = value; break;
                     case nameof(Constants.ENABLE_LOW_QUALITY_IN_LOGIN_SCENE): Constants.ENABLE_LOW_QUALITY_IN_LOGIN_SCENE = value; break;
+
+                    // FXAA 的開關住在 GraphicsManager 而不是 Constants，所以不能用 nameof。
+                    // 少了這個 case，玩家在選單開啟後重開遊戲就會被打回關閉。
+                    case "FXAA":
+                        if (GraphicsManager.Instance != null)
+                            GraphicsManager.Instance.IsFXAAEnabled = value;
+                        break;
+
                     default: break;
                 }
             }
