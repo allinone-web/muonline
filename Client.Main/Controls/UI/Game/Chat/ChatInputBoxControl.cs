@@ -179,6 +179,10 @@ namespace Client.Main.Controls.UI
                 }
             }
 
+            // 手機完全不用這十顆貼圖鈕（見下方的 CreateButton 與 DrawMobileBar）
+            if (MobileUi.IsMobile)
+                yield break;
+
             foreach (var texture in s_typeButtonTextures)
             {
                 yield return texture;
@@ -344,6 +348,29 @@ namespace Client.Main.Controls.UI
 
         private SpriteControl CreateButton(int x, int y, string texturePath, string name)
         {
+            // 手機：建出來但不給貼圖路徑，也永遠不顯示。
+            //
+            // 這十顆是 27x27 的桌面貼圖鈕（四個頻道分頁 + 六個開關），在 iPhone 上
+            // 不到 15 pt。功能已經由輸入列自己畫的按鈕取代：頻道用一顆輪替鈕，
+            // 悄悄話／系統／紀錄是上方那三顆文字鈕，外框／大小／透明度在手機上
+            // 沒有意義（視窗不能拖也不能縮放）。
+            //
+            // 物件保留是因為 Show/Hide、UpdateVisualStates、事件繫結都還引用它們；
+            // 不載入貼圖就不會佔記憶體，也不會被畫出來。
+            if (MobileUi.IsMobile)
+            {
+                return new SpriteControl
+                {
+                    X = x,
+                    Y = y,
+                    ViewSize = new Point(1, 1),
+                    AutoViewSize = false,
+                    Interactive = false,
+                    Name = name,
+                    Visible = false
+                };
+            }
+
             return new SpriteControl
             {
                 X = x,
