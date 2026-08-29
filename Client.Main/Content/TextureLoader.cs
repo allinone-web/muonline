@@ -297,6 +297,111 @@ namespace Client.Main.Content
                 : path.Trim().Replace('\\', '/').ToLowerInvariant();
         }
 
+        /// <summary>
+        /// 是否要為這張貼圖產生 mipmap。
+        ///
+        /// 只在高畫質模式下產生 —— 低畫質模式本來就用 PointClamp，mipmap 沒有意義，
+        /// 徒然多耗三分之一記憶體。
+        ///
+        /// 限定 2 的冪次尺寸：OpenGL ES 對非 2 的冪次貼圖搭配 mipmap 的支援
+        /// 依實作而異，限制在安全範圍內。MU 的貼圖絕大多數本來就是 2 的冪次。
+        /// </summary>
+        private static bool ShouldGenerateMipmaps(int width, int height)
+        {
+            if (!Constants.HIGH_QUALITY_TEXTURES)
+                return false;
+
+            // 太小的貼圖產生 mipmap 沒有意義
+            if (width < 8 || height < 8)
+                return false;
+
+            return IsPowerOfTwo(width) && IsPowerOfTwo(height);
+        }
+
+        private static bool IsPowerOfTwo(int value)
+            => value > 0 && (value & (value - 1)) == 0;
+
+        /// <summary>
+        /// 以 2x2 盒式濾波逐層降採樣產生 mipmap。
+        ///
+        /// MonoGame 的 Texture2D 帶 mipMap 參數只會配置各層級的空間，
+        /// <b>不會自動產生內容</b> —— 必須逐層 SetData，否則遠處會取樣到未初始化的資料。
+        /// </summary>
+        private static void GenerateMipmaps(Texture2D texture, Color[] level0, int width, int height)
+        {
+            var current = new Color[width * height];
+            Array.Copy(level0, current, width * height);
+
+            int w = width, h = height, level = 1;
+
+            while (w > 1 || h > 1)
+            {
+                int nw = Math.Max(1, w / 2);
+                int nh = Math.Max(1, h / 2);
+                var next = new Color[nw * nh];
+
+                for (int y = 0; y < nh; y++)
+                {
+                    int sy0 = y * 2;
+                    int sy1 = Math.Min(sy0 + 1, h - 1);
+
+                    for (int x = 0; x < nw; x++)
+                    {
+                        int sx0 = x * 2;
+                        int sx1 = Math.Min(sx0 + 1, w - 1);
+
+                        var a = current[sy0 * w + sx0];
+                        var b = current[sy0 * w + sx1];
+                        var c = current[sy1 * w + sx0];
+                        var d = current[sy1 * w + sx1];
+
+                        // 在 8-bit 空間平均。嚴格來說該在線性空間做，
+                        // 但 MU 的貼圖沒有 sRGB 標記，維持與原本一致的處理。
+                        next[y * nw + x] = new Color(
+                            (a.R + b.R + c.R + d.R) / 4,
+                            (a.G + b.G + c.G + d.G) / 4,
+                            (a.B + b.B + c.B + d.B) / 4,
+                            (a.A + b.A + c.A + d.A) / 4);
+                    }
+                }
+
+                try
+                {
+                    texture.SetData(level, null, next, 0, next.Length);
+                }
+                catch
+                {
+                    // 某些格式或尺寸組合可能不接受該層級 —— 停止產生即可，
+                    // 已寫入的層級仍然有效
+                    break;
+                }
+
+                current = next;
+                w = nw;
+                h = nh;
+                level++;
+            }
+        }
+
+        /// <summary>
+        /// 從 RGBA 位元組陣列產生 mipmap（DXT 軟體解壓後的資料走這條）。
+        /// </summary>
+        private static void GenerateMipmapsFromBytes(Texture2D texture, byte[] rgba, int width, int height)
+        {
+            int pixelCount = width * height;
+            if (rgba is null || rgba.Length < pixelCount * 4)
+                return;
+
+            var level0 = new Color[pixelCount];
+            for (int i = 0; i < pixelCount; i++)
+            {
+                int o = i * 4;
+                level0[i] = new Color(rgba[o], rgba[o + 1], rgba[o + 2], rgba[o + 3]);
+            }
+
+            GenerateMipmaps(texture, level0, width, height);
+        }
+
         private static TextureScript ParseScript(string fileName)
         {
             if (fileName.Contains("mu_rgb_lights.jpg", StringComparison.OrdinalIgnoreCase))
@@ -369,8 +474,16 @@ namespace Client.Main.Content
                     if (CustomDecompressFunction != null && isCompressed)
                     {
                         var data = CustomDecompressFunction(textureInfo);
-                        texture = new Texture2D(_graphicsDevice, textureInfo.Width, textureInfo.Height, false, SurfaceFormat.Color);
+                        bool dxtMipmaps = ShouldGenerateMipmaps(textureInfo.Width, textureInfo.Height);
+                        texture = new Texture2D(_graphicsDevice, textureInfo.Width, textureInfo.Height,
+                                                dxtMipmaps, SurfaceFormat.Color);
                         texture.SetData(data);
+
+                        // iOS 的 .OZD 貼圖都走這條（GPU 不支援 DXT，改軟體解壓），
+                        // 因此這裡的 mipmap 對 iOS 的畫質影響最大。
+                        if (dxtMipmaps)
+                            GenerateMipmapsFromBytes(texture, data, textureInfo.Width, textureInfo.Height);
+
                         clientTexture.Texture = texture;
                         return texture;
                     }
@@ -381,7 +494,12 @@ namespace Client.Main.Content
                     }
                     else
                     {
-                        texture = new Texture2D(_graphicsDevice, textureInfo.Width, textureInfo.Height);
+                        // mipmap 讓遠處貼圖以預先降採樣的層級取樣，
+                        // 消除縮小時的閃爍與摩爾紋；也是各向異性濾波真正生效的前提
+                        // —— 只開濾波不開 mipmap，效果會大打折扣。
+                        bool useMipmaps = ShouldGenerateMipmaps(textureInfo.Width, textureInfo.Height);
+                        texture = new Texture2D(_graphicsDevice, textureInfo.Width, textureInfo.Height,
+                                                useMipmaps, SurfaceFormat.Color);
                         int pixelCount = texture.Width * texture.Height;
                         int components = textureInfo.Components;
 
@@ -421,6 +539,9 @@ namespace Client.Main.Content
                                 pixelData[i] = new Color(r, g, b, a);
                             }
                             texture.SetData(pixelData, 0, pixelCount);
+
+                            if (useMipmaps)
+                                GenerateMipmaps(texture, pixelData, textureInfo.Width, textureInfo.Height);
                         }
                         finally
                         {

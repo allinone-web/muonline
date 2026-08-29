@@ -382,7 +382,7 @@ namespace Client.Main.Controls.Terrain
             try
             {
                 _graphicsDevice.RasterizerState = RasterizerState.CullNone;
-                _graphicsDevice.SamplerStates[0] = SamplerState.LinearWrap;
+                _graphicsDevice.SamplerStates[0] = GraphicsManager.GetQualityLinearWrapSamplerState();
                 _graphicsDevice.BlendState = additive ? BlendState.Additive : BlendState.NonPremultiplied;
                 _graphicsDevice.DepthStencilState = additive
                     ? DepthStencilState.DepthRead
