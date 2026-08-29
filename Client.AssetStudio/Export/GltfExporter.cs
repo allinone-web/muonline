@@ -435,9 +435,7 @@ public static class GltfExporter
                 continue;
 
             // LockPositions 的動作最後一格是位移資料，不是姿勢 —— 與遊戲的 totalFrames 一致。
-            int keys = action.LockPositions ? action.NumAnimationKeys - 1 : action.NumAnimationKeys;
-            if (keys < 2)
-                continue;
+            int keys = Math.Max(action.LockPositions ? action.NumAnimationKeys - 1 : action.NumAnimationKeys, 1);
 
             // 時間 accessor 也是需要時才建，否則整個動作被壓掉時會留下沒人用的緩衝資料。
             int? timeAccessor = null;
@@ -497,8 +495,36 @@ public static class GltfExporter
                     ref timeAccessor, ref singleKeyTime, keys, secondsPerFrame);
             }
 
-            if (animation.Channels.Count > 0)
-                animations.Add(animation);
+            // **動作編號就是身分。** MonsterActionType.Stop1 是 0、Die 是 6；
+            // PlayerAction 那一套有 380 個編號。少匯出一個動作，後面全部的編號就位移一格 ——
+            // 在 Blender 裡看只是「少了一個 action」，但任何依編號查表的東西都會拿到錯的動作，
+            // 而且是靜默的。所以即使整個動作完全沒有變化，也要留一個空殼。
+            //
+            // glTF 規定 animation.channels 至少要有一項，所以補一條單影格的曲線。
+            if (animation.Channels.Count == 0 && boneNodeIndex.Length > 0)
+            {
+                var node = root.Nodes[boneNodeIndex[0]];
+
+                singleKeyTime ??= buffer.AddScalarFloat(root, [0f], withBounds: true);
+
+                var value = node.Translation is { Length: 3 } t
+                    ? new Vector3(t[0], t[1], t[2])
+                    : Vector3.Zero;
+
+                animation.Samplers.Add(new GltfAnimationSampler
+                {
+                    Input = singleKeyTime.Value,
+                    Output = buffer.AddVec3(root, [value], target: null, withBounds: false),
+                });
+
+                animation.Channels.Add(new GltfAnimationChannel
+                {
+                    Sampler = 0,
+                    Target = new GltfAnimationTarget { Node = boneNodeIndex[0], Path = "translation" },
+                });
+            }
+
+            animations.Add(animation);
         }
 
         return animations;

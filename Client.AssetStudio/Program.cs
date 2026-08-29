@@ -1,7 +1,8 @@
 // MU 資源瀏覽器 / 編輯器。
 //
 //   MuAssetStudio [--data <Data目錄>] [--size 1700x1000] [--open <名稱>]
-//                 [--panels skills,export] [--kind 道具] [--action N] [--pause]
+//                 [--panels skills,export,library] [--kind 道具] [--open-library <id>]
+//                 [--action N] [--pause]
 //                 [--seconds N] [--screenshot <path>]
 //
 //   MuAssetStudio --report                          目錄盤點（不開視窗）
@@ -16,6 +17,16 @@
 //   MuAssetStudio --tex-export <貼圖檔> [--out <png>]        OZJ/OZT/OZD/OZP → PNG
 //   MuAssetStudio --tex-import <png> --out <ozj|ozt> [--quality 92] [--no-backup]
 //                                                   PNG → OZJ/OZT（會先備份原檔）
+//   MuAssetStudio --textures-export <模型> [--out <資料夾>]   整套貼圖 → PNG
+//   MuAssetStudio --textures-import <模型> --from <資料夾>    改過的 PNG → 寫回遊戲資源
+//   MuAssetStudio --import <gltf|glb> [--scale N]    讀外部模型，印出相容性報告
+//   MuAssetStudio --roundtrip <名稱>                 匯出成 glTF 再讀回來，比對幾何
+//
+//   自有資產的資源庫（引擎中立：glTF + PNG + JSON 清單）
+//   MuAssetStudio --library-list [--library <資料夾>]
+//   MuAssetStudio --library-add <gltf|glb> [--name X] [--kind 怪物]
+//   MuAssetStudio --library-show <id>                 相容性報告 + 目前的動作對映
+//   MuAssetStudio --library-map <id> --action N [--clip <動作名稱>]
 //
 // 所有 CLI 模式都不需要圖形裝置，可以在沒有視窗的終端機工作階段裡跑。
 
@@ -97,6 +108,71 @@ if (parsed.TryGetValue("skeleton-diff", out var skeletonBase) && skeletonBase is
 if (parsed.ContainsKey("items"))
     return ItemReport.Print(session.Catalog, session.Items, parsed.GetValueOrDefault("items"));
 
+if (parsed.GetValueOrDefault("library") is string libraryRoot)
+    session.Library.Open(libraryRoot);
+
+if (parsed.ContainsKey("library-list"))
+    return LibraryCommands.List(session.Library);
+
+if (parsed.TryGetValue("library-add", out var libraryAdd) && libraryAdd is not null)
+{
+    return LibraryCommands.Add(session.Library, libraryAdd,
+                               parsed.GetValueOrDefault("name"), parsed.GetValueOrDefault("kind"));
+}
+
+if (parsed.TryGetValue("library-show", out var libraryShow) && libraryShow is not null)
+    return LibraryCommands.Show(session.Library, libraryShow);
+
+if (parsed.TryGetValue("library-map", out var libraryMap) && libraryMap is not null)
+{
+    if (!int.TryParse(parsed.GetValueOrDefault("action"), out int mappedAction))
+    {
+        Console.Error.WriteLine("--library-map <id> 需要 --action <編號> 與 --clip <動作名稱>");
+        return 2;
+    }
+
+    return LibraryCommands.Map(session.Library, libraryMap, mappedAction, parsed.GetValueOrDefault("clip"));
+}
+
+if (parsed.TryGetValue("textures-export", out var texturesModel) && texturesModel is not null)
+{
+    string output = parsed.GetValueOrDefault("out")
+        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                        "Documents", "mu-textures", texturesModel.Replace('/', '_'));
+
+    return TextureCommands.ExportAll(session.Catalog, texturesModel, output, dataPath);
+}
+
+if (parsed.TryGetValue("textures-import", out var texturesTarget) && texturesTarget is not null)
+{
+    string? from = parsed.GetValueOrDefault("from");
+
+    if (from is null)
+    {
+        Console.Error.WriteLine("--textures-import <模型> 需要 --from <資料夾>");
+        return 2;
+    }
+
+    int batchQuality = parsed.TryGetValue("quality", out var bq) && int.TryParse(bq, out int parsedBatchQuality)
+        ? Math.Clamp(parsedBatchQuality, 1, 100)
+        : 92;
+
+    return TextureCommands.ImportAll(session.Catalog, texturesTarget, from, dataPath,
+                                     batchQuality, backup: !parsed.ContainsKey("no-backup"));
+}
+
+if (parsed.TryGetValue("import", out var importPath) && importPath is not null)
+{
+    float? importScale = parsed.TryGetValue("scale", out var sc) && float.TryParse(sc, out float parsedScale)
+        ? parsedScale
+        : null;
+
+    return ImportCommands.Inspect(importPath, importScale);
+}
+
+if (parsed.TryGetValue("roundtrip", out var roundtripTarget) && roundtripTarget is not null)
+    return ImportCommands.RoundTrip(session.Catalog, roundtripTarget, parsed.GetValueOrDefault("out"), dataPath);
+
 if (parsed.ContainsKey("verify"))
     return VerifyCommand.Run(session.Catalog, parsed.GetValueOrDefault("verify"));
 
@@ -142,6 +218,7 @@ var options = new StudioOptions(
     InitialSelection: parsed.GetValueOrDefault("open"),
     InitialPanels: parsed.GetValueOrDefault("panels"),
     InitialKind: parsed.GetValueOrDefault("kind"),
+    InitialLibraryAsset: parsed.GetValueOrDefault("open-library"),
     InitialAction: parsed.TryGetValue("action", out var a) && int.TryParse(a, out int actionIndex) ? actionIndex : null,
     StartPaused: parsed.ContainsKey("pause"),
     ShowSkeleton: parsed.ContainsKey("skeleton"),

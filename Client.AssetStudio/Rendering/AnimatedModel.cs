@@ -63,13 +63,13 @@ public sealed class AnimatedModel : IDisposable
 
     public long FileSize { get; }
 
-    private AnimatedModel(GraphicsDevice device, BMD bmd, string path)
+    private AnimatedModel(GraphicsDevice device, BMD bmd, string path, string? textureDirectory = null)
     {
         _device = device;
         Bmd = bmd;
         Path = path;
-        Directory = System.IO.Path.GetDirectoryName(path) ?? string.Empty;
-        FileSize = new FileInfo(path).Length;
+        Directory = textureDirectory ?? System.IO.Path.GetDirectoryName(path) ?? string.Empty;
+        FileSize = File.Exists(path) ? new FileInfo(path).Length : 0L;
 
         _white = new Texture2D(device, 1, 1);
         _white.SetData([Color.White]);
@@ -142,6 +142,16 @@ public sealed class AnimatedModel : IDisposable
         var bmd = new BMDReader().Load(path).GetAwaiter().GetResult();
         return new AnimatedModel(device, bmd, path);
     }
+
+    /// <summary>
+    /// 用一份已經在記憶體裡的模型建檢視器狀態。給資源庫的外部資產用。
+    /// </summary>
+    /// <param name="textureDirectory">
+    /// 貼圖要去哪裡找。外部資產的貼圖是從 glTF 抽出來寫成 PNG 的，
+    /// 不在來源檔旁邊，所以要另外指定。
+    /// </param>
+    public static AnimatedModel FromBmd(GraphicsDevice device, BMD bmd, string path, string textureDirectory)
+        => new(device, bmd, path, textureDirectory);
 
     // ── 動畫取樣 ──────────────────────────────────────────────────
 

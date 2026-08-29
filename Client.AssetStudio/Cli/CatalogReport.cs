@@ -198,6 +198,9 @@ public static class CatalogReport
                                 + "（NPCObject.SetBodyPartsAsync）。");
             }
 
+            foreach (var part in entry.BodyParts)
+                Console.WriteLine($"  身體部位 {part}");
+
             foreach (var attachment in entry.Attachments)
                 Console.WriteLine($"  ＋ {attachment}");
 

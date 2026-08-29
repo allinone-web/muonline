@@ -1,3 +1,4 @@
+using Client.AssetStudio.Catalog;
 using Client.AssetStudio.Textures;
 
 namespace Client.AssetStudio.Cli;
@@ -35,6 +36,59 @@ public static class TextureCommands
             Console.Error.WriteLine($"匯出失敗：{ex.GetType().Name} {ex.Message}");
             return 1;
         }
+    }
+
+    /// <summary>把一個模型（含身體部位）用到的整套貼圖匯出成 PNG。</summary>
+    public static int ExportAll(EntityCatalog catalog, string target, string destination, string dataPath)
+    {
+        var entry = FindModel(catalog, target);
+        if (entry is null)
+            return 2;
+
+        var result = TextureBatch.Export(entry, dataPath, destination);
+
+        Console.WriteLine($"{entry.Name} → {destination}");
+        Console.WriteLine(result.Summary);
+
+        foreach (var message in result.Messages)
+            Console.WriteLine("  " + message);
+
+        return result.Failed == 0 ? 0 : 1;
+    }
+
+    /// <summary>把資料夾裡改過的 PNG 依主檔名寫回這個模型的貼圖。</summary>
+    public static int ImportAll(
+        EntityCatalog catalog, string target, string source, string dataPath, int quality, bool backup)
+    {
+        var entry = FindModel(catalog, target);
+        if (entry is null)
+            return 2;
+
+        var result = TextureBatch.Import(entry, dataPath, source, quality, backup);
+
+        Console.WriteLine($"{source} → {entry.Name}");
+        Console.WriteLine(result.Summary);
+
+        foreach (var message in result.Messages)
+            Console.WriteLine("  " + message);
+
+        return result.Failed == 0 ? 0 : 1;
+    }
+
+    private static EntityEntry? FindModel(EntityCatalog catalog, string target)
+    {
+        var entry = catalog.Entries.FirstOrDefault(e =>
+                        e.FullPath is not null
+                     && (e.ModelPath.Equals(target, StringComparison.OrdinalIgnoreCase)
+                      || e.Name.Equals(target, StringComparison.OrdinalIgnoreCase)
+                      || e.ClassName?.Equals(target, StringComparison.OrdinalIgnoreCase) == true))
+                 ?? catalog.Entries.FirstOrDefault(e =>
+                        e.FullPath is not null && e.Search.Contains(target, StringComparison.OrdinalIgnoreCase));
+
+        if (entry is null)
+            Console.Error.WriteLine($"找不到「{target}」");
+
+        return entry;
     }
 
     public static int Import(string source, string destination, int quality, bool backup)

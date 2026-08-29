@@ -32,6 +32,18 @@
     <PackageReference Include="ImGui.NET" Version="1.91.6.1" />
     <!-- 行為參數的真相在 OpenMU 的 PostgreSQL，不是 .bmd。 -->
     <PackageReference Include="Npgsql" Version="10.0.0" />
+
+    <!--
+      只用來**讀**外部的 glTF / GLB。
+      匯出方向維持自己寫的（Export/GltfExporter.cs）—— 那一份已經逐點驗證過，
+      而且編碼了 MU 專屬的決定（Z 軸向上的根節點、常數曲線壓縮），
+      換成通用函式庫只是把驗證過的東西換掉。
+      讀取方向相反：外部資產來自 Blender / Mixamo / 市集，會用到 GLB、
+      base64 內嵌緩衝、sparse accessor、interleaved byteStride、
+      正規化整數屬性、多組 UV…… 自己寫一個讀取器不會比較短，只會比較脆。
+      而一個會靜默讀錯的匯入器比沒有匯入器更糟。
+    -->
+    <PackageReference Include="SharpGLTF.Toolkit" Version="1.0.6" />
   </ItemGroup>
 
   <!--

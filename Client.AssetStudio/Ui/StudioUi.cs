@@ -63,6 +63,7 @@ public sealed partial class StudioUi
     /// <summary>次要面板預設關著。一開啟就把六個視窗全攤在畫面上，第一眼只會看到一團重疊的框。</summary>
     private bool _showSkills;
     private bool _showExport;
+    private bool _showLibrary;
 
     public void Draw()
     {
@@ -84,6 +85,9 @@ public sealed partial class StudioUi
         if (_showExport)
             DrawExportPanel();
 
+        if (_showLibrary)
+            DrawLibraryPanel();
+
         DrawStatusBar();
     }
 
@@ -96,6 +100,8 @@ public sealed partial class StudioUi
                 _showSkills = true;
             else if (panel.Equals("export", StringComparison.OrdinalIgnoreCase))
                 _showExport = true;
+            else if (panel.Equals("library", StringComparison.OrdinalIgnoreCase))
+                _showLibrary = true;
         }
     }
 
@@ -108,6 +114,7 @@ public sealed partial class StudioUi
         {
             ImGui.MenuItem("魔法（技能）", string.Empty, ref _showSkills);
             ImGui.MenuItem("匯出 glTF", string.Empty, ref _showExport);
+            ImGui.MenuItem("資源庫（自有資產）", string.Empty, ref _showLibrary);
             ImGui.EndMenu();
         }
 
@@ -148,6 +155,7 @@ public sealed partial class StudioUi
             "模型" => (origin.X + size.X - rightWidth, origin.Y, rightWidth, size.Y * 0.46f),
             "伺服器數值" => (origin.X + size.X - rightWidth, origin.Y + (size.Y * 0.46f), rightWidth, size.Y * 0.54f - statusHeight),
             "魔法" => (origin.X + leftWidth + 40f, origin.Y + 40f, 900f, 620f),
+            "資源庫" => (origin.X + leftWidth + 60f, origin.Y + 60f, 760f, 640f),
             _ => (origin.X + leftWidth + 80f, origin.Y + 80f, 620f, 460f),
         };
 

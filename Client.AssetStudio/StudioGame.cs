@@ -16,6 +16,7 @@ public sealed record StudioOptions(
     string? InitialSelection,
     string? InitialPanels,
     string? InitialKind,
+    string? InitialLibraryAsset,
     int? InitialAction,
     bool StartPaused,
     bool ShowSkeleton,
@@ -108,6 +109,9 @@ public sealed class StudioGame : Game
         if (_options.InitialKind is string initialKind && !_ui.SelectKind(initialKind))
             _session.Report($"沒有「{initialKind}」這個分類", failed: true);
 
+        if (_options.InitialLibraryAsset is string libraryAsset && !_ui.SelectLibraryAsset(libraryAsset))
+            _session.Report($"資源庫裡沒有「{libraryAsset}」", failed: true);
+
         _viewport.ShowSkeleton = _options.ShowSkeleton;
 
         if (_options.ConnectionString is string connection)
@@ -124,6 +128,7 @@ public sealed class StudioGame : Game
 
         _session.ApplyPendingServerData();
         ProcessLoadRequest();
+        ProcessLibraryRequest();
         AdvanceAnimation(gameTime);
     }
 
@@ -206,6 +211,56 @@ public sealed class StudioGame : Game
 
         int stopMale = (int)Client.Main.Models.PlayerAction.PlayerStopMale;
         return stopMale < model.ActionCount ? stopMale : 0;
+    }
+
+    /// <summary>
+    /// 把資源庫裡的自有資產掛上檢視器。
+    /// </summary>
+    /// <remarks>
+    /// 走的是與遊戲原本資產完全相同的渲染路徑 —— 這正是重點：
+    /// 「我的模型放進遊戲會長什麼樣」不該用另一個檢視器回答。
+    /// </remarks>
+    private void ProcessLibraryRequest()
+    {
+        if (_session.RequestedLibraryAsset is not { } request || _session.IsLoading)
+            return;
+
+        _session.RequestedLibraryAsset = null;
+        _session.IsLoading = true;
+
+        try
+        {
+            _session.Model?.Dispose();
+
+            var model = AnimatedModel.FromBmd(
+                GraphicsDevice, request.Model.Model,
+                System.IO.Path.Combine(request.TextureDirectory, request.Asset.Id),
+                request.TextureDirectory);
+
+            _session.Model = model;
+
+            // 自有資產不在目錄裡，所以清掉選取 —— 右邊的伺服器面板不該顯示上一隻怪的數值。
+            _session.Selected = null;
+            _session.CurrentAction = 0;
+            _session.AnimTime = 0d;
+
+            _viewport!.Camera.Frame(model.Bounds);
+
+            int missing = model.AllMeshes.Count(m => !m.Texture.Found);
+            _session.Report(
+                $"{request.Asset.Name}：{model.AllMeshes.Count()} 網格、{model.BoneCount} 骨骼、"
+              + $"{model.ActionCount} 動作"
+              + (missing > 0 ? $"　注意：{missing} 個網格缺貼圖" : string.Empty),
+                failed: missing > 0);
+        }
+        catch (Exception ex)
+        {
+            _session.Report($"{request.Asset.Name} 載入失敗：{ex.GetType().Name} {ex.Message}", failed: true);
+        }
+        finally
+        {
+            _session.IsLoading = false;
+        }
     }
 
     private void AdvanceAnimation(GameTime gameTime)

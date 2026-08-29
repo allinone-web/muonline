@@ -1,5 +1,6 @@
 using Client.AssetStudio.Catalog;
 using Client.AssetStudio.Rendering;
+using Client.AssetStudio.Project;
 using Client.AssetStudio.Server;
 
 namespace Client.AssetStudio;
@@ -28,6 +29,9 @@ public sealed class StudioSession
     /// <summary>人工標註：哪些素材要換、換了沒有。存在 ~/.mu-studio/asset-tags.json。</summary>
     public AssetTagStore Tags { get; } = new();
 
+    /// <summary>自有資產的資源庫（glTF + PNG + 清單，引擎中立）。</summary>
+    public AssetLibrary Library { get; } = new();
+
     public OpenMuRepository Server { get; } = new();
 
     /// <summary>資料庫裡的怪物，鍵是 <c>MonsterDefinition.Number</c>。連不上時是空的。</summary>
@@ -46,6 +50,11 @@ public sealed class StudioSession
 
     /// <summary>UI 想開的資源。載入完成後由 <see cref="StudioGame"/> 清成 null。</summary>
     public EntityEntry? Requested { get; set; }
+
+    /// <summary>
+    /// UI 想在檢視器裡看的自有資產。與 <see cref="Requested"/> 同樣的理由走主執行緒。
+    /// </summary>
+    public (Project.LibraryAsset Asset, Import.ImportedModel Model, string TextureDirectory)? RequestedLibraryAsset { get; set; }
 
     public AnimatedModel? Model { get; set; }
 
