@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ClientMainTargetFramework>net10.0</ClientMainTargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>MuAssetStudio</AssemblyName>
+    <RootNamespace>Client.AssetStudio</RootNamespace>
+    <RollForward>Major</RollForward>
+
+    <!-- 與 Client.MapEditor 相同：cimgui / SDL2 / OpenAL 的 macOS 原生庫都有 arm64。 -->
+    <RuntimeIdentifier>osx-arm64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <UseAppHost>true</UseAppHost>
+
+    <!-- ImGui 的頂點/索引緩衝要直接讀原生記憶體。 -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <UseSourceGenerators>true</UseSourceGenerators>
+    <DefineConstants>$(DefineConstants);MACOS</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Client.Data\Client.Data.csproj" />
+    <!-- Client.Main 只用來讀「怪物/NPC 編號 → 類別 → 模型路徑」這層知識（純反射，不啟動遊戲）。 -->
+    <ProjectReference Include="..\Client.Main\Client.Main.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MonoGame.Framework.DesktopGL" Version="3.8.5" />
+    <PackageReference Include="ImGui.NET" Version="1.91.6.1" />
+    <!-- 行為參數的真相在 OpenMU 的 PostgreSQL，不是 .bmd。 -->
+    <PackageReference Include="Npgsql" Version="10.0.0" />
+  </ItemGroup>
+
+  <!--
+    共用 Client.MapEditor 已經寫好的編輯器基礎設施，用連結而不是複製。
+    這幾個檔案只相依 MonoGame / ImGui / Client.Data，與地圖無關；
+    複製一份的話兩邊會各自漂移，那才是真正的重複開發。
+    （另一個工作階段正在改地圖編輯器，所以這裡只讀不改它的檔案。）
+  -->
+  <ItemGroup>
+    <Compile Include="..\Client.MapEditor\ImGuiRenderer.cs" Link="Shared\ImGuiRenderer.cs" />
+    <Compile Include="..\Client.MapEditor\EditorFonts.cs" Link="Shared\EditorFonts.cs" />
+    <Compile Include="..\Client.MapEditor\TextureDecoder.cs" Link="Shared\TextureDecoder.cs" />
+    <Compile Include="..\Client.MapEditor\TexturePreviewCache.cs" Link="Shared\TexturePreviewCache.cs" />
+    <Compile Include="..\Client.MapEditor\BmdThumbnailRenderer.cs" Link="Shared\BmdThumbnailRenderer.cs" />
+    <Compile Include="..\Client.MapEditor\ThumbnailCache.cs" Link="Shared\ThumbnailCache.cs" />
+  </ItemGroup>
+
+</Project>
