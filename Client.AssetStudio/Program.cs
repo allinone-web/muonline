@@ -9,6 +9,8 @@
 //   MuAssetStudio --verify [分類]                    解析每一個模型，回報解不開的與缺貼圖的
 //   MuAssetStudio --items [篩選]                     道具模型的語意分類（劍／斧／盔甲…）
 //   MuAssetStudio --skeleton-diff <主模型> --with <部位>  兩個模型的骨頭索引對不對得上
+//   MuAssetStudio --godot-export --world N --out <資料夾> [--max-types 64] [--no-objects]
+//                                                   整張地圖 → map.json + PNG + glTF（給 Godot 原型）
 //   MuAssetStudio --check <相對路徑|名稱>            某個模型的貼圖是否齊全
 //   MuAssetStudio --db [篩選] [--conn <連線字串>]     客戶端類別 vs OpenMU MonsterDefinition 對照
 //   MuAssetStudio --skills [篩選] [--no-db]           技能盤點：型別、動作、視覺效果、與伺服器對照
@@ -180,6 +182,42 @@ if (parsed.TryGetValue("roundtrip", out var roundtripTarget) && roundtripTarget 
 
     return ImportCommands.RoundTrip(session.Catalog, roundtripTarget, parsed.GetValueOrDefault("out"),
                                     dataPath, parsed.GetValueOrDefault("gltf"), roundtripScale);
+}
+
+if (parsed.ContainsKey("godot-export"))
+{
+    if (!int.TryParse(parsed.GetValueOrDefault("world"), out int godotWorld))
+    {
+        Console.Error.WriteLine("--godot-export 需要 --world N");
+        return 2;
+    }
+
+    string godotOut = parsed.GetValueOrDefault("out")
+        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                        "Documents", "mu-godot", $"World{godotWorld}");
+
+    var godotOptions = new Client.AssetStudio.Export.GodotSceneExporter.Options(
+        MaxObjectTypes: parsed.TryGetValue("max-types", out var mt) && int.TryParse(mt, out int maxTypes)
+            ? maxTypes
+            : 64,
+        ExportObjects: !parsed.ContainsKey("no-objects"));
+
+    var godotResult = Client.AssetStudio.Export.GodotSceneExporter.Export(
+        dataPath, godotWorld, godotOut, godotOptions);
+
+    Console.WriteLine();
+    Console.WriteLine($"World{godotResult.WorldIndex}（{godotOut}）");
+    Console.WriteLine($"地形貼圖 {godotResult.TileTextures}　"
+                    + $"物件型別 {godotResult.ObjectTypesExported} / {godotResult.ObjectTypes}　"
+                    + $"物件實例 {godotResult.ObjectInstances}");
+
+    foreach (var warning in godotResult.Warnings.Take(20))
+        Console.WriteLine("  " + warning);
+
+    if (godotResult.Warnings.Length > 20)
+        Console.WriteLine($"  …另有 {godotResult.Warnings.Length - 20} 項");
+
+    return 0;
 }
 
 if (parsed.ContainsKey("verify"))

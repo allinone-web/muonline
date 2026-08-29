@@ -14,8 +14,36 @@ namespace Client.AssetStudio.Textures;
 /// </remarks>
 public static class TextureResolver
 {
-    /// <summary>客戶端 reader 支援的副檔名，順序與 <c>TextureLoader</c> 一致。</summary>
-    public static readonly string[] Extensions = ["ozj", "ozt", "ozd", "ozp", "jpg", "tga", "png", "bmp"];
+    /// <summary>客戶端 reader 支援的副檔名。</summary>
+    public static readonly string[] Extensions = ["ozt", "ozd", "tga", "ozj", "ozp", "jpg", "png", "bmp"];
+
+    /// <summary>
+    /// 網格要求 <c>.tga</c> / <c>.ozt</c> / <c>.ozd</c> 時的搜尋順序 —— 帶 alpha 的格式優先。
+    /// </summary>
+    private static readonly string[] AlphaFirst = ["ozt", "ozd", "tga", "ozj", "ozp", "jpg", "png", "bmp"];
+
+    /// <summary>網格要求 <c>.jpg</c> / <c>.ozj</c>（或沒寫）時的搜尋順序。</summary>
+    private static readonly string[] OpaqueFirst = ["ozj", "ozp", "jpg", "ozt", "ozd", "tga", "png", "bmp"];
+
+    /// <summary>
+    /// 依網格寫的副檔名挑搜尋順序。
+    /// </summary>
+    /// <remarks>
+    /// <b>這一段不能簡化成一張固定的清單。</b>資源包裡同名檔案會兩種格式並存 ——
+    /// <c>Object3/stree.OZJ</c>（JPEG，不透明）與 <c>Object3/stree.OZT</c>（TGA，帶 alpha）——
+    /// 固定先找 <c>ozj</c> 的話，樹葉會拿到不透明那一張，整棵樹變成一塊灰板子。
+    ///
+    /// 客戶端的作法是<b>先看網格要求什麼副檔名</b>再選 reader
+    /// （<c>TextureLoader</c> 的 <c>.tga → OZTReader</c>、<c>.jpg → OZJReader</c>），
+    /// 然後把磁碟上的檔名換成該 reader 的副檔名。這裡照抄那個語意，
+    /// 再保留原本的全格式後援，讓資源包缺檔時仍然找得到東西。
+    /// </remarks>
+    private static string[] CandidateExtensions(string texturePath)
+        => Path.GetExtension(texturePath).ToLowerInvariant() switch
+        {
+            ".tga" or ".ozt" or ".ozd" => AlphaFirst,
+            _ => OpaqueFirst,
+        };
 
     private static readonly Dictionary<string, string[]> DirectoryCache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -32,7 +60,7 @@ public static class TextureResolver
 
         string baseName = Path.GetFileNameWithoutExtension(texturePath);
 
-        foreach (var extension in Extensions)
+        foreach (var extension in CandidateExtensions(texturePath))
         {
             string? hit = Find(modelDirectory, $"{baseName}.{extension}")
                        ?? Find(Path.Combine(modelDirectory, "texture"), $"{baseName}.{extension}");

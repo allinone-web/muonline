@@ -342,8 +342,9 @@ public sealed partial class StudioUi
         if (!mesh.Texture.Found)
         {
             ImGui.TextColored(Danger, $"找不到 {mesh.TexturePath}");
-            ImGui.TextColored(Muted, $"搜尋順序：{string.Join(" / ", TextureResolver.Extensions)}，"
-                                   + "模型所在目錄與其下的 texture/ 子目錄。");
+            ImGui.TextColored(Muted, $"可接受的格式：{string.Join(" / ", TextureResolver.Extensions)}"
+                                   + "（網格寫 .tga 時 ozt 優先，寫 .jpg 時 ozj 優先）；"
+                                   + "找的位置是模型所在目錄與其下的 texture/ 子目錄。");
         }
         else
         {

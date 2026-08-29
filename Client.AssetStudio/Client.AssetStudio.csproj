@@ -25,6 +25,11 @@
     <ProjectReference Include="..\Client.Data\Client.Data.csproj" />
     <!-- Client.Main 只用來讀「怪物/NPC 編號 → 類別 → 模型路徑」這層知識（純反射，不啟動遊戲）。 -->
     <ProjectReference Include="..\Client.Main\Client.Main.csproj" />
+    <!--
+      地圖編輯器把共用的資料層抽成了 MuAssets.Core（零引擎相依）。
+      下面連結進來的那幾個 UI 基礎設施檔案現在依賴它，所以這裡也要引用。
+    -->
+    <ProjectReference Include="..\MuAssets.Core\MuAssets.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
