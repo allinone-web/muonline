@@ -33,6 +33,9 @@ public static class TextureIO
     /// <summary>OZJReader 讀這個位置當「由上而下」旗標。</summary>
     private const int OzjTopDownFlagOffset = 17;
 
+    /// <summary>OZJReader.MAX_WIDTH / OZTReader.MAX_WIDTH，兩者都是 1024。</summary>
+    private const int MaxDimension = 1024;
+
     /// <summary>OZT 在 width 欄位之前的固定前置位元組（取自官方資源，兩個樣本一致）。</summary>
     private static readonly byte[] OztHeader =
         [0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
@@ -137,10 +140,19 @@ public static class TextureIO
             using var image = Image.Load<Rgba32>(imagePath);
             string extension = Path.GetExtension(destinationPath).ToLowerInvariant();
 
+            // OZJReader / OZTReader 都會對超過 1024 的尺寸丟 FileLoadException。
+            // 不先擋的話寫得出檔案、遊戲載入時才炸，而症狀是「那個網格不見了」。
+            if (extension is ".ozj" or ".ozt" && (image.Width > MaxDimension || image.Height > MaxDimension))
+            {
+                return new ImportResult(false,
+                    $"{extension} 的寬高不能超過 {MaxDimension}，目前是 {image.Width}×{image.Height}"
+                  + "（OZJReader / OZTReader 會拒絕載入）");
+            }
+
             switch (extension)
             {
                 case ".ozj":
-                    WriteOzj(image, destinationPath, jpegQuality);
+                    AtomicWrite(destinationPath, temp => WriteOzj(image, temp, jpegQuality));
                     return new ImportResult(true, $"已寫入 {Path.GetFileName(destinationPath)}（{image.Width}×{image.Height}，JPEG 品質 {jpegQuality}）");
 
                 case ".ozt":
@@ -150,11 +162,11 @@ public static class TextureIO
                         return new ImportResult(false, $"OZT 的寬高必須是 2 的冪，目前是 {image.Width}×{image.Height}");
                     }
 
-                    WriteOzt(image, destinationPath);
+                    AtomicWrite(destinationPath, temp => WriteOzt(image, temp));
                     return new ImportResult(true, $"已寫入 {Path.GetFileName(destinationPath)}（{image.Width}×{image.Height}，RGBA）");
 
                 case ".png":
-                    image.SaveAsPng(destinationPath);
+                    AtomicWrite(destinationPath, image.SaveAsPng);
                     return new ImportResult(true, $"已寫入 {Path.GetFileName(destinationPath)}");
 
                 case ".ozd":
@@ -172,6 +184,36 @@ public static class TextureIO
         finally
         {
             TextureResolver.InvalidateAll();
+        }
+    }
+
+    /// <summary>
+    /// 先寫到同一個資料夾的暫存檔，成功了才換上去。
+    /// </summary>
+    /// <remarks>
+    /// 這個方法會覆寫<b>遊戲資源本身</b>。直接 <c>File.Create</c> 會先把原檔截斷成 0，
+    /// 寫到一半失敗（磁碟滿、編碼丟例外）就留下一個壞掉的貼圖 ——
+    /// 而遊戲遇到讀不出來的貼圖是<b>安靜地不畫那個網格</b>，很難察覺。
+    /// 暫存檔放在同一個資料夾，所以 <c>File.Move</c> 是同一個磁碟區內的原子操作。
+    /// </remarks>
+    private static void AtomicWrite(string destinationPath, Action<string> write)
+    {
+        string directory = Path.GetDirectoryName(destinationPath) ?? ".";
+        Directory.CreateDirectory(directory);
+
+        string temporary = Path.Combine(directory, $".{Path.GetFileName(destinationPath)}.tmp");
+
+        try
+        {
+            write(temporary);
+            File.Move(temporary, destinationPath, overwrite: true);
+        }
+        catch
+        {
+            if (File.Exists(temporary))
+                File.Delete(temporary);
+
+            throw;
         }
     }
 

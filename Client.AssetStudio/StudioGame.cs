@@ -118,6 +118,7 @@ public sealed class StudioGame : Game
     {
         base.Update(gameTime);
 
+        _session.ApplyPendingServerData();
         ProcessLoadRequest();
         AdvanceAnimation(gameTime);
     }

@@ -22,6 +22,12 @@ public sealed class StudioSession
 
     public SkillCatalog Skills { get; } = new();
 
+    /// <summary>道具模型 → 道具定義。把 2715 個沒有語意的檔名變成可分類的清單。</summary>
+    public ItemCatalog Items { get; } = new();
+
+    /// <summary>人工標註：哪些素材要換、換了沒有。存在 ~/.mu-studio/asset-tags.json。</summary>
+    public AssetTagStore Tags { get; } = new();
+
     public OpenMuRepository Server { get; } = new();
 
     /// <summary>資料庫裡的怪物，鍵是 <c>MonsterDefinition.Number</c>。連不上時是空的。</summary>
@@ -76,6 +82,16 @@ public sealed class StudioSession
     /// <summary>資料庫正在讀取中。UI 用它把按鈕變成「連線中…」。</summary>
     public bool ServerBusy { get; private set; }
 
+    /// <summary>讀好但還沒套用的資料庫快照。由 <see cref="StudioGame"/> 在主執行緒套用。</summary>
+    private ServerSnapshot? _pendingServer;
+
+    private sealed record ServerSnapshot(
+        Dictionary<short, MonsterRow> Monsters,
+        Dictionary<short, SkillRow> Skills,
+        Dictionary<short, List<string>> Spawns,
+        string Message,
+        bool Failed);
+
     /// <summary>
     /// 連上 OpenMU 的資料庫並讀進怪物、技能與生怪區。
     /// </summary>
@@ -83,6 +99,13 @@ public sealed class StudioSession
     /// 啟動時會自動跑一次（可用 <c>--no-db</c> 關掉）。
     /// 這個工具的核心主張是「外觀與行為要並排看」，每次開啟都要手動按一次連線
     /// 等於把那件事變成選配。連不上不是錯誤 —— 伺服器沒開著也應該能瀏覽模型。
+    ///
+    /// <b>讀完不直接指派。</b>這個方法跑在執行緒集區，而 UI 正在同一時間走訪
+    /// <c>ServerMonsterDrafts</c> 與每一筆的 <c>Attributes</c>。
+    /// 在背景 <c>Clear()</c> 一個正在被列舉的字典會丟
+    /// <c>InvalidOperationException</c>，而且是在 ImGui 的繪製迴圈裡冒出來、
+    /// 堆疊看不出真正的原因。所以結果先放進 <see cref="_pendingServer"/>，
+    /// 由主執行緒的 <see cref="ApplyPendingServerData"/> 套用。
     /// </remarks>
     public async Task ReloadServerAsync()
     {
@@ -97,21 +120,36 @@ public sealed class StudioSession
             var skills = await Server.LoadSkillsAsync();
             var spawns = await Server.LoadSpawnSummaryAsync();
 
-            ServerMonsters = monsters;
-            ServerSkills = skills;
-            ServerSpawns = spawns;
-            ServerMonsterDrafts.Clear();
-
-            Report($"資料庫已讀取：怪物 {monsters.Count}、技能 {skills.Count}");
+            _pendingServer = new ServerSnapshot(
+                monsters, skills, spawns,
+                $"資料庫已讀取：怪物 {monsters.Count}、技能 {skills.Count}",
+                Failed: false);
         }
         catch (Exception ex)
         {
-            Report($"資料庫連線失敗：{ex.Message}", failed: true);
+            _pendingServer = new ServerSnapshot([], [], [], $"資料庫連線失敗：{ex.Message}", Failed: true);
         }
         finally
         {
             ServerBusy = false;
         }
+    }
+
+    /// <summary>由主執行緒每幀呼叫一次，把背景讀好的資料庫快照換上去。</summary>
+    public void ApplyPendingServerData()
+    {
+        if (Interlocked.Exchange(ref _pendingServer, null) is not { } snapshot)
+            return;
+
+        if (!snapshot.Failed)
+        {
+            ServerMonsters = snapshot.Monsters;
+            ServerSkills = snapshot.Skills;
+            ServerSpawns = snapshot.Spawns;
+            ServerMonsterDrafts.Clear();
+        }
+
+        Report(snapshot.Message, snapshot.Failed);
     }
 
     public void Report(string message, bool failed = false)

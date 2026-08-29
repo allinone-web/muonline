@@ -25,7 +25,7 @@ public sealed partial class StudioUi
     private readonly ImGuiRenderer _imgui;
     private readonly ModelViewport _viewport;
     private readonly StudioSession _session;
-    private readonly ThumbnailCache _thumbnails;
+    private readonly BoundedThumbnailCache _thumbnails;
     private TexturePreviewCache _previews;
 
     /// <summary>視埠上一幀量到的大小。render target 在 ImGui 佈局之前就要畫好，所以慢一幀。</summary>
@@ -39,7 +39,7 @@ public sealed partial class StudioUi
         _imgui = imgui;
         _viewport = viewport;
         _session = session;
-        _thumbnails = new ThumbnailCache(game.GraphicsDevice, imgui);
+        _thumbnails = new BoundedThumbnailCache(game.GraphicsDevice, imgui);
         _previews = new TexturePreviewCache(game.GraphicsDevice, imgui);
 
         _exportDirectory = Path.Combine(

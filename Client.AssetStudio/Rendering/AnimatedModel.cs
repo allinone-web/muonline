@@ -373,16 +373,11 @@ public sealed class AnimatedModel : IDisposable
         _textures.Clear();
         TextureResolver.Invalidate(Directory);
 
-        foreach (var mesh in Meshes)
-            mesh.RefreshTexture(Directory);
-
         foreach (var part in Parts)
-        {
             TextureResolver.Invalidate(part.Directory);
 
-            foreach (var mesh in part.Meshes)
-                mesh.RefreshTexture(part.Directory);
-        }
+        foreach (var mesh in AllMeshes)
+            mesh.RefreshTexture();
     }
 
     private BoundingBox ComputeBounds()

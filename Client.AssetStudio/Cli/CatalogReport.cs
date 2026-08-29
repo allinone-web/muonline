@@ -48,6 +48,22 @@ public static class CatalogReport
             Console.WriteLine($"{EntityKindNames.Of(kind),-10}{bound,7}{parts,7}{orphan,7}{missing,8}");
         }
 
+        foreach (var kind in EntityKindNames.All)
+        {
+            var groups = catalog.GroupsOf(kind);
+            if (groups.Length == 0)
+                continue;
+
+            Console.WriteLine();
+            Console.WriteLine($"── {EntityKindNames.Of(kind)} 的子分類 ──");
+
+            foreach (var group in groups)
+            {
+                int count = catalog.OfKind(kind).Count(e => e.Group == group);
+                Console.WriteLine($"  {group,-24}{count,6}");
+            }
+        }
+
         var brokenClasses = catalog.Entries.Where(e => e.ClassName is not null && e.ModelMissing).ToArray();
 
         if (brokenClasses.Length > 0)
@@ -203,7 +219,7 @@ public static class CatalogReport
         return missingTotal == 0 ? 0 : 1;
     }
 
-    public static int Export(EntityCatalog catalog, string target, string outputDirectory, float fps)
+    public static int Export(EntityCatalog catalog, string target, string outputDirectory, float fps, string dataPath)
     {
         var matches = Find(catalog, target).Where(e => e.FullPath is not null).ToArray();
 
@@ -222,7 +238,7 @@ public static class CatalogReport
             try
             {
                 var result = GltfExporter.Export(entry.FullPath!, directory,
-                    new GltfExporter.Options(fps, ExportTextures: true, entry.Kind));
+                    new GltfExporter.Options(fps, ExportTextures: true, entry.Kind, entry.BodyParts, dataPath));
 
                 Console.WriteLine($"✓ {result.GltfPath}");
                 Console.WriteLine($"   {result.Meshes} 網格、{result.Bones} 骨骼、"

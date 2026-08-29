@@ -23,6 +23,7 @@ public sealed class MeshView
     public MeshView(BMDTextureMesh mesh, int index, string modelDirectory)
     {
         Index = index;
+        Directory = modelDirectory;
         TexturePath = mesh.TexturePath ?? string.Empty;
         Texture = TextureResolver.Resolve(modelDirectory, TexturePath);
 
@@ -39,6 +40,15 @@ public sealed class MeshView
     }
 
     public int Index { get; }
+
+    /// <summary>
+    /// 這個網格的貼圖要在哪個資料夾找。
+    /// </summary>
+    /// <remarks>
+    /// 不能用主模型的資料夾：身體部位是另外載入的模型，貼圖跟著它自己走。
+    /// 匯入一張新貼圖時寫錯資料夾，遊戲仍然找不到它 —— 而且完全不會報錯。
+    /// </remarks>
+    public string Directory { get; }
 
     public string TexturePath { get; }
 
@@ -70,7 +80,7 @@ public sealed class MeshView
 
     public int VertexCount => _source.Length;
 
-    public void RefreshTexture(string modelDirectory) => Texture = TextureResolver.Resolve(modelDirectory, TexturePath);
+    public void RefreshTexture() => Texture = TextureResolver.Resolve(Directory, TexturePath);
 
     /// <summary>把綁定姿勢的頂點依骨骼矩陣重新算成這一幀的位置。</summary>
     public void Skin(Matrix[] bones)

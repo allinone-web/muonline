@@ -46,7 +46,8 @@
     <Compile Include="..\Client.MapEditor\TextureDecoder.cs" Link="Shared\TextureDecoder.cs" />
     <Compile Include="..\Client.MapEditor\TexturePreviewCache.cs" Link="Shared\TexturePreviewCache.cs" />
     <Compile Include="..\Client.MapEditor\BmdThumbnailRenderer.cs" Link="Shared\BmdThumbnailRenderer.cs" />
-    <Compile Include="..\Client.MapEditor\ThumbnailCache.cs" Link="Shared\ThumbnailCache.cs" />
+    <!-- ThumbnailCache 沒有連結：那一份沒有上限，對只看一張圖的地圖編輯器夠用，
+         但這裡要瀏覽 4739 個模型（見 Rendering/BoundedThumbnailCache.cs）。 -->
   </ItemGroup>
 
 </Project>

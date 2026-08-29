@@ -116,7 +116,8 @@ public sealed partial class StudioUi
             string directory = Path.Combine(_exportDirectory, SafeName(entry));
 
             var result = GltfExporter.Export(entry.FullPath!, directory,
-                new GltfExporter.Options(ResolveExportFps(), _exportTextures, entry.Kind));
+                new GltfExporter.Options(ResolveExportFps(), _exportTextures, entry.Kind,
+                                         entry.BodyParts, _session.DataPath));
 
             _session.Report(
                 $"已匯出 {Path.GetFileName(result.GltfPath)}："
@@ -152,7 +153,8 @@ public sealed partial class StudioUi
                 var result = GltfExporter.Export(
                     entry.FullPath!,
                     Path.Combine(_exportDirectory, SafeName(entry)),
-                    new GltfExporter.Options(ResolveExportFps(), _exportTextures, entry.Kind));
+                    new GltfExporter.Options(ResolveExportFps(), _exportTextures, entry.Kind,
+                                             entry.BodyParts, _session.DataPath));
 
                 ok++;
                 warnings.AddRange(result.Warnings.Select(w => $"{entry.Name}：{w}"));

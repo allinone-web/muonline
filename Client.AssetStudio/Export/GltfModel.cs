@@ -8,10 +8,12 @@ namespace Client.AssetStudio.Export;
 // 刻意用 POCO 而不是 Dictionary<string, object>：欄位名寫錯在 glTF 裡是「安靜地少一塊」，
 // 匯進 Blender 只會看到模型少了法線或動畫完全沒有，不會有任何錯誤訊息。
 
+// WriteIndented 是關的：一個 379 個動作的角色模型，縮排會讓 .gltf 從 4 MB 變成 9 MB，
+// 而這個檔案是給 Blender 讀的，不是給人讀的。要看內容的話 `python3 -m json.tool` 一行就排好。
 [JsonSourceGenerationOptions(
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
-    WriteIndented = true)]
+    WriteIndented = false)]
 [JsonSerializable(typeof(GltfRoot))]
 internal sealed partial class GltfJsonContext : JsonSerializerContext;
 

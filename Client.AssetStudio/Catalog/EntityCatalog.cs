@@ -60,10 +60,23 @@ public sealed record EntityEntry
     /// </remarks>
     public bool IsReferenced { get; init; } = true;
 
+    /// <summary>
+    /// 語意上的子分類（劍／頭盔／職業預設身體…）。空字串代表這一類沒有子分類。
+    /// </summary>
+    /// <remarks>
+    /// 目錄的第一層是「檔案在哪個資料夾」，那是結構不是語意。
+    /// 道具有 2715 個模型，檔名幾乎不帶語意；沒有這一層，
+    /// 「把所有的弓列出來」這種最基本的問題就只能靠猜檔名。
+    /// </remarks>
+    public string Group { get; init; } = string.Empty;
+
+    /// <summary>子分類之外的補充（道具名稱、部位變體、編號…）。</summary>
+    public string Detail { get; init; } = string.Empty;
+
     /// <summary>清單裡的唯一鍵，也是 ImGui 的 ID。</summary>
     public string Id => ClassName is null ? $"{Kind}:{ModelPath}" : $"{Kind}:{ClassName}";
 
-    public string Search => $"{Name} {ClassName} {ModelPath} {Number}";
+    public string Search => $"{Name} {ClassName} {ModelPath} {Number} {Group} {Detail}";
 }
 
 public sealed record CatalogStats(
@@ -99,12 +112,22 @@ public sealed class EntityCatalog
 
     public EntityEntry[] Entries { get; private set; } = [];
 
+    /// <summary>
+    /// 每個大分類底下的子分類，依數量排序。<b>在 Build 時算好。</b>
+    /// </summary>
+    /// <remarks>
+    /// UI 的工具列每幀都會問一次「這一類有哪些子分類」。
+    /// 每幀對 4739 筆做 GroupBy 會持續配置記憶體、給 GC 找事做，
+    /// 而這份資料在 <see cref="Build"/> 之後就不會變了。
+    /// </remarks>
+    private Dictionary<EntityKind, string[]> _groups = [];
+
     public CatalogStats Stats { get; private set; } = new(0, 0, 0, 0);
 
     /// <summary>掃描過程中的問題，UI 會顯示出來（例如 Client.Main 有型別載入不了）。</summary>
     public List<string> Warnings { get; } = [];
 
-    public void Build(string dataPath)
+    public void Build(string dataPath, ItemCatalog? items = null)
     {
         Warnings.Clear();
 
@@ -201,17 +224,84 @@ public sealed class EntityCatalog
             }
         }
 
+        // 語意分類。放在最後統一做，因為它與「這一筆是從類別來的還是從檔案來的」無關。
+        entries = entries.Select(e => Classify(e, items)).ToList();
+
         Entries = entries
             .OrderBy(e => e.Kind)
+            .ThenBy(e => e.Group, StringComparer.Ordinal)
             .ThenBy(e => e.ClassName is null)          // 有類別的排前面
             .ThenBy(e => e.Number < 0 ? int.MaxValue : e.Number)
             .ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
+        _groups = Entries
+            .Where(e => e.Group.Length > 0)
+            .GroupBy(e => e.Kind)
+            .ToDictionary(
+                g => g.Key,
+                g => g.GroupBy(e => e.Group)
+                      .OrderByDescending(x => x.Count())
+                      .Select(x => x.Key)
+                      .ToArray());
+
         Stats = new CatalogStats(classBound, orphans, missing, unresolvedClasses);
     }
 
     public EntityEntry[] OfKind(EntityKind kind) => Entries.Where(e => e.Kind == kind).ToArray();
+
+    /// <summary>某一類底下實際出現過的子分類，依數量排序。</summary>
+    public string[] GroupsOf(EntityKind kind) => _groups.GetValueOrDefault(kind, []);
+
+    /// <summary>
+    /// 補上語意分類。
+    /// </summary>
+    /// <remarks>
+    /// 三類各有各的真相來源，不能用同一套規則：
+    /// <list type="bullet">
+    /// <item><b>道具</b> —— <c>item.bmd</c>（模型路徑 → 群組 + 名稱）。</item>
+    /// <item><b>角色</b> —— 檔名規則，因為根本沒有資料檔描述那個資料夾。</item>
+    /// <item><b>怪物 / NPC</b> —— 有沒有伺服器編號就是最有用的分類，
+    /// 那決定了它能不能真的出現在遊戲裡。</item>
+    /// </list>
+    /// </remarks>
+    private static EntityEntry Classify(EntityEntry entry, ItemCatalog? items)
+    {
+        switch (entry.Kind)
+        {
+            case EntityKind.Item when items is not null:
+            {
+                string? group = items.GroupOf(entry.ModelPath);
+                string? name = items.NameOf(entry.ModelPath);
+
+                return entry with
+                {
+                    Group = group ?? "未對應",
+                    Detail = name ?? string.Empty,
+                    // 道具名稱比檔名有用得多，但檔名要留著才搜尋得到。
+                    Name = name is null ? entry.Name : $"{name}（{entry.Name}）",
+                };
+            }
+
+            case EntityKind.Player:
+            {
+                var classification = PlayerPartClassifier.Classify(entry.ModelPath);
+                return entry with { Group = classification.Group, Detail = classification.Detail };
+            }
+
+            case EntityKind.Monster or EntityKind.Npc:
+            {
+                string group = entry.ClassName is null
+                    ? (entry.IsReferenced ? "零件（被其他類別引用）" : "沒有類別")
+                    : entry.Number >= 0 ? "有伺服器編號" : "有類別、無伺服器編號";
+
+                return entry with { Group = group };
+            }
+
+            default:
+                return entry;
+        }
+    }
 
     /// <summary>哪些類別用到這個模型檔。孤兒模型的判斷與「誰在用」是同一份資料。</summary>
     public string[] UsersOf(string modelPath) => Entries

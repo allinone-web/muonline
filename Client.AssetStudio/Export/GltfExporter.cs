@@ -43,10 +43,16 @@ public static class GltfExporter
     /// <summary>遊戲未經調整時的動畫速率：<c>PlaySpeed(1) × AnimationSpeed(4)</c>。</summary>
     public const float DefaultFramesPerSecond = AnimatedModelDefaults.AnimationSpeed;
 
+    /// <param name="BodyParts">
+    /// 共用主模型骨架的身體部位（<c>NPCObject.SetBodyPartsAsync</c> 組出來的那幾個）。
+    /// 相對於 <c>Data/</c> 的路徑。
+    /// </param>
     public sealed record Options(
         float FramesPerSecond = DefaultFramesPerSecond,
         bool ExportTextures = true,
-        EntityKind Kind = EntityKind.Monster);
+        EntityKind Kind = EntityKind.Monster,
+        IReadOnlyList<string>? BodyParts = null,
+        string? DataPath = null);
 
     public sealed record Result(string GltfPath, int Meshes, int Bones, int Animations, int Textures, string[] Warnings);
 
@@ -92,12 +98,9 @@ public static class GltfExporter
 
             var node = new GltfNode { Name = BoneName(bone, i) };
 
-            if (bone is not null && bone != BMDTextureBone.Dummy
-                && bone.Matrixes is { Length: > 0 }
-                && bone.Matrixes[0].Position is { Length: > 0 }
-                && bone.Matrixes[0].Quaternion is { Length: > 0 })
+            if (HasPose(bone))
             {
-                var position = bone.Matrixes[0].Position[0];
+                var position = bone!.Matrixes[0].Position[0];
                 var rotation = bone.Matrixes[0].Quaternion[0];
 
                 node.Translation = [position.X, position.Y, position.Z];
@@ -111,7 +114,14 @@ public static class GltfExporter
         for (int i = 0; i < bones.Length; i++)
         {
             var bone = bones[i];
-            short parent = bone is null || bone == BMDTextureBone.Dummy ? (short)-1 : bone.Parent;
+
+            // 沒有姿勢資料的骨頭（Dummy，或關鍵影格是空的）在遊戲裡是
+            // **絕對的**單位矩陣（GenerateBoneMatrix 直接 worldTransform = Identity），
+            // 不是「相對父骨的單位矩陣」。glTF 的節點變換一律是相對父節點的，
+            // 所以要把它們掛到座標系根節點底下 —— 那個節點的世界變換
+            // 正好就是 MU 空間的單位矩陣。
+            // 掛在原本的父骨底下會讓它繼承父骨的姿勢，子骨跟著整串偏掉。
+            short parent = HasPose(bone) ? bone!.Parent : (short)-1;
 
             if (parent >= 0 && parent < bones.Length)
             {
@@ -149,6 +159,50 @@ public static class GltfExporter
             mesh.Primitives.Add(primitive);
         }
 
+        // 身體部位。NPC 與角色的主模型常常一個網格都沒有（Man01.bmd 有 43 骨、0 網格），
+        // 不把部位合進來的話匯出的就是一副空骨架 —— 檔案存在、Blender 打得開、但什麼都看不到。
+        // 部位共用主模型的骨架（遊戲端的 LinkParentAnimation），所以直接併成同一個 mesh 的
+        // 額外 primitive，skin 不用動。
+        foreach (var partPath in options.BodyParts ?? [])
+        {
+            string full = Path.Combine(options.DataPath ?? string.Empty, partPath);
+
+            if (!File.Exists(full))
+                continue;
+
+            BMD part;
+            try
+            {
+                part = new BMDReader().Load(full).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"身體部位讀取失敗 {partPath}：{ex.Message}");
+                continue;
+            }
+
+            string partDirectory = Path.GetDirectoryName(full) ?? modelDirectory;
+            var partBindPose = BuildBindPose(part);
+
+            foreach (var (source, meshIndex) in (part.Meshes ?? []).Select((m, i) => (m, i)))
+            {
+                // 骨骼矩陣用主模型的，但法線換算要用部位自己的綁定姿勢
+                // （部位的骨頭數可以少於主模型，見 --skeleton-diff）。
+                var primitive = BuildPrimitive(source, partBindPose, bones.Length, buffer, root, warnings, meshIndex);
+                if (primitive is null)
+                    continue;
+
+                if (options.ExportTextures && !string.IsNullOrWhiteSpace(source.TexturePath))
+                {
+                    primitive.Material = ResolveMaterial(
+                        source.TexturePath, partDirectory, outputDirectory,
+                        root, materialIndex, warnings, ref exportedTextures);
+                }
+
+                mesh.Primitives.Add(primitive);
+            }
+        }
+
         if (mesh.Primitives.Count == 0)
             warnings.Add("這個模型沒有任何可匯出的網格");
 
@@ -165,7 +219,10 @@ public static class GltfExporter
             {
                 Name = baseName + "_Skin",
                 Joints = boneNodeIndex.ToList(),
-                Skeleton = boneNodeIndex.Length > 0 ? boneNodeIndex[0] : null,
+
+                // 座標系根節點才是所有關節的共同祖先。指向 joints[0] 是錯的：
+                // 沒有姿勢的骨頭會直接掛在根底下，不在 joints[0] 的子樹裡。
+                Skeleton = 0,
             }];
         }
 
@@ -340,6 +397,20 @@ public static class GltfExporter
 
     // ── 動畫 ─────────────────────────────────────────────────────
 
+    /// <summary>
+    /// 把每個動作轉成一個 glTF animation。
+    /// </summary>
+    /// <remarks>
+    /// <b>常數曲線會被壓掉。</b>角色模型有 379 個動作、60 根骨頭，全展開是
+    /// 45,000 個 sampler，光 JSON 就 17 MB —— 而一個 694 面的角色沒有必要那麼大。
+    /// 實際上絕大多數骨頭在絕大多數動作裡完全不動：
+    /// <list type="bullet">
+    /// <item>整條曲線都等於節點自己的預設姿勢 → <b>整個 channel 省略</b>
+    /// （glTF 沒有 channel 時就用節點的 TRS，語意完全相同）。</item>
+    /// <item>整條曲線是常數但不等於預設姿勢 → 只寫<b>一個關鍵影格</b>。</item>
+    /// </list>
+    /// 兩者都是無損的：取樣任何時間點得到的姿勢與展開版一模一樣。
+    /// </remarks>
     private static List<GltfAnimation> BuildAnimations(
         BMD bmd,
         int[] boneNodeIndex,
@@ -354,6 +425,9 @@ public static class GltfExporter
 
         float secondsPerFrame = 1f / MathF.Max(framesPerSecond, 0.01f);
 
+        // 所有「只有一格」的曲線共用同一個時間 accessor。
+        int? singleKeyTime = null;
+
         for (int actionIndex = 0; actionIndex < actions.Length; actionIndex++)
         {
             var action = actions[actionIndex];
@@ -365,11 +439,8 @@ public static class GltfExporter
             if (keys < 2)
                 continue;
 
-            var times = new List<float>(keys);
-            for (int k = 0; k < keys; k++)
-                times.Add(k * secondsPerFrame);
-
-            int timeAccessor = buffer.AddScalarFloat(root, times, withBounds: true);
+            // 時間 accessor 也是需要時才建，否則整個動作被壓掉時會留下沒人用的緩衝資料。
+            int? timeAccessor = null;
 
             var animation = new GltfAnimation { Name = ActionNames.Of(kind, actionIndex) };
 
@@ -407,31 +478,23 @@ public static class GltfExporter
                     rotations.Add(new Vector4(q.X, q.Y, q.Z, q.W));
                 }
 
-                int translationSampler = animation.Samplers.Count;
-                animation.Samplers.Add(new GltfAnimationSampler
-                {
-                    Input = timeAccessor,
-                    Output = buffer.AddVec3(root, translations, target: null, withBounds: false),
-                });
+                var node = root.Nodes[boneNodeIndex[boneIndex]];
 
-                animation.Channels.Add(new GltfAnimationChannel
-                {
-                    Sampler = translationSampler,
-                    Target = new GltfAnimationTarget { Node = boneNodeIndex[boneIndex], Path = "translation" },
-                });
+                AddChannel(
+                    animation, buffer, root, boneNodeIndex[boneIndex], "translation",
+                    IsConstant(translations, (a, b) => (a - b).LengthSquared() <= Epsilon),
+                    Matches(node.Translation, translations[0]),
+                    values => buffer.AddVec3(root, values, target: null, withBounds: false),
+                    translations,
+                    ref timeAccessor, ref singleKeyTime, keys, secondsPerFrame);
 
-                int rotationSampler = animation.Samplers.Count;
-                animation.Samplers.Add(new GltfAnimationSampler
-                {
-                    Input = timeAccessor,
-                    Output = buffer.AddVec4(root, rotations),
-                });
-
-                animation.Channels.Add(new GltfAnimationChannel
-                {
-                    Sampler = rotationSampler,
-                    Target = new GltfAnimationTarget { Node = boneNodeIndex[boneIndex], Path = "rotation" },
-                });
+                AddChannel(
+                    animation, buffer, root, boneNodeIndex[boneIndex], "rotation",
+                    IsConstant(rotations, (a, b) => (a - b).LengthSquared() <= Epsilon),
+                    Matches(node.Rotation, rotations[0]),
+                    values => buffer.AddVec4(root, values),
+                    rotations,
+                    ref timeAccessor, ref singleKeyTime, keys, secondsPerFrame);
             }
 
             if (animation.Channels.Count > 0)
@@ -439,6 +502,91 @@ public static class GltfExporter
         }
 
         return animations;
+    }
+
+    /// <summary>浮點比較的容忍度。四元數與位置都在同一個量級上，用同一個值。</summary>
+    private const float Epsilon = 1e-8f;
+
+    private static bool IsConstant<T>(List<T> values, Func<T, T, bool> equal)
+    {
+        for (int i = 1; i < values.Count; i++)
+        {
+            if (!equal(values[0], values[i]))
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>這個常數值與節點的預設 TRS 一樣嗎？一樣的話整個 channel 都可以省略。</summary>
+    private static bool Matches(float[]? nodeValue, Vector3 value)
+        => nodeValue is null
+            ? value.LengthSquared() <= Epsilon
+            : nodeValue.Length == 3
+              && MathF.Abs(nodeValue[0] - value.X) <= 1e-4f
+              && MathF.Abs(nodeValue[1] - value.Y) <= 1e-4f
+              && MathF.Abs(nodeValue[2] - value.Z) <= 1e-4f;
+
+    private static bool Matches(float[]? nodeValue, Vector4 value)
+        => nodeValue is null
+            ? MathF.Abs(value.X) <= 1e-4f && MathF.Abs(value.Y) <= 1e-4f
+              && MathF.Abs(value.Z) <= 1e-4f && MathF.Abs(value.W - 1f) <= 1e-4f
+            : nodeValue.Length == 4
+              && MathF.Abs(nodeValue[0] - value.X) <= 1e-4f
+              && MathF.Abs(nodeValue[1] - value.Y) <= 1e-4f
+              && MathF.Abs(nodeValue[2] - value.Z) <= 1e-4f
+              && MathF.Abs(nodeValue[3] - value.W) <= 1e-4f;
+
+    private static void AddChannel<T>(
+        GltfAnimation animation,
+        BufferBuilder buffer,
+        GltfRoot root,
+        int node,
+        string path,
+        bool constant,
+        bool matchesDefault,
+        Func<List<T>, int> write,
+        List<T> values,
+        ref int? timeAccessor,
+        ref int? singleKeyTime,
+        int keys,
+        float secondsPerFrame)
+    {
+        // 常數而且等於節點預設 → 這個 channel 什麼都沒說，直接不寫。
+        if (constant && matchesDefault)
+            return;
+
+        int input;
+        List<T> output;
+
+        if (constant)
+        {
+            singleKeyTime ??= buffer.AddScalarFloat(root, [0f], withBounds: true);
+            input = singleKeyTime.Value;
+            output = [values[0]];
+        }
+        else
+        {
+            if (timeAccessor is null)
+            {
+                var times = new List<float>(keys);
+                for (int k = 0; k < keys; k++)
+                    times.Add(k * secondsPerFrame);
+
+                timeAccessor = buffer.AddScalarFloat(root, times, withBounds: true);
+            }
+
+            input = timeAccessor.Value;
+            output = values;
+        }
+
+        int sampler = animation.Samplers.Count;
+        animation.Samplers.Add(new GltfAnimationSampler { Input = input, Output = write(output) });
+        animation.Channels.Add(new GltfAnimationChannel
+        {
+            Sampler = sampler,
+            Target = new GltfAnimationTarget { Node = node, Path = path },
+        });
     }
 
     // ── 材質 ─────────────────────────────────────────────────────
@@ -503,6 +651,14 @@ public static class GltfExporter
         cache[texturePath] = index;
         return index;
     }
+
+    /// <summary>這根骨頭有沒有可用的姿勢資料（不是 Dummy，而且第一個動作有關鍵影格）。</summary>
+    private static bool HasPose(BMDTextureBone? bone)
+        => bone is not null
+        && bone != BMDTextureBone.Dummy
+        && bone.Matrixes is { Length: > 0 }
+        && bone.Matrixes[0].Position is { Length: > 0 }
+        && bone.Matrixes[0].Quaternion is { Length: > 0 };
 
     private static string BoneName(BMDTextureBone? bone, int index)
     {

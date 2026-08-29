@@ -6,6 +6,7 @@
 //
 //   MuAssetStudio --report                          目錄盤點（不開視窗）
 //   MuAssetStudio --verify [分類]                    解析每一個模型，回報解不開的與缺貼圖的
+//   MuAssetStudio --items [篩選]                     道具模型的語意分類（劍／斧／盔甲…）
 //   MuAssetStudio --skeleton-diff <主模型> --with <部位>  兩個模型的骨頭索引對不對得上
 //   MuAssetStudio --check <相對路徑|名稱>            某個模型的貼圖是否齊全
 //   MuAssetStudio --db [篩選] [--conn <連線字串>]     客戶端類別 vs OpenMU MonsterDefinition 對照
@@ -39,7 +40,9 @@ session.DataPath = dataPath;
 Console.WriteLine($"Data 目錄：{dataPath}");
 Console.WriteLine("掃描資源目錄…");
 
-session.Catalog.Build(dataPath);
+// 道具分類要在目錄之前建好：目錄會用它把 2715 個沒有語意的檔名換成道具名稱。
+session.Items.Build();
+session.Catalog.Build(dataPath, session.Items);
 
 // 刻意用 GetAwaiter().GetResult() 而不是 await：
 // 頂層陳述式裡只要出現一個 await，編譯器就會產生 async Main，
@@ -91,6 +94,9 @@ if (parsed.TryGetValue("skeleton-diff", out var skeletonBase) && skeletonBase is
     return CatalogReport.CompareSkeletons(session.Catalog, skeletonBase, part);
 }
 
+if (parsed.ContainsKey("items"))
+    return ItemReport.Print(session.Catalog, session.Items, parsed.GetValueOrDefault("items"));
+
 if (parsed.ContainsKey("verify"))
     return VerifyCommand.Run(session.Catalog, parsed.GetValueOrDefault("verify"));
 
@@ -121,7 +127,7 @@ if (parsed.TryGetValue("export", out var target) && target is not null)
         ? parsedFps
         : Client.AssetStudio.Export.GltfExporter.DefaultFramesPerSecond;
 
-    return CatalogReport.Export(session.Catalog, target, output, fps);
+    return CatalogReport.Export(session.Catalog, target, output, fps, dataPath);
 }
 
 // ── 視窗模式 ─────────────────────────────────────────────────

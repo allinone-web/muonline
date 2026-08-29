@@ -1,3 +1,4 @@
+using Client.AssetStudio.Catalog;
 using Client.AssetStudio.Textures;
 using Client.MapEditor;
 using ImGuiNET;
@@ -10,6 +11,8 @@ public sealed partial class StudioUi
     private string _importSourcePath = string.Empty;
     private int _importTargetMesh = -1;
     private int _jpegQuality = 92;
+    private string _noteDraft = string.Empty;
+    private string _noteDraftFor = string.Empty;
 
     /// <summary>模型資訊：網格、骨骼、動作、貼圖，以及貼圖的匯出與匯入。</summary>
     private void DrawModelPanel()
@@ -36,6 +39,15 @@ public sealed partial class StudioUi
             HelpMarker("伺服器編號 = [NpcInfo] 的 typeId = OpenMU 的 MonsterDefinition.Number。\n"
                      + "模型檔名裡的數字（Monster33.bmd）是另一套編號，兩者沒有關係。");
         }
+
+        if (entry.Group.Length > 0)
+        {
+            ImGui.TextColored(Muted, entry.Detail.Length > 0
+                ? $"分類 {entry.Group}　{entry.Detail}"
+                : $"分類 {entry.Group}");
+        }
+
+        DrawTagEditor(entry);
 
         if (model is null)
         {
@@ -66,10 +78,121 @@ public sealed partial class StudioUi
                 ImGui.EndTabItem();
             }
 
+            if (entry.Kind == EntityKind.Item && _session.Items.For(entry.ModelPath).Count > 0
+                && ImGui.BeginTabItem("道具定義"))
+            {
+                DrawItemBindings(entry);
+                ImGui.EndTabItem();
+            }
+
             ImGui.EndTabBar();
         }
 
         ImGui.End();
+    }
+
+    /// <summary>
+    /// 標註這個資源要不要換。
+    /// </summary>
+    /// <remarks>
+    /// 備註欄用「草稿 + 失焦才寫檔」：每敲一個字就寫一次 JSON，
+    /// 四千多筆的檔案會被寫爆，而且打字會頓。
+    /// </remarks>
+    private void DrawTagEditor(EntityEntry entry)
+    {
+        var tags = _session.Tags;
+        var current = tags.TagOf(entry.ModelPath);
+
+        ImGui.SetNextItemWidth(140f);
+
+        if (ImGui.BeginCombo("##tag", AssetTagNames.Of(current)))
+        {
+            foreach (var tag in AssetTagNames.All)
+            {
+                if (ImGui.Selectable(AssetTagNames.Of(tag), current == tag))
+                {
+                    tags.SetTag(entry.ModelPath, tag);
+
+                    // 目錄的可見清單是有快取的；標註篩選開著時不清掉就不會更新。
+                    _visibleKey = string.Empty;
+                }
+            }
+
+            ImGui.EndCombo();
+        }
+
+        ImGui.SameLine();
+
+        if (_noteDraftFor != entry.ModelPath)
+        {
+            _noteDraft = tags.NoteOf(entry.ModelPath);
+            _noteDraftFor = entry.ModelPath;
+        }
+
+        ImGui.SetNextItemWidth(-1f);
+        ImGui.InputTextWithHint("##note", "備註（誰畫的、換成什麼、還缺什麼）", ref _noteDraft, 256);
+
+        if (ImGui.IsItemDeactivatedAfterEdit())
+            tags.SetNote(entry.ModelPath, _noteDraft);
+    }
+
+    /// <summary>這個模型被哪幾件道具使用，以及那些道具的數值。</summary>
+    private void DrawItemBindings(EntityEntry entry)
+    {
+        var bindings = _session.Items.For(entry.ModelPath);
+
+        ImGui.TextColored(Muted, $"{bindings.Count} 件道具使用這個模型");
+        HelpMarker("同一個模型被多件道具共用是常態 —— 同一把劍的不同等級、不同名字，"
+                 + "在 item.bmd 裡是不同的編號但指向同一個 .bmd。\n"
+                 + "換掉這個模型會同時影響下面全部。");
+
+        const ImGuiTableFlags flags = ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY
+                                    | ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp;
+
+        if (!ImGui.BeginTable("itemBindings", 4, flags))
+            return;
+
+        ImGui.TableSetupColumn("編號", ImGuiTableColumnFlags.WidthFixed, 46f);
+        ImGui.TableSetupColumn("名稱");
+        ImGui.TableSetupColumn("需求", ImGuiTableColumnFlags.WidthFixed, 130f);
+        ImGui.TableSetupColumn("職業", ImGuiTableColumnFlags.WidthFixed, 120f);
+        ImGui.TableSetupScrollFreeze(0, 1);
+        ImGui.TableHeadersRow();
+
+        foreach (var binding in bindings)
+        {
+            var definition = binding.Definition;
+
+            ImGui.TableNextRow();
+
+            ImGui.TableSetColumnIndex(0);
+            ImGui.Text(binding.Number.ToString());
+
+            ImGui.TableSetColumnIndex(1);
+            ImGui.Text(binding.Name);
+
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.BeginTooltip();
+                ImGui.Text($"{binding.GroupName}　群組 {binding.Group} 編號 {binding.Number}");
+                ImGui.TextColored(Muted, $"傷害 {definition.DamageMin}-{definition.DamageMax}　"
+                                       + $"防禦 {definition.Defense}　魔力 {definition.MagicPower}");
+                ImGui.TextColored(Muted, $"掉落等級 {definition.DropLevel}　"
+                                       + (definition.TwoHanded ? "雙手" : "單手"));
+                ImGui.EndTooltip();
+            }
+
+            ImGui.TableSetColumnIndex(2);
+            ImGui.TextColored(Muted,
+                $"Lv{definition.RequiredLevel} 力{definition.RequiredStrength} 敏{definition.RequiredDexterity}");
+
+            ImGui.TableSetColumnIndex(3);
+            ImGui.TextColored(Muted, definition.AllowedClasses.Count == 0
+                ? "－"
+                : string.Join("/", definition.AllowedClasses));
+        }
+
+        ImGui.EndTable();
     }
 
     private void DrawModelOverview()
@@ -250,7 +373,7 @@ public sealed partial class StudioUi
         ImGui.SliderInt("##quality", ref _jpegQuality, 60, 100, "JPEG %d");
 
         if (ImGui.Button("匯入並取代這張貼圖"))
-            ImportTexture(mesh.Texture.FullPath, mesh.TexturePath);
+            ImportTexture(mesh);
 
         HelpMarker(
             "會依照目標檔的副檔名寫回：\n"
@@ -277,7 +400,7 @@ public sealed partial class StudioUi
         }
     }
 
-    private void ImportTexture(string? existingPath, string requestedName)
+    private void ImportTexture(Rendering.MeshView mesh)
     {
         if (string.IsNullOrWhiteSpace(_importSourcePath) || !File.Exists(_importSourcePath))
         {
@@ -287,10 +410,11 @@ public sealed partial class StudioUi
 
         var model = _session.Model!;
 
-        // 沒有現成檔案時（缺貼圖的網格），就在模型旁邊新建一個 .OZT ——
+        // 沒有現成檔案時（缺貼圖的網格），就在**這個網格自己的**資料夾新建一個 .OZT ——
+        // 身體部位是另外載入的模型，貼圖跟著它走，寫到主模型的資料夾遊戲會找不到。
         // OZT 帶 alpha 而且是這裡唯一能無損寫入的格式。
-        string destination = existingPath
-            ?? Path.Combine(model.Directory, Path.GetFileNameWithoutExtension(requestedName) + ".OZT");
+        string destination = mesh.Texture.FullPath
+            ?? Path.Combine(mesh.Directory, Path.GetFileNameWithoutExtension(mesh.TexturePath) + ".OZT");
 
         // OZD 寫不了，但同名的 OZT 會被優先找到，所以直接改寫成 OZT。
         if (Path.GetExtension(destination).Equals(".ozd", StringComparison.OrdinalIgnoreCase))
