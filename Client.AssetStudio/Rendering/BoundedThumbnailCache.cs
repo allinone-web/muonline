@@ -44,7 +44,22 @@ public sealed class BoundedThumbnailCache : IDisposable
 
     public int Capacity => _capacity;
 
-    public void BeginFrame(int budget = DefaultBudgetPerFrame) => _budgetLeft = budget;
+    /// <summary>
+    /// 每幀開頭呼叫：重置這一幀的繪製預算，並在<b>這時候</b>才逐出超出上限的縮圖。
+    /// </summary>
+    /// <remarks>
+    /// 逐出一定要在幀的開頭，不能在 <see cref="Get"/> 裡順手做。
+    /// ImGui 的繪製指令只記貼圖 id，真正的貼圖是在 <c>EndLayout</c> 才查表用的；
+    /// 在同一幀中途 <c>UnbindTexture</c> 一個前面已經送出繪製指令的 id，
+    /// <c>ImGuiRenderer</c> 查不到就會丟
+    /// <c>InvalidOperationException: ImGui 要求了未登記的貼圖 id</c>。
+    /// 上一幀的繪製在這裡已經結束，所以此刻逐出是安全的。
+    /// </remarks>
+    public void BeginFrame(int budget = DefaultBudgetPerFrame)
+    {
+        _budgetLeft = budget;
+        Trim();
+    }
 
     /// <summary>
     /// 取得縮圖。還沒畫、而且這一幀的預算用完時回傳 null ——
@@ -73,7 +88,7 @@ public sealed class BoundedThumbnailCache : IDisposable
         var entry = new Entry(bmdPath, texture, id, _recent.AddLast(bmdPath));
         _entries[bmdPath] = entry;
 
-        Trim();
+        // 這裡不 Trim：見 BeginFrame 的說明。這一幀最多超出上限 budget 張。
         return id;
     }
 

@@ -15,6 +15,7 @@ public sealed record StudioOptions(
     string? ScreenshotPath,
     string? InitialSelection,
     string? InitialPanels,
+    string? InitialKind,
     int? InitialAction,
     bool StartPaused,
     bool ShowSkeleton,
@@ -103,6 +104,9 @@ public sealed class StudioGame : Game
         // 自動化截圖時要能打開預設關著的面板 —— 否則終端機裡驗不到它們長什麼樣。
         if (_options.InitialPanels is string panels)
             _ui.OpenPanels(panels);
+
+        if (_options.InitialKind is string initialKind && !_ui.SelectKind(initialKind))
+            _session.Report($"沒有「{initialKind}」這個分類", failed: true);
 
         _viewport.ShowSkeleton = _options.ShowSkeleton;
 

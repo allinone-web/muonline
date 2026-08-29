@@ -171,6 +171,27 @@ public sealed partial class StudioUi
                  + "這個篩選要解析每個模型的 BMD，第一次切換會停頓一下。");
     }
 
+    /// <summary>切到某個大分類。給 <c>--kind</c> 用（自動化截圖要能驗到縮圖牆）。</summary>
+    public bool SelectKind(string name)
+    {
+        foreach (var kind in EntityKindNames.All)
+        {
+            if (!EntityKindNames.Of(kind).Equals(name, StringComparison.OrdinalIgnoreCase)
+                && !kind.ToString().Equals(name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            _kindFilter = kind;
+            _catalogFilter = string.Empty;
+            _groupFilter = string.Empty;
+            _visibleKey = string.Empty;
+            return true;
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// 把目錄跳到某一筆上。<c>--open</c> 與「在目錄裡找相關模型」都用它。
     /// </summary>
@@ -351,20 +372,60 @@ public sealed partial class StudioUi
             ImGui.TextColored(TagColor(tag), AssetTagNames.Of(tag));
     }
 
+    /// <summary>
+    /// 縮圖牆。<b>只畫看得到的那幾列。</b>
+    /// </summary>
+    /// <remarks>
+    /// 沒有這一層的話，「道具」那一類每幀要跑 2715 次
+    /// <c>BeginGroup / PushID / ImageButton / PopID</c>，而且每一格都會去問一次縮圖快取
+    /// —— 快取因此被整份掃過，LRU 的「最久沒用到」永遠是這一幀剛用過的東西，
+    /// 逐出策略等於失效。ImGui 會裁掉畫面外的東西，但那是在<b>我們的程式跑完之後</b>。
+    ///
+    /// 每一格的高度必須是固定的，否則捲動位置算不出來；所以說明文字截成一行，
+    /// 完整名稱在滑鼠提示裡。
+    /// </remarks>
+    /// <summary>縮圖底下固定保留幾行說明文字。</summary>
+    private const int CaptionLines = 2;
+
     private void DrawThumbnailGrid(EntityEntry[] entries)
     {
         const float cell = 96f;
-        int perRow = Math.Max(1, (int)(ImGui.GetContentRegionAvail().X / (cell + 14f)));
 
-        // 縮圖有每幀預算（見 ThumbnailCache），所以整份走一遍不會卡；
-        // 沒畫到的格子這一幀顯示佔位方塊，下一幀補上。
-        for (int i = 0; i < entries.Length; i++)
+        var spacing = ImGui.GetStyle().ItemSpacing;
+        float columnWidth = cell + spacing.X;
+        int perRow = Math.Max(1, (int)(ImGui.GetContentRegionAvail().X / columnWidth));
+        // 說明文字固定兩行：一行放不下「Apocalypse Sword（apocalypse_sword）」這種名字，
+        // 而行數不固定的話捲動位置就算不出來。
+        float rowHeight = cell + (ImGui.GetTextLineHeightWithSpacing() * CaptionLines) + spacing.Y;
+
+        int rows = (entries.Length + perRow - 1) / perRow;
+        float scroll = ImGui.GetScrollY();
+        float viewHeight = ImGui.GetWindowHeight();
+
+        // 上下各多畫一列，捲動時才不會看到空白閃一下。
+        int firstRow = Math.Max(0, (int)(scroll / rowHeight) - 1);
+        int lastRow = Math.Min(rows, (int)((scroll + viewHeight) / rowHeight) + 2);
+
+        if (firstRow > 0)
+            ImGui.Dummy(new NVector2(0f, firstRow * rowHeight));
+
+        for (int row = firstRow; row < lastRow; row++)
         {
-            DrawThumbnailCell(entries[i], cell);
+            for (int column = 0; column < perRow; column++)
+            {
+                int index = (row * perRow) + column;
+                if (index >= entries.Length)
+                    break;
 
-            if ((i + 1) % perRow != 0)
-                ImGui.SameLine();
+                if (column > 0)
+                    ImGui.SameLine();
+
+                DrawThumbnailCell(entries[index], cell);
+            }
         }
+
+        if (lastRow < rows)
+            ImGui.Dummy(new NVector2(0f, (rows - lastRow) * rowHeight));
     }
 
     private void DrawThumbnailCell(EntityEntry entry, float size)
@@ -397,16 +458,70 @@ public sealed partial class StudioUi
         string caption = entry.Number >= 0 ? $"{entry.Number} {entry.Name}" : entry.Name;
         var tag = _session.Tags.TagOf(entry.ModelPath);
 
-        ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + size);
-        ImGui.TextColored(
-            tag != AssetTag.None ? TagColor(tag)
-            : entry.ClassName is null ? Muted
-            : new NVector4(0.88f, 0.9f, 0.92f, 1f),
-            caption);
-        ImGui.PopTextWrapPos();
+        // 固定兩行、自己斷行：格子高度必須固定，捲動的可見範圍才算得出來
+        // （見 DrawThumbnailGrid）。放不下的完整名稱在滑鼠提示裡。
+        var color = tag != AssetTag.None ? TagColor(tag)
+                  : entry.ClassName is null ? Muted
+                  : new NVector4(0.88f, 0.9f, 0.92f, 1f);
+
+        foreach (var line in Wrap(caption, size, CaptionLines))
+            ImGui.TextColored(color, line);
 
         ImGui.PopID();
         ImGui.EndGroup();
+    }
+
+    /// <summary>
+    /// 把文字斷成固定行數，最後一行放不下的部分用刪節號。
+    /// </summary>
+    /// <remarks>
+    /// 不用 <c>PushTextWrapPos</c>：那會讓行數隨字串長度變動，
+    /// 而縮圖牆需要每一格<b>等高</b>才算得出捲動的可見範圍。
+    /// 一律回傳 <paramref name="lines"/> 行（不足的補空字串）。
+    /// </remarks>
+    private static string[] Wrap(string text, float width, int lines)
+    {
+        var result = new string[lines];
+        var rest = text.AsSpan();
+
+        for (int line = 0; line < lines; line++)
+        {
+            if (rest.IsEmpty)
+            {
+                result[line] = string.Empty;
+                continue;
+            }
+
+            bool last = line == lines - 1;
+
+            if (ImGui.CalcTextSize(rest.ToString()).X <= width)
+            {
+                result[line] = rest.ToString();
+                rest = default;
+                continue;
+            }
+
+            int fit = LongestFit(rest, width, last);
+
+            result[line] = last ? rest[..fit].ToString() + "…" : rest[..fit].ToString();
+            rest = rest[fit..];
+        }
+
+        return result;
+    }
+
+    /// <summary>最多幾個字元放得進 <paramref name="width"/>（最後一行要留刪節號的位置）。</summary>
+    private static int LongestFit(ReadOnlySpan<char> text, float width, bool reserveEllipsis)
+    {
+        for (int length = text.Length; length > 1; length--)
+        {
+            string candidate = reserveEllipsis ? text[..length].ToString() + "…" : text[..length].ToString();
+
+            if (ImGui.CalcTextSize(candidate).X <= width)
+                return length;
+        }
+
+        return 1;
     }
 
     private void DrawEntryTooltip(EntityEntry entry)

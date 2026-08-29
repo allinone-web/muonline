@@ -1,7 +1,7 @@
 // MU 資源瀏覽器 / 編輯器。
 //
 //   MuAssetStudio [--data <Data目錄>] [--size 1700x1000] [--open <名稱>]
-//                 [--panels skills,export] [--action N] [--pause]
+//                 [--panels skills,export] [--kind 道具] [--action N] [--pause]
 //                 [--seconds N] [--screenshot <path>]
 //
 //   MuAssetStudio --report                          目錄盤點（不開視窗）
@@ -141,6 +141,7 @@ var options = new StudioOptions(
     ScreenshotPath: parsed.GetValueOrDefault("screenshot"),
     InitialSelection: parsed.GetValueOrDefault("open"),
     InitialPanels: parsed.GetValueOrDefault("panels"),
+    InitialKind: parsed.GetValueOrDefault("kind"),
     InitialAction: parsed.TryGetValue("action", out var a) && int.TryParse(a, out int actionIndex) ? actionIndex : null,
     StartPaused: parsed.ContainsKey("pause"),
     ShowSkeleton: parsed.ContainsKey("skeleton"),
