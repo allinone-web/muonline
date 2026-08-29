@@ -40,9 +40,17 @@ public sealed class MapEditorScene : BaseScene
 
         await base.Load();
 
-        // 預設開 Lorencia（World1）；沒有的話就開第一張可用的圖。
-        var initial = _session.Worlds.FirstOrDefault(w => w.Index == 1 && w.IsPlayable)
-                      ?? _session.Worlds.FirstOrDefault(w => w.IsPlayable);
+        // --world 指定哪張就開哪張；沒指定時預設 Lorencia（World1），
+        // 再沒有就開第一張可用的圖。
+        var initial = _session.StartupWorldIndex is int wanted
+            ? _session.Worlds.FirstOrDefault(w => w.Index == wanted)
+            : null;
+
+        if (_session.StartupWorldIndex is int missing && initial is null)
+            _session.StatusMessage = $"找不到 World{missing}，改開預設的圖";
+
+        initial ??= _session.Worlds.FirstOrDefault(w => w.Index == 1 && w.IsPlayable)
+                    ?? _session.Worlds.FirstOrDefault(w => w.IsPlayable);
 
         if (initial is not null)
             _session.RequestWorld(initial.Index);
@@ -79,6 +87,55 @@ public sealed class MapEditorScene : BaseScene
         _session.Camera.Update(gameTime, acceptInput);
 
         ApplyObjectDrawDistance();
+    }
+
+    /// <summary>
+    /// 從零建一張新地圖，建完直接載入。
+    /// </summary>
+    /// <remarks>
+    /// 直接寫進遊戲的 Data 目錄（就是編輯器正在讀的那個）——
+    /// 新地圖的意義就在於馬上能載入來畫，中間再隔一層輸出目錄只是多一步。
+    /// 已經存在的 WorldN 不會被覆蓋。
+    /// </remarks>
+    public async Task CreateNewWorldAsync(int worldIndex, string mapName, int donorWorldIndex)
+    {
+        if (_session.FileBusy)
+            return;
+
+        _session.FileBusy = true;
+
+        try
+        {
+            string? worldsPath = string.IsNullOrWhiteSpace(_session.Settings.WorldsSourcePath)
+                ? null
+                : _session.Settings.WorldsSourcePath;
+
+            var result = await NewMapScaffold.CreateAsync(
+                _session.DataPath, worldIndex, mapName, donorWorldIndex, worldClassDirectory: worldsPath);
+
+            if (!result.Success)
+            {
+                _session.FileMessage = $"建立失敗：{result.Error}";
+                return;
+            }
+
+            _session.Worlds = WorldCatalog.Discover(_session.DataPath);
+
+            _session.FileMessage =
+                $"已建立 World{worldIndex}：地形 {result.Files.Length} 個、貼圖 {result.CopiedTextures.Length} 個" +
+                (result.WorldClassPath is null ? "（沒有產生世界類別）" : "、含世界類別") +
+                (result.Warnings.Length > 0 ? $"　警告：{string.Join("；", result.Warnings)}" : string.Empty);
+
+            _session.RequestWorld(worldIndex);
+        }
+        catch (Exception ex)
+        {
+            _session.FileMessage = $"建立失敗：{ex.Message}";
+        }
+        finally
+        {
+            _session.FileBusy = false;
+        }
     }
 
     /// <summary>

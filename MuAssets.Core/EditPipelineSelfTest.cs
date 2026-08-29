@@ -1,4 +1,5 @@
 using Client.Data.ATT;
+using Client.Data.MAP;
 
 namespace MuAssets.Core;
 
@@ -37,6 +38,7 @@ public static class EditPipelineSelfTest
             PlaceAndDeleteObject(session, document),
             SaveAndReloadProject(session, document),
             RoleAnnotations(session, document, world),
+            BlankMap(),
             ExportToClientFormat(session, document),
             SpawnAreasAndOpenMuExport(session, document),
             Validation(session, document, world),
@@ -203,8 +205,9 @@ public static class EditPipelineSelfTest
 
         try
         {
+            // 空白的新地圖上沒有物件可標註。那不是失敗，是這個案例不適用。
             if (touched.Length < 3)
-                return ("語義角色", false, "地圖上的物件不足三個，測不了");
+                return ("語義角色", true, "略過（地圖上的物件不足三個）");
 
             touched[0].Role = "siege.gate";
             touched[0].RoleId = 3;
@@ -253,6 +256,59 @@ public static class EditPipelineSelfTest
                 touched[i].Tags = before[i].Tags;
             }
 
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// 從零建一張空白地圖，存成客戶端格式再讀回來。
+    /// </summary>
+    /// <remarks>
+    /// 空白地圖有三個值錯了不會報錯、只會讓地圖看起來壞掉，所以逐一檢查：
+    /// 第二層要是哨兵值 255（填 0 的話整張圖被 0 號貼圖蓋掉）、
+    /// 光照要是 128（填 0 是一張全黑的地圖）、屬性要全部可走。
+    /// </remarks>
+    private static (string, bool, string) BlankMap()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"mu-editor-selftest-blank-{Environment.ProcessId}");
+        const int worldIndex = 999;
+
+        try
+        {
+            var blank = MapDocument.CreateBlank(worldIndex);
+
+            var export = MapExporter.ExportAsync(blank, directory, worldIndex).GetAwaiter().GetResult();
+            if (!export.Success)
+                return ("空白新地圖", false, export.Error ?? "匯出失敗");
+
+            var entry = new WorldEntry(worldIndex, worldIndex - 1, $"World{worldIndex}", directory, true, true, false, []);
+            var reloaded = MapDocument.LoadAsync(entry).GetAwaiter().GetResult();
+
+            bool layer2IsSentinel = reloaded.Layer2.All(v => v == TerrainTextureMapping.NoLayerIndex);
+            bool allWalkable = reloaded.Attributes.All(a => a == 0);
+            bool flat = reloaded.Height is not null
+                     && Enumerable.Range(0, MapDocument.CellCount).All(i => reloaded.HeightAt(i) == 0);
+            bool neutralLight = reloaded.Light is not null
+                             && reloaded.Light.Data.Take(MapDocument.CellCount).All(c => c.R == 128 && c.G == 128 && c.B == 128);
+
+            // 伺服器那一側：OpenMU 的規則是「0 或 1 可走、1 是安全區」，
+            // 所以全 0 代表整張圖都能走。
+            var terrain = MapExporter.BuildServerTerrainData(reloaded);
+            bool serverWalkable = terrain.Length == MapDocument.CellCount + 3
+                               && terrain.Skip(3).All(b => b is 0 or 1);
+
+            bool passed = layer2IsSentinel && allWalkable && flat && neutralLight && serverWalkable;
+
+            return ("空白新地圖", passed,
+                $"第二層哨兵 {layer2IsSentinel}、全可走 {allWalkable}、平地 {flat}、中性光照 {neutralLight}、伺服器地形 {serverWalkable}");
+        }
+        catch (Exception ex)
+        {
+            return ("空白新地圖", false, ex.Message);
+        }
+        finally
+        {
             if (Directory.Exists(directory))
                 Directory.Delete(directory, recursive: true);
         }

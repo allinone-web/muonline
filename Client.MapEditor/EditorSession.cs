@@ -25,6 +25,9 @@ public sealed class EditorSession : EditSession
     /// <summary>目前載入的 world index，尚未載入任何世界時為 null。</summary>
     public int? LoadedWorldIndex { get; set; }
 
+    /// <summary>--world：啟動時要開哪一張圖；null 表示用預設。</summary>
+    public int? StartupWorldIndex { get; set; }
+
     /// <summary>UI 想切到的 world index。場景處理完會清成 null。</summary>
     public int? RequestedWorldIndex { get; set; }
 

@@ -26,6 +26,13 @@ public sealed class EditorSettings
     /// 介面字型大小。macOS 上視窗不是 HiDPI，系統會把畫面放大約 1.7 倍，
     /// 調大字型是最直接的補償方式。
     /// </summary>
+    /// <summary>
+    /// <c>Client.Main/Worlds</c> 的路徑。填了的話，新建地圖會順便產生
+    /// <c>World{N}.cs</c>（帶 <c>[WorldInfo]</c>）—— 客戶端靠那個屬性認得這張圖。
+    /// 留空就只建資料，類別自己補。
+    /// </summary>
+    public string WorldsSourcePath { get; set; } = string.Empty;
+
     public float FontSize { get; set; } = 17f;
 
     /// <summary>

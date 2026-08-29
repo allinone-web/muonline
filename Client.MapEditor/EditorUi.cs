@@ -17,6 +17,11 @@ public sealed class EditorUi
 {
     private static readonly NVector4 Warning = new(1f, 0.65f, 0.2f, 1f);
     private static readonly NVector4 Danger = new(1f, 0.42f, 0.4f, 1f);
+
+    // 新建地圖的欄位。200 起跳是為了離官方的 0–92 遠一點，不會撞號。
+    private int _newWorldIndex = 200;
+    private string _newWorldName = string.Empty;
+    private int _newWorldDonor = NewMapScaffold.DefaultDonorWorld;
     private static readonly NVector4 Muted = new(0.6f, 0.62f, 0.66f, 1f);
     private static readonly NVector4 Normal = new(0.88f, 0.9f, 0.92f, 1f);
 
@@ -192,7 +197,67 @@ public sealed class EditorUi
             ImGui.EndTable();
         }
 
+        ImGui.Separator();
+        DrawNewWorld();
+
         ImGui.End();
+    }
+
+    /// <summary>
+    /// 從零建一張新地圖。
+    /// </summary>
+    /// <remarks>
+    /// 客戶端要載入一張圖，光有地形檔不夠 —— 貼圖是逐圖一份、按檔名找的，
+    /// 還要有 Object 目錄與帶 [WorldInfo] 的類別。這個按鈕把四樣一起建好，
+    /// 細節見 MuAssets.Core/NewMapScaffold.cs。
+    /// </remarks>
+    private void DrawNewWorld()
+    {
+        if (!ImGui.CollapsingHeader("新建地圖"))
+            return;
+
+        ImGui.SetNextItemWidth(120f);
+        ImGui.InputInt("編號", ref _newWorldIndex);
+
+        ImGui.SetNextItemWidth(-1f);
+        ImGui.InputTextWithHint("##newname", "地圖名稱", ref _newWorldName, 48);
+
+        ImGui.SetNextItemWidth(120f);
+        ImGui.InputInt("貼圖來源", ref _newWorldDonor);
+        ImGui.SameLine();
+        ImGui.TextColored(Muted, $"從 World{_newWorldDonor} 複製地形貼圖");
+
+        ImGui.TextColored(Muted, "Client.Main/Worlds 路徑（留空就不產生世界類別）");
+        ImGui.SetNextItemWidth(-1f);
+
+        string worldsPath = _session.Settings.WorldsSourcePath;
+        if (ImGui.InputText("##worldssrc", ref worldsPath, 512))
+        {
+            _session.Settings.WorldsSourcePath = worldsPath;
+            _session.Settings.Save();
+        }
+
+        bool exists = _session.Worlds.Any(w => w.Index == _newWorldIndex);
+
+        ImGui.BeginDisabled(_session.FileBusy || exists || _newWorldIndex <= 0);
+        if (ImGui.Button("建立並載入"))
+        {
+            _ = (_game.ActiveScene as MapEditorScene)?.CreateNewWorldAsync(
+                _newWorldIndex,
+                string.IsNullOrWhiteSpace(_newWorldName) ? $"World{_newWorldIndex}" : _newWorldName.Trim(),
+                _newWorldDonor);
+        }
+
+        ImGui.EndDisabled();
+
+        if (exists)
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(Warning, $"World{_newWorldIndex} 已經存在");
+        }
+
+        if (!string.IsNullOrEmpty(_session.FileMessage))
+            ImGui.TextWrapped(_session.FileMessage);
     }
 
     private void DrawViewPanel()

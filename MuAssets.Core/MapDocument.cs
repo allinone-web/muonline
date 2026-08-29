@@ -43,6 +43,70 @@ public sealed class MapDocument
     /// <summary>載入過程中沒能讀到的部分，UI 直接顯示出來而不是靜靜地少資料。</summary>
     public List<string> Warnings { get; } = [];
 
+    /// <summary>
+    /// 一張全新的空白地圖：整片平地、全部可走、沒有物件。
+    /// </summary>
+    /// <remarks>
+    /// 幾個值不是隨便挑的：
+    ///
+    /// <list type="bullet">
+    ///   <item><b>Layer2 全填 255</b> —— 那是「這格沒有第二層」的哨兵值。
+    ///         填 0 的話整張圖會被第二層的 0 號貼圖蓋掉。</item>
+    ///   <item><b>高度全 0</b> —— 平地。高度是 0–255 的刻度，渲染時乘 1.5。</item>
+    ///   <item><b>光照全 128</b> —— 渲染端會把烘焙光乘 2，128 對應 1.0，
+    ///         也就是不打亮也不壓暗。填 0 會得到一張全黑的地圖。</item>
+    /// </list>
+    ///
+    /// 版本欄位跟著 World1：舊版 XOR 格式是編輯器唯一寫得出來的格式
+    /// （Season 20 的 ModulusCryptor 只有解密），而讀取端沒有魔數時就走舊格式路徑。
+    /// </remarks>
+    /// <param name="worldIndex">客戶端的 world 編號（OpenMU 的地圖編號 + 1）。</param>
+    /// <param name="groundTile">整張圖的底層貼圖索引，預設 0（TileGrass01）。</param>
+    public static MapDocument CreateBlank(int worldIndex, byte groundTile = 0)
+    {
+        var document = new MapDocument
+        {
+            WorldIndex = worldIndex,
+            MapVersion = 0,
+            MapNumber = (byte)worldIndex,
+            AttVersion = 0,
+            AttIndex = (byte)worldIndex,
+            ObjVersion = 0,
+        };
+
+        Array.Fill(document.Layer1, groundTile);
+        Array.Fill(document.Layer2, TerrainTextureMapping.NoLayerIndex);
+        Array.Fill(document.Alpha, (byte)0);
+        Array.Fill(document.Attributes, (TWFlags)0);
+
+        document.Height = new OZB
+        {
+            Version = 0,
+            Width = Size,
+            Height = Size,
+            FileType = OZBFileType.BM8,
+            Data = CreateSurface(Color.FromArgb(0, 0, 0)),
+        };
+
+        document.Light = new OZB
+        {
+            Version = 0,
+            Width = Size,
+            Height = Size,
+            FileType = OZBFileType.BM6,
+            Data = CreateSurface(Color.FromArgb(128, 128, 128)),
+        };
+
+        return document;
+    }
+
+    private static Color[] CreateSurface(Color value)
+    {
+        var data = new Color[CellCount];
+        Array.Fill(data, value);
+        return data;
+    }
+
     public static async Task<MapDocument> LoadAsync(WorldEntry entry)
     {
         var document = new MapDocument { WorldIndex = entry.Index };

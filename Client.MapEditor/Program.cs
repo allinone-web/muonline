@@ -1,6 +1,6 @@
 // MU 地圖編輯器。
 //
-//   MuMapEditor [--data <Data目錄>] [--size 1600x1000] [--seconds N] [--screenshot <path>]
+//   MuMapEditor [--data <Data目錄>] [--world N] [--size 1600x1000] [--seconds N] [--screenshot <path>]
 //
 // --seconds / --screenshot 讓它能在終端機裡跑完就退出，用於自動化驗證。
 
@@ -33,6 +33,9 @@ var options = new EditorOptions(
     FullScreen: parsed.ContainsKey("fullscreen"));
 
 EditorSession.Current.RunSelfTest = parsed.ContainsKey("selftest");
+if (parsed.GetValueOrDefault("world") is string startupWorld && int.TryParse(startupWorld, out int startupWorldIndex))
+    EditorSession.Current.StartupWorldIndex = startupWorldIndex;
+
 EditorSession.Current.ExportOnStartPath = parsed.GetValueOrDefault("export-to");
 EditorSession.Current.ExportOpenMuOnStartPath = parsed.GetValueOrDefault("export-openmu-to");
 

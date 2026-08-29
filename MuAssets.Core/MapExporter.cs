@@ -46,18 +46,18 @@ public static class MapExporter
             await new ATTWriter().Save(attPath, BuildAttribute(document));
             written.Add(Path.GetFileName(attPath));
 
-            if (document.Objects.Count > 0)
+            // 沒有物件時也要寫。跳過的話匯出目標會留著上一版的 .obj，
+            // 「刪光所有物件再匯出」就變成無效操作 —— 而且新建的空地圖
+            // 會少一個每張官方地圖都有的檔案。
+            string objPath = Path.Combine(targetDirectory, $"EncTerrain{worldIndex}.obj");
+            Backup(objPath, backedUp);
+            await new OBJWriter().Save(objPath, new OBJ
             {
-                string objPath = Path.Combine(targetDirectory, $"EncTerrain{worldIndex}.obj");
-                Backup(objPath, backedUp);
-                await new OBJWriter().Save(objPath, new OBJ
-                {
-                    Version = document.ObjVersion,
-                    MapNumber = worldIndex,
-                    Objects = document.Objects.Select(o => o.To(document.ObjVersion)).ToArray(),
-                });
-                written.Add(Path.GetFileName(objPath));
-            }
+                Version = document.ObjVersion,
+                MapNumber = worldIndex,
+                Objects = document.Objects.Select(o => o.To(document.ObjVersion)).ToArray(),
+            });
+            written.Add(Path.GetFileName(objPath));
 
             if (document.Height is not null)
             {
