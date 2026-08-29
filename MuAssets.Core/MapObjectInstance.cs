@@ -27,6 +27,29 @@ public sealed class MapObjectInstance
     public float UnknownFloat1 { get; set; }
     public float UnknownFloat2 { get; set; }
 
+    // ── 語義標註 ──────────────────────────────────────────────
+    //
+    // MU 的 .obj 只有型別編號，說得出「這是一扇門的模型」，說不出
+    // 「這是攻城戰的 3 號城門」。玩法要的是後者。
+    //
+    // 刻意用字串而不是列舉：角色由玩法定義，編輯器不該預先知道有哪些。
+    // 命名慣例 <系統>.<角色>，例如 siege.gate、siege.statue、arena.spawn。
+    //
+    // 這幾個欄位不寫進 .obj（那是客戶端的格式，多寫會讀不了），
+    // 只存在 map.json 裡，由伺服器端的產生器去用。
+
+    /// <summary>語義角色；空字串表示只是布景。</summary>
+    public string Role { get; set; } = string.Empty;
+
+    /// <summary>同一個角色的第幾個（3 號城門）。同 Role 內不得重複，見 <see cref="MapValidator"/>。</summary>
+    public int RoleId { get; set; }
+
+    /// <summary>自由標籤，給還沒定案的玩法用。</summary>
+    public string[] Tags { get; set; } = [];
+
+    /// <summary>有沒有被標註成某個角色。</summary>
+    public bool HasRole => !string.IsNullOrWhiteSpace(Role);
+
     public int TileX => (int)(Position.X / MuConstants.TerrainScale);
     public int TileY => (int)(Position.Y / MuConstants.TerrainScale);
 
@@ -104,5 +127,14 @@ public sealed class MapObjectInstance
         _ => throw new NotSupportedException($"Unsupported .obj version {version}."),
     };
 
-    public MapObjectInstance Clone() => (MapObjectInstance)MemberwiseClone();
+    public MapObjectInstance Clone()
+    {
+        var copy = (MapObjectInstance)MemberwiseClone();
+
+        // MemberwiseClone 是淺複製，標籤陣列要另外複製一份，
+        // 不然撤銷用的快照會跟著現行物件一起被改掉。
+        copy.Tags = (string[])Tags.Clone();
+
+        return copy;
+    }
 }

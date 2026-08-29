@@ -36,6 +36,7 @@ public static class EditPipelineSelfTest
             UndoRedo(session, document),
             PlaceAndDeleteObject(session, document),
             SaveAndReloadProject(session, document),
+            RoleAnnotations(session, document, world),
             ExportToClientFormat(session, document),
             SpawnAreasAndOpenMuExport(session, document),
             Validation(session, document, world),
@@ -183,6 +184,80 @@ public static class EditPipelineSelfTest
     }
 
     /// <summary>存成專案再讀回來，比對資料是否一致。</summary>
+    /// <summary>
+    /// 語義角色：存檔後讀回不遺失，而且撞號會被校驗器抓到。
+    /// </summary>
+    /// <remarks>
+    /// 這兩件事是攻城戰、競技場、任務觸發點共用的基礎（見
+    /// docs/系統精簡決策-保留簡化刪除.md §21）。標註掉了不會有任何錯誤訊息 ——
+    /// 地圖照樣打得開、照樣畫得出來，只是玩法在伺服器端找不到那扇門，
+    /// 所以只能靠測試守住。
+    /// </remarks>
+    private static (string, bool, string) RoleAnnotations(EditSession session, MapDocument document, WorldEntry? world)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"mu-editor-selftest-roles-{Environment.ProcessId}");
+
+        // 記下原本的樣子：這個測試會改文件，後面的測試還要用。
+        var touched = document.Objects.Take(3).ToArray();
+        var before = touched.Select(o => o.Clone()).ToArray();
+
+        try
+        {
+            if (touched.Length < 3)
+                return ("語義角色", false, "地圖上的物件不足三個，測不了");
+
+            touched[0].Role = "siege.gate";
+            touched[0].RoleId = 3;
+            touched[0].Tags = ["breakable", "phase2"];
+
+            touched[1].Role = "siege.statue";
+            touched[1].RoleId = 1;
+
+            // 和第一個撞號，校驗器應該要抓到。
+            touched[2].Role = "siege.gate";
+            touched[2].RoleId = 3;
+
+            MapProjectIo.SaveAsync(document, directory).GetAwaiter().GetResult();
+            var reloaded = MapProjectIo.LoadAsync(directory).GetAwaiter().GetResult();
+
+            bool rolesMatch = document.Objects.Count == reloaded.Objects.Count
+                           && document.Objects.Zip(reloaded.Objects).All(pair =>
+                                  pair.First.Role == pair.Second.Role &&
+                                  pair.First.RoleId == pair.Second.RoleId &&
+                                  pair.First.Tags.SequenceEqual(pair.Second.Tags));
+
+            // 沒有標註的物件不該多出欄位來，舊專案才讀得回原樣。
+            bool cleanDefaults = reloaded.Objects.Skip(3).All(o => !o.HasRole && o.RoleId == 0 && o.Tags.Length == 0);
+
+            int duplicates = world is null
+                ? -1
+                : MapValidator
+                    .Validate(reloaded, world, session.TextureMappings, session.NpcCatalog)
+                    .Count(i => i.Category == "角色");
+
+            bool passed = rolesMatch && cleanDefaults && duplicates == 2;
+
+            return ("語義角色", passed,
+                $"存讀一致 {rolesMatch}、未標註物件保持乾淨 {cleanDefaults}、撞號抓到 {duplicates} 筆（應為 2）");
+        }
+        catch (Exception ex)
+        {
+            return ("語義角色", false, ex.Message);
+        }
+        finally
+        {
+            for (int i = 0; i < touched.Length && i < before.Length; i++)
+            {
+                touched[i].Role = before[i].Role;
+                touched[i].RoleId = before[i].RoleId;
+                touched[i].Tags = before[i].Tags;
+            }
+
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static (string, bool, string) SaveAndReloadProject(EditSession session, MapDocument document)
     {
         string directory = Path.Combine(Path.GetTempPath(), $"mu-editor-selftest-project-{Environment.ProcessId}");

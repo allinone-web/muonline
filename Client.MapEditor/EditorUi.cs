@@ -16,6 +16,7 @@ namespace Client.MapEditor;
 public sealed class EditorUi
 {
     private static readonly NVector4 Warning = new(1f, 0.65f, 0.2f, 1f);
+    private static readonly NVector4 Danger = new(1f, 0.42f, 0.4f, 1f);
     private static readonly NVector4 Muted = new(0.6f, 0.62f, 0.66f, 1f);
     private static readonly NVector4 Normal = new(0.88f, 0.9f, 0.92f, 1f);
 
@@ -605,6 +606,8 @@ public sealed class EditorUi
         }
 
         ImGui.Separator();
+        DrawRoleEditor(selected);
+        ImGui.Separator();
 
         if (ImGui.Button("刪除"))
         {
@@ -619,6 +622,152 @@ public sealed class EditorUi
         ImGui.Separator();
         DrawObjectUndoRedo();
     }
+
+    /// <summary>
+    /// 選中物件的語義角色。
+    /// </summary>
+    /// <remarks>
+    /// MU 的 .obj 只說得出「這是一扇門的模型」，說不出「這是攻城戰的 3 號城門」，
+    /// 而玩法要的是後者（見 docs/系統精簡決策-保留簡化刪除.md §21）。
+    ///
+    /// 角色是字串不是下拉選單：玩法自己定義有哪些角色，編輯器不該預先知道。
+    /// 下面那排常用值只是快捷鍵，不是全部的選項。
+    /// </remarks>
+    private void DrawRoleEditor(MapObjectInstance selected)
+    {
+        ImGui.TextColored(Muted, "語義角色（給玩法用，不寫進 .obj）");
+
+        string role = selected.Role;
+        if (ImGui.InputTextWithHint("角色", "siege.gate", ref role, 64))
+        {
+            selected.Role = role.Trim();
+            _session.IssuesStale = true;
+            _session.HasUnsavedChanges = true;
+        }
+
+        int roleId = selected.RoleId;
+        if (ImGui.InputInt("編號", ref roleId))
+        {
+            selected.RoleId = Math.Max(0, roleId);
+            _session.IssuesStale = true;
+            _session.HasUnsavedChanges = true;
+        }
+
+        string tags = string.Join(", ", selected.Tags);
+        if (ImGui.InputTextWithHint("標籤", "以逗號分隔", ref tags, 256))
+        {
+            selected.Tags = tags
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToArray();
+
+            _session.HasUnsavedChanges = true;
+        }
+
+        foreach (string preset in RolePresets)
+        {
+            if (ImGui.SmallButton(preset))
+            {
+                selected.Role = preset;
+                _session.IssuesStale = true;
+                _session.HasUnsavedChanges = true;
+            }
+
+            ImGui.SameLine();
+        }
+
+        ImGui.NewLine();
+
+        if (selected.HasRole && ImGui.SmallButton("清除角色"))
+        {
+            selected.Role = string.Empty;
+            selected.RoleId = 0;
+            selected.Tags = [];
+            _session.IssuesStale = true;
+            _session.HasUnsavedChanges = true;
+        }
+    }
+
+    /// <summary>
+    /// 依角色列出已標註的物件與生怪區。
+    /// </summary>
+    /// <remarks>
+    /// 「城門放了幾個、編號有沒有跳號或撞號」用眼睛在地圖上找不出來 ——
+    /// 城門通常長得一模一樣，而且散在地圖四個角。
+    /// </remarks>
+    private void DrawRoleOverview()
+    {
+        var document = _session.Document;
+        if (document is null)
+            return;
+
+        var objectGroups = document.Objects
+            .Where(o => o.HasRole)
+            .GroupBy(o => o.Role)
+            .OrderBy(g => g.Key, StringComparer.Ordinal)
+            .ToArray();
+
+        var spawnGroups = document.Spawns
+            .Where(s => s.HasRole)
+            .GroupBy(s => s.Role)
+            .OrderBy(g => g.Key, StringComparer.Ordinal)
+            .ToArray();
+
+        if (objectGroups.Length == 0 && spawnGroups.Length == 0)
+        {
+            ImGui.TextColored(Muted, "還沒有任何物件或生怪區被標註角色");
+            return;
+        }
+
+        foreach (var group in objectGroups)
+        {
+            var ids = group.Select(o => o.RoleId).ToArray();
+            var duplicates = ids.GroupBy(i => i).Where(g => g.Count() > 1).Select(g => g.Key).ToArray();
+
+            if (!ImGui.TreeNodeEx($"{group.Key}（{group.Count()} 個）##role-{group.Key}"))
+                continue;
+
+            if (duplicates.Length > 0)
+                ImGui.TextColored(Danger, $"編號重複：{string.Join("、", duplicates)}");
+
+            foreach (var instance in group.OrderBy(o => o.RoleId))
+            {
+                if (ImGui.Selectable($"#{instance.RoleId}  type {instance.Type} @ ({instance.TileX}, {instance.TileY})##{instance.GetHashCode()}"))
+                {
+                    _session.SelectedObject = instance;
+                    _session.Camera.FocusTile(instance.TileX, instance.TileY);
+                }
+            }
+
+            ImGui.TreePop();
+        }
+
+        foreach (var group in spawnGroups)
+        {
+            if (!ImGui.TreeNodeEx($"{group.Key}（{group.Count()} 區）##spawnrole-{group.Key}"))
+                continue;
+
+            foreach (var area in group.OrderBy(s => s.TeamId))
+            {
+                if (ImGui.Selectable($"隊 {area.TeamId}  ({area.X1},{area.Y1})-({area.X2},{area.Y2})##{area.GetHashCode()}"))
+                {
+                    _session.SelectedSpawn = area;
+                    _session.Camera.FocusTile(area.X1, area.Y1);
+                }
+            }
+
+            ImGui.TreePop();
+        }
+    }
+
+    /// <summary>常用角色的快捷鍵。不是白名單 —— 角色可以填任何字串。</summary>
+    private static readonly string[] RolePresets =
+    [
+        "siege.gate",
+        "siege.statue",
+        "siege.lever",
+        "siege.crown",
+        "arena.spawn",
+    ];
 
     /// <summary>
     /// 生怪工具的設定：挑怪物、看清單、改參數、匯出給 OpenMU。
@@ -1217,6 +1366,12 @@ public sealed class EditorUi
             ImGui.TextColored(Muted, "尚未載入地圖");
             ImGui.End();
             return;
+        }
+
+        if (ImGui.CollapsingHeader("依角色檢視"))
+        {
+            DrawRoleOverview();
+            ImGui.Separator();
         }
 
         if (_objectSummaryWorldIndex != entry.Index)

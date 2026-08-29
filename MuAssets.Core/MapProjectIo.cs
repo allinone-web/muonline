@@ -283,6 +283,17 @@ public static class MapProjectIo
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public float? UnknownFloat2 { get; set; }
 
+        // 語義標註。沒有標註的物件（絕大多數）不寫進 JSON，
+        // 這樣既省檔案大小，舊專案讀進來也自然是預設值。
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Role { get; set; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? RoleId { get; set; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string[]? Tags { get; set; }
+
         public static ObjectRecord From(MapObjectInstance instance) => new()
         {
             Type = instance.Type,
@@ -296,6 +307,9 @@ public static class MapProjectIo
             UnknownByte = instance.UnknownByte,
             UnknownFloat1 = instance.UnknownFloat1,
             UnknownFloat2 = instance.UnknownFloat2,
+            Role = instance.HasRole ? instance.Role : null,
+            RoleId = instance.RoleId == 0 ? null : instance.RoleId,
+            Tags = instance.Tags.Length == 0 ? null : instance.Tags,
         };
 
         public MapObjectInstance To() => new()
@@ -311,6 +325,9 @@ public static class MapProjectIo
             UnknownByte = UnknownByte ?? 0,
             UnknownFloat1 = UnknownFloat1 ?? 0f,
             UnknownFloat2 = UnknownFloat2 ?? 0f,
+            Role = Role ?? string.Empty,
+            RoleId = RoleId ?? 0,
+            Tags = Tags ?? [],
         };
 
         private static System.Numerics.Vector3 ToVector(float[] values)

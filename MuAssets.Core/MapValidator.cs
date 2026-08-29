@@ -43,11 +43,44 @@ public static class MapValidator
         CheckObjects(document, entry, issues);
         CheckSpawns(document, entry, npcCatalog, issues);
         CheckServerMapping(entry, issues);
+        CheckRoles(document, issues);
 
         return issues
             .OrderByDescending(i => i.Severity)
             .ThenBy(i => i.Category, StringComparer.Ordinal)
             .ToList();
+    }
+
+    /// <summary>
+    /// 語義角色的唯一性：同一個 Role 底下，RoleId 不得重複。
+    /// </summary>
+    /// <remarks>
+    /// 玩法是靠「角色 + 編號」去找地圖上的東西的（攻城戰要開 3 號城門、
+    /// 競技場要把紅隊放到 1 號出生點）。編號撞號的時候伺服器只會挑到其中一個，
+    /// 而且挑到哪一個沒有保證 —— 這種錯在遊戲裡極難查，但在這裡一眼就看得到。
+    ///
+    /// 只查物件。生怪區的識別是 Role + TeamId，而同一隊有多個出生區是正常的。
+    /// </remarks>
+    private static void CheckRoles(MapDocument document, List<ValidationIssue> issues)
+    {
+        foreach (var group in document.Objects
+            .Where(o => o.HasRole)
+            .GroupBy(o => (o.Role, o.RoleId)))
+        {
+            if (group.Count() <= 1)
+                continue;
+
+            foreach (var duplicate in group)
+            {
+                issues.Add(new ValidationIssue(
+                    IssueSeverity.Error, "角色",
+                    $"{group.Key.Role} 的 {group.Key.RoleId} 號有 {group.Count()} 個物件",
+                    (duplicate.TileX, duplicate.TileY), Object: duplicate));
+            }
+        }
+
+        // 生怪區不查重：同一隊有好幾個出生區是正常的（攻方十個人要分散進場），
+        // SpawnArea 也沒有 RoleId —— 它的識別是 Role + TeamId，而那本來就允許多筆。
     }
 
     private static void CheckTerrainData(MapDocument document, List<ValidationIssue> issues)

@@ -53,6 +53,18 @@ public sealed class SpawnArea
     /// <summary>顯示用的名稱，從目錄帶進來，方便在清單上辨認。</summary>
     public string Name { get; set; } = string.Empty;
 
+    /// <summary>
+    /// 語義角色，例如 <c>siege.attacker.spawn</c>。空字串表示就是一般的生怪區。
+    /// </summary>
+    /// <remarks>與 <see cref="MapObjectInstance.Role"/> 同一套慣例與同一條唯一性規則。</remarks>
+    public string Role { get; set; } = string.Empty;
+
+    /// <summary>哪一隊（攻方／守方／競技場的隊伍）。0 表示不分隊。</summary>
+    public int TeamId { get; set; }
+
+    /// <summary>有沒有被標註成某個角色。</summary>
+    public bool HasRole => !string.IsNullOrWhiteSpace(Role);
+
     public bool IsPoint => X1 == X2 && Y1 == Y2;
 
     public int Width => X2 - X1 + 1;
