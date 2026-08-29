@@ -26,6 +26,19 @@ namespace Client.Main.Controls.UI
         // 取代原本四個 27x27 的分頁貼圖）、中間是輸入欄、右邊一顆送出鈕。
         // 高度 72，輸入欄 48 —— 都在拇指按得到的範圍。
         private const int MobileBarHeight = 72;
+
+        /// <summary>
+        /// 輸入列上方那一排開關的高度與尺寸。
+        ///
+        /// 桌面版有十顆 27x27 的貼圖鈕（四個頻道分頁 + 悄悄話/系統/紀錄/外框/
+        /// 大小/透明度）。27x27 在 iPhone 上不到 15 pt，而且是為 1024x768 畫的
+        /// 點陣圖。手機只保留真正用得到的三個開關，做成文字鈕：
+        /// 頻道已經有自己的按鈕（點一下輪替），外框／大小／透明度是桌面視窗的
+        /// chrome，手機的聊天視窗不能拖也不能縮放，留著沒有意義。
+        /// </summary>
+        private const int MobileToggleHeight = 44;
+        private const int MobileToggleGap = 8;
+        private const int MobileToggleWidth = 128;
         private const int MobileBarPadding = 10;
         private const int MobileChannelButtonWidth = 132;
         private const int MobileSendButtonWidth = 120;
@@ -435,7 +448,12 @@ namespace Client.Main.Controls.UI
         private Rectangle _mobileChannelRect;
         private Rectangle _mobileFieldRect;
         private Rectangle _mobileSendRect;
-        private int _mobilePressedButton = -1;   // 0 = 頻道，1 = 送出
+
+        /// <summary>悄悄話鎖定、系統訊息、聊天紀錄。</summary>
+        private readonly Rectangle[] _mobileToggleRects = new Rectangle[3];
+        private static readonly string[] MobileToggleLabels = { "WHISPER", "SYSTEM", "LOG" };
+
+        private int _mobilePressedButton = -1;   // 0 = 頻道，1 = 送出，2.. = 開關
         private bool _mobileWasPressed;
         private Point _mobileLastCanvas = Point.Zero;
 
@@ -450,7 +468,8 @@ namespace Client.Main.Controls.UI
             _mobileLastCanvas = canvas;
 
             int width = MobileWidth;
-            ViewSize = new Point(width, MobileBarHeight);
+            int totalHeight = MobileBarHeight + MobileToggleHeight + MobileToggleGap;
+            ViewSize = new Point(width, totalHeight);
             ControlSize = ViewSize;
             AutoViewSize = false;
 
@@ -462,16 +481,26 @@ namespace Client.Main.Controls.UI
             X = (canvas.X - width) / 2;
             Y = (int)(canvas.Y * 0.62f);
 
+            // 開關排在最上面一列，輸入列在它下面
+            for (int i = 0; i < _mobileToggleRects.Length; i++)
+            {
+                _mobileToggleRects[i] = new Rectangle(
+                    MobileBarPadding + i * (MobileToggleWidth + MobileToggleGap),
+                    0, MobileToggleWidth, MobileToggleHeight);
+            }
+
+            int barTop = MobileToggleHeight + MobileToggleGap;
+
             _mobileChannelRect = new Rectangle(
-                MobileBarPadding, MobileBarPadding, MobileChannelButtonWidth, MobileInnerHeight);
+                MobileBarPadding, barTop + MobileBarPadding, MobileChannelButtonWidth, MobileInnerHeight);
 
             _mobileSendRect = new Rectangle(
-                width - MobileBarPadding - MobileSendButtonWidth, MobileBarPadding,
+                width - MobileBarPadding - MobileSendButtonWidth, barTop + MobileBarPadding,
                 MobileSendButtonWidth, MobileInnerHeight);
 
             int fieldX = _mobileChannelRect.Right + MobileBarPadding;
             _mobileFieldRect = new Rectangle(
-                fieldX, MobileBarPadding,
+                fieldX, barTop + MobileBarPadding,
                 Math.Max(80, _mobileSendRect.X - MobileBarPadding - fieldX), MobileInnerHeight);
 
             // 輸入欄的內距：文字不要貼著框線。
@@ -500,6 +529,20 @@ namespace Client.Main.Controls.UI
                 return;
 
             var origin = DisplayRectangle.Location;
+
+            // 三個開關：亮 = 開著。用文字，不用貼圖。
+            for (int i = 0; i < _mobileToggleRects.Length; i++)
+            {
+                bool on = i switch
+                {
+                    0 => _isWhisperLocked,
+                    1 => _chatLogWindowRef.IsSysMsgVisible,
+                    _ => _chatLogWindowRef.IsChatLogVisible,
+                };
+
+                DrawMobileBarButton(sb, font, origin, _mobileToggleRects[i],
+                    MobileToggleLabels[i], _mobilePressedButton == i + 2, emphasis: on);
+            }
 
             // 輸入欄：比面板再深一階，才看得出「這裡可以打字」
             var field = new Rectangle(origin.X + _mobileFieldRect.X, origin.Y + _mobileFieldRect.Y,
@@ -558,6 +601,14 @@ namespace Client.Main.Controls.UI
                 if (new Rectangle(origin.X + _mobileSendRect.X, origin.Y + _mobileSendRect.Y,
                                   _mobileSendRect.Width, _mobileSendRect.Height).Contains(position))
                     return 1;
+
+                for (int i = 0; i < _mobileToggleRects.Length; i++)
+                {
+                    var r = _mobileToggleRects[i];
+                    if (new Rectangle(origin.X + r.X, origin.Y + r.Y, r.Width, r.Height).Contains(position))
+                        return i + 2;
+                }
+
                 return -1;
             }
 
@@ -575,15 +626,24 @@ namespace Client.Main.Controls.UI
                 {
                     SoundController.Instance.PlayBuffer("Sound/iButtonClick.wav");
 
-                    if (button == 0)
+                    switch (button)
                     {
-                        // 一顆鈕輪流切換四個頻道，取代四個分頁。
-                        int next = ((int)_currentInputType + 1) % MobileChannelLabels.Length;
-                        SetInputType((InputMessageType)next);
-                    }
-                    else
-                    {
-                        ProcessEnterKey();
+                        case 0:
+                            // 一顆鈕輪流切換四個頻道，取代四個分頁。
+                            SetInputType((InputMessageType)(((int)_currentInputType + 1) % MobileChannelLabels.Length));
+                            break;
+                        case 1:
+                            ProcessEnterKey();
+                            break;
+                        case 2:
+                            ToggleWhisperLock();
+                            break;
+                        case 3:
+                            ToggleSystemMessages();
+                            break;
+                        default:
+                            ToggleChatLogVisibility();
+                            break;
                     }
                 }
 
@@ -943,7 +1003,11 @@ namespace Client.Main.Controls.UI
             // 必須畫在 base.Draw 之前 —— 子控制項（輸入框、按鈕）要蓋在底上面。
             if (MobileUi.IsMobile && sb != null)
             {
-                MobileUi.DrawPanel(sb, DisplayRectangle);
+                // 面板只蓋輸入列那一段；上面那排開關各自有底，之間留空。
+                var full = DisplayRectangle;
+                int barTop = MobileToggleHeight + MobileToggleGap;
+                MobileUi.DrawPanel(sb, new Rectangle(
+                    full.X, full.Y + barTop, full.Width, full.Height - barTop));
             }
 
             if (MobileUi.IsMobile && sb != null)
