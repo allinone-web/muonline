@@ -165,17 +165,57 @@ public static class MapValidator
         }
     }
 
+    /// <summary>
+    /// 這筆物件的數值是不是壞的。
+    /// </summary>
+    /// <remarks>
+    /// 三種情形：型別是負的（型別編號本來就沒有負數）、
+    /// 座標或縮放不是有限值（NaN / Infinity）、
+    /// 或者縮放小到不可能是真的（非正規值，正常最小也在 0.01 這個量級）。
+    /// </remarks>
+    private static bool IsCorrupt(MapObjectInstance instance)
+    {
+        if (instance.Type < 0)
+            return true;
+
+        foreach (float value in new[]
+        {
+            instance.Position.X, instance.Position.Y, instance.Position.Z,
+            instance.Angle.X, instance.Angle.Y, instance.Angle.Z,
+            instance.Scale,
+        })
+        {
+            if (!float.IsFinite(value))
+                return true;
+        }
+
+        return instance.Scale is not 0f && MathF.Abs(instance.Scale) < 0.0001f;
+    }
+
     private static void CheckObjects(MapDocument document, WorldEntry entry, List<ValidationIssue> issues)
     {
         int outOfBounds = 0;
         int floating = 0;
+        int corrupt = 0;
         var missingModelTypes = new SortedSet<short>();
 
         MapObjectInstance? firstFloating = null;
         MapObjectInstance? firstOutOfBounds = null;
+        MapObjectInstance? firstCorrupt = null;
 
         foreach (var instance in document.Objects)
         {
+            // 官方資源裡有讀壞的記錄：World7 有一個 type −515、座標 9.1e−41、
+            // 縮放 1e−39 的物件，World92 則有帶 NaN / Infinity 座標的。
+            // 那些數字是浮點數的非正規值，看起來像資料其實是垃圾 ——
+            // 它們永遠不會出現在遊戲裡，但會一直留在檔案裡跟著存回去。
+            if (IsCorrupt(instance))
+            {
+                corrupt++;
+                firstCorrupt ??= instance;
+                continue;
+            }
+
             if ((uint)instance.TileX >= MapDocument.Size || (uint)instance.TileY >= MapDocument.Size)
             {
                 outOfBounds++;
@@ -197,6 +237,15 @@ public static class MapValidator
                 floating++;
                 firstFloating ??= instance;
             }
+        }
+
+        if (corrupt > 0)
+        {
+            issues.Add(new ValidationIssue(
+                IssueSeverity.Error, "物件",
+                $"{corrupt} 個物件的數值是壞的（型別為負、座標非有限值，或縮放是非正規值）—— 它們永遠不會出現在遊戲裡",
+                firstCorrupt is null ? null : (firstCorrupt.TileX, firstCorrupt.TileY),
+                Object: firstCorrupt));
         }
 
         if (outOfBounds > 0)
