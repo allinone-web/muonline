@@ -130,11 +130,14 @@ namespace Client.Main.Configuration
         public float PlayerScale { get; set; } = 1.25f;
 
         /// <summary>
-        /// 怪物的顯示倍率。刻意低於 <see cref="PlayerScale"/> ——
-        /// MU 的怪物多半是巨人與野獸，本來就比人類大，
-        /// 用同一個倍率會大得誇張。
+        /// 怪物的顯示倍率，預設 1.0 —— 不放大。
+        ///
+        /// 原本跟著放大 1.1 倍，實機看下來不需要：MU 的怪物本來就是巨人與
+        /// 野獸，尺寸已經夠。放大玩家的用意是讓角色在畫面上夠大而不必拉近
+        /// 鏡頭，怪物並沒有這個問題，一起放大反而讓畫面顯得擁擠。
+        /// 保留這個設定是為了還能調。
         /// </summary>
-        public float MonsterScale { get; set; } = 1.1f;
+        public float MonsterScale { get; set; } = 1.0f;
 
         /// <summary>
         /// NPC 的顯示倍率。人形 NPC 與玩家相當，但 NPCObject 底下也掛著
