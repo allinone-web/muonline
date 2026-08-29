@@ -305,7 +305,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     if (IsDanger)
                         sprite.Draw(pixel, new Rectangle(rect.X, rect.Y + 6, 3, rect.Height - 12), ModernHudTheme.Danger * 0.85f);
 
-                    float mobileScale = 12.5f / Constants.BASE_FONT_SIZE;
+                    float mobileScale = 15f / Constants.BASE_FONT_SIZE;
                     string mobileLabel = Text ?? string.Empty;
                     Vector2 mobileSize = font.MeasureString(mobileLabel) * mobileScale;
 
@@ -1119,15 +1119,19 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             private const int MobilePanelHeight = 660;
             private const int MobileHeaderHeight = 64;
             private const int MobilePadding = 16;
-            private const int MobileCategoryWidth = 250;
-            private const int MobileCategoryHeight = 42;
-            private const int MobileCategoryGap = 4;
-            private const int MobileOptionRowHeight = 54;
+            // 分類的字放大之後，250 會讓 "World & Visibility" 之類的字被截掉
+            private const int MobileCategoryWidth = 290;
+            // 字級與行距整體放大一階。42/4/54 是照著「一頁塞得下」倒推的，
+            // 結果每一列都貼在一起，讀起來很擠。列高與間距拉開之後，
+            // 一頁少放兩三項，但那兩三項本來也沒有人看得舒服。
+            private const int MobileCategoryHeight = 52;
+            private const int MobileCategoryGap = 8;
+            private const int MobileOptionRowHeight = 66;
             private const int MobileOptionPadding = 12;
             private const int MobileOptionColumns = 2;
 
-            /// <summary>選項字級。13 在實機上偏小（實測截圖），提到 15。</summary>
-            private const float MobileOptionFontSize = 15f;
+            /// <summary>選項字級。13 太小，15 仍然偏小（實機回報），提到 17。</summary>
+            private const float MobileOptionFontSize = 17f;
 
             private int MobileOptionAreaX => MobilePadding + MobileCategoryWidth + MobilePadding + MobileOptionPadding;
             private int MobileOptionAreaWidth => MobilePanelWidth - MobileOptionAreaX - MobilePadding - MobileOptionPadding;
@@ -1191,15 +1195,6 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 // 桌面是兩層選單：MENU 開一個有六顆按鈕的面板，其中「設定」再開
                 // 這個左右分欄的面板。手機不需要那一層 —— 左欄本來就是一份清單，
                 // 把動作直接排進去，MENU 一按就到位，少一次點擊也少一個要關的視窗。
-                if (IsMobile)
-                {
-                    AddActionRow("Continue", () => _owner.Visible = false);
-                    AddActionRow("Party", () => _owner.TogglePartyPanelFromMenu());
-                    AddActionRow("Character Select", () => _ = _owner.LeaveToCharacterSelectAsync());
-                    AddActionRow("Server Select", () => _ = _owner.LeaveToServerSelectAsync());
-                    AddActionRow("Exit Game", () => _ = _owner.ExitGameAsync(), isDanger: true);
-                }
-
                 int categoryStartY = 78;
                 int categoryX = 20;
                 int categoryWidth = 166;
@@ -1239,6 +1234,15 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 }
                 AddCategoryButton("Performance", () => BuildPerformanceCategory(), categoryStartY,
                     ref categoryX, categoryWidth, categoryHeight, categorySpacing, categoriesPerRow, ref categoryIndex);
+
+                if (IsMobile)
+                {
+                    AddActionRow("Continue", () => _owner.Visible = false);
+                    AddActionRow("Party", () => _owner.TogglePartyPanelFromMenu());
+                    AddActionRow("Character", () => _ = _owner.LeaveToCharacterSelectAsync());
+                    AddActionRow("Server", () => _ = _owner.LeaveToServerSelectAsync());
+                    AddActionRow("Exit", () => _ = _owner.ExitGameAsync(), isDanger: true);
+                }
 
                 _closeButton = new PauseMenuButtonControl
                 {
@@ -1739,44 +1743,45 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 Y = _baseY + _openAnimation.OffsetPixels;
             }
 
-            /// <summary>動作群組佔用的列數（Continue / Party / Character / Server / Exit）。</summary>
-            private const int MobileActionRowCount = 5;
-
-            /// <summary>動作群組與設定分類之間的分隔。</summary>
-            private const int MobileActionGroupGap = 14;
-
-            /// <summary>設定分類清單的上緣：動作群組之下。</summary>
-            private int MobileCategoryListTop
-                => ContentTop
-                 + MobileActionRowCount * (MobileCategoryHeight + MobileCategoryGap)
-                 + MobileActionGroupGap;
-
+            /// <summary>
+            /// 動作列（Continue / Party / Character Select / Server Select / Exit Game）。
+            ///
+            /// 放在<b>右側區域的底部</b>，橫向一排 —— 不是塞進左欄。
+            /// 左欄是「設定分類」的清單，動作和它們不是同一種東西：分類是
+            /// 「切換右邊要看什麼」，動作是「離開這個畫面去做別的事」。
+            /// 混在同一欄會讓左欄變成一份沒有邏輯的十二項清單。
+            ///
+            /// 橫排在右下角還有一個好處：它就在拇指的位置。
+            /// </summary>
+            private const int MobileActionBarHeight = 56;
+            private const int MobileActionBarGap = 10;
             private int _mobileActionIndex;
 
-            /// <summary>
-            /// 左欄上半部的動作列。外觀和設定分類一樣（同一份清單），
-            /// 但不參與分類的選中狀態 —— 它們是「做一件事」，不是「看一組設定」。
-            /// </summary>
             private void AddActionRow(string label, Action onClick, bool isDanger = false)
             {
-                int y = ContentTop + _mobileActionIndex * (MobileCategoryHeight + MobileCategoryGap);
-                _mobileActionIndex++;
+                const int count = 5;
+                int areaX = MobileOptionAreaX;
+                int areaWidth = MobileOptionAreaWidth;
+                int gap = MobileActionBarGap;
+                int width = (areaWidth - gap * (count - 1)) / count;
 
                 var button = new MenuTabButtonControl
                 {
                     Text = label,
                     IsAction = true,
                     IsDanger = isDanger,
-                    X = MobilePadding,
-                    Y = y,
-                    ControlSize = new Point(MobileCategoryWidth, MobileCategoryHeight),
-                    ViewSize = new Point(MobileCategoryWidth, MobileCategoryHeight),
+                    X = areaX + _mobileActionIndex * (width + gap),
+                    Y = MobilePanelHeight - MobilePadding - MobileActionBarHeight,
+                    ControlSize = new Point(width, MobileActionBarHeight),
+                    ViewSize = new Point(width, MobileActionBarHeight),
                     AutoViewSize = false,
                     FontSize = 14f,
                     TextColor = ModernHudTheme.TextGray
                 };
                 button.Click += (s, e) => onClick();
                 Controls.Add(button);
+
+                _mobileActionIndex++;
             }
 
             private void AddCategoryButton(string label, Action onClick, int startY,
@@ -1787,7 +1792,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 {
                     // 左側一整欄，由上而下。橫排的窄條在觸控上很難按準。
                     x = MobilePadding;
-                    y = MobileCategoryListTop + index * (MobileCategoryHeight + MobileCategoryGap);
+                    y = ContentTop + index * (MobileCategoryHeight + MobileCategoryGap);
                     width = MobileCategoryWidth;
                     height = MobileCategoryHeight;
                 }
@@ -1807,7 +1812,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     ControlSize = new Point(width, height),
                     ViewSize = new Point(width, height),
                     AutoViewSize = false,
-                    FontSize = IsMobile ? 14f : 10.5f,
+                    FontSize = IsMobile ? 16f : 10.5f,
                     TextColor = ModernHudTheme.TextGray
                 };
                 button.Click += (s, e) =>
@@ -1865,7 +1870,9 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 if (IsMobile)
                 {
                     // 兩欄由上而下填：先填滿左欄再換右欄。
-                    int perColumn = Math.Max(1, (MobilePanelHeight - ContentTop - MobilePadding) / MobileOptionRowHeight);
+                    // 底部那一排動作鈕佔掉的高度要先扣掉，否則最後幾個選項會壓在上面
+                    int optionsBottom = MobilePanelHeight - MobilePadding - MobileActionBarHeight - MobileActionBarGap;
+                    int perColumn = Math.Max(1, (optionsBottom - ContentTop) / MobileOptionRowHeight);
                     int column = Math.Min(_mobileOptionIndex / perColumn, MobileOptionColumns - 1);
                     int row = _mobileOptionIndex - column * perColumn;
 
