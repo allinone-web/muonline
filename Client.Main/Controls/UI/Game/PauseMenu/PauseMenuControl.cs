@@ -939,11 +939,15 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             private const int MobileCategoryWidth = 250;
             private const int MobileCategoryHeight = 42;
             private const int MobileCategoryGap = 4;
-            private const int MobileOptionRowHeight = 52;
+            private const int MobileOptionRowHeight = 54;
+            private const int MobileOptionPadding = 12;
             private const int MobileOptionColumns = 2;
 
-            private int MobileOptionAreaX => MobilePadding + MobileCategoryWidth + MobilePadding;
-            private int MobileOptionAreaWidth => MobilePanelWidth - MobileOptionAreaX - MobilePadding;
+            /// <summary>選項字級。13 在實機上偏小（實測截圖），提到 15。</summary>
+            private const float MobileOptionFontSize = 15f;
+
+            private int MobileOptionAreaX => MobilePadding + MobileCategoryWidth + MobilePadding + MobileOptionPadding;
+            private int MobileOptionAreaWidth => MobilePanelWidth - MobileOptionAreaX - MobilePadding - MobileOptionPadding;
             private int MobileOptionColumnWidth => (MobileOptionAreaWidth - MobilePadding) / MobileOptionColumns;
 
             /// <summary>手機的選項是兩欄由上而下填，這裡記錄已經放了幾個。</summary>
@@ -1527,7 +1531,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     ControlSize = new Point(width, height),
                     ViewSize = new Point(width, height),
                     AutoViewSize = false,
-                    FontSize = IsMobile ? 13f : 10.5f,
+                    FontSize = IsMobile ? 14f : 10.5f,
                     TextColor = ModernHudTheme.TextGray
                 };
                 button.Click += (s, e) =>
@@ -1593,7 +1597,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     int y = ContentTop + row * MobileOptionRowHeight;
 
                     option = new OptionToggle(label, getter, apply,
-                        x, y, MobileOptionColumnWidth, 120, 38, 13f);
+                        x, y, MobileOptionColumnWidth, 120, 38, MobileOptionFontSize);
                     _mobileOptionIndex++;
                 }
                 else
@@ -1708,9 +1712,14 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     _getter = getter;
                     _setter = setter;
 
+                    // 標籤和開關在同一列，長標籤會直接壓在開關上（實機截圖：
+                    // 「Dynamic Lighting Shader」和 ENABLED 疊在一起）。
+                    // 先量過再決定要不要截斷，並且左右都留邊距。
+                    string display = FitLabel(label, width - buttonWidth - 20, fontSize);
+
                     _label = new LabelControl
                     {
-                        Text = label,
+                        Text = display,
                         X = x,
                         Y = y,
                         FontSize = fontSize,
@@ -1770,6 +1779,22 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     _label.Y = y;
                     _button.X = x + width - _button.ViewSize.X;
                     _button.Y = y - 4;
+                }
+
+                /// <summary>把標籤截到指定寬度以內，超出的部分以刪節號結尾。</summary>
+                private static string FitLabel(string text, int maxWidth, float fontSize)
+                {
+                    var font = GraphicsManager.Instance?.Font;
+                    if (font == null || maxWidth <= 0 || string.IsNullOrEmpty(text))
+                        return text;
+
+                    float scale = fontSize / Constants.BASE_FONT_SIZE;
+                    float width = font.MeasureString(text).X * scale;
+                    if (width <= maxWidth)
+                        return text;
+
+                    int keep = Math.Max(1, (int)(text.Length * (maxWidth / width)) - 1);
+                    return text.Substring(0, keep).TrimEnd() + "…";
                 }
             }
 

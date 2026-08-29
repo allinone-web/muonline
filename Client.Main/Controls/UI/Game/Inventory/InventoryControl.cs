@@ -60,14 +60,17 @@ namespace Client.Main.Controls.UI.Game.Inventory
         /// <summary>手機視窗的上緣。要讓開右上角的介面按鈕、經驗條與狀態列。</summary>
         private const int MobileWindowTop = 112;
 
-        private const int MobileInfoColumnWidth = 320;
+        private const int MobileInfoColumnWidth = 280;
         private const int MobileColumnGap = 14;
 
         /// <summary>
-        /// 裝備欄的寬度。人偶的擺放需要中心點左右各約 4.75 個格子
-        /// （見 BuildEquipSlots：最左是 4 格 + 24，最右是 4.5 格 + 16）。
+        /// 裝備欄的寬度，取人偶實際需要的最小值。
+        ///
+        /// BuildEquipSlots 的擺放範圍是中心點左邊 4 格 + 24、右邊 4.5 格 + 16
+        /// （右邊比較寬是因為翅膀那格有 3 格寬），合計 8.5 格 + 40。
+        /// 先前寫成 9 格 + 40，多出來的 32 px 是純粹的留白。
         /// </summary>
-        private static int MobileEquipColumnWidth => INVENTORY_SQUARE_WIDTH * 9 + 40;
+        private static int MobileEquipColumnWidth => (INVENTORY_SQUARE_WIDTH * 17) / 2 + 40;
 
         // 手機的四欄：立體圖 | 裝備 | 背包 | 資訊
         private Rectangle _previewPanelRect;
@@ -434,10 +437,12 @@ namespace Client.Main.Controls.UI.Game.Inventory
             // 置中比硬釘在某個 Y 好看，也不會壓到那六顆按鈕。
             X = Math.Max(PANEL_PADDING, (canvas.X - WINDOW_WIDTH) / 2);
             _mobileBaseY = 0;   // 由下一行決定
-            // 上緣必須讓開頂部的 HUD 區塊（左上頭像與數值、右上按鈕與經驗條），
-            // 否則 HUD 畫在最上層，文字會透出來蓋在視窗上。
-            // 讓開之後高度不足以置中就靠上，這比壓住 HUD 好。
-            _mobileBaseY = Math.Max(MobileWindowTop, (canvas.Y - WINDOW_HEIGHT) / 2);
+            // 垂直置中。
+            //
+            // 先前為了「讓開頂部 HUD」把上緣釘在固定位置，結果視窗長高之後就再也
+            // 置不了中 —— 那個顧慮其實不成立：Show() 會 BringToFront()，視窗本來
+            // 就畫在 HUD 之上，不會有文字透出來的問題。置中優先。
+            _mobileBaseY = Math.Max(12, (canvas.Y - WINDOW_HEIGHT) / 2);
             Y = _mobileBaseY;
         }
 
@@ -2946,7 +2951,9 @@ namespace Client.Main.Controls.UI.Game.Inventory
             if (GetMobileInfoItem() != null)
                 return;
 
-            const string hint = "選擇道具查看";
+            // 遊戲的字型沒有中文字符，中文會整串變成 ??????（實機截圖確認）。
+            // 這一層的字串一律用英文，與其他介面文字也一致。
+            const string hint = "SELECT AN ITEM";
             float scale = 0.46f;
             var size = _font.MeasureString(hint) * scale;
             var position = new Vector2(

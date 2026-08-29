@@ -30,7 +30,10 @@ namespace Client.Main.Controls.UI.Game
         private const int MaxRows = 4;
         private const int RowHeight = 54;
         private const int RowGap = 6;
-        private const int PanelWidth = 300;
+        private const int PanelWidth = MobileUi.RightColumnWidth;
+
+        /// <summary>清單上緣：狀態列（時間／電量／FPS）之下。</summary>
+        private const int TopMargin = 200;
 
         /// <summary>與伺服器端一致的撿取距離（格），見 ScopeManager.FindNearestPickupItemRawId。</summary>
         private const double PickupRangeSquared = 5 * 5;
@@ -207,14 +210,16 @@ namespace Client.Main.Controls.UI.Game
 
             var canvas = UiScaler.VirtualSize;
 
-            // 右側、技能弧線的上方 —— 那塊區域是空的，而且右手拇指本來就在附近。
-            // 由下往上排，最近的一件永遠在最下面（離拇指最近）。
+            // 右側，狀態列的下方，<b>由上往下</b>排。
+            //
+            // 原本是由下往上（最近的一件離拇指最近），但那樣清單會往下長，
+            // 越接近 ATK 與技能弧線 —— 想撿東西卻按到攻擊是更糟的誤觸。
+            // 改成從固定的上緣往下長，清單再長也不會侵入動作區。
             int right = canvas.X - MobileUi.CornerInset;
-            int bottom = canvas.Y - 300;
 
             for (int i = 0; i < _entries.Count; i++)
             {
-                int y = bottom - (i + 1) * RowHeight - i * RowGap;
+                int y = TopMargin + i * (RowHeight + RowGap);
                 _rowRects.Add(new Rectangle(right - PanelWidth, y, PanelWidth, RowHeight));
             }
         }
