@@ -30,11 +30,53 @@ namespace Client.Main.Controls.UI
             Visible = true;
             Interactive = false;
 
-            float lineHeight = UiScaler.VirtualSize.Y * ORIGINAL_NOTICE_LINE_HEIGHT;
-            _spawnCenter = new Vector2(
-                UiScaler.VirtualSize.X * 0.5f,
-                UiScaler.VirtualSize.Y * ORIGINAL_NOTICE_FIRST_LINE + lineHeight * 0.5f);
+            RefreshSpawnAnchor();
         }
+
+        /// <summary>
+        /// 公告的落點。
+        ///
+        /// 桌面沿用原版：畫面正中央、上緣往下 300/480。
+        ///
+        /// <b>手機改到左側。</b>正中央是所有視窗的位置（地圖、技能、背包都置中），
+        /// 公告每 12 秒刷新一次，只要視窗開著就會有一行金字直接蓋在上面 ——
+        /// 使用者回報的「點地圖，左邊的公告忽然跑到地圖中間」就是這件事：
+        /// 公告一直都在中央，只是平常背景是場景所以不明顯。
+        ///
+        /// 左欄本來就是訊息的位置（聊天記錄也在那裡），公告放過去才是一致的。
+        ///
+        /// 這個值必須<b>可以重算</b>：畫布尺寸會在執行期改變（安全區域在啟動後
+        /// 約半秒才讀得到真值，見 MuGame.PollSafeArea），只在建構子算一次的話
+        /// 之後就一直是錯的。
+        /// </summary>
+        private void RefreshSpawnAnchor()
+        {
+            var canvas = UiScaler.VirtualSize;
+            float lineHeight = canvas.Y * ORIGINAL_NOTICE_LINE_HEIGHT;
+
+            if (MobileUi.IsMobile)
+            {
+                // 左欄，聊天記錄下方。X 是文字的<b>中心</b>（FloatingText 置中對齊），
+                // 所以取欄寬的一半。
+                _spawnCenter = new Vector2(
+                    MobileUi.LeftEdge + MobileNoticeColumnWidth * 0.5f,
+                    canvas.Y * MobileNoticeTop);
+            }
+            else
+            {
+                _spawnCenter = new Vector2(
+                    canvas.X * 0.5f,
+                    canvas.Y * ORIGINAL_NOTICE_FIRST_LINE + lineHeight * 0.5f);
+            }
+
+            _spawnAnchorFor = canvas;
+        }
+
+        /// <summary>手機公告欄的寬度與上緣（畫面高度的比例）。與聊天記錄同一欄。</summary>
+        private const int MobileNoticeColumnWidth = 560;
+        private const float MobileNoticeTop = 0.62f;
+
+        private Point _spawnAnchorFor = Point.Zero;
 
         // ────────────────────────── Public API ──────────────────────────
         /// <summary>
@@ -100,8 +142,29 @@ namespace Client.Main.Controls.UI
         }
 
         // ───────────────────────── Overrides ──────────────────────────
+        protected override void OnScreenSizeChanged()
+        {
+            base.OnScreenSizeChanged();
+            RefreshSpawnAnchor();
+            lock (_sync)
+            {
+                RecalculateStack();
+            }
+        }
+
         public override void Update(GameTime gameTime)
         {
+            // 畫布可能在執行期改變（安全區域、轉向）。OnScreenSizeChanged 不一定
+            // 會傳到這裡 —— 這個控制項沒有可見的大小，所以自己比對一次。
+            if (UiScaler.VirtualSize != _spawnAnchorFor)
+            {
+                RefreshSpawnAnchor();
+                lock (_sync)
+                {
+                    RecalculateStack();
+                }
+            }
+
             _latestTotalSeconds = (float)gameTime.TotalGameTime.TotalSeconds;
             _noticeCountdownSeconds -= (float)gameTime.ElapsedGameTime.TotalSeconds;
             bool removedAny = false;

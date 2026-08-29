@@ -410,6 +410,17 @@ namespace Client.Main.Controls.UI.Game.Hud
 
         public override bool OnClick()
         {
+            // 手機一律不走這條路。
+            //
+            // 分派有兩條：這裡（UI 點擊路由）和 UpdateMobileTouch（自行處理觸控）。
+            // 手機靠建構子裡的 Interactive = !IsMobile 讓 OnClick 不會被呼叫 ——
+            // 但那是「只要沒有人改那一行就成立」的約定，而不是保證。
+            // 哪天有人為了別的理由把 Interactive 打開，兩條路就會同時觸發，
+            // 症狀是每個按鈕都做兩次（背包開了又關、技能放兩次）。
+            // 這裡直接擋掉，讓那個約定變成保證。
+            if (IsMobile)
+                return false;
+
             base.OnClick();
 
             var mousePos = MuGame.Instance.UiMouseState;

@@ -49,6 +49,25 @@ namespace Client.Main.Controls.UI.Login
         private Point _lastVirtualSize = Point.Zero;
         private int _pressedCard = -1;
         private bool _wasPressed;
+
+        /// <summary>
+        /// 已經選過伺服器了。選完之後這個清單就不該再回應任何觸控 ——
+        /// 但它不會立刻消失：Visible 要等連線狀態變更的事件回來才會被關掉，
+        /// 中間有幾十毫秒到一兩秒的空窗。使用者回報「聽到連續快速的點擊音效」
+        /// 就是這段空窗裡的重複觸發。
+        ///
+        /// 由 SetServers 重置（重新拿到清單 = 真的回到選伺服器這一步）。
+        /// </summary>
+        private bool _selectionSent;
+
+        /// <summary>
+        /// 兩次啟用之間的最短間隔。觸控狀態偶爾會在單次按壓中閃回 Released
+        /// 再變回 Pressed，那在邊緣判定上就是完整的一次「放開」——
+        /// 沒有這個下限的話一次點擊會送出好幾次。
+        /// </summary>
+        private const double MinActivationIntervalSeconds = 0.4;
+        private double _lastActivationAt = double.NegativeInfinity;
+        private double _elapsedSeconds;
         private SpriteFont? _font;
 
         public event EventHandler<ServerSelectEventArgs>? ServerClick;
@@ -68,6 +87,9 @@ namespace Client.Main.Controls.UI.Login
                 _servers.AddRange(servers);
 
             _lastVirtualSize = Point.Zero;   // 強制重算版面
+
+            // 重新拿到清單 = 真的回到「選伺服器」這一步，解除鎖定
+            _selectionSent = false;
         }
 
         public int ServerCount => _servers.Count;
@@ -122,6 +144,8 @@ namespace Client.Main.Controls.UI.Login
 
             RefreshLayout();
 
+            _elapsedSeconds += gameTime.ElapsedGameTime.TotalSeconds;
+
             var mouse = MuGame.Instance.UiMouseState;
             bool pressed = mouse.LeftButton == ButtonState.Pressed;
             var position = new Point(mouse.X, mouse.Y);
@@ -136,8 +160,14 @@ namespace Client.Main.Controls.UI.Login
                 _pressedCard = -1;
                 _wasPressed = false;
 
-                if (card >= 0 && card == HitTest(position) && card < _servers.Count)
+                bool tooSoon = _elapsedSeconds - _lastActivationAt < MinActivationIntervalSeconds;
+
+                if (card >= 0 && card == HitTest(position) && card < _servers.Count
+                    && !_selectionSent && !tooSoon)
                 {
+                    _selectionSent = true;
+                    _lastActivationAt = _elapsedSeconds;
+
                     var server = _servers[card];
                     SoundController.Instance.PlayBuffer("Sound/iButtonClick.wav");
                     ServerClick?.Invoke(this, new ServerSelectEventArgs
