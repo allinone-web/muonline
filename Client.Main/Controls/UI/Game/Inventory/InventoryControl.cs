@@ -98,8 +98,33 @@ namespace Client.Main.Controls.UI.Game.Inventory
         /// <summary>裝備欄那一欄的水平中心。桌面是整個視窗的中心，手機是左半欄的中心。</summary>
         private int _equipCenterX;
 
-        public const int Columns = 8;
-        public const int Rows = 8;
+        /// <summary>
+        /// 背包格線的<b>欄數</b>。
+        ///
+        /// 這個值純粹是排版：伺服器送來的是 0..63 的平面格號，
+        /// 客戶端用 <c>x = index % Columns, y = index / Columns</c> 攤成格子，
+        /// 送回去時再 <c>index = y * Columns + x</c> 折回來。兩者互為反函數，
+        /// 所以欄數怎麼設都不影響協議 —— <b>前提是道具都是 1x1</b>，
+        /// 而這正是 <see cref="Core.Utilities.ItemDatabase.SingleSlotItems"/> 保證的
+        /// （伺服器那邊由 OPENMU_SINGLE_SLOT_ITEMS 保證，兩邊必須一致）。
+        ///
+        /// 桌面維持 8 欄。手機改成 5 欄：8 欄要 8x64 = 512 px 寬，
+        /// 加上裝備欄與資訊欄，整個視窗就寬得離譜。5 欄只要 320 px，
+        /// 換來的是要捲動 —— 對手機來說那是划算的交換。
+        /// </summary>
+        public static int Columns => s_mobile ? 5 : 8;
+
+        /// <summary>
+        /// 列數。必須讓 <c>Rows * Columns</c> 蓋得住全部 64 格。
+        /// 5 欄需要 13 列（65 格），最後一列有一格是不存在的 —— 見 <see cref="TotalSlots"/>。
+        /// </summary>
+        public static int Rows => s_mobile ? 13 : 8;
+
+        /// <summary>
+        /// 背包實際的格數。<c>Rows * Columns</c> 可能比它大（5x13 = 65），
+        /// 多出來的那一格不對應任何伺服器格號，不能放東西也不能點。
+        /// </summary>
+        public const int TotalSlots = 64;
         internal const int InventorySlotOffsetConstant = 12;
 
         // ═══════════════════════════════════════════════════════════════
@@ -238,6 +263,17 @@ namespace Client.Main.Controls.UI.Game.Inventory
         private Rectangle _paperdollPanelRect;
         private Rectangle _beamRect;
         private Rectangle _gridRect;
+
+        // ── 背包格線的捲動（只有手機會用到）──
+        //
+        // 5 欄需要 13 列，13 x 64 = 832 px，比可用高度還高，所以要捲。
+        // _gridVisibleRows 是實際看得到的列數，_gridScrollRow 是最上面那一列的列號。
+        private int _gridVisibleRows = Rows;
+        private int _gridScrollRow;
+        private bool _gridDragging;
+        private int _gridDragStartY;
+        private int _gridDragStartScrollPixels;
+        private float _gridScrollPixels;
         private Rectangle _gridFrameRect;
         private Rectangle _footerRect;
         private Rectangle _zenFieldRect;
@@ -558,7 +594,11 @@ namespace Client.Main.Controls.UI.Game.Inventory
 
             if (IsMouseOver && !_isDragging)
             {
-                HandleInventoryInteraction(mousePos, leftJustPressed, leftJustReleased);
+                // 拖曳格線＝捲動。被捲動吃掉的話就不能同時算成點選道具，
+                // 否則手指一滑，最後停在哪一格就選中哪一格。
+                bool scrolled = UpdateGridScroll(mousePos, leftPressed, leftJustPressed, leftJustReleased);
+                if (!scrolled)
+                    HandleInventoryInteraction(mousePos, leftJustPressed, leftJustReleased);
             }
 
             if (_hoveredItem == null && _hoveredEquipSlot >= 0 && _equippedItems.TryGetValue((byte)_hoveredEquipSlot, out var hoveredEquip))
@@ -656,6 +696,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 DrawGridOverlays(spriteBatch);
                 DrawEquipHighlights(spriteBatch);
                 DrawInventoryItems(spriteBatch);
+                DrawGridScrollbar(spriteBatch);
                 DrawEquippedItems(spriteBatch);
                 DrawChrome(spriteBatch);
                 DrawTexts(spriteBatch);
@@ -857,7 +898,10 @@ namespace Client.Main.Controls.UI.Game.Inventory
             int contentHeight = contentBottom - contentTop;
 
             int gridTotalWidth = Columns * INVENTORY_SQUARE_WIDTH;
-            int gridTotalHeight = Rows * INVENTORY_SQUARE_HEIGHT;
+
+            // 放得下幾列就顯示幾列，其餘用捲的。
+            _gridVisibleRows = Math.Clamp(contentHeight / INVENTORY_SQUARE_HEIGHT, 1, Rows);
+            int gridTotalHeight = _gridVisibleRows * INVENTORY_SQUARE_HEIGHT;
 
             // 四欄由左到右：立體圖 | 裝備 | 背包 | 資訊
             const int ColumnGap = MobileColumnGap;
@@ -1309,10 +1353,10 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 spriteBatch.Draw(pixel, new Rectangle(lineX, _gridRect.Y, 1, _gridRect.Height), isMajor ? gridLineMajor : gridLine);
             }
 
-            for (int y = 1; y < Rows; y++)
+            for (int y = 1; y < _gridVisibleRows; y++)
             {
                 int lineY = _gridRect.Y + y * INVENTORY_SQUARE_HEIGHT;
-                bool isMajor = y == Rows / 2;
+                bool isMajor = y == _gridVisibleRows / 2;
                 spriteBatch.Draw(pixel, new Rectangle(_gridRect.X, lineY, _gridRect.Width, 1), isMajor ? gridLineMajor : gridLine);
             }
 
@@ -2126,7 +2170,12 @@ namespace Client.Main.Controls.UI.Game.Inventory
 
         private static bool IsWithinGrid(Point slot)
         {
-            return slot.X >= 0 && slot.X < Columns && slot.Y >= 0 && slot.Y < Rows;
+            if (slot.X < 0 || slot.X >= Columns || slot.Y < 0 || slot.Y >= Rows)
+                return false;
+
+            // 5 欄 x 13 列 = 65，比實際的 64 格多一格。那一格不對應任何
+            // 伺服器格號 —— 讓它通過的話會送出格號 64，伺服器會直接拒絕。
+            return slot.Y * Columns + slot.X < TotalSlots;
         }
 
         private void PlaceItemOnGrid(InventoryItem item)
@@ -2379,6 +2428,29 @@ namespace Client.Main.Controls.UI.Game.Inventory
             }
         }
 
+        /// <summary>
+        /// 格線右側的捲軸。沒有它的話，玩家不會知道下面還有 8 列 ——
+        /// 一個看起來剛好放滿的格線和一個「還有更多」的格線長得一模一樣。
+        /// </summary>
+        private void DrawGridScrollbar(SpriteBatch spriteBatch)
+        {
+            if (!s_mobile || MaxGridScrollRow <= 0)
+                return;
+
+            var grid = Translate(_gridRect);
+            var track = new Rectangle(grid.Right + 4, grid.Y, 6, grid.Height);
+
+            float visibleRatio = _gridVisibleRows / (float)Rows;
+            int thumbHeight = Math.Max(28, (int)(track.Height * visibleRatio));
+            int travel = track.Height - thumbHeight;
+            int thumbY = track.Y + (int)(travel * (_gridScrollRow / (float)MaxGridScrollRow));
+
+            MobileUi.DrawScrollbar(
+                spriteBatch, track,
+                new Rectangle(track.X, thumbY, track.Width, thumbHeight),
+                _gridDragging);
+        }
+
         private void DrawInventoryItems(SpriteBatch spriteBatch)
         {
             if (GraphicsManager.Instance.Pixel == null || GraphicsManager.Instance.Font == null)
@@ -2387,6 +2459,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
             _jewelEntries.Clear();
 
             Point gridTopLeft = Translate(_gridRect).Location;
+            gridTopLeft.Y -= _gridScrollRow * INVENTORY_SQUARE_HEIGHT;
             var font = GraphicsManager.Instance.Font;
             var pixel = GraphicsManager.Instance.Pixel;
 
@@ -2889,6 +2962,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
             else
             {
                 Point gridTopLeft = Translate(_gridRect).Location;
+                gridTopLeft.Y -= _gridScrollRow * INVENTORY_SQUARE_HEIGHT;
                 hoveredItemRect = new Rectangle(
                     gridTopLeft.X + infoItem.GridPosition.X * INVENTORY_SQUARE_WIDTH,
                     gridTopLeft.Y + infoItem.GridPosition.Y * INVENTORY_SQUARE_HEIGHT,
@@ -3187,6 +3261,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
             else if (_pickedItemOriginalGrid.X >= 0 && _pickedItemOriginalGrid.Y >= 0)
             {
                 Point gridTopLeft = Translate(_gridRect).Location;
+                gridTopLeft.Y -= _gridScrollRow * INVENTORY_SQUARE_HEIGHT;
                 rect = new Rectangle(
                     gridTopLeft.X + _pickedItemOriginalGrid.X * INVENTORY_SQUARE_WIDTH,
                     gridTopLeft.Y + _pickedItemOriginalGrid.Y * INVENTORY_SQUARE_HEIGHT,
@@ -3253,8 +3328,74 @@ namespace Client.Main.Controls.UI.Game.Inventory
 
         private Point GetSlotAtScreenPosition(Point screenPos)
         {
-            return ItemGridRenderHelper.GetSlotAtScreenPosition(DisplayRectangle, _gridRect, Columns, Rows, INVENTORY_SQUARE_WIDTH, INVENTORY_SQUARE_HEIGHT, screenPos);
+            var slot = ItemGridRenderHelper.GetSlotAtScreenPosition(
+                DisplayRectangle, _gridRect, Columns, _gridVisibleRows,
+                INVENTORY_SQUARE_WIDTH, INVENTORY_SQUARE_HEIGHT, screenPos);
+
+            if (slot.X < 0)
+                return slot;
+
+            // 命中的是「看得到的第幾列」，要加回捲掉的列數才是真正的格號
+            slot.Y += _gridScrollRow;
+
+            // 5x13 = 65 格，最後一格不對應任何伺服器格號
+            if (!IsWithinGrid(slot))
+                return new Point(-1, -1);
+
+            return slot;
         }
+
+        /// <summary>格線可以捲動的最大列號。</summary>
+        private int MaxGridScrollRow => Math.Max(0, Rows - _gridVisibleRows);
+
+        /// <summary>
+        /// 背包格線的觸控捲動。回傳這一次觸控是否被捲動吃掉
+        /// （被吃掉的話就不能同時算成「點選道具」）。
+        /// </summary>
+        private bool UpdateGridScroll(Point mousePos, bool leftPressed, bool leftJustPressed, bool leftJustReleased)
+        {
+            if (!s_mobile || MaxGridScrollRow <= 0)
+                return false;
+
+            if (leftJustPressed && Translate(_gridRect).Contains(mousePos))
+            {
+                _gridDragging = true;
+                _gridDragStartY = mousePos.Y;
+                _gridDragStartScrollPixels = (int)_gridScrollPixels;
+                return false;   // 還不知道是拖曳還是點選，先不吃掉
+            }
+
+            if (!_gridDragging)
+                return false;
+
+            if (leftJustReleased || !leftPressed)
+            {
+                bool wasDrag = Math.Abs(mousePos.Y - _gridDragStartY) > DragThresholdPixels;
+                _gridDragging = false;
+                SnapGridScroll();
+                return wasDrag;
+            }
+
+            int delta = _gridDragStartY - mousePos.Y;
+            if (Math.Abs(delta) <= DragThresholdPixels)
+                return false;
+
+            float max = MaxGridScrollRow * INVENTORY_SQUARE_HEIGHT;
+            _gridScrollPixels = MathHelper.Clamp(_gridDragStartScrollPixels + delta, 0f, max);
+            _gridScrollRow = (int)MathF.Round(_gridScrollPixels / INVENTORY_SQUARE_HEIGHT);
+            return true;
+        }
+
+        /// <summary>放開手指後對齊到整列，避免半列被切掉。</summary>
+        private void SnapGridScroll()
+        {
+            _gridScrollRow = Math.Clamp(
+                (int)MathF.Round(_gridScrollPixels / INVENTORY_SQUARE_HEIGHT), 0, MaxGridScrollRow);
+            _gridScrollPixels = _gridScrollRow * INVENTORY_SQUARE_HEIGHT;
+        }
+
+        /// <summary>超過這個位移才算拖曳，否則算點選。手指按下時本來就會晃幾個像素。</summary>
+        private const int DragThresholdPixels = 8;
 
         private int GetEquipSlotAtScreenPosition(Point screenPos)
         {

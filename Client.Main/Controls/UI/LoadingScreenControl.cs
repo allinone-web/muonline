@@ -11,12 +11,7 @@ namespace Client.Main.Controls.UI.Game
         private SpriteFont _font;
         private string _pendingMessage = "Loading...";
         private float _progress = 0f; // Value from 0 to 1
-        private BasicEffect _basicEffect; // For drawing the progress bar
 
-        // Progress bar constants
-        private const int ProgressBarHeight = 20; // Slightly smaller for GameScene
-        private const int ProgressBarMargin = 100; // Margin from screen edges
-        private const int ProgressBarYOffset = 50; // Offset from the bottom of the screen
 
         public string Message
         {
@@ -33,56 +28,10 @@ namespace Client.Main.Controls.UI.Game
         public override async Task Load()
         {
             _font = GraphicsManager.Instance.Font;
-            _basicEffect = new BasicEffect(GraphicsDevice)
-            {
-                VertexColorEnabled = true,
-                Projection = Matrix.CreateOrthographicOffCenter(0, UiScaler.VirtualSize.X, UiScaler.VirtualSize.Y, 0, 0, 1),
-                View = Matrix.Identity,
-                World = Matrix.Identity
-            };
             await base.Load();
         }
 
-        private VertexPositionColor[] CreateRectangleVertices(Vector2 pos, Vector2 size, Color color)
-        {
-            return
-            [
-                new VertexPositionColor(new Vector3(pos.X, pos.Y, 0), color),
-                new VertexPositionColor(new Vector3(pos.X + size.X, pos.Y, 0), color),
-                new VertexPositionColor(new Vector3(pos.X, pos.Y + size.Y, 0), color),
-                new VertexPositionColor(new Vector3(pos.X + size.X, pos.Y + size.Y, 0), color)
-            ];
-        }
 
-        private void DrawProgressBar()
-        {
-            if (_basicEffect == null || Progress <= 0f) return; // Don't draw if no progress or effect not ready
-
-            var gd = GraphicsManager.Instance.GraphicsDevice;
-            int barWidth = UiScaler.VirtualSize.X - (ProgressBarMargin * 2);
-            int barX = ProgressBarMargin;
-            int barY = UiScaler.VirtualSize.Y - ProgressBarHeight - ProgressBarYOffset; // Positioned near bottom
-
-            var bgPos = new Vector2(barX, barY);
-            var bgSize = new Vector2(barWidth, ProgressBarHeight);
-            var progressFillSize = new Vector2(barWidth * Progress, ProgressBarHeight);
-
-            var bgVertices = CreateRectangleVertices(bgPos, bgSize, Color.DarkSlateGray * 0.8f);
-            var progressVertices = CreateRectangleVertices(bgPos, progressFillSize, Color.ForestGreen * 0.9f);
-
-            _basicEffect.TextureEnabled = false;
-            _basicEffect.VertexColorEnabled = true;
-
-            foreach (var pass in _basicEffect.CurrentTechnique.Passes)
-            {
-                pass.Apply();
-                gd.DrawUserPrimitives(PrimitiveType.TriangleStrip, bgVertices, 0, 2);
-                if (Progress > 0)
-                {
-                    gd.DrawUserPrimitives(PrimitiveType.TriangleStrip, progressVertices, 0, 2);
-                }
-            }
-        }
 
         public override void Draw(GameTime gameTime)
         {
@@ -106,22 +55,18 @@ namespace Client.Main.Controls.UI.Game
                     new Rectangle(0, 0, UiScaler.VirtualSize.X, UiScaler.VirtualSize.Y),
                     Color.Black * 0.75f); // Semi-transparent black background
 
-                // Loading Message
-                if (_font != null)
-                {
-                    var text = Message;
-                    Vector2 size = _font.MeasureString(text);
-                    Vector2 pos = new Vector2(
-                        (UiScaler.VirtualSize.X - size.X) * 0.5f,
-                        (UiScaler.VirtualSize.Y - size.Y) * 0.5f - ProgressBarHeight); // Position text above progress bar
-
-                    spriteBatch.DrawString(_font, text, pos + Vector2.One, Color.Black * 0.7f); // Shadow
-                    spriteBatch.DrawString(_font, text, pos, Color.White);
-                }
+                // 訊息與進度條<b>不在這裡畫</b>。
+                //
+                // 這個控制項和 ProgressBarControl 幾乎總是成對出現
+                // （SelectCharacterScene 兩個都加，GameScene 也是），而兩邊各自
+                // 畫一條進度條加一份文字 —— 畫面下緣因此有兩條相差 10 px、
+                // 寬度還不一樣的進度條，文字也印兩次。使用者看到的就是「兩套載入百分比」。
+                //
+                // 分工改成：這個控制項只負責<b>壓暗背景</b>，
+                // 進度條、百分比與狀態文字一律由 ProgressBarControl 畫。
+                // Message / Progress 兩個屬性保留 —— 它們仍然是資料來源，
+                // GameScene 與 SelectCharacterScene 從這裡讀值餵給 ProgressBarControl。
             }
-
-            // Draw Progress Bar using BasicEffect (outside of SpriteBatchScope for Sprite)
-            DrawProgressBar();
 
             // We call base.Draw(gameTime) if LoadingScreenControl itself might have child controls
             // For now, it's simple, so it might not be strictly necessary.
