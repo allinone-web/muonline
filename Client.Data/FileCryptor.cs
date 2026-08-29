@@ -1,4 +1,4 @@
-﻿namespace Client.Data
+namespace Client.Data
 {
     public static class FileCryptor
     {
@@ -20,5 +20,21 @@
             return dst;
         }
 
+        /// <summary>
+        /// 反向操作 <see cref="Decrypt"/>。滾動金鑰是由**密文**推進的，
+        /// 所以加密時必須先算出這個位元組的密文，再用它更新金鑰。
+        /// </summary>
+        public static byte[] Encrypt(byte[] src)
+        {
+            var dst = new byte[src.Length];
+            ushort mapKey = 0x5E;
+            for (int i = 0; i < src.Length; ++i)
+            {
+                byte cipher = (byte)((byte)(src[i] + mapKey) ^ MAP_XOR_KEY[i % 16]);
+                dst[i] = cipher;
+                mapKey = (ushort)(cipher + 0x3D & 0xFF);
+            }
+            return dst;
+        }
     }
 }

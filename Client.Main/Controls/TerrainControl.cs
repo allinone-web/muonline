@@ -280,6 +280,76 @@ namespace Client.Main.Controls
         public float GetWindValue(int x, int y) => _wind.GetWindValue(x, y);
 
         /// <summary>
+        /// 編輯器用：把改過的地形資料換進渲染端，只傳有變動的部分。
+        /// </summary>
+        /// <remarks>
+        /// 整條渲染管線都是用**參考identity**判斷要不要重建快取的
+        /// （<c>TerrainRenderer.EnsureVertexCache</c> 比對 HeightMap / TerrainWall / Normals，
+        /// <c>IsPersistentTerrainIndexCacheUsable</c> 比對 Layer1 / Layer2 / Alpha），
+        /// 所以這裡一律「換成新陣列」而不是就地改內容 —— 就地改的話畫面不會更新。
+        /// </remarks>
+        public void ApplyEditedTerrain(
+            byte[] layer1 = null,
+            byte[] layer2 = null,
+            byte[] alpha = null,
+            Client.Data.ATT.TWFlags[] attributes = null,
+            Color[] heightMap = null,
+            Color[] lightData = null)
+        {
+            if (_data == null)
+                return;
+
+            if (layer1 != null || layer2 != null || alpha != null)
+            {
+                // TerrainMapping 是 struct，必須取出、改完再寫回。
+                var mapping = _data.Mapping;
+                if (layer1 != null) mapping.Layer1 = (byte[])layer1.Clone();
+                if (layer2 != null) mapping.Layer2 = (byte[])layer2.Clone();
+                if (alpha != null) mapping.Alpha = (byte[])alpha.Clone();
+                _data.Mapping = mapping;
+            }
+
+            if (attributes != null)
+            {
+                // TerrainAttribute.TerrainWall 是唯讀屬性，只能整個換一個新物件。
+                var replacement = new Client.Data.ATT.TerrainAttribute
+                {
+                    Version = _data.Attributes?.Version ?? 0,
+                    Index = _data.Attributes?.Index ?? 0,
+                    Width = 255,
+                    Height = 255,
+                };
+
+                int count = Math.Min(attributes.Length, replacement.TerrainWall.Length);
+                for (int i = 0; i < count; i++)
+                    replacement.TerrainWall[i] = attributes[i];
+
+                _data.Attributes = replacement;
+            }
+
+            bool geometryChanged = heightMap != null || attributes != null;
+
+            if (heightMap != null)
+                _data.HeightMap = (Color[])heightMap.Clone();
+
+            if (lightData != null)
+                _data.LightData = (Color[])lightData.Clone();
+
+            // 高度或 Height 屬性一變，法線與光照就過期了；重算順序與 Load() 相同。
+            if (geometryChanged || lightData != null)
+            {
+                _lightManager.CreateTerrainNormals();
+                _lightManager.CreateFinalLightmap(LightDirection);
+            }
+
+            if (geometryChanged)
+            {
+                _renderer.CreateHeightMapTexture();
+                _grassRenderer.BuildAllGrass();
+            }
+        }
+
+        /// <summary>
         /// Renders the terrain into the shared shadow map.
         /// </summary>
         public void RenderShadowMap(Effect shadowEffect, Matrix lightViewProjection)

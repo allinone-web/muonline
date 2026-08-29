@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
@@ -20,14 +20,14 @@ namespace Client.Data.OZB
 
             return fileType switch
             {
-                "BM6" => this.ReadBM6(br, version),
-                "BM8" => this.ReadBM8(br, version),
-                "BM\u0018" => this.ReadBM8(br, version),
+                "BM6" => this.ReadBM6(br, buffer, version),
+                "BM8" => this.ReadBM8(br, buffer, version),
+                "BM\u0018" => this.ReadBM8(br, buffer, version),
                 _ => throw new FileLoadException($"Invalid OZB file type. Expected BM6 or BM8, Received: {fileType}"),
             };
         }
 
-        private OZB ReadBM8(BinaryReader br, byte version)
+        private OZB ReadBM8(BinaryReader br, byte[] buffer, byte version)
         {
             // header (14 bytes)
             var type = br.ReadInt16();
@@ -51,6 +51,7 @@ namespace Client.Data.OZB
 
             var bmpHeader = br.ReadBytes(1026);
 
+            var headerLength = (int)br.BaseStream.Position;
             var backTerrainHeight = br.ReadBytes(width * height);
 
             return new OZB
@@ -58,11 +59,13 @@ namespace Client.Data.OZB
                 Version = version,
                 Width = width,
                 Height = height,
+                FileType = OZBFileType.BM8,
+                RawHeader = buffer.AsSpan(0, headerLength).ToArray(),
                 Data = backTerrainHeight.Select(x => Color.FromArgb(255, x, 0, 0)).ToArray()
             };
         }
 
-        private OZB ReadBM6(BinaryReader br, byte version)
+        private OZB ReadBM6(BinaryReader br, byte[] buffer, byte version)
         {
             // header
             var type = br.ReadInt16();
@@ -84,6 +87,8 @@ namespace Client.Data.OZB
             var clrUsed = br.ReadInt32();
             var clrImportant = br.ReadInt32();
 
+            var headerLength = (int)br.BaseStream.Position;
+
             Color[] data = new Color[width * height];
 
             for (var i = 0; i < data.Length; i++)
@@ -99,6 +104,8 @@ namespace Client.Data.OZB
                 Version = version,
                 Width = width,
                 Height = height,
+                FileType = OZBFileType.BM6,
+                RawHeader = buffer.AsSpan(0, headerLength).ToArray(),
                 Data = data
             };
         }

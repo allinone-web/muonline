@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ClientMainTargetFramework>net10.0</ClientMainTargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>MuMapEditor</AssemblyName>
+    <RootNamespace>Client.MapEditor</RootNamespace>
+    <RollForward>Major</RollForward>
+
+    <!-- cimgui、SDL2、OpenAL 的 macOS 原生庫都有 arm64，不需要 Rosetta。
+         （MuMac 釘 osx-x64 是它自己的歷史包袱，編輯器不跟。） -->
+    <RuntimeIdentifier>osx-arm64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <UseAppHost>true</UseAppHost>
+
+    <!-- ImGui 的頂點/索引緩衝要直接讀原生記憶體。 -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <UseSourceGenerators>true</UseSourceGenerators>
+    <DefineConstants>$(DefineConstants);MACOS</DefineConstants>
+  </PropertyGroup>
+
+  <!-- macOS 上 MGCB 需要 Wine 才能編 shader，所以一律用預先建好的 .xnb。
+       這也順便避開 MuMac 那個 `dotnet tool restore` 目標（mgcb 3.8.5.1 會無限卡住）。 -->
+  <PropertyGroup>
+    <PrebuiltContentDir>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../Client.Main/MGContent/PrebuiltContent/DesktopGL/Content'))</PrebuiltContentDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Client.Data\Client.Data.csproj" />
+    <ProjectReference Include="..\Client.Main\Client.Main.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MonoGame.Framework.DesktopGL" Version="3.8.5" />
+    <!-- 1.91.6.1 是 docking 分支：有 DockSpace 與 ConfigFlags.DockingEnable，
+         原生庫是 x86_64 + arm64 的 universal binary。 -->
+    <PackageReference Include="ImGui.NET" Version="1.91.6.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="$(PrebuiltContentDir)/**/*.xnb">
+      <Link>Content/%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <Target Name="ValidatePrebuiltContent" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(PrebuiltContentDir)')"
+           Text="[MapEditor] 找不到預建內容目錄：$(PrebuiltContentDir)" />
+  </Target>
+
+</Project>

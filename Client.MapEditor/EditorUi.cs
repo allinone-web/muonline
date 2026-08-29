@@ -1,0 +1,1665 @@
+using Client.Data.ATT;
+using Client.Data.MAP;
+using Client.Main;
+using Client.Main.Controls;
+using ImGuiNET;
+using Microsoft.Xna.Framework;
+using NVector2 = System.Numerics.Vector2;
+using NVector4 = System.Numerics.Vector4;
+
+namespace Client.MapEditor;
+
+/// <summary>
+/// 所有 ImGui 面板。每幀由 <see cref="MapEditorGame.Draw"/> 呼叫一次。
+/// </summary>
+public sealed class EditorUi
+{
+    private static readonly NVector4 Warning = new(1f, 0.65f, 0.2f, 1f);
+    private static readonly NVector4 Muted = new(0.6f, 0.62f, 0.66f, 1f);
+    private static readonly NVector4 Normal = new(0.88f, 0.9f, 0.92f, 1f);
+
+    private readonly MapEditorGame _game;
+    private readonly EditorSession _session;
+    private readonly TexturePreviewCache _previews;
+    private readonly LayerView _layerView;
+    private readonly TransformGizmo _gizmo = new();
+    private readonly ThumbnailCache _thumbnails;
+    private readonly AssetCatalog _catalog;
+
+    private string _worldFilter = string.Empty;
+    private bool _showOnlyPlayable = true;
+    private float _thumbnailSize = 96f;
+    private ObjectSummary[] _objectSummary = [];
+    private int _objectSummaryWorldIndex = -1;
+    private AssetEntry[] _assets = [];
+    private int _assetWorldIndex = -1;
+    private string _assetFilter = string.Empty;
+    private AssetCategory _categoryFilter = AssetCategory.Unclassified;
+    private float _assetThumbnailSize = 96f;
+    private readonly Dictionary<string, string[]> _assetTextures = new(StringComparer.OrdinalIgnoreCase);
+    private MapObjectInstance? _transformBefore;
+    private string _spawnFilter = string.Empty;
+    private bool _autoValidateOnce = true;
+    private bool _gizmoActive;
+
+    public EditorUi(MapEditorGame game, ImGuiRenderer imgui, EditorSession session)
+    {
+        _game = game;
+        _session = session;
+        _previews = new TexturePreviewCache(game.GraphicsDevice, imgui);
+        _layerView = new LayerView(game.GraphicsDevice, imgui);
+        _thumbnails = new ThumbnailCache(game.GraphicsDevice, imgui);
+
+        // 人工標註存在使用者目錄，不污染遊戲資源。
+        _catalog = new AssetCatalog(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".mu-editor",
+            "object-catalog.json"));
+    }
+
+    public void Draw()
+    {
+        // PassthruCentralNode：中央留空讓 3D 視埠透出來，面板停靠在四周。
+        ImGui.DockSpaceOverViewport(0, ImGui.GetMainViewport(), ImGuiDockNodeFlags.PassthruCentralNode);
+
+        _thumbnails.BeginFrame();
+
+        DrawGizmo();
+
+        DrawWorldList();
+        DrawFilePanel();
+        DrawToolPanel();
+        DrawViewPanel();
+        DrawLayerPanel();
+        DrawCoordinatePanel();
+        DrawTextureMappingPanel();
+        DrawObjectPanel();
+        DrawValidationPanel();
+        DrawAssetLibraryPanel();
+        DrawStatusBar();
+    }
+
+    /// <summary>
+    /// 首次啟動（還沒有 imgui.ini）時的預設版面：面板分佈在四周，中央留給 3D 視埠。
+    /// 用 FirstUseEver 而不是 DockBuilder —— 一樣能避免面板疊在一起，
+    /// 但使用者拖過之後 ImGui 會記住，不會每幀被重置。
+    /// </summary>
+    /// <remarks>
+    /// <c>SetNextWindowPos</c> 只作用於「下一個」<c>Begin</c>，所以必須在每個面板各自呼叫，
+    /// 不能在一幀開頭一次設完。
+    /// </remarks>
+    private static void PlaceWindow(string panel)
+    {
+        var viewport = ImGui.GetMainViewport();
+        var origin = viewport.WorkPos;
+        var size = viewport.WorkSize;
+
+        const float leftWidth = 300f;
+        const float rightWidth = 330f;
+        const float statusHeight = 30f;
+        const float gap = 8f;
+
+        float bottomHeight = MathF.Max(230f, size.Y * 0.28f);
+        float bottomY = origin.Y + size.Y - bottomHeight - statusHeight;
+        float columnHeight = bottomY - origin.Y - gap;
+        float rightX = origin.X + size.X - rightWidth;
+
+        // 底部橫條切成四格。ImGui.NET 1.91 沒開放 DockBuilder，
+        // 所以是用固定位置分欄而不是真正的 dock layout。
+        float bottomWidth = size.X - rightWidth - gap;
+        float slot = (bottomWidth - (gap * 3f)) / 4f;
+
+        (float x, float y, float w, float h) = panel switch
+        {
+            // 左欄：地圖清單在上、工具在下。
+            "地圖清單" => (origin.X, origin.Y, leftWidth, columnHeight * 0.55f),
+            "工具" => (origin.X, origin.Y + (columnHeight * 0.55f) + gap, leftWidth, (columnHeight * 0.45f) - gap),
+
+            // 右欄：檢視、座標、圖層。
+            "檢視" => (rightX, origin.Y, rightWidth, 200f),
+            "座標" => (rightX, origin.Y + 208f, rightWidth, 215f),
+            "圖層" => (rightX, origin.Y + 431f, rightWidth, columnHeight - 431f),
+
+            // 底部四格。「校驗」與「素材庫」共用最後一格，用標題列切換。
+            "檔案" => (origin.X, bottomY, slot, bottomHeight),
+            "物件" => (origin.X + slot + gap, bottomY, slot, bottomHeight),
+            "貼圖對應" => (origin.X + ((slot + gap) * 2f), bottomY, slot, bottomHeight),
+            _ => (origin.X + ((slot + gap) * 3f), bottomY, slot, bottomHeight),
+        };
+
+        ImGui.SetNextWindowPos(new NVector2(x, y), ImGuiCond.FirstUseEver);
+        ImGui.SetNextWindowSize(new NVector2(w, h), ImGuiCond.FirstUseEver);
+    }
+
+    private void DrawWorldList()
+    {
+        PlaceWindow("地圖清單");
+        ImGui.Begin("地圖清單");
+
+        ImGui.SetNextItemWidth(-1f);
+        ImGui.InputTextWithHint("##filter", "搜尋名稱或編號", ref _worldFilter, 64);
+        ImGui.Checkbox("只顯示可載入的", ref _showOnlyPlayable);
+
+        var worlds = _session.Worlds.Where(Matches).ToArray();
+        ImGui.TextColored(Muted, $"{worlds.Length} / {_session.Worlds.Length} 張　（雙擊載入）");
+        ImGui.Separator();
+
+        const ImGuiTableFlags flags = ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY
+                                    | ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp;
+
+        if (ImGui.BeginTable("worlds", 4, flags))
+        {
+            ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed, 70f);
+            ImGui.TableSetupColumn("名稱");
+            ImGui.TableSetupColumn("OpenMU", ImGuiTableColumnFlags.WidthFixed, 60f);
+            ImGui.TableSetupColumn("檔案", ImGuiTableColumnFlags.WidthFixed, 60f);
+            ImGui.TableSetupScrollFreeze(0, 1);
+            ImGui.TableHeadersRow();
+
+            foreach (var world in worlds)
+            {
+                ImGui.TableNextRow();
+
+                ImGui.TableSetColumnIndex(0);
+                bool selected = _session.LoadedWorldIndex == world.Index;
+
+                // 雙擊才載入。載一張圖要解析全部資料 + 上千個模型，
+                // 誤觸一下就重載代價太大（實測過視窗搶到焦點時會被外部點擊觸發）。
+                ImGui.Selectable(
+                    $"World{world.Index}##w{world.Index}",
+                    selected,
+                    ImGuiSelectableFlags.SpanAllColumns | ImGuiSelectableFlags.AllowDoubleClick);
+
+                if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+                    _session.RequestWorld(world.Index);
+
+                ImGui.TableSetColumnIndex(1);
+                ImGui.Text(world.Name);
+
+                ImGui.TableSetColumnIndex(2);
+                // 客戶端 worldIndex = OpenMU map number + 1；沒有登記世界類別就沒有對應編號。
+                if (world.MapNumber is int number)
+                    ImGui.Text(number.ToString());
+                else
+                    ImGui.TextColored(Muted, "－");
+
+                ImGui.TableSetColumnIndex(3);
+                ImGui.Text($"{Flag(world.HasAtt, "A")}{Flag(world.HasMap, "M")}{Flag(world.HasObj, "O")}");
+            }
+
+            ImGui.EndTable();
+        }
+
+        ImGui.End();
+    }
+
+    private void DrawViewPanel()
+    {
+        PlaceWindow("檢視");
+        ImGui.Begin("檢視");
+
+        var camera = _session.Camera;
+
+        int mode = (int)camera.Mode;
+        if (ImGui.RadioButton("環繞", ref mode, (int)CameraMode.Orbit))
+            camera.Mode = CameraMode.Orbit;
+        ImGui.SameLine();
+        if (ImGui.RadioButton("俯視", ref mode, (int)CameraMode.TopDown))
+            camera.Mode = CameraMode.TopDown;
+
+        ImGui.Separator();
+
+        float distance = camera.Distance;
+        if (ImGui.SliderFloat("距離", ref distance, 200f, Constants.TERRAIN_SIZE * Constants.TERRAIN_SCALE * 1.5f, "%.0f"))
+            camera.Distance = distance;
+
+        float yaw = MathHelper.ToDegrees(camera.Yaw);
+        if (ImGui.SliderFloat("方位", ref yaw, -180f, 180f, "%.0f°"))
+            camera.Yaw = MathHelper.ToRadians(yaw);
+
+        if (camera.Mode == CameraMode.Orbit)
+        {
+            float pitch = MathHelper.ToDegrees(camera.Pitch);
+            if (ImGui.SliderFloat("俯角", ref pitch, 5f, 89f, "%.0f°"))
+                camera.Pitch = MathHelper.ToRadians(pitch);
+        }
+
+        if (ImGui.Button("看全圖"))
+            camera.FrameWholeMap();
+        ImGui.SameLine();
+        if (ImGui.Button("回中心"))
+            camera.FocusTile(Constants.TERRAIN_SIZE / 2, Constants.TERRAIN_SIZE / 2);
+
+        ImGui.Separator();
+        ImGui.TextColored(Muted, "右鍵拖曳＝旋轉　中鍵拖曳＝平移");
+        ImGui.TextColored(Muted, "滾輪＝縮放　WASD＝移動");
+
+        ImGui.End();
+    }
+
+    private static readonly (MapLayer Layer, string Label)[] LayerTabs =
+    [
+        (MapLayer.Layer1, "第一層"),
+        (MapLayer.Layer2, "第二層"),
+        (MapLayer.Alpha, "混合"),
+        (MapLayer.Attribute, "屬性"),
+        (MapLayer.Height, "高度"),
+        (MapLayer.Light, "光照"),
+    ];
+
+    /// <summary>
+    /// 選取工具下，在選中的物件上畫 3D 拖曳手柄。
+    /// </summary>
+    /// <remarks>
+    /// 手柄畫在 ImGui 的前景層，永遠在最上面 —— 被地形擋住的手柄沒有用。
+    /// 拖曳期間要擋住相機，否則會一邊拖物件一邊轉視角。
+    /// </remarks>
+    private void DrawGizmo()
+    {
+        var scene = _game.ActiveScene as MapEditorScene;
+
+        if (scene is null || _session.Tool != EditorToolKind.SelectObject)
+        {
+            _gizmoActive = false;
+            return;
+        }
+
+        var io = ImGui.GetIO();
+        bool acceptInput = !io.WantCaptureMouse;
+
+        _gizmoActive = _gizmo.Draw(_session.SelectedObject, acceptInput);
+
+        if (_gizmo.IsDragging)
+        {
+            _session.ObjectsDirty = true;
+            _session.IssuesStale = true;
+        }
+        else if (_gizmo.TakeCompletedDrag() is MapObjectInstance before && _session.SelectedObject is MapObjectInstance current)
+        {
+            // 一次拖曳算一筆歷史，放開才記。
+            scene.CommitObjectTransform(current, before);
+        }
+    }
+
+    /// <summary>手柄這一幀有沒有吃掉滑鼠。<see cref="MapEditorGame"/> 用它決定相機要不要接受輸入。</summary>
+    public bool GizmoCapturesMouse => _gizmoActive;
+
+    /// <summary>
+    /// 存檔、匯出與部署。
+    /// </summary>
+    /// <remarks>
+    /// 三層是分開的，而且只有最後一層會動到遊戲資源：
+    /// <b>專案</b>（可再編輯的 map.json + PNG）→ <b>匯出</b>（客戶端格式，寫到輸出目錄）
+    /// → <b>部署</b>（複製進遊戲的 Data 目錄，每個被覆蓋的檔案都先備份）。
+    /// </remarks>
+    private void DrawFilePanel()
+    {
+        PlaceWindow("檔案");
+        ImGui.Begin("檔案");
+
+        var scene = _game.ActiveScene as MapEditorScene;
+        var document = _session.Document;
+
+        if (document is null)
+        {
+            ImGui.TextColored(Muted, "尚未載入地圖");
+            ImGui.End();
+            return;
+        }
+
+        if (_session.HasUnsavedChanges)
+            ImGui.TextColored(Warning, "有未儲存的變更");
+        else
+            ImGui.TextColored(Muted, "沒有未儲存的變更");
+
+        ImGui.Separator();
+
+        ImGui.BeginDisabled(_session.FileBusy);
+
+        if (ImGui.Button("存專案"))
+            _ = scene?.SaveProjectAsync();
+
+        ImGui.SameLine();
+        if (ImGui.Button("讀專案"))
+            _ = scene?.LoadProjectAsync();
+
+        ImGui.SameLine();
+        if (ImGui.Button("匯出客戶端"))
+            _ = scene?.ExportAsync();
+
+        ImGui.Separator();
+
+        ImGui.TextColored(Muted, "部署目標（遊戲的 Data 目錄）");
+        ImGui.SetNextItemWidth(-1f);
+
+        string deployPath = _session.Settings.DeployDataPath;
+        if (ImGui.InputText("##deploy", ref deployPath, 512))
+        {
+            _session.Settings.DeployDataPath = deployPath;
+            _session.Settings.Save();
+        }
+
+        bool canDeploy = !string.IsNullOrWhiteSpace(_session.Settings.DeployDataPath);
+        ImGui.BeginDisabled(!canDeploy);
+        if (ImGui.Button("部署到遊戲"))
+            scene?.Deploy();
+        ImGui.EndDisabled();
+
+        ImGui.EndDisabled();
+
+        if (!canDeploy)
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(Muted, "先填上路徑");
+        }
+
+        ImGui.Separator();
+        ImGui.TextColored(Muted, $"專案　{_session.Settings.ProjectDirectoryFor(document.WorldIndex)}");
+        ImGui.TextColored(Muted, $"輸出　{_session.Settings.OutputDirectoryFor(document.WorldIndex)}");
+
+        if (!string.IsNullOrEmpty(_session.FileMessage))
+        {
+            ImGui.Separator();
+            ImGui.TextWrapped(_session.FileMessage);
+        }
+
+        ImGui.End();
+    }
+
+    private static readonly (EditorToolKind Kind, string Label)[] ToolButtons =
+    [
+        (EditorToolKind.None, "瀏覽"),
+        (EditorToolKind.PaintLayer1, "第一層"),
+        (EditorToolKind.PaintLayer2, "第二層"),
+        (EditorToolKind.PaintAlpha, "混合"),
+        (EditorToolKind.SculptHeight, "高度"),
+        (EditorToolKind.PaintAttribute, "屬性"),
+        (EditorToolKind.PlaceObject, "放置"),
+        (EditorToolKind.SelectObject, "選取"),
+        (EditorToolKind.SpawnArea, "生怪"),
+    ];
+
+    private static readonly (TWFlags Flag, string Label)[] AttributeFlags =
+    [
+        (TWFlags.NoMove, "不可走"),
+        (TWFlags.NoGround, "無地面"),
+        (TWFlags.SafeZone, "安全區"),
+        (TWFlags.Water, "水"),
+        (TWFlags.Height, "抬高"),
+        (TWFlags.CameraUp, "相機抬升"),
+        (TWFlags.NoAttackZone, "禁攻擊"),
+    ];
+
+    /// <summary>
+    /// 編輯工具面板：選工具、調筆刷、撤銷重做。
+    /// </summary>
+    private void DrawToolPanel()
+    {
+        PlaceWindow("工具");
+        ImGui.Begin("工具");
+
+        if (_session.Document is null)
+        {
+            ImGui.TextColored(Muted, "尚未載入地圖");
+            ImGui.End();
+            return;
+        }
+
+        for (int i = 0; i < ToolButtons.Length; i++)
+        {
+            var (kind, label) = ToolButtons[i];
+
+            if (ImGui.RadioButton(label, _session.Tool == kind))
+                _session.Tool = kind;
+
+            if (i % 3 != 2)
+                ImGui.SameLine();
+        }
+
+        ImGui.Separator();
+
+        // 物件與生怪工具有自己的操作區，格子類的撤銷不畫在這裡。
+        if (_session.Tool is not (EditorToolKind.PlaceObject or EditorToolKind.SelectObject or EditorToolKind.SpawnArea))
+            DrawUndoRedo();
+
+        if (_session.Tool == EditorToolKind.None)
+        {
+            ImGui.TextColored(Muted, "選一個工具開始編輯。");
+            ImGui.End();
+            return;
+        }
+
+        if (_session.Tool is not (EditorToolKind.PlaceObject or EditorToolKind.SelectObject or EditorToolKind.SpawnArea))
+        {
+            ImGui.Separator();
+            DrawBrushSettings();
+        }
+
+        ImGui.Separator();
+        DrawToolSpecificSettings();
+
+        ImGui.End();
+    }
+
+    private void DrawUndoRedo()
+    {
+        var history = _session.History;
+        var scene = _game.ActiveScene as MapEditorScene;
+
+        ImGui.BeginDisabled(!history.CanUndo);
+        if (ImGui.Button("撤銷"))
+            scene?.Undo();
+        ImGui.EndDisabled();
+
+        ImGui.SameLine();
+        ImGui.BeginDisabled(!history.CanRedo);
+        if (ImGui.Button("重做"))
+            scene?.Redo();
+        ImGui.EndDisabled();
+
+        ImGui.SameLine();
+        ImGui.TextColored(Muted, $"{history.UndoDepth} 筆");
+
+        ImGui.TextColored(Muted, "Cmd+Z 撤銷、Cmd+Shift+Z 重做");
+
+        if (history.NextUndoDescription is string next)
+            ImGui.TextColored(Muted, $"下一步撤銷：{next}");
+    }
+
+    private void DrawBrushSettings()
+    {
+        var brush = _session.Brush;
+
+        int shape = (int)brush.Shape;
+        ImGui.SetNextItemWidth(-1f);
+        if (ImGui.Combo("##shape", ref shape, "點\0方形\0圓形\0"))
+            brush.Shape = (BrushShape)shape;
+
+        if (brush.Shape != BrushShape.Point)
+        {
+            int radius = brush.Radius;
+            if (ImGui.SliderInt("半徑", ref radius, 0, 32))
+                brush.Radius = radius;
+
+            float falloff = brush.Falloff;
+            if (ImGui.SliderFloat("衰減", ref falloff, 0f, 1f, "%.2f"))
+                brush.Falloff = falloff;
+        }
+
+        // 貼圖與屬性是離散值，強度對它們沒有意義。
+        if (_session.Tool is EditorToolKind.PaintAlpha or EditorToolKind.SculptHeight)
+        {
+            float strength = brush.Strength;
+            if (ImGui.SliderFloat("強度", ref strength, 0.01f, 1f, "%.2f"))
+                brush.Strength = strength;
+        }
+    }
+
+    private void DrawToolSpecificSettings()
+    {
+        switch (_session.Tool)
+        {
+            case EditorToolKind.PaintLayer1:
+            case EditorToolKind.PaintLayer2:
+                DrawTilePicker();
+                break;
+
+            case EditorToolKind.PaintAlpha:
+                float alpha = _session.PaintAlphaValue;
+                if (ImGui.SliderFloat("目標混合值", ref alpha, 0f, 255f, "%.0f"))
+                    _session.PaintAlphaValue = alpha;
+
+                ImGui.TextColored(Muted, "0 = 只顯示第一層，255 = 完全蓋成第二層");
+                break;
+
+            case EditorToolKind.SculptHeight:
+                DrawHeightSettings();
+                break;
+
+            case EditorToolKind.PaintAttribute:
+                DrawAttributeSettings();
+                break;
+
+            case EditorToolKind.PlaceObject:
+                DrawPlaceSettings();
+                break;
+
+            case EditorToolKind.SelectObject:
+                DrawSelectionSettings();
+                break;
+
+            case EditorToolKind.SpawnArea:
+                DrawSpawnSettings();
+                break;
+        }
+    }
+
+    private void DrawPlaceSettings()
+    {
+        int type = _session.PlaceObjectType;
+        if (ImGui.InputInt("物件 type", ref type))
+            _session.PlaceObjectType = (short)Math.Clamp(type, 0, 255);
+
+        ImGui.TextColored(Muted, "在素材庫點模型可以帶入 type");
+
+        bool snap = _session.SnapToTile;
+        if (ImGui.Checkbox("貼齊格子中心", ref snap))
+            _session.SnapToTile = snap;
+
+        float yaw = _session.PlaceRandomYaw;
+        if (ImGui.SliderFloat("隨機旋轉", ref yaw, 0f, 180f, "±%.0f°"))
+            _session.PlaceRandomYaw = yaw;
+
+        float scale = _session.PlaceRandomScale;
+        if (ImGui.SliderFloat("隨機縮放", ref scale, 0f, 0.5f, "±%.2f"))
+            _session.PlaceRandomScale = scale;
+
+        ImGui.Separator();
+        DrawObjectUndoRedo();
+    }
+
+    private void DrawSelectionSettings()
+    {
+        var scene = _game.ActiveScene as MapEditorScene;
+        var selected = _session.SelectedObject;
+
+        if (selected is null)
+        {
+            ImGui.TextColored(Muted, "點一下地形選取最近的物件");
+            ImGui.Separator();
+            DrawObjectUndoRedo();
+            return;
+        }
+
+        ImGui.Text($"type {selected.Type} @ ({selected.TileX}, {selected.TileY})");
+
+        // 拖曳期間先改值，放開才記進歷史，這樣一次拖曳只算一筆。
+        _transformBefore ??= selected.Clone();
+
+        var position = new System.Numerics.Vector3(selected.Position.X, selected.Position.Y, selected.Position.Z);
+        if (ImGui.DragFloat3("位置", ref position, 5f))
+        {
+            selected.Position = position;
+            _session.ObjectsDirty = true;
+        }
+
+        float yaw = selected.Angle.Z;
+        if (ImGui.DragFloat("旋轉 Z", ref yaw, 1f, -360f, 360f, "%.0f°"))
+        {
+            selected.Angle = selected.Angle with { Z = yaw };
+            _session.ObjectsDirty = true;
+        }
+
+        float scale = selected.Scale;
+        if (ImGui.DragFloat("縮放", ref scale, 0.01f, 0.05f, 8f, "%.2f"))
+        {
+            selected.Scale = MathF.Max(0.05f, scale);
+            _session.ObjectsDirty = true;
+        }
+
+        if (ImGui.IsMouseReleased(ImGuiMouseButton.Left) && _transformBefore is not null)
+        {
+            scene?.CommitObjectTransform(selected, _transformBefore);
+            _transformBefore = null;
+        }
+
+        ImGui.Separator();
+
+        if (ImGui.Button("刪除"))
+        {
+            scene?.DeleteSelectedObject();
+            _transformBefore = null;
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("相機對準"))
+            _session.Camera.FocusTile(selected.TileX, selected.TileY);
+
+        ImGui.Separator();
+        DrawObjectUndoRedo();
+    }
+
+    /// <summary>
+    /// 生怪工具的設定：挑怪物、看清單、改參數、匯出給 OpenMU。
+    /// </summary>
+    /// <remarks>
+    /// 生怪區畫在「圖層」面板的俯視圖上（拖曳出矩形）—— 那裡看得到地形與屬性，
+    /// 才知道怪該擺在哪。3D 視埠上不好框範圍。
+    /// </remarks>
+    private void DrawSpawnSettings()
+    {
+        var scene = _game.ActiveScene as MapEditorScene;
+        var document = _session.Document;
+
+        if (document is null)
+            return;
+
+        var catalog = _session.NpcCatalog.Entries;
+
+        if (catalog.Length == 0)
+        {
+            ImGui.TextColored(Warning, "還沒有怪物目錄");
+            ImGui.TextWrapped("執行 MuMapEditor --build-npc-catalog 產生");
+            return;
+        }
+
+        var current = catalog.FirstOrDefault(e => e.TypeId == _session.SpawnTypeId);
+        ImGui.SetNextItemWidth(-1f);
+
+        if (ImGui.BeginCombo("##npc", current is null ? "選擇怪物／NPC" : $"{current.TypeId} {current.Name}"))
+        {
+            ImGui.SetNextItemWidth(-1f);
+            ImGui.InputTextWithHint("##npcFilter", "搜尋名稱或編號", ref _spawnFilter, 64);
+
+            foreach (var entry in catalog.Where(MatchesNpc).Take(200))
+            {
+                if (ImGui.Selectable($"{entry.TypeId,4}  {entry.Name}", entry.TypeId == _session.SpawnTypeId))
+                    _session.SpawnTypeId = entry.TypeId;
+
+                if (ImGui.IsItemHovered())
+                {
+                    ImGui.SetTooltip(
+                        $"{entry.ClassName}（{(entry.Kind == NpcKind.Monster ? "怪物" : "NPC")}）\n" +
+                        $"模型：{entry.ModelPath ?? "－"}\n" +
+                        $"伺服器名稱：{entry.ServerDesignation ?? "－"}");
+                }
+            }
+
+            ImGui.EndCombo();
+        }
+
+        ImGui.TextColored(Muted, "在「圖層」面板的俯視圖上拖曳出範圍");
+
+        ImGui.Separator();
+        ImGui.Text($"{document.Spawns.Count} 個生怪區");
+
+        if (ImGui.BeginChild("spawns", new NVector2(0f, 150f)))
+        {
+            foreach (var area in document.Spawns.ToArray())
+            {
+                bool selected = ReferenceEquals(_session.SelectedSpawn, area);
+                string label = $"{area.Name} ({area.X1},{area.Y1})-({area.X2},{area.Y2}) ×{area.Quantity}";
+
+                if (ImGui.Selectable(label + $"##{area.GetHashCode()}", selected))
+                    _session.SelectedSpawn = area;
+            }
+        }
+
+        ImGui.EndChild();
+
+        if (_session.SelectedSpawn is SpawnArea spawn)
+        {
+            ImGui.Separator();
+
+            int quantity = spawn.Quantity;
+            if (ImGui.DragInt("數量", ref quantity, 1f, 1, 200))
+            {
+                spawn.Quantity = (short)quantity;
+                _session.HasUnsavedChanges = true;
+            }
+
+            int direction = (int)spawn.Direction;
+            if (ImGui.Combo("朝向", ref direction, "未定\0西\0西南\0南\0東南\0東\0東北\0北\0西北\0"))
+            {
+                spawn.Direction = (SpawnDirection)direction;
+                _session.HasUnsavedChanges = true;
+            }
+
+            int trigger = (int)spawn.Trigger;
+            if (ImGui.Combo("觸發", ref trigger, "自動\0活動期間\0活動開始一次\0波次期間\0波次開始一次\0程式控制\0遊蕩\0"))
+            {
+                spawn.Trigger = (SpawnTrigger)trigger;
+                _session.HasUnsavedChanges = true;
+            }
+
+            if (ImGui.Button("刪除生怪區"))
+                scene?.DeleteSpawnArea(spawn);
+        }
+
+        ImGui.Separator();
+        ImGui.BeginDisabled(_session.FileBusy);
+        if (ImGui.Button("匯出給 OpenMU"))
+            _ = scene?.ExportToOpenMuAsync();
+        ImGui.EndDisabled();
+
+        ImGui.TextColored(Muted, "產生 Terrain{N}.att 與地圖初始化器原始碼");
+    }
+
+    private bool MatchesNpc(NpcEntry entry)
+        => string.IsNullOrWhiteSpace(_spawnFilter)
+        || entry.Name.Contains(_spawnFilter, StringComparison.OrdinalIgnoreCase)
+        || entry.TypeId.ToString().Contains(_spawnFilter, StringComparison.Ordinal);
+
+    private void DrawObjectUndoRedo()
+    {
+        var history = _session.ObjectHistory;
+        var scene = _game.ActiveScene as MapEditorScene;
+
+        ImGui.BeginDisabled(!history.CanUndo);
+        if (ImGui.Button("撤銷##obj"))
+            scene?.UndoObject();
+        ImGui.EndDisabled();
+
+        ImGui.SameLine();
+        ImGui.BeginDisabled(!history.CanRedo);
+        if (ImGui.Button("重做##obj"))
+            scene?.RedoObject();
+        ImGui.EndDisabled();
+
+        ImGui.SameLine();
+        ImGui.TextColored(Muted, $"物件 {history.Depth} 筆");
+    }
+
+    /// <summary>從這張圖實際有的貼圖裡挑一個索引。直接顯示縮圖，比輸入數字直覺。</summary>
+    private void DrawTilePicker()
+    {
+        var entry = _session.LoadedWorld;
+        if (entry is null)
+            return;
+
+        if (_session.Tool == EditorToolKind.PaintLayer2)
+        {
+            bool empty = _session.PaintLayer2AsEmpty;
+            if (ImGui.Checkbox("塗成「無第二層」", ref empty))
+                _session.PaintLayer2AsEmpty = empty;
+
+            if (empty)
+            {
+                ImGui.TextColored(Muted, $"寫入哨兵值 {TerrainTextureMapping.NoLayerIndex}");
+                return;
+            }
+        }
+
+        ImGui.Text($"貼圖索引 {_session.PaintTileIndex}");
+
+        var indexMap = TerrainTextureMapping.BuildIndexMap();
+        var available = indexMap
+            .Where(kv => entry.TileFiles.Any(f =>
+                string.Equals(Path.GetFileNameWithoutExtension(f), Path.GetFileNameWithoutExtension(kv.Value), StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(kv => kv.Key)
+            .ToArray();
+
+        const float size = 44f;
+        int perRow = Math.Max(1, (int)(ImGui.GetContentRegionAvail().X / (size + 8f)));
+
+        for (int i = 0; i < available.Length; i++)
+        {
+            var (index, file) = available[i];
+
+            string? actual = entry.TileFiles.FirstOrDefault(f =>
+                string.Equals(Path.GetFileNameWithoutExtension(f), Path.GetFileNameWithoutExtension(file), StringComparison.OrdinalIgnoreCase));
+
+            var id = actual is null ? null : _previews.Get(Path.Combine(entry.Directory, actual));
+
+            ImGui.PushID(index);
+
+            bool selected = _session.PaintTileIndex == index;
+            if (selected)
+                ImGui.PushStyleColor(ImGuiCol.Button, new NVector4(0.3f, 0.55f, 0.9f, 1f));
+
+            if (id.HasValue)
+            {
+                if (ImGui.ImageButton("tile", id.Value, new NVector2(size, size)))
+                    _session.PaintTileIndex = (byte)index;
+            }
+            else if (ImGui.Button($"{index}", new NVector2(size + 8f, size + 8f)))
+            {
+                _session.PaintTileIndex = (byte)index;
+            }
+
+            if (selected)
+                ImGui.PopStyleColor();
+
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip($"索引 {index}　{actual ?? file}");
+
+            ImGui.PopID();
+
+            if ((i + 1) % perRow != 0)
+                ImGui.SameLine();
+        }
+    }
+
+    private void DrawHeightSettings()
+    {
+        int mode = (int)_session.HeightMode;
+        ImGui.SetNextItemWidth(-1f);
+        if (ImGui.Combo("##heightMode", ref mode, "升高\0降低\0平滑\0壓平\0"))
+            _session.HeightMode = (HeightMode)mode;
+
+        if (_session.HeightMode is HeightMode.Raise or HeightMode.Lower)
+        {
+            float step = _session.HeightStep;
+            if (ImGui.SliderFloat("每次幅度", ref step, 1f, 40f, "%.0f"))
+                _session.HeightStep = step;
+        }
+        else if (_session.HeightMode == HeightMode.Flatten)
+        {
+            float target = _session.FlattenTarget;
+            if (ImGui.SliderFloat("壓平到", ref target, 0f, 255f, "%.0f"))
+                _session.FlattenTarget = target;
+
+            var scene = _game.ActiveScene as MapEditorScene;
+            if (ImGui.Button("取滑鼠所在高度") && scene?.HoveredTile.Valid == true && _session.Document is not null)
+            {
+                int index = (scene.HoveredTile.TileY * MapDocument.Size) + scene.HoveredTile.TileX;
+                _session.FlattenTarget = _session.Document.HeightAt(index);
+            }
+        }
+
+        ImGui.TextColored(Muted, "高度圖是 0–255，渲染時乘以 1.5");
+    }
+
+    private void DrawAttributeSettings()
+    {
+        foreach (var (flag, label) in AttributeFlags)
+        {
+            if (ImGui.RadioButton(label, _session.AttributeFlag == flag))
+                _session.AttributeFlag = flag;
+        }
+
+        ImGui.Separator();
+
+        bool erase = _session.AttributeErase;
+        if (ImGui.Checkbox("清除（而非設定）", ref erase))
+            _session.AttributeErase = erase;
+
+        ImGui.TextColored(Muted, "切到「圖層 → 屬性」可以看到全圖分佈");
+    }
+
+    /// <summary>
+    /// 圖層俯視圖。既是資料檢查工具（哪裡不可走、貼圖怎麼分佈），
+    /// 也是導覽圖 —— 點一下就把相機移過去。
+    /// </summary>
+    private void DrawLayerPanel()
+    {
+        PlaceWindow("圖層");
+        ImGui.Begin("圖層");
+
+        var document = _session.Document;
+        if (document is null)
+        {
+            ImGui.TextColored(Muted, "尚未載入地圖");
+            ImGui.End();
+            return;
+        }
+
+        for (int i = 0; i < LayerTabs.Length; i++)
+        {
+            var (layer, label) = LayerTabs[i];
+
+            if (ImGui.RadioButton(label, _session.VisibleLayer == layer))
+            {
+                _session.VisibleLayer = layer;
+                _session.LayerViewDirty = true;
+            }
+
+            // 一行三個，六個層剛好兩行。
+            if (i % 3 != 2)
+                ImGui.SameLine();
+        }
+
+        if (_session.LayerViewDirty)
+        {
+            _layerView.Rebuild(document, _session.VisibleLayer);
+            _session.LayerViewDirty = false;
+        }
+
+        ImGui.Separator();
+
+        if (_layerView.TextureId is not IntPtr textureId)
+        {
+            ImGui.End();
+            return;
+        }
+
+        var available = ImGui.GetContentRegionAvail();
+        float side = MathF.Max(120f, MathF.Min(available.X, available.Y - 24f));
+
+        var imageOrigin = ImGui.GetCursorScreenPos();
+        ImGui.Image(textureId, new NVector2(side, side));
+
+        DrawSpawnOverlay(document, imageOrigin, side);
+
+        if (ImGui.IsItemHovered())
+        {
+            var mouse = ImGui.GetIO().MousePos;
+            int tileX = (int)((mouse.X - imageOrigin.X) / side * MapDocument.Size);
+            int tileY = (int)((mouse.Y - imageOrigin.Y) / side * MapDocument.Size);
+
+            if ((uint)tileX < MapDocument.Size && (uint)tileY < MapDocument.Size)
+            {
+                ImGui.SetTooltip($"({tileX}, {tileY})  {Describe(document, tileX, tileY)}");
+
+                if (_session.Tool == EditorToolKind.SpawnArea)
+                    HandleSpawnDrag(tileX, tileY);
+                else if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+                    _session.Camera.FocusTile(tileX, tileY);
+            }
+        }
+
+        ImGui.TextColored(Muted, _session.Tool == EditorToolKind.SpawnArea
+            ? "拖曳出生怪範圍"
+            : "點一下把相機移到該格");
+
+        ImGui.End();
+    }
+
+    /// <summary>在俯視圖上疊出既有的生怪區，選中的那個高亮。</summary>
+    private void DrawSpawnOverlay(MapDocument document, NVector2 imageOrigin, float side)
+    {
+        if (document.Spawns.Count == 0)
+            return;
+
+        var drawList = ImGui.GetWindowDrawList();
+        float scale = side / MapDocument.Size;
+
+        foreach (var area in document.Spawns)
+        {
+            var min = new NVector2(imageOrigin.X + (area.X1 * scale), imageOrigin.Y + (area.Y1 * scale));
+            var max = new NVector2(imageOrigin.X + ((area.X2 + 1) * scale), imageOrigin.Y + ((area.Y2 + 1) * scale));
+
+            bool selected = ReferenceEquals(_session.SelectedSpawn, area);
+            uint color = selected
+                ? ImGui.GetColorU32(new NVector4(1f, 0.85f, 0.2f, 1f))
+                : ImGui.GetColorU32(new NVector4(1f, 0.35f, 0.35f, 0.85f));
+
+            drawList.AddRect(min, max, color, 0f, ImDrawFlags.None, selected ? 2.5f : 1.5f);
+            drawList.AddRectFilled(min, max, ImGui.GetColorU32(new NVector4(1f, 0.35f, 0.35f, 0.15f)));
+        }
+    }
+
+    /// <summary>按下拖到放開＝一個生怪區。</summary>
+    private void HandleSpawnDrag(int tileX, int tileY)
+    {
+        var scene = _game.ActiveScene as MapEditorScene;
+
+        if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+            _session.SpawnDragStart = (tileX, tileY);
+
+        if (ImGui.IsMouseReleased(ImGuiMouseButton.Left) && _session.SpawnDragStart is (int startX, int startY))
+        {
+            scene?.AddSpawnArea(startX, startY, tileX, tileY);
+            _session.SpawnDragStart = null;
+        }
+    }
+
+    private string Describe(MapDocument document, int tileX, int tileY)
+    {
+        int index = (tileY * MapDocument.Size) + tileX;
+
+        return _session.VisibleLayer switch
+        {
+            MapLayer.Layer1 => $"貼圖索引 {document.Layer1[index]}",
+            MapLayer.Layer2 => document.Layer2[index] == TerrainTextureMapping.NoLayerIndex
+                ? "無第二層"
+                : $"貼圖索引 {document.Layer2[index]}",
+            MapLayer.Alpha => $"混合 {document.Alpha[index]}",
+            MapLayer.Attribute => document.Attributes[index] == TWFlags.None
+                ? "None"
+                : document.Attributes[index].ToString(),
+            MapLayer.Height => $"高度 {document.HeightAt(index)}",
+            MapLayer.Light => $"光照 {document.LightAt(index).R},{document.LightAt(index).G},{document.LightAt(index).B}",
+            _ => string.Empty,
+        };
+    }
+
+    /// <summary>
+    /// 座標檢查器。對應 Lineage 編輯器裡的 MapCoordinateTool：
+    /// 隨時能看到「滑鼠這一格」在客戶端與伺服器兩邊分別是什麼，以及那一格的行走屬性。
+    /// 沒有這個，擺怪與出生點只能靠猜。
+    /// </summary>
+    private void DrawCoordinatePanel()
+    {
+        PlaceWindow("座標");
+        ImGui.Begin("座標");
+
+        var world = (_game.ActiveScene?.World) as WorldControl;
+        var hit = TerrainPicker.Pick(world, MuGame.Instance.MouseRay);
+
+        if (!hit.Valid || world is null)
+        {
+            ImGui.TextColored(Muted, "滑鼠不在地形上");
+            ImGui.End();
+            return;
+        }
+
+        var entry = _session.LoadedWorld;
+
+        ImGui.Text($"格子　　 {hit.TileX}, {hit.TileY}");
+        ImGui.Text($"世界座標 {hit.World.X:F0}, {hit.World.Y:F0}");
+        ImGui.Text($"地形高度 {hit.Height:F1}");
+
+        ImGui.Separator();
+
+        // 伺服器那邊的地圖編號與格子座標。OpenMU 的格子索引與客戶端相同（x = i & 0xFF、y = i >> 8），
+        // 差別只在地圖編號要減一。
+        if (entry?.MapNumber is int mapNumber)
+            ImGui.Text($"OpenMU　 map {mapNumber} @ ({hit.TileX}, {hit.TileY})");
+        else
+            ImGui.TextColored(Warning, "這張圖在客戶端沒有登記 WorldInfo，對不到 OpenMU 編號");
+
+        ImGui.Separator();
+
+        var flags = world.Terrain.RequestTerrainFlag(hit.TileX, hit.TileY);
+        ImGui.Text($"屬性　　 {(flags == TWFlags.None ? "None" : flags.ToString())}");
+
+        bool walkable = !flags.HasFlag(TWFlags.NoMove) && !flags.HasFlag(TWFlags.NoGround);
+        ImGui.TextColored(walkable ? Muted : Warning, walkable ? "可行走" : "不可行走");
+
+        if (ImGui.Button("相機對準這一格"))
+            _session.Camera.FocusTile(hit.TileX, hit.TileY);
+
+        ImGui.End();
+    }
+
+    /// <summary>
+    /// 貼圖對應表：這張圖用到哪些索引、每個索引現在對到哪個檔案、哪些缺。
+    /// </summary>
+    /// <remarks>
+    /// 這是「換貼圖素材」的入口 —— 改對應不動原始資源，寫進
+    /// <c>~/.mu-editor/texture-mappings.json</c>，重新載入地圖後生效。
+    ///
+    /// 也是缺貼圖的修法：Season 20 的新圖用到索引 33 以上，
+    /// 而 S6 世代的載入器（含原版 MuMain）只掛到 29，缺的部分在這裡自己指定。
+    /// </remarks>
+    private void DrawTextureMappingPanel()
+    {
+        PlaceWindow("貼圖對應");
+        ImGui.Begin("貼圖對應");
+
+        var entry = _session.LoadedWorld;
+        var document = _session.Document;
+
+        if (entry is null || document is null)
+        {
+            ImGui.TextColored(Muted, "尚未載入地圖");
+            ImGui.End();
+            return;
+        }
+
+        var scene = _game.ActiveScene as MapEditorScene;
+        var mapping = _session.TextureMappings.BuildFor(entry.Index);
+
+        // 這張圖實際用到的索引（Layer2 的 255 是哨兵值，不算）。
+        var used = new SortedSet<int>(document.Layer1.Select(v => (int)v));
+        foreach (var value in document.Layer2)
+        {
+            if (value != TerrainTextureMapping.NoLayerIndex)
+                used.Add(value);
+        }
+
+        int custom = _session.TextureMappings.CountFor(entry.Index);
+        int missing = used.Count(i => ResolveTileFile(entry, mapping, i) is null);
+
+        ImGui.Text($"用到 {used.Count} 個索引");
+        ImGui.SameLine();
+        if (missing > 0)
+            ImGui.TextColored(Warning, $"缺 {missing} 個");
+        else
+            ImGui.TextColored(Muted, "全部對得上");
+
+        if (custom > 0)
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(Muted, $"自訂 {custom} 個");
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("重新載入地圖"))
+            scene?.ReloadCurrentWorld();
+
+        ImGui.Separator();
+
+        const ImGuiTableFlags flags = ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY
+                                    | ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp;
+
+        if (ImGui.BeginTable("mapping", 4, flags))
+        {
+            ImGui.TableSetupColumn("索引", ImGuiTableColumnFlags.WidthFixed, 46f);
+            ImGui.TableSetupColumn("格數", ImGuiTableColumnFlags.WidthFixed, 62f);
+            ImGui.TableSetupColumn("貼圖檔");
+            ImGui.TableSetupColumn("預覽", ImGuiTableColumnFlags.WidthFixed, 44f);
+            ImGui.TableSetupScrollFreeze(0, 1);
+            ImGui.TableHeadersRow();
+
+            var layer1Usage = document.TileUsage(layer2: false);
+            var layer2Usage = document.TileUsage(layer2: true);
+
+            foreach (int index in used)
+            {
+                string? file = ResolveTileFile(entry, mapping, index);
+                bool isCustom = _session.TextureMappings.Get(entry.Index, index) is not null;
+
+                ImGui.TableNextRow();
+                ImGui.PushID(index);
+
+                ImGui.TableSetColumnIndex(0);
+                ImGui.Text(index.ToString());
+
+                ImGui.TableSetColumnIndex(1);
+                ImGui.Text((layer1Usage.GetValueOrDefault((byte)index) + layer2Usage.GetValueOrDefault((byte)index)).ToString());
+
+                ImGui.TableSetColumnIndex(2);
+                DrawMappingCombo(entry, index, file, isCustom);
+
+                ImGui.TableSetColumnIndex(3);
+                if (file is not null && _previews.Get(Path.Combine(entry.Directory, file)) is IntPtr preview)
+                    ImGui.Image(preview, new NVector2(36f, 36f));
+
+                ImGui.PopID();
+            }
+
+            ImGui.EndTable();
+        }
+
+        ImGui.End();
+    }
+
+    private void DrawMappingCombo(WorldEntry entry, int index, string? current, bool isCustom)
+    {
+        string label = current ?? "（缺）";
+
+        if (isCustom)
+            ImGui.TextColored(new NVector4(0.45f, 0.75f, 1f, 1f), "•");
+        else if (current is null)
+            ImGui.TextColored(Warning, "!");
+        else
+            ImGui.TextColored(Muted, " ");
+
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(-1f);
+
+        if (!ImGui.BeginCombo($"##map{index}", label))
+            return;
+
+        if (isCustom && ImGui.Selectable("恢復預設"))
+            _session.TextureMappings.Clear(entry.Index, index);
+
+        foreach (var file in entry.TileFiles)
+        {
+            if (ImGui.Selectable(file, string.Equals(file, current, StringComparison.OrdinalIgnoreCase)))
+                _session.TextureMappings.Set(entry.Index, index, file);
+        }
+
+        ImGui.EndCombo();
+    }
+
+    /// <summary>
+    /// 索引表寫的是 .ozj，實際檔案可能是 .ozt（透明版），比對時忽略副檔名。
+    /// 找不到就是這個索引缺貼圖。
+    /// </summary>
+    private static string? ResolveTileFile(WorldEntry entry, Dictionary<int, string> mapping, int index)
+    {
+        if (!mapping.TryGetValue(index, out var mapped))
+            return null;
+
+        return entry.TileFiles.FirstOrDefault(f =>
+            string.Equals(Path.GetFileNameWithoutExtension(f), Path.GetFileNameWithoutExtension(mapped), StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// 這張圖實際擺了哪些物件。type 對應的模型是 <c>Object{world}/Object{type+1:00}.bmd</c>
+    /// （見 <c>Client.Main.Objects.MapTileObject.Load</c>），語意類別來自該 world 的
+    /// <c>CreateMapTileObjects()</c>。Phase 2 會在這裡接上縮圖與分類標註。
+    /// </summary>
+    private void DrawObjectPanel()
+    {
+        PlaceWindow("物件");
+        ImGui.Begin("物件");
+
+        var document = _session.Document;
+        var entry = _session.LoadedWorld;
+
+        if (document is null || entry is null)
+        {
+            ImGui.TextColored(Muted, "尚未載入地圖");
+            ImGui.End();
+            return;
+        }
+
+        if (_objectSummaryWorldIndex != entry.Index)
+        {
+            _objectSummary = BuildObjectSummary(document, entry);
+            _objectSummaryWorldIndex = entry.Index;
+        }
+
+        int broken = _objectSummary.Where(o => !o.HasModel).Sum(o => o.Count);
+
+        ImGui.Text($"{document.Objects.Count} 個物件，{_objectSummary.Length} 種");
+
+        if (broken > 0)
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(Warning, $"{broken} 個載不到模型");
+
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("這些物件在遊戲裡不會出現 —— 模型路徑對不到檔案");
+        }
+
+        ImGui.Separator();
+
+        const ImGuiTableFlags flags = ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY
+                                    | ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp;
+
+        if (ImGui.BeginTable("objects", 3, flags))
+        {
+            ImGui.TableSetupColumn("type", ImGuiTableColumnFlags.WidthFixed, 44f);
+            ImGui.TableSetupColumn("數量", ImGuiTableColumnFlags.WidthFixed, 50f);
+            ImGui.TableSetupColumn("類別");
+            ImGui.TableSetupScrollFreeze(0, 1);
+            ImGui.TableHeadersRow();
+
+            foreach (var item in _objectSummary)
+            {
+                ImGui.TableNextRow();
+
+                ImGui.TableSetColumnIndex(0);
+                if (ImGui.Selectable($"{item.Type}##o{item.Type}", false, ImGuiSelectableFlags.SpanAllColumns))
+                    FocusObject(document, item.Type);
+
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip($"Object{entry.Index}/Object{item.Type + 1:00}.bmd");
+
+                ImGui.TableSetColumnIndex(1);
+                ImGui.Text(item.Count.ToString());
+
+                ImGui.TableSetColumnIndex(2);
+                if (!item.HasModel)
+                    ImGui.TextColored(Warning, "缺模型");
+                else if (item.ClassName is null)
+                    ImGui.TextColored(Muted, "未分類");
+                else
+                    ImGui.Text(item.ClassName);
+            }
+
+            ImGui.EndTable();
+        }
+
+        ImGui.End();
+    }
+
+    private static ObjectSummary[] BuildObjectSummary(MapDocument document, WorldEntry entry)
+    {
+        var semanticTypes = WorldCatalog.GetTileObjectTypes(entry);
+
+        return document.Objects
+            .GroupBy(o => o.Type)
+            .OrderByDescending(g => g.Count())
+            .Select(g =>
+            {
+                string? className = null;
+
+                if (semanticTypes is not null && g.Key >= 0 && g.Key < semanticTypes.Length)
+                {
+                    var type = semanticTypes[g.Key];
+
+                    // 泛用的 MapTileObject 代表這個 type 沒有被該 world 特別分類過。
+                    if (type is not null && type.Name != "MapTileObject")
+                        className = type.Name;
+                }
+
+                return new ObjectSummary(g.Key, g.Count(), className, ResolvesModel(entry, g.Key, className));
+            })
+            .ToArray();
+    }
+
+    /// <summary>把相機移到該種物件的第一個實例上。</summary>
+    private void FocusObject(MapDocument document, short type)
+    {
+        var first = document.Objects.FirstOrDefault(o => o.Type == type);
+        if (first is null)
+            return;
+
+        int tileX = first.TileX;
+        int tileY = first.TileY;
+
+        _session.Camera.Mode = CameraMode.Orbit;
+        _session.Camera.Distance = 900f;
+        _session.Camera.FocusTile(tileX, tileY);
+    }
+
+    private readonly record struct ObjectSummary(short Type, int Count, string? ClassName, bool HasModel);
+
+    /// <summary>
+    /// 這個 type 在遊戲裡載得到模型嗎？
+    /// </summary>
+    /// <remarks>
+    /// 泛用的 <c>MapTileObject.Load</c> 組出來的路徑是 <c>Object{world}/Object{type+1:00}.bmd</c>，
+    /// 但 <b>Object1（Lorencia）裡全是具名檔案</b>（Tree01.bmd、Bonfire01.bmd…），
+    /// 一個 ObjectNN.bmd 都沒有 —— 所以沒有語意類別的 type 在 Lorencia 一定載不到，
+    /// <c>WorldControl.RemoveFailed</c> 會把它們從世界移除。實測 Lorencia 2833 個物件裡有 1028 個是這種。
+    ///
+    /// 有語意類別的就當作載得到：那些類別各自在 Load() 裡寫死自己的路徑，這裡驗不了。
+    /// </remarks>
+    private static bool ResolvesModel(WorldEntry entry, short type, string? className)
+    {
+        if (className is not null)
+            return true;
+
+        string path = Path.Combine(
+            Path.GetDirectoryName(entry.Directory) ?? string.Empty,
+            $"Object{entry.Index}",
+            $"Object{type + 1:00}.bmd");
+
+        return File.Exists(path);
+    }
+
+    private static readonly NVector4 ErrorColor = new(1f, 0.4f, 0.4f, 1f);
+
+    /// <summary>
+    /// 校驗面板：把「畫得出來但進遊戲會壞掉」的東西列出來，點一下跳過去看。
+    /// </summary>
+    private void DrawValidationPanel()
+    {
+        PlaceWindow("校驗");
+        ImGui.Begin("校驗");
+
+        var document = _session.Document;
+        var entry = _session.LoadedWorld;
+        var scene = _game.ActiveScene as MapEditorScene;
+
+        if (document is null || entry is null)
+        {
+            ImGui.TextColored(Muted, "尚未載入地圖");
+            ImGui.End();
+            return;
+        }
+
+        // 校驗要掃過整張圖與所有物件，不適合每幀跑，改成手動觸發 + 標記過期。
+        if (ImGui.Button("執行校驗") || (_session.IssuesStale && _session.Issues.Count == 0 && _autoValidateOnce))
+        {
+            _session.Issues = MapValidator.Validate(document, entry, _session.TextureMappings, _session.NpcCatalog);
+            _session.IssuesStale = false;
+            _autoValidateOnce = false;
+        }
+
+        ImGui.SameLine();
+
+        int errors = _session.Issues.Count(i => i.Severity == IssueSeverity.Error);
+        int warnings = _session.Issues.Count(i => i.Severity == IssueSeverity.Warning);
+
+        if (_session.IssuesStale && _session.Issues.Count > 0)
+            ImGui.TextColored(Muted, "（地圖已變動，結果可能過期）");
+        else if (errors > 0)
+            ImGui.TextColored(ErrorColor, $"{errors} 個錯誤、{warnings} 個警告");
+        else if (warnings > 0)
+            ImGui.TextColored(Warning, $"{warnings} 個警告");
+        else if (_session.Issues.Count == 0)
+            ImGui.TextColored(Muted, "尚未校驗");
+
+        ImGui.Separator();
+
+        if (_session.Issues.Count == 0)
+        {
+            ImGui.TextColored(Muted, "按「執行校驗」開始");
+            ImGui.End();
+            return;
+        }
+
+        foreach (var issue in _session.Issues)
+        {
+            var color = issue.Severity switch
+            {
+                IssueSeverity.Error => ErrorColor,
+                IssueSeverity.Warning => Warning,
+                _ => Muted,
+            };
+
+            string mark = issue.Severity switch
+            {
+                IssueSeverity.Error => "✕",
+                IssueSeverity.Warning => "!",
+                _ => "·",
+            };
+
+            ImGui.TextColored(color, $"{mark} [{issue.Category}]");
+            ImGui.SameLine();
+            ImGui.TextWrapped(issue.Message);
+
+            // 有座標／物件／生怪區的就給一個跳過去的按鈕。
+            if (issue.Tile is (int x, int y))
+            {
+                ImGui.PushID(issue.GetHashCode());
+                if (ImGui.SmallButton($"跳到 ({x}, {y})"))
+                {
+                    _session.Camera.FocusTile(x, y);
+
+                    if (issue.Spawn is not null)
+                        _session.SelectedSpawn = issue.Spawn;
+                }
+
+                ImGui.PopID();
+            }
+            else if (issue.Object is MapObjectInstance instance)
+            {
+                ImGui.PushID(issue.GetHashCode());
+                if (ImGui.SmallButton($"跳到物件 ({instance.TileX}, {instance.TileY})"))
+                {
+                    _session.SelectedObject = instance;
+                    _session.Tool = EditorToolKind.SelectObject;
+                    _session.Camera.Mode = CameraMode.Orbit;
+                    _session.Camera.Distance = 900f;
+                    _session.Camera.FocusTile(instance.TileX, instance.TileY);
+                }
+
+                ImGui.PopID();
+            }
+
+            ImGui.Separator();
+        }
+
+        ImGui.End();
+    }
+
+    /// <summary>
+    /// 素材庫。列出目前這張圖的 <c>Object{N}</c> 目錄裡所有模型，畫成縮圖並依類別分組。
+    /// 分類可以人工改，改完寫回 <c>~/.mu-editor/object-catalog.json</c>。
+    /// </summary>
+    private void DrawAssetLibraryPanel()
+    {
+        PlaceWindow("素材庫");
+        ImGui.Begin("素材庫");
+
+        var entry = _session.LoadedWorld;
+        if (entry is null)
+        {
+            ImGui.TextColored(Muted, "尚未載入地圖");
+            ImGui.End();
+            return;
+        }
+
+        if (_assetWorldIndex != entry.Index)
+        {
+            _assets = _catalog.Scan(_session.DataPath, entry.Index, WorldCatalog.GetTileObjectTypes(entry));
+            _assetWorldIndex = entry.Index;
+            _assetFilter = string.Empty;
+        }
+
+        if (_assets.Length == 0)
+        {
+            ImGui.TextColored(Warning, $"Object{entry.Index}/ 沒有模型檔");
+            ImGui.End();
+            return;
+        }
+
+        DrawAssetToolbar(entry);
+        ImGui.Separator();
+
+        var visible = _assets
+            .Where(a => _categoryFilter == AssetCategory.Unclassified || a.Category == _categoryFilter)
+            .Where(a => string.IsNullOrWhiteSpace(_assetFilter)
+                     || a.FileName.Contains(_assetFilter, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        ImGui.TextColored(Muted, $"{visible.Length} / {_assets.Length} 個模型");
+
+        if (ImGui.BeginChild("assets", new NVector2(0f, 0f)))
+        {
+            float cell = _assetThumbnailSize + 16f;
+            int perRow = Math.Max(1, (int)(ImGui.GetContentRegionAvail().X / cell));
+
+            for (int i = 0; i < visible.Length; i++)
+            {
+                DrawAssetCell(visible[i]);
+
+                if ((i + 1) % perRow != 0)
+                    ImGui.SameLine();
+            }
+        }
+
+        ImGui.EndChild();
+        ImGui.End();
+    }
+
+    private void DrawAssetToolbar(WorldEntry entry)
+    {
+        ImGui.SetNextItemWidth(180f);
+        ImGui.InputTextWithHint("##assetFilter", "搜尋檔名", ref _assetFilter, 64);
+
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(140f);
+
+        // 「未分類」在這裡當成「全部」用：它是列舉的第一項，也是預設值。
+        if (ImGui.BeginCombo("##category", _categoryFilter == AssetCategory.Unclassified
+                ? "全部類別"
+                : AssetCategoryNames.Of(_categoryFilter)))
+        {
+            if (ImGui.Selectable("全部類別", _categoryFilter == AssetCategory.Unclassified))
+                _categoryFilter = AssetCategory.Unclassified;
+
+            foreach (var category in AssetCategoryNames.All.Where(c => c != AssetCategory.Unclassified))
+            {
+                int count = _assets.Count(a => a.Category == category);
+                if (count == 0)
+                    continue;
+
+                if (ImGui.Selectable($"{AssetCategoryNames.Of(category)} ({count})", _categoryFilter == category))
+                    _categoryFilter = category;
+            }
+
+            ImGui.EndCombo();
+        }
+
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(120f);
+        ImGui.SliderFloat("##assetSize", ref _assetThumbnailSize, 64f, 192f, "%.0f px");
+
+        int unclassified = _assets.Count(a => a.Category == AssetCategory.Unclassified);
+        if (unclassified > 0)
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(Warning, $"{unclassified} 個未分類");
+        }
+    }
+
+    /// <summary>模型用到的貼圖清單。解 BMD 不便宜，所以查過就快取。</summary>
+    private string[] GetTextureNames(AssetEntry asset)
+    {
+        if (_assetTextures.TryGetValue(asset.Id, out var cached))
+            return cached;
+
+        var names = AssetCatalog.TextureNames(asset.Path).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        _assetTextures[asset.Id] = names;
+        return names;
+    }
+
+    private void DrawAssetCell(AssetEntry asset)
+    {
+        ImGui.BeginGroup();
+        ImGui.PushID(asset.Id);
+
+        var id = _thumbnails.Get(asset.Path);
+        var size = new NVector2(_assetThumbnailSize, _assetThumbnailSize);
+
+        if (id.HasValue)
+            ImGui.Image(id.Value, size);
+        else
+            ImGui.Button("…", size);
+
+        // 點素材＝把它的 type 帶進放置工具，直接就能開始擺。
+        if (ImGui.IsItemClicked() && asset.ObjectType is short clickedType)
+        {
+            _session.PlaceObjectType = clickedType;
+            _session.Tool = EditorToolKind.PlaceObject;
+        }
+
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.BeginTooltip();
+            ImGui.Text(asset.FileName);
+            ImGui.TextColored(Muted, $"類別：{AssetCategoryNames.Of(asset.Category)}（來源：{asset.CategorySource}）");
+            ImGui.TextColored(Muted, asset.ObjectType is short type ? $"物件 type {type}" : "具名模型，非 ObjectNN");
+
+            // 貼圖清單：要替換素材就得先知道這個模型吃哪幾張圖。
+            ImGui.Separator();
+            foreach (var texture in GetTextureNames(asset))
+                ImGui.TextColored(Muted, texture);
+
+            ImGui.EndTooltip();
+        }
+
+        // 右鍵改分類，改完立刻寫檔。
+        if (ImGui.BeginPopupContextItem("category"))
+        {
+            ImGui.TextColored(Muted, asset.FileName);
+            ImGui.Separator();
+
+            foreach (var category in AssetCategoryNames.All)
+            {
+                if (ImGui.MenuItem(AssetCategoryNames.Of(category), string.Empty, asset.Category == category))
+                {
+                    _catalog.SetCategory(asset, category);
+                    _assetWorldIndex = -1; // 下一幀重掃，讓分類立刻反映
+                }
+            }
+
+            ImGui.EndPopup();
+        }
+
+        // 檔名太長就截斷，格子寬度要對齊縮圖。
+        string label = Path.GetFileNameWithoutExtension(asset.FileName);
+        ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + _assetThumbnailSize);
+        ImGui.TextColored(asset.Category == AssetCategory.Unclassified ? Muted : Normal, label);
+        ImGui.PopTextWrapPos();
+
+        ImGui.PopID();
+        ImGui.EndGroup();
+    }
+
+    private void DrawStatusBar()
+    {
+        var viewport = ImGui.GetMainViewport();
+        const float height = 28f;
+
+        ImGui.SetNextWindowPos(new NVector2(viewport.WorkPos.X, viewport.WorkPos.Y + viewport.WorkSize.Y - height));
+        ImGui.SetNextWindowSize(new NVector2(viewport.WorkSize.X, height));
+
+        const ImGuiWindowFlags flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize
+                                     | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoScrollbar
+                                     | ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoDocking;
+
+        if (ImGui.Begin("##status", flags))
+        {
+            ImGui.Text(_session.StatusMessage);
+            ImGui.SameLine(ImGui.GetWindowWidth() - 120f);
+            ImGui.TextColored(Muted, $"{ImGui.GetIO().Framerate:F0} FPS");
+        }
+
+        ImGui.End();
+    }
+
+    private bool Matches(WorldEntry world)
+    {
+        if (_showOnlyPlayable && !world.IsPlayable)
+            return false;
+
+        if (string.IsNullOrWhiteSpace(_worldFilter))
+            return true;
+
+        return world.Name.Contains(_worldFilter, StringComparison.OrdinalIgnoreCase)
+            || world.Index.ToString().Contains(_worldFilter, StringComparison.Ordinal);
+    }
+
+    private static string Flag(bool present, string label) => present ? label : "·";
+}
