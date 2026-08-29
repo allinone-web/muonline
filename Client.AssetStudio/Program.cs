@@ -20,7 +20,9 @@
 //   MuAssetStudio --textures-export <模型> [--out <資料夾>]   整套貼圖 → PNG
 //   MuAssetStudio --textures-import <模型> --from <資料夾>    改過的 PNG → 寫回遊戲資源
 //   MuAssetStudio --import <gltf|glb> [--scale N]    讀外部模型，印出相容性報告
-//   MuAssetStudio --roundtrip <名稱>                 匯出成 glTF 再讀回來，比對幾何
+//   MuAssetStudio --roundtrip <名稱> [--gltf <file>] [--scale N]
+//                                                   匯出成 glTF 再讀回來，比對幾何；
+//                                                   給 --gltf 就改比對現成的檔案
 //
 //   自有資產的資源庫（引擎中立：glTF + PNG + JSON 清單）
 //   MuAssetStudio --library-list [--library <資料夾>]
@@ -171,7 +173,14 @@ if (parsed.TryGetValue("import", out var importPath) && importPath is not null)
 }
 
 if (parsed.TryGetValue("roundtrip", out var roundtripTarget) && roundtripTarget is not null)
-    return ImportCommands.RoundTrip(session.Catalog, roundtripTarget, parsed.GetValueOrDefault("out"), dataPath);
+{
+    float? roundtripScale = parsed.TryGetValue("scale", out var rs) && float.TryParse(rs, out float parsedRoundtripScale)
+        ? parsedRoundtripScale
+        : null;
+
+    return ImportCommands.RoundTrip(session.Catalog, roundtripTarget, parsed.GetValueOrDefault("out"),
+                                    dataPath, parsed.GetValueOrDefault("gltf"), roundtripScale);
+}
 
 if (parsed.ContainsKey("verify"))
     return VerifyCommand.Run(session.Catalog, parsed.GetValueOrDefault("verify"));

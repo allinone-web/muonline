@@ -78,7 +78,13 @@ public static class ImportCommands
     /// 只要有一個弄反，模型仍然畫得出來、只是不對，而用眼睛判斷不了程度。
     /// 走一趟往返再量點雲距離，就把「看起來差不多」變成一個數字。
     /// </remarks>
-    public static int RoundTrip(EntityCatalog catalog, string target, string? workDirectory, string dataPath)
+    /// <param name="externalGltf">
+    /// 指定的話就不自己匯出，改用這個現成的 glTF 比對。
+    /// 用途有兩個：驗別人寫的匯出器對不對，以及「我重做了這隻怪，形狀差多少」。
+    /// </param>
+    public static int RoundTrip(
+        EntityCatalog catalog, string target, string? workDirectory, string dataPath,
+        string? externalGltf = null, float? scale = null)
     {
         var entry = catalog.Entries.FirstOrDefault(e =>
                         e.FullPath is not null
@@ -94,15 +100,32 @@ public static class ImportCommands
             return 2;
         }
 
-        string work = workDirectory ?? Path.Combine(Path.GetTempPath(), "mu-roundtrip");
-        Directory.CreateDirectory(work);
+        string gltfPath;
 
-        var exported = GltfExporter.Export(entry.FullPath, work,
-            new GltfExporter.Options(ExportTextures: false, Kind: entry.Kind,
-                                     BodyParts: entry.BodyParts, DataPath: dataPath));
+        if (externalGltf is not null)
+        {
+            if (!File.Exists(externalGltf))
+            {
+                Console.Error.WriteLine($"找不到 {externalGltf}");
+                return 2;
+            }
+
+            gltfPath = externalGltf;
+        }
+        else
+        {
+            string work = workDirectory ?? Path.Combine(Path.GetTempPath(), "mu-roundtrip");
+            Directory.CreateDirectory(work);
+
+            gltfPath = GltfExporter.Export(entry.FullPath, work,
+                new GltfExporter.Options(ExportTextures: false, Kind: entry.Kind,
+                                         BodyParts: entry.BodyParts, DataPath: dataPath)).GltfPath;
+        }
 
         // 匯入時不自動縮放：往返比對要的是「原封不動」，不是「縮到參考身高」。
-        var imported = GltfImporter.Import(exported.GltfPath, new GltfImporter.Options(AutoScale: false));
+        // 別人的匯出器可能縮到公尺級，那就要用 --scale 把它還原成 MU 的世界單位。
+        var imported = GltfImporter.Import(gltfPath,
+            new GltfImporter.Options(Scale: scale ?? 1f, AutoScale: false));
 
         if (imported.Report.HasErrors)
         {
@@ -125,6 +148,9 @@ public static class ImportCommands
 
         Console.WriteLine();
         Console.WriteLine($"── 往返：{entry.Name}（{entry.ModelPath}）──");
+
+        if (externalGltf is not null)
+            Console.WriteLine($"比對對象：{externalGltf}" + (scale is float s ? $"　×{s}" : string.Empty));
         Console.WriteLine($"頂點    {result.VerticesA,7} → {result.VerticesB,7}");
         Console.WriteLine($"三角形  {result.TrianglesA,7} → {result.TrianglesB,7}");
         Console.WriteLine($"骨骼    {result.BonesA,7} → {result.BonesB,7}");

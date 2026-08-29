@@ -263,9 +263,14 @@ public static class GltfImporter
 
                 for (int k = 0; k < keys; k++)
                 {
-                    var local = animation is null
+                    // GetDecomposed()：glTF 的節點變換可以存成「T/R/S 三個欄位」，
+                    // 也可以存成一個 4×4 矩陣。存成矩陣時直接讀 .Scale / .Rotation 會丟
+                    // InvalidOperationException（"Needs to be in SRT representation"）。
+                    // 兩種寫法都合法而且都會遇到 —— Blender 兩種都可能輸出，
+                    // 這個專案自己的兩個匯出器就剛好一邊一種。
+                    var local = (animation is null
                         ? joint.Node.LocalTransform
-                        : joint.Node.GetLocalTransform(animation, k / fps);
+                        : joint.Node.GetLocalTransform(animation, k / fps)).GetDecomposed();
 
                     if (!scaleWarned && (local.Scale - Vector3.One).Length() > 0.01f)
                     {
