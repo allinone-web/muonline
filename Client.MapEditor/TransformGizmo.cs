@@ -4,6 +4,7 @@ using ImGuiNET;
 using Microsoft.Xna.Framework;
 using NVector2 = System.Numerics.Vector2;
 using NVector4 = System.Numerics.Vector4;
+using MuAssets.Core;
 
 namespace Client.MapEditor;
 

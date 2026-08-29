@@ -1,7 +1,6 @@
 using Client.Data.ATT;
-using Microsoft.Xna.Framework;
 
-namespace Client.MapEditor;
+namespace MuAssets.Core;
 
 /// <summary>編輯器改動的哪一份逐格資料。</summary>
 public enum EditTarget
@@ -99,7 +98,8 @@ public sealed class EditStroke
             data[index] = System.Drawing.Color.FromArgb(255, (packed >> 16) & 0xFF, (packed >> 8) & 0xFF, packed & 0xFF);
     }
 
-    public static int PackLight(Color color) => (color.R << 16) | (color.G << 8) | color.B;
+    /// <summary>把光照顏色打包成一個 int，供歷史記錄用（歷史只存整數值）。</summary>
+    public static int PackLight(byte r, byte g, byte b) => (r << 16) | (g << 8) | b;
 }
 
 /// <summary>撤銷／重做堆疊。</summary>

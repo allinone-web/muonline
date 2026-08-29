@@ -1,4 +1,4 @@
-namespace Client.MapEditor;
+namespace MuAssets.Core;
 
 /// <summary>
 /// 掃過所有 <c>Object{N}</c> 目錄，回報自動分類的覆蓋率。

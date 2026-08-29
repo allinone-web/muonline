@@ -3,7 +3,7 @@ using Client.Data.MAP;
 using Client.Data.OBJS;
 using Client.Data.OZB;
 
-namespace Client.MapEditor;
+namespace MuAssets.Core;
 
 public sealed record ExportResult(bool Success, string[] Files, string[] BackedUp, string? Error);
 

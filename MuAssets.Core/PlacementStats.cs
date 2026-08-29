@@ -2,7 +2,7 @@ using Client.Data.ATT;
 using Client.Data.MAP;
 using Client.Data.OBJS;
 
-namespace Client.MapEditor;
+namespace MuAssets.Core;
 
 /// <summary>一種物件在某張圖上的擺放統計。</summary>
 public readonly record struct PlacementProfile(
@@ -54,13 +54,13 @@ public static class PlacementStats
 
         foreach (var mapObject in obj.Objects)
         {
-            int tileX = (int)(mapObject.Position.X / Client.Main.Constants.TERRAIN_SCALE);
-            int tileY = (int)(mapObject.Position.Y / Client.Main.Constants.TERRAIN_SCALE);
+            int tileX = (int)(mapObject.Position.X / MuConstants.TerrainScale);
+            int tileY = (int)(mapObject.Position.Y / MuConstants.TerrainScale);
 
-            if ((uint)tileX >= MapDocument.Size || (uint)tileY >= MapDocument.Size)
+            if ((uint)tileX >= MuConstants.TerrainSize || (uint)tileY >= MuConstants.TerrainSize)
                 continue;
 
-            var flags = attributes.TerrainWall[(tileY * MapDocument.Size) + tileX];
+            var flags = attributes.TerrainWall[(tileY * MuConstants.TerrainSize) + tileX];
 
             var current = accumulator.GetValueOrDefault(mapObject.Type);
             accumulator[mapObject.Type] = (

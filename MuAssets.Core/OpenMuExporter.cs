@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Client.MapEditor;
+namespace MuAssets.Core;
 
 public sealed record OpenMuExportResult(bool Success, string[] Files, string? Error);
 

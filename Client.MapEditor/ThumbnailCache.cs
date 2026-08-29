@@ -1,4 +1,5 @@
 using Microsoft.Xna.Framework.Graphics;
+using MuAssets.Core;
 
 namespace Client.MapEditor;
 

@@ -3,6 +3,7 @@ using Client.Main.Scenes;
 using ImGuiNET;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using MuAssets.Core;
 
 namespace Client.MapEditor;
 

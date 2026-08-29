@@ -1,4 +1,4 @@
-namespace Client.MapEditor;
+namespace MuAssets.Core;
 
 public enum BrushShape
 {

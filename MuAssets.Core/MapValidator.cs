@@ -1,7 +1,7 @@
 using Client.Data.ATT;
 using Client.Data.MAP;
 
-namespace Client.MapEditor;
+namespace MuAssets.Core;
 
 public enum IssueSeverity
 {

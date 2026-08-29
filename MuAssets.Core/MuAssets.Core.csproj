@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>MuAssets.Core</AssemblyName>
+    <RootNamespace>MuAssets.Core</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    ⚠️ 這個專案**不准**引用任何遊戲引擎。
+    只能依賴 Client.Data（純解析，也沒有引擎相依），以及它帶進來的 ImageSharp。
+
+    理由見 docs/引擎轉換方案-工具與客戶端遷移到Godot.md 的分層規則：
+    地圖與素材的資料、編輯、驗證、匯出邏輯要能同時被 MonoGame 編輯器、
+    Godot 編輯器與無頭 CLI 使用。加了引擎相依，遷移就前功盡棄。
+
+    加新的 PackageReference 之前先問：Godot 那邊也能用嗎？
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\Client.Data\Client.Data.csproj" />
+  </ItemGroup>
+
+
+</Project>

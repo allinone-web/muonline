@@ -1,4 +1,4 @@
-namespace Client.MapEditor;
+namespace MuAssets.Core;
 
 /// <summary>物件的一次可還原改動：新增、刪除，或變換。</summary>
 public sealed class ObjectEdit

@@ -6,6 +6,7 @@
 
 using Client.Main;
 using Client.MapEditor;
+using MuAssets.Core;
 
 const string DefaultDataDir = "/Users/airtan/Documents/GitHub/mmorpg-3d-research/assets/MU_Red_1_20_61/Data";
 
@@ -60,7 +61,7 @@ if (parsed.ContainsKey("build-npc-catalog"))
     string? openMuRoot = parsed.GetValueOrDefault("openmu")
         ?? "/Users/airtan/Documents/GitHub/mmorpg-3d-research/repos/openmu/src";
 
-    var entries = MonsterCatalog.Build(clientMainRoot, Directory.Exists(openMuRoot) ? openMuRoot : null);
+    var entries = NpcCatalogBuilder.Build(clientMainRoot, Directory.Exists(openMuRoot) ? openMuRoot : null);
     MonsterCatalog.Save(entries);
 
     int withModel = entries.Count(e => e.ModelPath is not null);

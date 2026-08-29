@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Client.Data.MAP;
 
-namespace Client.MapEditor;
+namespace MuAssets.Core;
 
 /// <summary>
 /// 每張圖自訂的「貼圖索引 → 檔名」對應，存在 <c>~/.mu-editor/texture-mappings.json</c>。

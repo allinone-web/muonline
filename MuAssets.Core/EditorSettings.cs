@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Client.MapEditor;
+namespace MuAssets.Core;
 
 /// <summary>
 /// 跨執行階段保留的設定，存在 <c>~/.mu-editor/settings.json</c>。

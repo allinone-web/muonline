@@ -3,6 +3,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using NumericsVector3 = System.Numerics.Vector3;
 using XnaVector3 = Microsoft.Xna.Framework.Vector3;
+using MuAssets.Core;
 
 namespace Client.MapEditor;
 

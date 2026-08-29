@@ -6,7 +6,7 @@ using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using DrawingColor = System.Drawing.Color;
 
-namespace Client.MapEditor;
+namespace MuAssets.Core;
 
 /// <summary>
 /// 專案格式的讀寫：`map.json` + 六張 PNG。

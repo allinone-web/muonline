@@ -1,7 +1,7 @@
 using System.Numerics;
 using Client.Data.OBJS;
 
-namespace Client.MapEditor;
+namespace MuAssets.Core;
 
 /// <summary>
 /// 地圖上的一個物件，編輯器用的可變版本。
@@ -27,8 +27,8 @@ public sealed class MapObjectInstance
     public float UnknownFloat1 { get; set; }
     public float UnknownFloat2 { get; set; }
 
-    public int TileX => (int)(Position.X / Client.Main.Constants.TERRAIN_SCALE);
-    public int TileY => (int)(Position.Y / Client.Main.Constants.TERRAIN_SCALE);
+    public int TileX => (int)(Position.X / MuConstants.TerrainScale);
+    public int TileY => (int)(Position.Y / MuConstants.TerrainScale);
 
     public static MapObjectInstance From(IMapObject source)
     {

@@ -1,4 +1,5 @@
 using Client.Main.Controls;
+using MuAssets.Core;
 
 namespace Client.MapEditor;
 

@@ -8,6 +8,7 @@ using NumericsVector3 = System.Numerics.Vector3;
 using Client.Main.Scenes;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
+using MuAssets.Core;
 
 namespace Client.MapEditor;
 
@@ -106,7 +107,7 @@ public sealed class MapEditorScene : BaseScene
                 EditorTools.TargetOf(_session.Tool),
                 EditorTools.DescriptionOf(_session.Tool));
 
-            EditorTools.Apply(_session, document, _session.ActiveStroke, HoveredTile.TileX, HoveredTile.TileY);
+            EditorTools.Apply(_session.Tools, document, _session.ActiveStroke, HoveredTile.TileX, HoveredTile.TileY);
             _session.TerrainDirty = true;
             _session.IssuesStale = true;
         }
@@ -196,59 +197,14 @@ public sealed class MapEditorScene : BaseScene
             : $"選取 type {_session.SelectedObject.Type} @ ({_session.SelectedObject.TileX}, {_session.SelectedObject.TileY})";
     }
 
-    public void DeleteSelectedObject()
-    {
-        var document = _session.Document;
-        var selected = _session.SelectedObject;
-
-        if (document is null || selected is null)
-            return;
-
-        int index = document.Objects.IndexOf(selected);
-        if (index < 0)
-            return;
-
-        document.Objects.RemoveAt(index);
-        _session.ObjectHistory.Push(ObjectEdit.Remove(selected, index));
-        _session.SelectedObject = null;
-        _session.ObjectsDirty = true;
-        _session.HasUnsavedChanges = true;
-        _session.StatusMessage = $"刪除 type {selected.Type}";
-    }
+    public void DeleteSelectedObject() => _session.DeleteSelectedObject();
 
     public void CommitObjectTransform(MapObjectInstance instance, MapObjectInstance before)
-    {
-        _session.ObjectHistory.Push(ObjectEdit.Transform(instance, before));
-        _session.ObjectsDirty = true;
-        _session.HasUnsavedChanges = true;
-    }
+        => _session.CommitObjectTransform(instance, before);
 
-    public void UndoObject()
-    {
-        if (_session.Document is null)
-            return;
+    public void UndoObject() => _session.UndoObject();
 
-        var edit = _session.ObjectHistory.Undo(_session.Document);
-        if (edit is null)
-            return;
-
-        _session.SelectedObject = null;
-        _session.ObjectsDirty = true;
-        _session.StatusMessage = $"已撤銷：{edit.Description}";
-    }
-
-    public void RedoObject()
-    {
-        if (_session.Document is null)
-            return;
-
-        var edit = _session.ObjectHistory.Redo(_session.Document);
-        if (edit is null)
-            return;
-
-        _session.ObjectsDirty = true;
-        _session.StatusMessage = $"已重做：{edit.Description}";
-    }
+    public void RedoObject() => _session.RedoObject();
 
     /// <summary>
     /// 把文件的物件清單同步到畫面上的世界。
@@ -315,33 +271,9 @@ public sealed class MapEditorScene : BaseScene
         }
     }
 
-    public void Undo()
-    {
-        if (_session.Document is null)
-            return;
+    public void Undo() => _session.Undo();
 
-        var stroke = _session.History.Undo(_session.Document);
-        if (stroke is null)
-            return;
-
-        _session.TerrainDirty = true;
-        _session.LayerViewDirty = true;
-        _session.StatusMessage = $"已撤銷：{stroke.Description}（{stroke.CellCount} 格）";
-    }
-
-    public void Redo()
-    {
-        if (_session.Document is null)
-            return;
-
-        var stroke = _session.History.Redo(_session.Document);
-        if (stroke is null)
-            return;
-
-        _session.TerrainDirty = true;
-        _session.LayerViewDirty = true;
-        _session.StatusMessage = $"已重做：{stroke.Description}（{stroke.CellCount} 格）";
-    }
+    public void Redo() => _session.Redo();
 
     /// <summary>
     /// 把文件的改動推進渲染端。每幀最多一次 —— 這個動作會讓地形快取整個重建。
@@ -366,25 +298,7 @@ public sealed class MapEditorScene : BaseScene
 
     /// <summary>在圖層俯視圖上拖出一個生怪區。</summary>
     public void AddSpawnArea(int startX, int startY, int endX, int endY)
-    {
-        var document = _session.Document;
-        if (document is null)
-            return;
-
-        var area = Client.MapEditor.SpawnArea.FromCorners(startX, startY, endX, endY);
-        area.TypeId = _session.SpawnTypeId;
-        area.Name = _session.NpcCatalog.Entries.FirstOrDefault(e => e.TypeId == area.TypeId)?.Name ?? string.Empty;
-
-        // 面積越大預設放越多隻，但至少一隻。
-        area.Quantity = (short)Math.Clamp(area.Width * area.Height / 40, 1, 60);
-
-        document.Spawns.Add(area);
-        _session.SelectedSpawn = area;
-        _session.IssuesStale = true;
-        _session.HasUnsavedChanges = true;
-        _session.StatusMessage =
-            $"新增生怪區 {area.Name}（{area.X1},{area.Y1}）-（{area.X2},{area.Y2}）× {area.Quantity}";
-    }
+        => _session.AddSpawnArea(startX, startY, endX, endY);
 
     public void DeleteSpawnArea(SpawnArea area)
     {

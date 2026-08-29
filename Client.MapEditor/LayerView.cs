@@ -2,6 +2,7 @@ using Client.Data.ATT;
 using Client.Data.MAP;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using MuAssets.Core;
 
 namespace Client.MapEditor;
 

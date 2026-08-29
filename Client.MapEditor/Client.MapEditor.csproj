@@ -29,7 +29,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Client.Data\Client.Data.csproj" />
+    <ProjectReference Include="..\MuAssets.Core\MuAssets.Core.csproj" />
     <ProjectReference Include="..\Client.Main\Client.Main.csproj" />
   </ItemGroup>
 

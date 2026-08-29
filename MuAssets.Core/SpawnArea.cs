@@ -1,4 +1,4 @@
-namespace Client.MapEditor;
+namespace MuAssets.Core;
 
 /// <summary>與 OpenMU 的 <c>SpawnTrigger</c> 逐項對應。</summary>
 public enum SpawnTrigger

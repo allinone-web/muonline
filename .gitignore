@@ -333,3 +333,6 @@ OpenMU/
 .dotnet_cli_home/
 .serena
 .agents
+
+# ImGui 執行時會在工作目錄寫下版面設定，不是原始碼。
+imgui.ini

@@ -1,6 +1,7 @@
 using Client.Main;
 using Client.Main.Controls;
 using Microsoft.Xna.Framework;
+using MuAssets.Core;
 
 namespace Client.MapEditor;
 

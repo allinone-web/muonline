@@ -1,11 +1,10 @@
 using System.Drawing;
-using Client.Data;
 using Client.Data.ATT;
 using Client.Data.MAP;
 using Client.Data.OBJS;
 using Client.Data.OZB;
 
-namespace Client.MapEditor;
+namespace MuAssets.Core;
 
 /// <summary>
 /// 編輯器持有的地圖資料 —— 一份可改的複本，與畫面上那個世界分開。
@@ -17,8 +16,8 @@ namespace Client.MapEditor;
 /// </remarks>
 public sealed class MapDocument
 {
-    public const int Size = Constants.TERRAIN_SIZE;
-    public const int CellCount = Size * Size;
+    public const int Size = MuConstants.TerrainSize;
+    public const int CellCount = MuConstants.CellCount;
 
     public int WorldIndex { get; init; }
 

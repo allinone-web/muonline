@@ -1,7 +1,7 @@
 using Client.Data.ATT;
 using Client.Data.MAP;
 
-namespace Client.MapEditor;
+namespace MuAssets.Core;
 
 public enum EditorToolKind
 {
@@ -58,7 +58,7 @@ public static class EditorTools
     };
 
     /// <summary>對一格施加一次筆刷。回傳這一次是否真的改到東西。</summary>
-    public static void Apply(EditorSession session, MapDocument document, EditStroke stroke, int centerX, int centerY)
+    public static void Apply(ToolSettings session, MapDocument document, EditStroke stroke, int centerX, int centerY)
     {
         var brush = session.Brush;
 
@@ -95,7 +95,7 @@ public static class EditorTools
             if (weight <= 0f)
                 return;
 
-            int index = (y * MapDocument.Size) + x;
+            int index = (y * MuConstants.TerrainSize) + x;
             stroke.Record(index, target[index], value);
             target[index] = value;
         });
@@ -105,14 +105,14 @@ public static class EditorTools
     /// 混合值是連續的，往目標值逼近。Alpha 決定第二層蓋過第一層多少，
     /// 是 MU 地形過渡的關鍵。
     /// </summary>
-    private static void PaintAlpha(EditorSession session, MapDocument document, EditStroke stroke, int centerX, int centerY)
+    private static void PaintAlpha(ToolSettings session, MapDocument document, EditStroke stroke, int centerX, int centerY)
     {
         var brush = session.Brush;
         float target = session.PaintAlphaValue;
 
         brush.ForEachCell(centerX, centerY, (x, y, weight) =>
         {
-            int index = (y * MapDocument.Size) + x;
+            int index = (y * MuConstants.TerrainSize) + x;
             byte before = document.Alpha[index];
 
             float blended = before + ((target - before) * weight * brush.Strength);
@@ -123,7 +123,7 @@ public static class EditorTools
         });
     }
 
-    private static void SculptHeight(EditorSession session, MapDocument document, EditStroke stroke, int centerX, int centerY)
+    private static void SculptHeight(ToolSettings session, MapDocument document, EditStroke stroke, int centerX, int centerY)
     {
         var data = document.Height?.Data;
         if (data is null)
@@ -141,7 +141,7 @@ public static class EditorTools
 
         brush.ForEachCell(centerX, centerY, (x, y, weight) =>
         {
-            int index = (y * MapDocument.Size) + x;
+            int index = (y * MuConstants.TerrainSize) + x;
             if (index >= data.Length)
                 return;
 
@@ -175,10 +175,10 @@ public static class EditorTools
                 int x = centerX + dx;
                 int y = centerY + dy;
 
-                if ((uint)x >= MapDocument.Size || (uint)y >= MapDocument.Size)
+                if ((uint)x >= MuConstants.TerrainSize || (uint)y >= MuConstants.TerrainSize)
                     continue;
 
-                sum += document.HeightAt((y * MapDocument.Size) + x);
+                sum += document.HeightAt((y * MuConstants.TerrainSize) + x);
                 count++;
             }
         }
@@ -186,7 +186,7 @@ public static class EditorTools
         return count > 0 ? sum / count : 0f;
     }
 
-    private static void PaintAttribute(EditorSession session, MapDocument document, EditStroke stroke, int centerX, int centerY)
+    private static void PaintAttribute(ToolSettings session, MapDocument document, EditStroke stroke, int centerX, int centerY)
     {
         var brush = session.Brush;
         var flag = session.AttributeFlag;
@@ -196,7 +196,7 @@ public static class EditorTools
             if (weight <= 0f)
                 return;
 
-            int index = (y * MapDocument.Size) + x;
+            int index = (y * MuConstants.TerrainSize) + x;
             var before = document.Attributes[index];
 
             var after = session.AttributeErase

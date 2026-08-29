@@ -2,7 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Client.Data.BMD;
 
-namespace Client.MapEditor;
+namespace MuAssets.Core;
 
 /// <summary>素材分類。刻意做成通用的類別，未來匯入非 MU 的素材也套得上。</summary>
 public enum AssetCategory
