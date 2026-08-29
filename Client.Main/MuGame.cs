@@ -201,6 +201,17 @@ namespace Client.Main
                 HardwareModeSwitch = false // Required for dynamic resolution changes at runtime
             };
 
+            // 多個 UI 視窗（小地圖、背包的模型預覽、角色資訊、商店、倉庫…）會綁
+            // 自己的 render target 畫完再切回來。back buffer 預設是
+            // DiscardContents —— 切回來的瞬間已經合成好的畫面就被丟掉了。
+            //
+            // 以前 HUD 是畫在 MainRenderTarget 裡，而那張是用 PreserveContents
+            // 建的，所以看不出問題。HUD 改到 back buffer 上畫之後，一開小地圖
+            // 背景就整片變黑，只剩地圖本身。
+            _graphics.PreparingDeviceSettings += (_, e) =>
+                e.GraphicsDeviceInformation.PresentationParameters.RenderTargetUsage =
+                    RenderTargetUsage.PreserveContents;
+
             if (OperatingSystem.IsAndroid())
             {
                 _graphics.IsFullScreen = true;
@@ -1014,7 +1025,18 @@ namespace Client.Main
                 {
                     _currentDrawPhase = "Scene.DrawUi";
                     DeferSceneUi = false;
-                    ActiveScene?.DrawUi(gameTime);
+
+                    // HUD 畫在原生解析度的 back buffer 上，變換矩陣不能再乘
+                    // RENDER_SCALE —— 否則 Render Scale 37.5% 時 UI 只剩三分之一。
+                    UiScaler.DrawingAtNativeResolution = true;
+                    try
+                    {
+                        ActiveScene?.DrawUi(gameTime);
+                    }
+                    finally
+                    {
+                        UiScaler.DrawingAtNativeResolution = false;
+                    }
                 }
 
                 _currentDrawPhase = "FrameworkDraw";

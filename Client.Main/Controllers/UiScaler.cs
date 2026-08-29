@@ -60,7 +60,25 @@ namespace Client.Main.Controllers
         public static float InverseScale { get; private set; } = 1f;
 
         public static Vector2 Offset { get; private set; } = Vector2.Zero;
-        public static Matrix SpriteTransform { get; private set; } = Matrix.Identity;
+        private static Matrix _spriteTransformScaled = Matrix.Identity;
+        private static Matrix _spriteTransformNative = Matrix.Identity;
+
+        /// <summary>
+        /// HUD 是否正畫在原生解析度的 back buffer 上，而不是被 RENDER_SCALE
+        /// 縮放過的渲染目標。
+        ///
+        /// UI 原本和 3D 一起畫進縮放後的目標，所以變換矩陣必須先乘上
+        /// RENDER_SCALE 才對得上那張較小的目標。HUD 改為在畫面貼回螢幕之後
+        /// 才畫（見 MuGame.DeferSceneUi）以後，那個乘法會讓 HUD 縮小同樣的
+        /// 倍率 —— Render Scale 37.5% 時 UI 只剩三分之一大。
+        ///
+        /// 3D 相關的疊層（名牌、掉落物標籤）仍然畫在縮放目標裡，還是要用
+        /// 舊的矩陣，所以兩份都留著，由這個旗標切換。
+        /// </summary>
+        public static bool DrawingAtNativeResolution { get; set; }
+
+        public static Matrix SpriteTransform
+            => DrawingAtNativeResolution ? _spriteTransformNative : _spriteTransformScaled;
         public static ScaleMode Mode { get; private set; } = ScaleMode.Uniform;
 
         /// <summary>
@@ -181,11 +199,15 @@ namespace Client.Main.Controllers
                 SafeAreaInsets.X + MathF.Max(0f, (usableWidth - scaledWidth) * 0.5f),
                 SafeAreaInsets.Y + MathF.Max(0f, (usableHeight - scaledHeight) * 0.5f));
 
-            // Apply render scale to the transform
+            var nativeTransform = Matrix.CreateScale(Scale, Scale, 1f);
+            nativeTransform.Translation = new Vector3(Offset, 0f);
+            _spriteTransformNative = nativeTransform;
+
+            // 畫進縮放後的渲染目標時要一起縮。
             float finalScale = Scale * Constants.RENDER_SCALE;
-            var transform = Matrix.CreateScale(finalScale, finalScale, 1f);
-            transform.Translation = new Vector3(Offset * Constants.RENDER_SCALE, 0f);
-            SpriteTransform = transform;
+            var scaledTransform = Matrix.CreateScale(finalScale, finalScale, 1f);
+            scaledTransform.Translation = new Vector3(Offset * Constants.RENDER_SCALE, 0f);
+            _spriteTransformScaled = scaledTransform;
         }
 
         private static void ConfigureStretch()
@@ -229,9 +251,11 @@ namespace Client.Main.Controllers
                 SafeAreaInsets.Z / ScaleX,
                 SafeAreaInsets.W / ScaleY);
 
-            float finalScaleX = ScaleX * Constants.RENDER_SCALE;
-            float finalScaleY = ScaleY * Constants.RENDER_SCALE;
-            SpriteTransform = Matrix.CreateScale(finalScaleX, finalScaleY, 1f);
+            _spriteTransformNative = Matrix.CreateScale(ScaleX, ScaleY, 1f);
+            _spriteTransformScaled = Matrix.CreateScale(
+                ScaleX * Constants.RENDER_SCALE,
+                ScaleY * Constants.RENDER_SCALE,
+                1f);
         }
 
         /// <summary>
