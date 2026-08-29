@@ -118,6 +118,46 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 HoverTextColor = ModernHudTheme.TextWhite;
             }
 
+            /// <summary>
+            /// 手機版：一塊底 + 標題 + 副標。沒有投影、沒有漸層、沒有左側色條、沒有外框。
+            ///
+            /// 桌面那一套（陰影 + 12 段漸層 + 懸停色塊 + 5px 強調條）疊在六顆直排的
+            /// 按鈕上，就是六層互相干擾的裝飾。每顆按鈕自己的顏色也一併取消 ——
+            /// 六種顏色沒有傳達任何資訊，只是六種顏色。危險項（離開遊戲）例外，
+            /// 那個紅色是真的在講「這一顆不一樣」。
+            /// </summary>
+            private void DrawMobile(SpriteBatch sprite, Texture2D pixel, SpriteFont font, Rectangle rect)
+            {
+                float fill = !Enabled ? 0.3f : (IsMousePressed ? 1.0f : (IsMouseOver ? 0.8f : 0.55f));
+                sprite.Draw(pixel, rect, MobileUi.TitleBarFill * fill);
+
+                if (IsDanger && Enabled)
+                    sprite.Draw(pixel, new Rectangle(rect.X, rect.Y, 3, rect.Height), ModernHudTheme.Danger * 0.85f);
+
+                string title = Text ?? string.Empty;
+                float titleScale = 15f / Constants.BASE_FONT_SIZE;
+                var titleSize = font.MeasureString(title) * titleScale;
+
+                bool hasSubtitle = !string.IsNullOrEmpty(Subtitle) && rect.Height >= 52;
+                float titleY = hasSubtitle
+                    ? rect.Y + rect.Height * 0.30f - titleSize.Y * 0.5f
+                    : rect.Y + (rect.Height - titleSize.Y) * 0.5f;
+
+                var titlePos = new Vector2(rect.X + 18, titleY);
+                sprite.DrawString(font, title, titlePos + Vector2.One, Color.Black * 0.6f,
+                                  0f, Vector2.Zero, titleScale, SpriteEffects.None, 0f);
+                sprite.DrawString(font, title, titlePos,
+                                  (Enabled ? MobileUi.TextPrimary : MobileUi.TextDim) * Alpha,
+                                  0f, Vector2.Zero, titleScale, SpriteEffects.None, 0f);
+
+                if (!hasSubtitle)
+                    return;
+
+                float subScale = 10.5f / Constants.BASE_FONT_SIZE;
+                var subPos = new Vector2(rect.X + 18, rect.Y + rect.Height * 0.62f);
+                sprite.DrawString(font, Subtitle, subPos, MobileUi.TextDim * (0.85f * Alpha),
+                                  0f, Vector2.Zero, subScale, SpriteEffects.None, 0f);
+            }
             public override void Draw(GameTime gameTime)
             {
                 if (Status != GameControlStatus.Ready || !Visible)
@@ -129,6 +169,11 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 if (pixel == null || font == null)
                     return;
 
+                if (MobileUi.IsMobile)
+                {
+                    DrawMobile(sprite, pixel, font, DisplayRectangle);
+                    return;
+                }
                 var rect = DisplayRectangle;
                 Color accent = IsDanger ? ModernHudTheme.Danger : AccentColor;
                 Color top;
