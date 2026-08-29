@@ -2236,6 +2236,18 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 return false;
             }
 
+            // 5 欄 x 13 列 = 65，比實際的 64 格多出一格。這裡必須用 IsWithinGrid
+            // 而不是只比對 Columns / Rows —— 只比對邊界的話，最後那一格會被當成
+            // 可以放，於是送出格號 64，伺服器直接拒絕，道具就卡在半途。
+            // FindFreeSlot 是走這個函式找空位的，所以補在這裡兩邊都涵蓋到。
+            if (!IsWithinGrid(targetSlot) ||
+                !IsWithinGrid(new Point(
+                    targetSlot.X + itemToPlace.Definition.Width - 1,
+                    targetSlot.Y + itemToPlace.Definition.Height - 1)))
+            {
+                return false;
+            }
+
             for (int y = 0; y < itemToPlace.Definition.Height; y++)
             {
                 for (int x = 0; x < itemToPlace.Definition.Width; x++)
