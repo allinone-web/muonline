@@ -36,7 +36,11 @@ namespace Client.Main.Controls.UI.Game
         private const int SLOT_WIDTH = 34;
         private const int SLOT_HEIGHT = 34;
 
-        private const int HEADER_HEIGHT = 52;
+        /// <summary>
+        /// 標題列高度。手機至少要放得下 46 見方的關閉鈕再加上下各 6 的餘裕 ——
+        /// 原本的 52 會讓關閉鈕的下緣穿出標題列、壓到內容區。
+        /// </summary>
+        private static int HEADER_HEIGHT => MobileUi.IsMobile ? MobileUi.CloseButtonSize + 12 : 52;
         private const int SECTION_HEADER_HEIGHT = 22;
         private const int GRID_PADDING = 10;
         private const int INFO_PANEL_HEIGHT = 170;
@@ -345,7 +349,7 @@ namespace Client.Main.Controls.UI.Game
             // 遊戲內所有視窗一致，見 docs/手機遊戲界面規格.md。
             // 統一尺寸：26x22 只有 14 pt，得瞄準才按得到。見 MobileUi.CloseButtonSize。
             _closeButtonRect = MobileUi.IsMobile
-                ? new Rectangle(12, 14, MobileUi.CloseButtonSize, MobileUi.CloseButtonSize)
+                ? new Rectangle(12, (HEADER_HEIGHT - MobileUi.CloseButtonSize) / 2, MobileUi.CloseButtonSize, MobileUi.CloseButtonSize)
                 : new Rectangle(12, 14, 26, 22);
         }
 

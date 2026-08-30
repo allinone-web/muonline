@@ -260,7 +260,7 @@ namespace Client.Main.Controls.UI.Game
             // 遊戲內所有視窗一致，見 docs/手機遊戲界面規格.md。
             // 統一尺寸：26x22 只有 14 pt，得瞄準才按得到。見 MobileUi.CloseButtonSize。
             _closeButtonRect = MobileUi.IsMobile
-                ? new Rectangle(12, 10, MobileUi.CloseButtonSize, MobileUi.CloseButtonSize)
+                ? new Rectangle(12, (HEADER_HEIGHT - MobileUi.CloseButtonSize) / 2, MobileUi.CloseButtonSize, MobileUi.CloseButtonSize)
                 : new Rectangle(12, 10, 26, 22);
         }
 
