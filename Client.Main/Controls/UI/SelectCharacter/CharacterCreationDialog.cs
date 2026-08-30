@@ -87,49 +87,27 @@ namespace Client.Main.Controls.UI.SelectCharacter
 
         public CharacterCreationDialog()
         {
+            // 只開放三個基礎職業。其餘（魔劍士、魔劍公爵、召喚師、格鬥家）
+            // 在原版 MU 也需要條件才解鎖，這裡先不提供。
             _availableClasses = new List<CharacterClassInfo>
             {
-                new CharacterClassInfo 
-                { 
-                    Class = CharacterClassNumber.DarkWizard, 
+                new CharacterClassInfo
+                {
+                    Class = CharacterClassNumber.DarkWizard,
                     Name = "Dark Wizard",
                     Description = "Masters of magical destruction.\nHigh magic damage, low defense."
                 },
-                new CharacterClassInfo 
-                { 
-                    Class = CharacterClassNumber.DarkKnight, 
+                new CharacterClassInfo
+                {
+                    Class = CharacterClassNumber.DarkKnight,
                     Name = "Dark Knight",
                     Description = "Warriors of strength and honor.\nHigh health and physical damage."
                 },
-                new CharacterClassInfo 
-                { 
-                    Class = CharacterClassNumber.FairyElf, 
+                new CharacterClassInfo
+                {
+                    Class = CharacterClassNumber.FairyElf,
                     Name = "Fairy Elf",
                     Description = "Agile archers and healers.\nHigh agility, support abilities."
-                },
-                new CharacterClassInfo 
-                { 
-                    Class = CharacterClassNumber.MagicGladiator, 
-                    Name = "Magic Gladiator",
-                    Description = "Hybrid warriors with magic.\nBalanced melee and magic skills."
-                },
-                new CharacterClassInfo 
-                { 
-                    Class = CharacterClassNumber.DarkLord, 
-                    Name = "Dark Lord",
-                    Description = "Commanders with dark powers.\nSummons pets and commands armies."
-                },
-                new CharacterClassInfo 
-                { 
-                    Class = CharacterClassNumber.Summoner, 
-                    Name = "Summoner",
-                    Description = "Mystics with curse powers.\nCurses enemies and summons."
-                },
-                new CharacterClassInfo 
-                { 
-                    Class = CharacterClassNumber.RageFighter, 
-                    Name = "Rage Fighter",
-                    Description = "Hand-to-hand combat masters.\nHighest HP, powerful combos."
                 }
             };
 
@@ -150,7 +128,7 @@ namespace Client.Main.Controls.UI.SelectCharacter
             _titleLabel = new LabelControl
             {
                 Text = "CREATE CHARACTER",
-                FontSize = 20f,
+                FontSize = MobileUi.TextTitle,
                 TextColor = Theme.TextGold,
                 Align = ControlAlign.Top | ControlAlign.HorizontalCenter,
                 Margin = new Margin { Top = 10 }
@@ -161,7 +139,7 @@ namespace Client.Main.Controls.UI.SelectCharacter
             var nameLabel = new LabelControl
             {
                 Text = "Character Name:",
-                FontSize = 13f,
+                FontSize = MobileUi.TextLabel,
                 TextColor = Theme.TextWhite,
                 X = 50,
                 Y = 75
@@ -176,7 +154,7 @@ namespace Client.Main.Controls.UI.SelectCharacter
                 ViewSize = new Point(550, 36),
                 MaxLength = 10,
                 PlaceholderText = "Enter name (3-10 chars)...",
-                FontSize = 8f,
+                FontSize = MobileUi.TextBody,
                 BackgroundColor = Theme.BgDark,
                 TextColor = Theme.TextWhite,
                 BorderColor = Theme.BorderInner,
@@ -188,7 +166,7 @@ namespace Client.Main.Controls.UI.SelectCharacter
             var classSectionLabel = new LabelControl
             {
                 Text = "Select Class:",
-                FontSize = 13f,
+                FontSize = MobileUi.TextLabel,
                 TextColor = Theme.TextWhite,
                 X = 50,
                 Y = 165
@@ -212,7 +190,7 @@ namespace Client.Main.Controls.UI.SelectCharacter
             _classLabel = new LabelControl
             {
                 Text = "Dark Wizard",
-                FontSize = 18f,
+                FontSize = MobileUi.TextHeading,
                 TextColor = Theme.TextGold,
                 Align = ControlAlign.HorizontalCenter,
                 Y = 200
@@ -223,7 +201,7 @@ namespace Client.Main.Controls.UI.SelectCharacter
             _classDescriptionLabel = new LabelControl
             {
                 Text = "",
-                FontSize = 12f,
+                FontSize = MobileUi.TextLabel,
                 TextColor = Theme.TextGray,
                 Align = ControlAlign.HorizontalCenter,
                 Y = 240,
@@ -274,7 +252,7 @@ namespace Client.Main.Controls.UI.SelectCharacter
             return new ButtonControl
             {
                 Text = text,
-                FontSize = 13f,
+                FontSize = MobileUi.TextBody,
                 AutoViewSize = false,
                 BackgroundColor = baseColor,
                 HoverBackgroundColor = Color.Lerp(baseColor, Color.White, 0.2f),
