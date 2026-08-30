@@ -26,7 +26,14 @@ namespace Client.Main.Worlds
         // 這樣 tools/mu golden 拍出來的取景就等於真機看到的取景 ——
         // 兩邊各寫各的相機，比出來的差異會分不清是「渲染不同」還是「根本沒看同一個地方」。
         private const float CameraYawDegrees = -45f;
-        private const float CameraPitchDegrees = 12f;
+        // 18 度：剛好讓天空離開畫面，又盡量不俯視。
+        //
+        // 界線是算得出來的，不必試誤：天空可見 ⟺ 俯角 < 垂直視角的一半。
+        // 本機的垂直視角經過寬螢幕補償後是 32.57 度（基準 35 度、長寬比 2.257、
+        // SelectSceneZoom 0.85），所以臨界值是 16.28 度。多 2 度當緩衝，
+        // 因為遠處地形起伏會讓地平線再冒高一點。
+        // 實測對照：12 度看得到天空，20 度看不到但偏俯視。
+        private const float CameraPitchDegrees = 18f;
         private const float CameraDistance = 1400f;
         private const float StageFieldOfView = 35f;
 
@@ -48,7 +55,9 @@ namespace Client.Main.Worlds
         /// 位移比發光更容易讀懂 —— 玩家一眼就知道「這個被選中了」，
         /// 而且不需要新的 shader（iOS 的 .fx 在 macOS 編不動，要送 CI）。
         /// </summary>
-        private const float SelectedStepDistance = 210f;
+        // 踏步方向是斜的，前移時角色同時往畫面右下跑 ——
+        // 幅度太大時最右邊那個會被切出畫面。
+        private const float SelectedStepDistance = 150f;
 
         /// <summary>選中的角色相對於自己站位的位移。</summary>
         public static Vector3 SelectedStepOffset => TowardCamera * SelectedStepDistance;
@@ -90,7 +99,7 @@ namespace Client.Main.Worlds
         private const float LabelScreenGap = 10f;
 
         /// <summary>角色並排的間距（世界單位，一格 = 100）。翅膀很寬，太小會黏在一起。</summary>
-        private const float SlotSpacing = 215f;
+        private const float SlotSpacing = 195f;
 
         /// <summary>
         /// 角色面向。

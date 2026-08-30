@@ -301,19 +301,6 @@ namespace Client.Main.Scenes.SelectCharacter
 
             _activeIndex = index;
 
-            // 診斷：五個人到鏡頭的水平距離。改成弧線排列之後應該全部相等
-            //（選中的那個會因為往前踏一步而比較近，那是預期的）。
-            {
-                var cam = Worlds.SelectWorld.CameraWorldPosition;
-                for (int d = 0; d < _characters.Count; d++)
-                {
-                    var pos = _characters[d].Position;
-                    float dist = new Vector2(cam.X - pos.X, cam.Y - pos.Y).Length();
-                    Console.WriteLine(
-                        $"[SelDiag] 位置{d} {_characters[d].Name} 距鏡頭 {dist:F1}");
-                }
-            }
-
             var activePlayer = _characters[index];
             activePlayer.PlayAction(activePlayer.GetCorrectIdleAction());
 
