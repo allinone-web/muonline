@@ -14,17 +14,60 @@ namespace Client.Main.Worlds
 {
     public class SelectWorld : WorldControl
     {
-        private readonly Vector3 _characterDisplayPosition = new(14000, 12295, 250);
-        private readonly Vector3 _characterDisplayAngle = new(0, 0, MathHelper.ToRadians(90));
+        // === 選角舞台：諾利亞的開闊草地 ===
+        // 格子 (139,84) 是使用者在遊戲裡站過、挑定的位置。那一帶 7×6 格完全平坦
+        // （地形高度值 113 × 1.5 = 170），五個角色並排站上去不會高低不齊。
+        private const float StageGroundZ = 170f;
+        private const float StageTileX = 139f;
+        private const float StageTileY = 84f;
+
+        // 鏡頭：接近平視。公式刻意與地圖編輯器的環繞鏡頭一致（EditorCamera.Apply），
+        // 這樣 tools/mu golden 拍出來的取景就等於真機看到的取景 ——
+        // 兩邊各寫各的相機，比出來的差異會分不清是「渲染不同」還是「根本沒看同一個地方」。
+        private const float CameraYawDegrees = -45f;
+        private const float CameraPitchDegrees = 13f;
+        private const float CameraDistance = 2000f;
+        private const float StageFieldOfView = 35f;
+
+        /// <summary>鏡頭焦點抬到胸口高度，角色才不會貼在畫面下緣。</summary>
+        private const float CameraFocusHeight = 80f;
+
+        /// <summary>角色並排的間距（世界單位，一格 = 100）。</summary>
+        private const float SlotSpacing = 130f;
+
+        /// <summary>角色面向。先給一個猜測值，看過真機截圖再調這一個數字就好。</summary>
+        private const float CharacterFacingDegrees = CameraYawDegrees + 180f;
+
+        private readonly Vector3 _characterDisplayPosition =
+            new(StageTileX * Constants.TERRAIN_SCALE + Constants.TERRAIN_SCALE / 2f,
+                StageTileY * Constants.TERRAIN_SCALE + Constants.TERRAIN_SCALE / 2f,
+                StageGroundZ);
+        private readonly Vector3 _characterDisplayAngle =
+            new(0, 0, MathHelper.ToRadians(CharacterFacingDegrees));
         private ILogger<SelectWorld> _logger;
         private CharacterSelectionController _controller;
 
         public Vector3 CharacterDisplayPosition => _characterDisplayPosition;
         public Vector3 CharacterDisplayAngle => _characterDisplayAngle;
 
-        public SelectWorld() : base(worldIndex: 94)
+        /// <summary>
+        /// 第 <paramref name="index"/> 個角色相對於舞台中心的位移。
+        /// 排列方向與鏡頭視線垂直，所以在畫面上就是水平的一排。
+        /// </summary>
+        public static Vector3 SlotOffset(int index, int count)
         {
-            EnableShadows = false;
+            if (count <= 1)
+                return Vector3.Zero;
+
+            float yaw = MathHelper.ToRadians(CameraYawDegrees);
+            var sideways = new Vector3(-MathF.Sin(yaw), MathF.Cos(yaw), 0f);
+            return sideways * ((index - (count - 1) / 2f) * SlotSpacing);
+        }
+
+        public SelectWorld() : base(worldIndex: 4)
+        {
+            // 接近平視的話沒有影子角色會像浮在地上，所以這裡要開。
+            EnableShadows = true;
             Terrain.PreferIndexBatching = true;
             _logger = MuGame.AppLoggerFactory?.CreateLogger<SelectWorld>() ?? throw new System.InvalidOperationException("LoggerFactory not initialized in MuGame");
         }
@@ -33,7 +76,7 @@ namespace Client.Main.Worlds
 
         protected override void ConfigureCameraState(ref CameraState cameraState)
         {
-            float fieldOfView = 29f * Constants.FOV_SCALE;
+            float fieldOfView = StageFieldOfView * Constants.FOV_SCALE;
 
             // 手機是超寬螢幕：垂直視角固定時，水平方向會多看到很多，角色因此顯得小。
             // 壓縮垂直視角，把水平取景拉回 16:9 的設計值（見 WideScreenFraming）。
@@ -45,10 +88,21 @@ namespace Client.Main.Worlds
                     MuGame.AppSettings?.Graphics?.Mobile?.SelectSceneZoom ?? 1f);
             }
 
+            var focus = _characterDisplayPosition + new Vector3(0f, 0f, CameraFocusHeight);
+
+            float yaw = MathHelper.ToRadians(CameraYawDegrees);
+            float pitch = MathHelper.ToRadians(CameraPitchDegrees);
+            float horizontal = CameraDistance * MathF.Cos(pitch);
+            var offset = new Vector3(
+                -MathF.Cos(yaw) * horizontal,
+                -MathF.Sin(yaw) * horizontal,
+                CameraDistance * MathF.Sin(pitch));
+
             cameraState = cameraState.With(
-                viewFar: 5500f,
+                viewFar: MathF.Max(8000f, CameraDistance * 3f),
                 fieldOfView: fieldOfView,
-                target: new Vector3(14229.295898f, 12340.358398f, 380f));
+                position: focus + offset,
+                target: focus);
         }
 
         public void SetController(CharacterSelectionController controller)
@@ -59,20 +113,23 @@ namespace Client.Main.Worlds
         protected override void CreateMapTileObjects()
         {
             base.CreateMapTileObjects();
-            MapTileObjects[14] = null;
-            MapTileObjects[71] = typeof(BlendedObjects);
-            MapTileObjects[11] = typeof(BlendedObjects);
-            MapTileObjects[36] = typeof(LightObject);
-            MapTileObjects[25] = typeof(BlendedObjects);
-            MapTileObjects[33] = typeof(BlendedObjects);
-            MapTileObjects[30] = typeof(BlendedObjects);
-            MapTileObjects[31] = typeof(FlowersObject2);
-            MapTileObjects[34] = typeof(FlowersObject);
-            MapTileObjects[26] = typeof(WaterFallObject);
-            MapTileObjects[24] = typeof(WaterFallObject);
-            MapTileObjects[54] = typeof(WaterSplashObject);
-            MapTileObjects[55] = typeof(WaterSplashObject);
-            MapTileObjects[56] = typeof(WaterSplashObject);
+
+            // 舞台換成諾利亞（World4）之後，物件索引的意義跟著換 ——
+            // 這份對照必須跟 NoriaWorld 一致，否則樹會被當成瀑布之類。
+            MapTileObjects[39] = typeof(Objects.Worlds.Noria.ChaosMachineObject);
+            MapTileObjects[1] = typeof(Objects.Worlds.Noria.NoriaObject);
+            MapTileObjects[9] = typeof(Objects.Worlds.Noria.NoriaObject);
+            MapTileObjects[17] = typeof(Objects.Worlds.Noria.NoriaObject);
+            MapTileObjects[19] = typeof(Objects.Worlds.Noria.NoriaObject);
+            MapTileObjects[35] = typeof(Objects.Worlds.Noria.NoriaObject);
+            MapTileObjects[41] = typeof(Objects.Worlds.Noria.NoriaObject);
+            MapTileObjects[42] = typeof(Objects.Worlds.Noria.NoriaObject);
+            MapTileObjects[43] = typeof(Objects.Worlds.Noria.NoriaObject);
+            MapTileObjects[38] = typeof(Objects.Worlds.Noria.RestPlaceObject);
+            MapTileObjects[8] = typeof(Objects.Worlds.Noria.SitPlaceObject);
+            MapTileObjects[6] = typeof(Objects.Worlds.Noria.ClimberObject);
+            MapTileObjects[37] = typeof(Objects.Worlds.Noria.LightBeamObject);
+            MapTileObjects[18] = typeof(Objects.Worlds.Noria.EoTheCraftsmanPlaceObject);
         }
 
         public override void AfterLoad()

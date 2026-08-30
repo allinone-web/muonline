@@ -98,7 +98,7 @@ namespace Client.Main.Scenes.SelectCharacter
                 {
                     Name = name,
                     CharacterClass = cls,
-                    Position = displayPosition,
+                    Position = displayPosition + Worlds.SelectWorld.SlotOffset(i, characterInfos.Count),
                     Angle = displayAngle,
                     Interactive = false,
                     World = world,
@@ -178,7 +178,7 @@ namespace Client.Main.Scenes.SelectCharacter
                 {
                     Name = name,
                     CharacterClass = CharacterClassNumber.DarkWizard,
-                    Position = displayPosition,
+                    Position = displayPosition + Worlds.SelectWorld.SlotOffset(i, characters.Count),
                     Angle = displayAngle,
                     Interactive = false,
                     World = world,
@@ -253,13 +253,18 @@ namespace Client.Main.Scenes.SelectCharacter
             for (int i = 0; i < _characters.Count; i++)
             {
                 var player = _characters[i];
-                bool isActive = i == index;
 
-                player.Hidden = !isActive;
-                player.Interactive = isActive;
+                // 並排展示：全部都看得見、全部都點得到。
+                // 原本是 MU 原版「一次只顯示一個」的做法，換成舞台之後不適用 ——
+                // 選中與否改用動作與特效表達，不是用隱藏其他人。
+                player.Hidden = false;
+                player.Interactive = true;
 
                 if (_labels.TryGetValue(player, out var label))
-                    label.Visible = isActive;
+                    label.Visible = true;
+
+                if (i != index && player.Status == GameControlStatus.Ready)
+                    player.PlayAction(player.GetCorrectIdleAction());
             }
 
             _activeIndex = index;
