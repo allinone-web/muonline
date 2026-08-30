@@ -1,4 +1,7 @@
+using System;
+using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using Client.AssetStudio.Project;
 using Client.Data.BMD;
@@ -48,6 +51,63 @@ namespace Client.Main.Objects
         {
             Model = _model;
             await base.Load();
+            Diagnose();
+        }
+
+        /// <summary>
+        /// 把「這隻怪到底載到了什麼」寫成檔案。
+        /// </summary>
+        /// <remarks>
+        /// 為什麼要寫檔而不是 <c>Console.WriteLine</c>：
+        /// 在 iPhone 上 Console 只進系統 log，要開 Console.app 才看得到。
+        /// 而這一類問題（模型載進來了、名牌出得來、就是畫不出來）光看畫面
+        /// 分辨不出是「貼圖沒解開」「網格是空的」還是「緩衝區沒建起來」——
+        /// 每一種在畫面上都長得一模一樣：什麼都沒有。
+        ///
+        /// 檔案落在資源庫旁邊，用 <c>tools/mu pull-diagnostic</c> 拉回來。
+        /// </remarks>
+        private void Diagnose()
+        {
+            try
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine($"=== {Asset.Id} (#{Asset.BindNumber}) {DateTime.Now:HH:mm:ss} ===");
+                sb.AppendLine($"  Status={Status}  Visible={Visible}  Scale={Scale}");
+
+                if (Model is null)
+                {
+                    sb.AppendLine("  Model=null  ← 模型根本沒指派");
+                }
+                else
+                {
+                    sb.AppendLine($"  網格 {Model.Meshes.Length}、骨骼 {Model.Bones.Length}、動作 {Model.Actions.Length}");
+
+                    for (int i = 0; i < Model.Meshes.Length; i++)
+                    {
+                        var mesh = Model.Meshes[i];
+                        string wanted = mesh.TexturePath ?? "(空)";
+                        string resolved = BMDLoader.Instance.GetTexturePath(Model, wanted) ?? "(解析不出路徑)";
+                        var data = TextureLoader.Instance.Get(resolved);
+
+                        sb.AppendLine($"  網格{i}: 頂點 {mesh.Vertices?.Length ?? 0}、三角形 {mesh.Triangles?.Length ?? 0}");
+                        sb.AppendLine($"    貼圖名 '{wanted}'");
+                        sb.AppendLine($"    解析成 '{resolved}'  檔案在={File.Exists(resolved)}");
+                        sb.AppendLine($"    載入結果={(data is null ? "NULL ← 這就是畫不出來的原因" : $"{data.Width}×{data.Height} 元件{data.Components}")}");
+                    }
+                }
+
+                string text = sb.ToString();
+                Console.WriteLine(text);
+
+                var root = LibraryAssetProvider.Root;
+                var parent = Path.GetDirectoryName(root);
+                if (!string.IsNullOrEmpty(parent) && Directory.Exists(parent))
+                    File.AppendAllText(Path.Combine(parent, "library-diagnostic.log"), text);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Library] 診斷本身失敗：{ex.Message}");
+            }
         }
 
         /// <summary>
