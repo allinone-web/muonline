@@ -7,6 +7,7 @@ using Client.AssetStudio.Import;
 using Client.AssetStudio.Project;
 using Client.Data.BMD;
 using Microsoft.Extensions.Logging;
+using Client.Main;
 
 namespace Client.Main.Content
 {
@@ -55,7 +56,7 @@ namespace Client.Main.Content
                 if (_library is not null)
                     return _library;
 
-                _library = new AssetLibrary();
+                _library = new AssetLibrary(ResolveRoot());
                 Reindex();
 
                 // 有沒有東西都要印。之前只在「有」的時候印，於是裝置上資源庫是空的時
@@ -87,12 +88,54 @@ namespace Client.Main.Content
             }
         }
 
+        /// <summary>
+        /// 找資源庫在哪。
+        /// </summary>
+        /// <remarks>
+        /// <b>不要相信 <c>AssetLibrary.DefaultRoot</c> 在每個平台都對。</b>
+        /// 它用的是 <c>SpecialFolder.UserProfile</c> + "Documents"，
+        /// 在 macOS 上剛好是 <c>~/Documents</c>，但 iOS 上 UserProfile 回傳什麼
+        /// 是執行期才知道的（容器根目錄？還是 Documents 本身？）——
+        /// 猜錯就是安靜地讀到空清單，每隻怪都落回原本的模型而且不報錯。
+        /// <b>這個 bug 已經吃過一次了。</b>
+        ///
+        /// 所以錨定在 <see cref="Constants.DataPath"/> 旁邊：那是每個平台都明確
+        /// 設定過、而且一定存在的路徑（iOS 由 MuIos/Program.cs 指定容器裡的
+        /// Documents/Data）。資源庫就放它隔壁。桌面環境維持原本的家目錄慣例。
+        /// 兩個都試，哪個真的有 library.json 就用哪個。
+        /// </remarks>
+        private static string ResolveRoot()
+        {
+            var candidates = new List<string>();
+
+            if (!string.IsNullOrEmpty(Constants.DataPath))
+            {
+                var beside = Path.GetDirectoryName(Path.GetFullPath(Constants.DataPath));
+                if (!string.IsNullOrEmpty(beside))
+                    candidates.Add(Path.Combine(beside, "mu-studio-library"));
+            }
+
+            candidates.Add(AssetLibrary.DefaultRoot);
+
+            foreach (var candidate in candidates)
+            {
+                if (File.Exists(Path.Combine(candidate, "library.json")))
+                {
+                    _logger?.LogInformation("資源庫根目錄：{Root}", candidate);
+                    return candidate;
+                }
+            }
+
+            _logger?.LogWarning("找不到資源庫（試過：{Tried}）", string.Join("、", candidates));
+            return candidates[0];
+        }
+
         /// <summary>重新讀一次清單。改完綁定不必重開客戶端。</summary>
         public static void Reload()
         {
             lock (Gate)
             {
-                _library = new AssetLibrary();
+                _library = new AssetLibrary(ResolveRoot());
                 Reindex();
                 _cache.Clear();
             }
