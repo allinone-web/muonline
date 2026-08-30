@@ -33,6 +33,25 @@ public sealed class LibraryAsset
     /// </remarks>
     public Dictionary<string, string> Actions { get; set; } = [];
 
+    /// <summary>
+    /// 遊戲的動作編號 → 播放速度（<c>BMDTextureAction.PlaySpeed</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 動畫長度必須跟伺服器的節奏對得上，否則會看到
+    /// 「攻擊動畫還沒揮完，傷害數字已經跳出來」這種視覺落差。
+    ///
+    /// 對齊的方向刻意是<b>改客戶端的播放速度，而不是改伺服器的 AttackDelay</b>：
+    /// 伺服器的數值是遊戲平衡，動的是玩法；播放速度只影響觀感。
+    /// 換一隻怪就要重調平衡，那是本末倒置。
+    ///
+    /// 公式來自 <c>ModelObject.Animation.cs</c>：
+    /// <c>_animTime += delta * PlaySpeed * AnimationSpeed</c>，
+    /// <c>_animTime</c> 的單位是影格，播完的條件是 <c>&gt;= 影格數 - 1</c>。
+    /// 所以 <c>PlaySpeed = (影格數 - 1) / (目標秒數 * AnimationSpeed)</c>，
+    /// <c>AnimationSpeed</c> 預設 4。
+    /// </remarks>
+    public Dictionary<string, float> ActionSpeeds { get; set; } = [];
+
     /// <summary>要接管遊戲裡的哪一個編號（怪物／NPC 的 <c>[NpcInfo]</c> typeId）。-1 表示還沒決定。</summary>
     public int BindNumber { get; set; } = -1;
 

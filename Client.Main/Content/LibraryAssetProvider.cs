@@ -109,6 +109,7 @@ namespace Client.Main.Content
 
                 var model = imported.Model;
                 RemapActions(model, imported.Clips, asset.Actions);
+                ApplyActionSpeeds(model, asset);
 
                 // 貼圖用資源庫的絕對路徑，不複製進 Data。
                 string textureDir = library.TextureDirectoryOf(asset);
@@ -127,6 +128,30 @@ namespace Client.Main.Content
 
                 return model;
             });
+        }
+
+        /// <summary>
+        /// 套用資源庫記下來的播放速度，讓動畫長度跟伺服器的節奏對上。
+        /// </summary>
+        /// <remarks>
+        /// 放在<b>這裡</b>而不是 <c>LibraryMonster</c>，是因為這是唯一把資產變成 BMD 的地方。
+        /// 放在物件那一層的話，工具（<c>--library-tune</c>）讀到的會是沒套速度的原始 BMD，
+        /// 於是「現在幾秒」那一欄永遠顯示舊值，看起來像是設定沒生效。
+        /// 同一份資料要有同一個真相來源。
+        /// </remarks>
+        internal static void ApplyActionSpeeds(BMD model, LibraryAsset asset)
+        {
+            if (asset.ActionSpeeds is not { Count: > 0 } speeds || model.Actions.Length == 0)
+                return;
+
+            foreach (var (key, speed) in speeds)
+            {
+                if (!int.TryParse(key, out int slot) || slot < 0 || slot >= model.Actions.Length)
+                    continue;
+
+                if (model.Actions[slot] is { } action && speed > 0f)
+                    action.PlaySpeed = speed;
+            }
         }
 
         /// <summary>
