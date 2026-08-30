@@ -701,7 +701,7 @@ namespace Client.Main.Controls.UI.Game.Trade
         {
             if (_font == null) return;
 
-            float scale = 0.32f;
+            float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextCaption) : 0.32f;
             Vector2 size = _font.MeasureString(title) * scale;
             float textX = x + (width - size.X) / 2;
 
@@ -729,7 +729,7 @@ namespace Client.Main.Controls.UI.Game.Trade
             if (_font != null)
             {
                 string title = "TRADE";
-                float scale = 0.50f;
+                float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextTitle) : 0.50f;
                 Vector2 size = _font.MeasureString(title) * scale;
                 Vector2 pos = new((WINDOW_WIDTH - size.X) / 2, (HEADER_HEIGHT - size.Y) / 2 + 2);
 
@@ -768,7 +768,7 @@ namespace Client.Main.Controls.UI.Game.Trade
             if (_font != null)
             {
                 string label = "Zen:";
-                float scale = 0.35f;
+                float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextLabel) : 0.35f;
                 Vector2 size = _font.MeasureString(label) * scale;
                 Vector2 pos = new(_partnerMoneyRect.X - size.X - 8, _partnerMoneyRect.Y + (_partnerMoneyRect.Height - size.Y) / 2);
                 spriteBatch.DrawString(_font, label, pos, Theme.TextGold, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
@@ -790,7 +790,7 @@ namespace Client.Main.Controls.UI.Game.Trade
             if (_font != null)
             {
                 string warning = "[!] CHECK ITEMS BEFORE ACCEPTING";
-                float scale = 0.32f;
+                float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextCaption) : 0.32f;
                 Vector2 size = _font.MeasureString(warning) * scale;
                 Vector2 pos = new((WINDOW_WIDTH - size.X) / 2, _dividerRect.Y + 12);
                 spriteBatch.DrawString(_font, warning, pos + Vector2.One, Color.Black * 0.6f, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
@@ -820,7 +820,7 @@ namespace Client.Main.Controls.UI.Game.Trade
             if (_font != null)
             {
                 string label = "Zen:";
-                float scale = 0.35f;
+                float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextLabel) : 0.35f;
                 Vector2 size = _font.MeasureString(label) * scale;
                 Vector2 pos = new(_myMoneyInputRect.X - size.X - 8, _myMoneyInputRect.Y + (_myMoneyInputRect.Height - size.Y) / 2);
                 spriteBatch.DrawString(_font, label, pos, Theme.TextGold, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
@@ -923,7 +923,7 @@ namespace Client.Main.Controls.UI.Game.Trade
                 TradeButtonStateChanged.TradeButtonState.Checked => "ACCEPTED",
                 _ => "TRADE",
             };
-            float scale = 0.45f;
+            float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextBody) : 0.45f;
             Vector2 size = _font.MeasureString(text) * scale;
             Vector2 pos = new(rect.X + (rect.Width - size.X) / 2, rect.Y + (rect.Height - size.Y) / 2);
 
@@ -947,7 +947,7 @@ namespace Client.Main.Controls.UI.Game.Trade
                     partnerText = $"{_partnerName} Lv.{_partnerLevel}";
                 }
 
-                float scale = 0.35f;
+                float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextLabel) : 0.35f;
                 Vector2 size = _font.MeasureString(partnerText) * scale;
                 Vector2 pos = new(
                     DisplayRectangle.X + _partnerInfoRect.X + (_partnerInfoRect.Width - size.X) / 2,
@@ -961,7 +961,7 @@ namespace Client.Main.Controls.UI.Game.Trade
             {
                 const string status = "PARTNER ACCEPTED";
 
-                float scale = 0.30f;
+                float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextCaption) : 0.30f;
                 Vector2 size = _font.MeasureString(status) * scale;
                 Vector2 pos = new(
                     DisplayRectangle.X + _partnerInfoRect.Right - size.X - 8,
@@ -974,7 +974,7 @@ namespace Client.Main.Controls.UI.Game.Trade
             // Partner money
             {
                 string moneyText = _partnerMoney.ToString();
-                float scale = 0.35f;
+                float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextLabel) : 0.35f;
                 Vector2 pos = new(
                     DisplayRectangle.X + _partnerMoneyRect.X + 8,
                     DisplayRectangle.Y + _partnerMoneyRect.Y + (_partnerMoneyRect.Height - _font.MeasureString(moneyText).Y * scale) / 2);
@@ -985,7 +985,7 @@ namespace Client.Main.Controls.UI.Game.Trade
             if (_characterState != null)
             {
                 string myText = $"YOU: {_characterState.Name}";
-                float scale = 0.32f;
+                float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextCaption) : 0.32f;
                 Vector2 size = _font.MeasureString(myText) * scale;
                 Vector2 pos = new(
                     DisplayRectangle.X + _myInfoRect.X + (_myInfoRect.Width - size.X) / 2,
@@ -1000,7 +1000,7 @@ namespace Client.Main.Controls.UI.Game.Trade
                 string moneyText = _isMoneyInputActive
                     ? (_moneyInputText.Length == 0 ? "0" : _moneyInputText) + (_moneyInputShowCursor ? "|" : string.Empty)
                     : _myMoney.ToString();
-                float scale = 0.35f;
+                float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextLabel) : 0.35f;
 
                 var screenRect = Translate(_myMoneyInputRect);
                 if (_isMoneyInputActive && pixel != null)
@@ -1152,7 +1152,7 @@ namespace Client.Main.Controls.UI.Game.Trade
             if (_hoveredItem == null || _font == null) return;
 
             var lines = ItemUiHelper.BuildTooltipLines(_hoveredItem);
-            const float scale = 0.44f;
+            float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextBody) : 0.44f;
             const int lineSpacing = 4;
             const int paddingX = 14;
             const int paddingY = 12;
@@ -1301,7 +1301,7 @@ namespace Client.Main.Controls.UI.Game.Trade
                 label += $" ({remainingSeconds}s)";
             }
 
-            float scale = 0.35f;
+            float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextLabel) : 0.35f;
             Vector2 size = _font.MeasureString(label) * scale;
             var pos = new Vector2(
                 rect.X + (rect.Width - size.X) / 2f,

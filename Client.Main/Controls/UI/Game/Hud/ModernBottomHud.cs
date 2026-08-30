@@ -1488,7 +1488,7 @@ namespace Client.Main.Controls.UI.Game.Hud
             }
 
             string text = $"{info.Name} {info.Current}/{info.Maximum}";
-            float scale = 0.32f;
+            float scale = MobileUi.ScaleFor(MobileUi.TextCaption);
             Vector2 size = _font!.MeasureString(text) * scale;
             Vector2 textPos = new(
                 rect.X + (rect.Width - size.X) * 0.5f,
@@ -1719,9 +1719,10 @@ namespace Client.Main.Controls.UI.Game.Hud
             if (_font == null || _vitalsTextRect.Width <= 0)
                 return;
 
-            const float LabelScale = 0.46f;
-            const float ValueScale = 0.62f;
-            const float SmallScale = 0.46f;
+            // 統一級距。數值比標籤大一級 —— 玩家要看的是數字，不是 "HP" 這兩個字母。
+            float LabelScale = MobileUi.ScaleFor(MobileUi.TextLabel);
+            float ValueScale = MobileUi.ScaleFor(MobileUi.TextBody);
+            float SmallScale = MobileUi.ScaleFor(MobileUi.TextLabel);
 
             int x = _vitalsTextRect.X;
             int y = _vitalsTextRect.Y;
@@ -1995,11 +1996,14 @@ namespace Client.Main.Controls.UI.Game.Hud
             if (remainingMs <= 0)
                 return;
 
+            // 和 TouchActionButtonsControl 同一個公式 —— 那裡修過的 bug 這裡也有：
+            // (remainingMs + 99) / 100f 少除了一個 10，剩 999 ms 時算出 10.98，
+            // 最後一秒會從 11.0 數回 1.0。無條件捨去到十分位，顯示值不會大於真值。
             string timerText = remainingMs >= 1000
-                ? $"{(remainingMs + 999) / 1000}"
-                : $"{(remainingMs + 99) / 100f:F1}";
+                ? ((remainingMs + 999) / 1000).ToString()
+                : (MathF.Floor(remainingMs / 100f) / 10f).ToString("F1");
 
-            const float textScale = 0.6f;
+            float textScale = MobileUi.ScaleFor(MobileUi.TextBody);
             Vector2 textSize = _font.MeasureString(timerText) * textScale;
             float tx = iconRect.X + (iconRect.Width - textSize.X) * 0.5f;
             float ty = iconRect.Y + (iconRect.Height - textSize.Y) * 0.5f;
@@ -2353,7 +2357,7 @@ namespace Client.Main.Controls.UI.Game.Hud
                 // Name text
                 if (_font != null)
                 {
-                    float nameScale = 0.36f;
+                    float nameScale = MobileUi.ScaleFor(MobileUi.TextLabel);
                     string displayName = candidate.Name;
                     float nameX = iconRect.Right + 5;
                     float nameY = rect.Y + (rect.Height - _font.MeasureString(displayName).Y * nameScale) / 2f;

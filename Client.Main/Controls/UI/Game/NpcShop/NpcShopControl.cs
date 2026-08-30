@@ -526,7 +526,7 @@ namespace Client.Main.Controls.UI.Game
         {
             if (_font == null) return;
 
-            float scale = 0.32f;
+            float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextCaption) : 0.32f;
             Vector2 size = _font.MeasureString(title) * scale;
             float textX = x + (width - size.X) / 2;
 
@@ -598,7 +598,7 @@ namespace Client.Main.Controls.UI.Game
             if (_font != null)
             {
                 string title = "NPC SHOP";
-                float scale = 0.50f;
+                float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextTitle) : 0.50f;
                 Vector2 size = _font.MeasureString(title) * scale;
                 Vector2 pos = new((WINDOW_WIDTH - size.X) / 2, (HEADER_HEIGHT - size.Y) / 2 + 2);
 
@@ -680,7 +680,7 @@ namespace Client.Main.Controls.UI.Game
                 string hint = _isRepairShop
                     ? (_shopMode == ShopMode.Repair ? "Repair mode - Click items" : "Buy/Sell - Press 'L' to repair")
                     : "Click item to buy";
-                float scale = 0.38f;
+                float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextLabel) : 0.38f;
                 Vector2 size = _font.MeasureString(hint) * scale;
                 int hintX = _footerRect.X;
                 Vector2 pos = new(hintX + ((_footerRect.Width - (hintX - _footerRect.X)) - size.X) / 2,
@@ -706,7 +706,7 @@ namespace Client.Main.Controls.UI.Game
 
             // Draw "Repair item" text for Repair
             string repairText = "Repair item";
-            float scale = 0.4f;
+            float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextLabel) : 0.4f;
             Vector2 textSize = _font.MeasureString(repairText) * scale;
             Vector2 textPos = new(repairRect.X + (repairRect.Width - textSize.X) / 2,
                                   repairRect.Y + (repairRect.Height - textSize.Y) / 2);
@@ -843,7 +843,7 @@ namespace Client.Main.Controls.UI.Game
             {
                 lines.Add(($"Buy Price: {buyPrice} Zen", Theme.TextGold));
             }
-            const float scale = 0.44f;
+            float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextBody) : 0.44f;
             const int lineSpacing = 4;
             const int paddingX = 14;
             const int paddingY = 12;

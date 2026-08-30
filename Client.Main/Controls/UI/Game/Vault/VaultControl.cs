@@ -584,7 +584,7 @@ namespace Client.Main.Controls.UI.Game
         {
             if (_font == null) return;
 
-            float scale = 0.32f;
+            float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextCaption) : 0.32f;
             Vector2 size = _font.MeasureString(title) * scale;
             float textX = x + (width - size.X) / 2;
 
@@ -670,7 +670,7 @@ namespace Client.Main.Controls.UI.Game
             if (_font != null)
             {
                 string title = "VAULT";
-                float scale = 0.50f;
+                float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextTitle) : 0.50f;
                 Vector2 size = _font.MeasureString(title) * scale;
                 Vector2 pos = new((WINDOW_WIDTH - size.X) / 2, (HEADER_HEIGHT - size.Y) / 2 + 2);
 
@@ -804,7 +804,7 @@ namespace Client.Main.Controls.UI.Game
             string zenText = _isZenInputActive
                 ? $"{(_zenMoveDirection == VaultMoveMoneyRequest.VaultMoneyMoveDirection.InventoryToVault ? "IN" : "OUT")}: {(_zenInputText.Length == 0 ? "0" : _zenInputText)}{(_zenInputShowCursor ? "|" : string.Empty)}"
                 : _vaultZen.ToString();
-            float scale = 0.35f;
+            float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextLabel) : 0.35f;
             Vector2 size = _font.MeasureString(zenText) * scale;
             Vector2 pos = new(zenRect.X + 8, zenRect.Y + (zenRect.Height - size.Y) / 2);
 
@@ -841,7 +841,7 @@ namespace Client.Main.Controls.UI.Game
             spriteBatch.Draw(pixel, new Rectangle(rect.X, rect.Y, 2, rect.Height), border);
             spriteBatch.Draw(pixel, new Rectangle(rect.Right - 2, rect.Y, 2, rect.Height), border);
 
-            float scale = 0.30f;
+            float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextCaption) : 0.30f;
             Vector2 size = _font.MeasureString(label) * scale;
             Vector2 pos = new(rect.X + (rect.Width - size.X) / 2, rect.Y + (rect.Height - size.Y) / 2);
             Color textColor = selected ? Theme.TextWhite : Theme.TextGray;
@@ -964,7 +964,7 @@ namespace Client.Main.Controls.UI.Game
             if (_hoveredItem == null || _font == null) return;
 
             var lines = ItemUiHelper.BuildTooltipLines(_hoveredItem);
-            const float scale = 0.44f;
+            float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextBody) : 0.44f;
             const int lineSpacing = 4;
             const int paddingX = 14;
             const int paddingY = 12;

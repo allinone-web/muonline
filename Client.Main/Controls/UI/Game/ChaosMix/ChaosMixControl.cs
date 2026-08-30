@@ -459,7 +459,7 @@ namespace Client.Main.Controls.UI.Game
             var pixel = GraphicsManager.Instance.Pixel;
             if (pixel == null || _font == null) return;
 
-            float scale = 0.32f;
+            float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextCaption) : 0.32f;
             Vector2 size = _font.MeasureString(title) * scale;
             int textX = x + (width - (int)size.X) / 2;
 
@@ -495,7 +495,7 @@ namespace Client.Main.Controls.UI.Game
             if (_font != null)
             {
                 string title = "CHAOS MIX";
-                float scale = 0.52f;
+                float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextTitle) : 0.52f;
                 Vector2 size = _font.MeasureString(title) * scale;
                 Vector2 pos = new((ControlSize.X - size.X) / 2, (HEADER_HEIGHT - size.Y) / 2 + 3);
 
@@ -591,7 +591,7 @@ namespace Client.Main.Controls.UI.Game
         {
             if (_font == null) return;
 
-            float scale = 0.32f;
+            float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextCaption) : 0.32f;
             int x = DisplayRectangle.X + _infoRect.X + 10;
             int y = DisplayRectangle.Y + _infoRect.Y + 10;
 
@@ -606,7 +606,7 @@ namespace Client.Main.Controls.UI.Game
             string warn = _warningLine ?? string.Empty;
             if (!string.IsNullOrWhiteSpace(warn))
             {
-                float warnScale = 0.30f;
+                float warnScale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextCaption) : 0.30f;
                 Vector2 warnSize = _font.MeasureString(warn) * warnScale;
                 Vector2 warnPos = new(
                     DisplayRectangle.X + _infoRect.X + (_infoRect.Width - warnSize.X) / 2,
@@ -630,7 +630,7 @@ namespace Client.Main.Controls.UI.Game
             if (_font == null) return;
 
             string text = _mixInProgress ? "MIXING..." : "MIX";
-            float scale = 0.45f;
+            float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextBody) : 0.45f;
             Vector2 size = _font.MeasureString(text) * scale;
             Vector2 pos = new(rect.X + (rect.Width - size.X) / 2, rect.Y + (rect.Height - size.Y) / 2);
 
