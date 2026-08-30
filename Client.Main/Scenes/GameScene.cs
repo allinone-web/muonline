@@ -982,6 +982,16 @@ namespace Client.Main.Scenes
             string standable = world == null ? "n/a" : world.IsWalkable(heroTile).ToString();
 
             var uiMouse = MuGame.Instance.UiMouseState;
+
+            // 卡住的關鍵：IsPointOverOpenWindow 不看座標，只看 MouseControl。
+            // MouseControl 卡在哪個控制項上，就是它把整個畫面都判定成 UI。
+            var mouseControl = MouseControl;
+            string owner = mouseControl == null
+                ? "null"
+                : ReferenceEquals(mouseControl, World)
+                    ? "World"
+                    : $"{mouseControl.GetType().Name}{mouseControl.DisplayRectangle}";
+
             string joy = _virtualJoystick == null
                 ? "none"
                 : $"active={_virtualJoystick.ActiveRaw} mag={_virtualJoystick.Magnitude:F2} "
@@ -990,7 +1000,8 @@ namespace Client.Main.Scenes
             Console.WriteLine(
                 $"[MoveDiag] tick hero=({heroTile.X},{heroTile.Y}) standable={standable} "
                 + $"moving={_hero.IsMoving} intent={_hero.MovementIntent} skip={_moveDiagSkip} "
-                + $"touch=({uiMouse.X},{uiMouse.Y}) pressed={uiMouse.LeftButton == ButtonState.Pressed} {joy}");
+                + $"touch=({uiMouse.X},{uiMouse.Y}) pressed={uiMouse.LeftButton == ButtonState.Pressed} {joy} "
+                + $"mouseControl={owner}");
         }
 
         /// <summary>
