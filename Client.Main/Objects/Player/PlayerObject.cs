@@ -3519,7 +3519,21 @@ namespace Client.Main.Objects.Player
         };
 
         // ────────────────────────────── CLASS → MODEL MAP ──────────────────────────────
-        private PlayerClass MapNetworkClassToModelClass(CharacterClassNumber n) => n switch
+        /// <summary>
+        /// 伺服器的職業編號 → 要載哪一套身體。
+        /// </summary>
+        /// <remarks>
+        /// <b>外觀汰換在這裡套用，不要搬到呼叫端。</b>
+        /// 組出 <c>Player/{部位}Class{NN}.bmd</c> 的地方有四處
+        /// （進世界、重設空裝備欄、預載清單、診斷輸出），
+        /// 只改其中幾處的話會出現「進世界時是新身體，
+        /// 但因為沒穿裝備立刻被重設回舊身體」這種看起來像沒生效的結果 ——
+        /// 那正是第一版犯的錯。
+        /// </remarks>
+        private PlayerClass MapNetworkClassToModelClass(CharacterClassNumber n)
+            => AppearanceOverride.Apply(MapNetworkClassToModelClassRaw(n));
+
+        private static PlayerClass MapNetworkClassToModelClassRaw(CharacterClassNumber n) => n switch
         {
             CharacterClassNumber.DarkWizard => PlayerClass.DarkWizard,
             CharacterClassNumber.SoulMaster => PlayerClass.SoulMaster,
@@ -3553,9 +3567,7 @@ namespace Client.Main.Objects.Player
             HideHelmMask();
             _helmItemEquipped = false;
 
-            // 外觀汰換：舊職業改用新職業的身體。只影響載哪五個部位檔，
-            // 伺服器送的職業、數值、技能、動作全部不變。見 AppearanceOverride。
-            PlayerClass mapped = AppearanceOverride.Apply(MapNetworkClassToModelClass(_characterClass));
+            PlayerClass mapped = MapNetworkClassToModelClass(_characterClass);
             await SetBodyPartsAsync("Player/",
                 "HelmClass", "ArmorClass", "PantClass", "GloveClass", "BootClass",
                 (int)mapped);
