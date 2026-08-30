@@ -115,6 +115,38 @@ namespace Client.Main.Scenes
         private bool _previousMousePressed = false;
 
         // Constructors
+        /// <summary>
+        /// 允許在初始化完成之前就被呈現。
+        ///
+        /// 沒有這個的話，MuGame.ChangeSceneAsync 會等整個場景初始化完才切換
+        /// （見 activateBeforeInitialization），而選角場景要載地圖與五個角色 ——
+        /// 實測那段有將近二十秒畫面還停在登入頁、沒有任何回饋，使用者會以為
+        /// 登入失敗而再按一次，於是拿到 AccountAlreadyConnected。
+        /// 改成先呈現載入畫面與進度條，載完再露出頁面。
+        /// </summary>
+        public override bool CanRenderWhileInitializing => true;
+
+        private Task _firstFramePreparationTask;
+
+        public override Task PrepareForFirstPresentedFrameAsync()
+        {
+            _firstFramePreparationTask ??= PrepareFirstPresentedFrameCoreAsync();
+            return _firstFramePreparationTask;
+        }
+
+        /// <summary>
+        /// 只準備「第一幀畫得出來」所需的東西：載入畫面與進度條。
+        /// 兩者都在建構子建好了，這裡只是把它們初始化到可以繪製。
+        /// </summary>
+        private async Task PrepareFirstPresentedFrameCoreAsync()
+        {
+            if (_loadingScreen != null && _loadingScreen.Status == GameControlStatus.NonInitialized)
+                await _loadingScreen.Initialize();
+
+            if (_progressBar != null && _progressBar.Status == GameControlStatus.NonInitialized)
+                await _progressBar.Initialize();
+        }
+
         public SelectCharacterScene(List<(string Name, CharacterClassNumber Class, ushort Level, byte[] Appearance)> characters, NetworkManager networkManager)
         {
             _characters = characters ?? new List<(string Name, CharacterClassNumber Class, ushort Level, byte[] Appearance)>();
@@ -1494,6 +1526,14 @@ namespace Client.Main.Scenes
                 _progressBar.Draw(gameTime);
                 return;
             }
+
+            // 載入畫面收掉之後，進度條也必須跟著收。
+            // 它是手動繪製的，不會因為載入結束就自己消失，而原本唯一會關掉它的
+            // 那行寫在「移除載入畫面」的分支裡 —— 載入畫面若已被別處收掉就永遠
+            // 不會執行，於是進度條一直留在畫面底部顯示 0%。
+            // 動作鈕改排成底部橫列之後，它就正面撞上按鈕了。
+            if (_progressBar is { Visible: true })
+                _progressBar.Visible = false;
 
             // Draw 3D world first
             base.Draw(gameTime);

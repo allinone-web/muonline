@@ -139,6 +139,22 @@ namespace Client.Main.Worlds
             MapTileObjects[18] = typeof(Objects.Worlds.Noria.EoTheCraftsmanPlaceObject);
         }
 
+        /// <summary>
+        /// 舞台附近多遠以內的地圖物件才載入。
+        ///
+        /// 諾利亞整張圖有約 2800 個物件，全部載入會讓選角畫面多花二十秒才出來
+        /// —— 實測 log 有一段 19.7 秒完全沒有輸出，使用者以為登入失敗而再按一次，
+        /// 於是拿到 AccountAlreadyConnected。畫面上只看得到舞台附近，其餘不必載。
+        /// </summary>
+        private const float StageObjectRadius = 4000f;
+
+        protected override bool ShouldCreateMapObject(Client.Data.OBJS.IMapObject mapObj)
+        {
+            float dx = mapObj.Position.X - _characterDisplayPosition.X;
+            float dy = mapObj.Position.Y - _characterDisplayPosition.Y;
+            return (dx * dx) + (dy * dy) <= StageObjectRadius * StageObjectRadius;
+        }
+
         public override void AfterLoad()
         {
             base.AfterLoad();

@@ -428,6 +428,9 @@ namespace Client.Main.Controls
                 OBJ obj = await reader.Load(objPath);
                 foreach (var mapObj in obj.Objects)
                 {
+                    if (!ShouldCreateMapObject(mapObj))
+                        continue;
+
                     var instance = WorldObjectFactory.CreateMapTileObject(this, mapObj);
                     if (instance != null) tasks.Add(instance.Load());
                 }
@@ -453,6 +456,14 @@ namespace Client.Main.Controls
         {
             base.AfterLoad();
         }
+
+        /// <summary>
+        /// 是否要建立這個地圖物件。預設整張圖都建。
+        ///
+        /// 只看得到一小塊地的場景（例如選角舞台）可以覆寫掉：諾利亞有兩千多個
+        /// 物件，全部載入會讓場景多花二十秒才出得來，而畫面上根本看不到那些。
+        /// </summary>
+        protected virtual bool ShouldCreateMapObject(Client.Data.OBJS.IMapObject mapObj) => true;
 
         /// <summary>
         /// Allows a world to adjust the camera loaded from Camera_Angle_Position.bmd without
