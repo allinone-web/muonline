@@ -251,11 +251,30 @@ public sealed class AssetLibrary
         }
     }
 
+    /// <summary>
+    /// 名稱 → 資料夾名。<b>只留 ASCII。</b>
+    /// </summary>
+    /// <remarks>
+    /// 原本用 <c>char.IsLetterOrDigit</c>，而那個對 CJK 回傳 true ——
+    /// 於是「天堂_死亡騎士」原封不動變成資料夾名。在 macOS 上完全正常，
+    /// 但這個資料夾要被複製到 iOS 裝置上：macOS 的檔名是 NFD（分解式）、
+    /// iOS 是 NFC（組合式），複製過去之後 <c>File.Exists</c> 對不上，
+    /// 載入安靜地失敗，世界裡就出現一隻看得到名字、看不到身體的怪。
+    ///
+    /// 資產的<b>顯示名稱</b>（<see cref="LibraryAsset.Name"/>）想用什麼語言都行，
+    /// 但<b>檔案系統上的 id</b> 要能安全地跨平台複製。
+    /// </remarks>
     private string MakeId(string name)
     {
-        string id = new string(name.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '-').ToArray())
+        static bool Keep(char c) =>
+            (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c is '-' or '_';
+
+        string id = new string(name.Select(c => Keep(c) ? c : '-').ToArray())
             .Trim('-')
             .ToLowerInvariant();
+
+        while (id.Contains("--"))
+            id = id.Replace("--", "-");
 
         if (string.IsNullOrEmpty(id))
             id = "asset";
