@@ -2,29 +2,6 @@ using System.Reflection;
 
 namespace Client.AssetStudio.Catalog;
 
-public enum EntityKind
-{
-    Monster,
-    Npc,
-    Player,
-    Pet,
-    SkillModel,
-    Item,
-    Effect,
-
-    /// <summary>
-    /// 從外部匯入、存在資源庫裡的資產（glTF ＋ PNG）。
-    /// </summary>
-    /// <remarks>
-    /// 與其他分類的差別：這一類的 <see cref="EntityEntry.FullPath"/> 指向的是
-    /// <b>.glb</b> 而不是 .bmd，載入時要走 <c>GltfImporter</c>。
-    /// 之所以要讓它出現在主目錄而不是只留在資源庫面板裡，是因為
-    /// 「這隻怪長什麼樣」與「它從哪來」是兩件事 ——
-    /// 要比較天堂的死亡騎士跟 MU 的 Balrog，得能在同一個縮圖牆上並排看。
-    /// </remarks>
-    Library,
-}
-
 /// <summary>目錄裡的一筆資源。可能是「有類別的怪物」，也可能是「沒人引用的孤兒模型」。</summary>
 public sealed record EntityEntry
 {

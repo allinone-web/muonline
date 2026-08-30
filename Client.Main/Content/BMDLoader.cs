@@ -1754,6 +1754,32 @@ namespace Client.Main.Content
             return result;
         }
 
+        /// <summary>
+        /// 幫一個「不是從磁碟讀出來」的 BMD 註冊貼圖位置。
+        /// </summary>
+        /// <remarks>
+        /// 資源庫的自有資產是 glTF，執行期由 <c>GltfImporter</c> 當場轉成 BMD，
+        /// 從來沒有經過 <see cref="Prepare"/>，所以 <c>_texturePathMap</c> 裡沒有它 ——
+        /// 不註冊的話每個網格都會找不到貼圖，畫出來是純白色。
+        ///
+        /// 傳進來的路徑可以是<b>絕對路徑</b>：資源庫在 Data 目錄之外
+        /// （預設 <c>~/Documents/mu-studio-library</c>），而 TextureLoader 內部是
+        /// <c>Path.Combine(Constants.DataPath, path)</c> —— .NET 的 Path.Combine
+        /// 遇到絕對路徑會原樣回傳，所以這條路本來就通，不必把貼圖複製進 Data。
+        /// </remarks>
+        public void RegisterExternalModel(BMD model, IReadOnlyDictionary<string, string> texturePaths)
+        {
+            if (model == null || texturePaths == null)
+                return;
+
+            var map = new Dictionary<string, string>();
+            foreach (var (name, fullPath) in texturePaths)
+                map[name.ToLowerInvariant()] = fullPath;
+
+            lock (_texturePathMap)
+                _texturePathMap[model] = map;
+        }
+
         public void RegisterDerivedModel(BMD source, BMD derived)
         {
             if (source == null || derived == null)

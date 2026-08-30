@@ -33,6 +33,7 @@
 //   MuAssetStudio --library-add <gltf|glb> [--name X] [--kind 怪物]
 //   MuAssetStudio --library-show <id>                 相容性報告 + 目前的動作對映
 //   MuAssetStudio --library-map <id> --action N [--clip <動作名稱>]
+//   MuAssetStudio --library-runtime [篩選]           客戶端真的載得動嗎（走 Client.Main 的路徑）
 //
 // 所有 CLI 模式都不需要圖形裝置，可以在沒有視窗的終端機工作階段裡跑。
 
@@ -116,6 +117,9 @@ if (parsed.ContainsKey("items"))
 
 if (parsed.GetValueOrDefault("library") is string libraryRoot)
     session.Library.Open(libraryRoot);
+
+if (parsed.ContainsKey("library-runtime"))
+    return RuntimeCommands.Check(session.Library, parsed.GetValueOrDefault("library-runtime"));
 
 if (parsed.ContainsKey("library-list"))
     return LibraryCommands.List(session.Library);

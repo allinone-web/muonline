@@ -1113,16 +1113,31 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 return;
             }
 
-            if (!NpcDatabase.TryGetNpcType(type, out var npcClassType))
-            {
-                _logger.LogWarning("ScopeHandler: NPC type not found in NpcDatabase for TypeID {TypeId}.", type);
-                return;
-            }
+            WalkerObject obj;
 
-            if (!(Activator.CreateInstance(npcClassType) is WalkerObject obj))
+            // 資源庫的自有資產先看 —— 它的用途就是覆寫遊戲原本的模型，
+            // 順序反過來的話永遠蓋不掉。
+            if (Content.LibraryAssetProvider.TryGet(type, out var libraryAsset))
             {
-                _logger.LogWarning("ScopeHandler: Could not create instance of NPC type {NpcClassType} for TypeID {TypeId}.", npcClassType, type);
-                return;
+                obj = new LibraryMonster(libraryAsset);
+                _logger.LogInformation(
+                    "ScopeHandler: TypeID {TypeId} 由資源庫的「{Name}」接管。", type, libraryAsset.Name);
+            }
+            else
+            {
+                if (!NpcDatabase.TryGetNpcType(type, out var npcClassType))
+                {
+                    _logger.LogWarning("ScopeHandler: NPC type not found in NpcDatabase for TypeID {TypeId}.", type);
+                    return;
+                }
+
+                if (Activator.CreateInstance(npcClassType) is not WalkerObject created)
+                {
+                    _logger.LogWarning("ScopeHandler: Could not create instance of NPC type {NpcClassType} for TypeID {TypeId}.", npcClassType, type);
+                    return;
+                }
+
+                obj = created;
             }
 
             // Configure the object's properties
