@@ -42,6 +42,11 @@ public sealed class MapEditorGame : MuGame
     {
         base.Initialize();
 
+        // 畫質預設在 base.Initialize 裡套用，所以覆寫只能在這之後。
+        // 只有使用者明講 --grass 才動它 —— 預設維持跟遊戲一致。
+        if (EditorSession.Current.ForceGrass)
+            Constants.DRAW_GRASS = true;
+
         if (Services.GetService(typeof(IGraphicsDeviceManager)) is GraphicsDeviceManager graphics)
         {
             graphics.PreferredBackBufferWidth = _options.Width;
@@ -77,12 +82,6 @@ public sealed class MapEditorGame : MuGame
         Constants.RENDER_SCALE = 1f;
         Constants.MSAA_ENABLED = false;
         GraphicsManager.Instance.UpdateRenderScale();
-
-        // 草也一樣。畫質選單的「Draw Grass」關掉之後那個選擇會存進設定檔，
-        // 而編輯器啟動時會把設定檔套上來 —— 於是編輯器裡永遠看不到會搖的草，
-        // 連「我剛換的草貼圖有沒有效」都驗不了。
-        // 編輯器要看的是資源本身，不是某次遊玩時的效能取捨。
-        Constants.DRAW_GRASS = true;
 
         _imgui = new ImGuiRenderer(this, _session.Settings.FontSize);
         _ui = new EditorUi(this, _imgui, _session);

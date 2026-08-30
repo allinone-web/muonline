@@ -67,6 +67,15 @@ public sealed class EditorSession : EditSession
 
     public bool RunSelfTest { get; set; }
 
+    /// <summary>
+    /// <c>--grass</c>：啟動時把會搖動的草打開。
+    /// </summary>
+    /// <remarks>
+    /// 預設不開，跟遊戲一樣交給畫質預設決定（Auto 在 Apple GPU 上會解析成 Medium，而 Medium 關草）。
+    /// 這個旗標只是省下「開起來再去『檢視』面板勾一次」，換草貼圖做前後對比時會用到。
+    /// </remarks>
+    public bool ForceGrass { get; set; }
+
     /// <summary>自我測試是否全數通過；null 表示還沒跑。</summary>
     public bool? SelfTestPassed { get; set; }
 

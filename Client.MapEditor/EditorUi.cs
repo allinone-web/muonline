@@ -365,6 +365,22 @@ public sealed class EditorUi : IDisposable
             camera.FocusTile(Constants.TERRAIN_SIZE / 2, Constants.TERRAIN_SIZE / 2);
 
         ImGui.Separator();
+
+        // 會搖動的草不是地形貼圖，是另一套 billboard，由 Constants.DRAW_GRASS 控制。
+        // 啟動時它的值來自畫質預設：Auto 在這台 Mac 上解析成 Medium，而 Medium 關草。
+        // 遊戲那邊玩家可以在暫停選單裡開；編輯器沒有那個選單，所以開關放這裡。
+        // 不在程式碼裡強制 —— 換草貼圖要驗收時自己勾起來就好。
+        bool drawGrass = Constants.DRAW_GRASS;
+        if (ImGui.Checkbox("顯示搖動的草", ref drawGrass))
+        {
+            Constants.DRAW_GRASS = drawGrass;
+            if (drawGrass)
+                (_game.ActiveScene as MapEditorScene)?.World?.Terrain?.ReloadGrassIfNeeded();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("草的 billboard（TileGrass01–03.OZT）。\n關掉時只剩地面貼圖，跟遊戲的低／中畫質一樣。");
+
+        ImGui.Separator();
         ImGui.TextColored(Muted, "右鍵拖曳＝旋轉　中鍵拖曳＝平移");
         ImGui.TextColored(Muted, "滾輪＝縮放　WASD＝移動");
 
