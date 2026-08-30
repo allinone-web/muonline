@@ -99,15 +99,17 @@ public sealed class StudioGame : Game
                                + $"孤兒模型 {_session.Catalog.Stats.OrphanModels}、"
                                + $"缺模型 {_session.Catalog.Stats.MissingModels}）";
 
+        // 分類要先切。切分類會重設清單與選擇，
+        // 所以 --open 放在它前面的話會被清掉（看起來就像 --open 沒作用）。
+        if (_options.InitialKind is string initialKind && !_ui.SelectKind(initialKind))
+            _session.Report($"沒有「{initialKind}」這個分類", failed: true);
+
         if (_options.InitialSelection is string wanted)
             SelectByName(wanted);
 
         // 自動化截圖時要能打開預設關著的面板 —— 否則終端機裡驗不到它們長什麼樣。
         if (_options.InitialPanels is string panels)
             _ui.OpenPanels(panels);
-
-        if (_options.InitialKind is string initialKind && !_ui.SelectKind(initialKind))
-            _session.Report($"沒有「{initialKind}」這個分類", failed: true);
 
         if (_options.InitialLibraryAsset is string libraryAsset && !_ui.SelectLibraryAsset(libraryAsset))
             _session.Report($"資源庫裡沒有「{libraryAsset}」", failed: true);
@@ -320,7 +322,12 @@ public sealed class StudioGame : Game
         var entry = _session.Catalog.Entries.FirstOrDefault(e =>
                         e.Name.Equals(wanted, StringComparison.OrdinalIgnoreCase)
                      || e.ClassName?.Equals(wanted, StringComparison.OrdinalIgnoreCase) == true
-                     || e.ModelPath.EndsWith(wanted, StringComparison.OrdinalIgnoreCase));
+                     || e.ModelPath.EndsWith(wanted, StringComparison.OrdinalIgnoreCase))
+                    // 精確比對找不到就退成子字串。名稱是「幻影騎士 Illusion Knight」
+                    // 這種中英並列的形式，要求打完整串太苛刻。
+                 ?? _session.Catalog.Entries.FirstOrDefault(e =>
+                        e.Name.Contains(wanted, StringComparison.OrdinalIgnoreCase)
+                     || e.Detail.Contains(wanted, StringComparison.OrdinalIgnoreCase));
 
         if (entry is not null)
         {

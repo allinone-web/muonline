@@ -7,6 +7,7 @@
 //
 //   MuAssetStudio --report                          目錄盤點（不開視窗）
 //   MuAssetStudio --verify [分類]                    解析每一個模型，回報解不開的與缺貼圖的
+//   MuAssetStudio --selftest                        匯出／匯入管線的無視窗回歸測試（離開碼 0/1/2）
 //   MuAssetStudio --items [篩選]                     道具模型的語意分類（劍／斧／盔甲…）
 //   MuAssetStudio --skeleton-diff <主模型> --with <部位>  兩個模型的骨頭索引對不對得上
 //   MuAssetStudio --godot-export --world N --out <資料夾> [--max-types 64] [--no-objects]
@@ -219,6 +220,9 @@ if (parsed.ContainsKey("godot-export"))
 
     return 0;
 }
+
+if (parsed.ContainsKey("selftest"))
+    return Client.AssetStudio.Cli.AssetPipelineSelfTest.Run(session.Catalog, dataPath);
 
 if (parsed.ContainsKey("verify"))
     return VerifyCommand.Run(session.Catalog, parsed.GetValueOrDefault("verify"));

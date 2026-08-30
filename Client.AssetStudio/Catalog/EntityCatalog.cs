@@ -196,6 +196,18 @@ public sealed class EntityCatalog
             });
         }
 
+        // 職業角色：把 Player/ 底下散落的部位組成「一個看得到的角色」。
+        // 沒有這一步的話目錄裡只有一件一件的上衣與褲子，
+        // 沒辦法回答「這個職業長什麼樣、動起來如何」。
+        foreach (var player in PlayerClassCatalog.Build(path => Resolve(files, path)))
+        {
+            entries.Add(player);
+            primary.Add(player.ModelPath);
+
+            foreach (var part in player.BodyParts)
+                referenced.Add(part);
+        }
+
         int classBound = entries.Count;
         int orphans = 0;
 
@@ -267,6 +279,11 @@ public sealed class EntityCatalog
     /// </remarks>
     private static EntityEntry Classify(EntityEntry entry, ItemCatalog? items)
     {
+        // 已經自己標好分類的不要再動 —— 職業角色是組合出來的，
+        // 它的 ModelPath 是共用骨架，照檔名分類會把 15 個職業全歸成「角色骨架」。
+        if (entry.Group.Length > 0)
+            return entry;
+
         switch (entry.Kind)
         {
             case EntityKind.Item when items is not null:

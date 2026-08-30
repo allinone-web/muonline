@@ -23,7 +23,11 @@ internal sealed class GltfRoot
     public int Scene { get; set; }
     public List<GltfScene> Scenes { get; set; } = [];
     public List<GltfNode> Nodes { get; set; } = [];
-    public List<GltfMesh> Meshes { get; set; } = [];
+    /// <summary>
+    /// 純骨架模型（player.bmd 這類）一個網格都沒有，這時候整個 <c>meshes</c> 不能落地 ——
+    /// glTF 規格禁止空陣列，寫出去的檔案會被驗證器與 Blender 整份拒絕。
+    /// </summary>
+    public List<GltfMesh>? Meshes { get; set; }
     public List<GltfSkin>? Skins { get; set; }
     public List<GltfAnimation>? Animations { get; set; }
     public List<GltfMaterial>? Materials { get; set; }

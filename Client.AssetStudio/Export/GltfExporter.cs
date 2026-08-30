@@ -203,16 +203,29 @@ public static class GltfExporter
             }
         }
 
-        if (mesh.Primitives.Count == 0)
-            warnings.Add("這個模型沒有任何可匯出的網格");
+        // 純骨架模型在沒有身體部位可併的時候一個 primitive 都沒有 —— player.bmd 就是這樣，
+        // 它自己 0 網格、60 骨、380 個動作，幾何全在 ArmorClass/HelmClass 那些部位檔裡。
+        // 這時候不能照樣寫出 mesh：glTF 規格要求 primitives 至少一筆，空的會讓
+        // SharpGLTF、Blender、Khronos 驗證器整份拒絕，連骨架和動作一起賠掉。
+        // 改成不寫 mesh，輸出就是一份合法的「動作庫」——骨架在、380 個動作也都在。
+        bool hasGeometry = mesh.Primitives.Count > 0;
 
-        root.Meshes.Add(mesh);
+        if (hasGeometry)
+        {
+            root.Meshes = [mesh];
 
-        int meshNodeIndex = root.Nodes.Count;
-        root.Nodes.Add(new GltfNode { Name = baseName + "_Mesh", Mesh = 0, Skin = bones.Length > 0 ? 0 : null });
-        root.Nodes[0].Children!.Add(meshNodeIndex);
+            int meshNodeIndex = root.Nodes.Count;
+            root.Nodes.Add(new GltfNode { Name = baseName + "_Mesh", Mesh = 0, Skin = bones.Length > 0 ? 0 : null });
+            root.Nodes[0].Children!.Add(meshNodeIndex);
+        }
+        else
+        {
+            warnings.Add("這個模型沒有網格，只輸出骨架與動作");
+        }
 
-        if (bones.Length > 0)
+        // 規格規定 skin 只能掛在有 mesh 的節點上，所以沒有幾何時連 skin 都不能寫。
+        // 骨架仍然以節點階層存在，Blender 匯進去是一串可動的節點。
+        if (bones.Length > 0 && hasGeometry)
         {
             // InverseBindMatrices 省略 = 全部單位矩陣，正是 BMD 的語意（見類別註解）。
             root.Skins = [new GltfSkin
