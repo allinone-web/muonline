@@ -21,11 +21,14 @@ namespace Client.Main.Models
     ///
     /// 幾何量的差別（五個部位的三角形總和，實測）：
     /// <code>
-    /// 戰士 Dark Knight   1,407  →  幻影騎士 Illusion Knight  2,410
-    /// 法師 Dark Wizard   1,383  →  魔導士   Mage             2,130
+    /// 戰士   Dark Knight  1,407  →  幻影騎士 Illusion Knight  2,410
+    /// 法師   Dark Wizard  1,383  →  魔導士   Mage             2,130
+    /// 弓箭手 Fairy Elf    1,752  →  斬殺者   Slayer           2,296
     /// </code>
-    /// 弓箭手刻意不換：新職業裡沒有弓手造型，而 Fairy Elf 本來就有 1,752，
-    /// 在舊職業裡排第三高。
+    /// 弓箭手這一個是取捨過的：新職業裡<b>沒有弓手造型</b>。
+    /// 煉金術士最精緻（5,180）但那是現行弓箭手的 2.96 倍，
+    /// 而且粉金長裙讀起來是聖女不是弓手；斬殺者的尖耳與緊身皮甲
+    /// 輪廓最接近，成本也只有 1.3 倍。
     /// </remarks>
     public static class AppearanceOverride
     {
@@ -34,6 +37,7 @@ namespace Client.Main.Models
         {
             [PlayerClass.DarkKnight] = PlayerClass.IllusionKnight,
             [PlayerClass.DarkWizard] = PlayerClass.Mage,
+            [PlayerClass.FairyElf]   = PlayerClass.Slayer,
         };
 
         /// <summary>把職業換成它的外觀職業；沒有對映就原樣回傳。</summary>
