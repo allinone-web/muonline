@@ -1545,8 +1545,15 @@ namespace Client.Main.Scenes
         {
             if (_loadingScreen != null && _loadingScreen.Visible)
             {
-                GraphicsDevice.Clear(new Color(12, 12, 20));
-                DrawBackground();
+                // 純黑、不畫背景圖。
+                //
+                // 原本鋪的是 MGContent/Background.jpg（MU 的宣傳圖），它的
+                // MUMono 標誌在原圖是上方置中，但整張圖被拉伸進 UiScaler 的
+                // 虛擬座標再映射到 2.26 的寬螢幕，標誌因此被擠壓變形，
+                // 看起來就是「左上角有一段看不清楚的文字」。
+                //
+                // 之後要換成自己的載入背景，就在這裡畫上去。
+                GraphicsDevice.Clear(Color.Black);
 
                 // 只有載入真的拖久了才顯示進度條。
                 // 只載舞台附近的物件之後，這段通常不到半秒 —— 進度條閃一下反而
