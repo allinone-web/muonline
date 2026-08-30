@@ -396,9 +396,27 @@ namespace Client.Main.Scenes.SelectCharacter
             if (clickedPlayer == null)
                 return;
 
-            if (_activeIndex < 0 || _characters[_activeIndex] != clickedPlayer)
+            int clickedIndex = _characters.IndexOf(clickedPlayer);
+            if (clickedIndex < 0)
+                return;
+
+            // 點到「不是目前選中的」角色，就是要選它。
+            //
+            // 這裡原本直接忽略非選中的角色，因為舊版一次只顯示一個 ——
+            // 能被點到的必然就是目前那個，點擊只用來觸發表情與雙擊進入。
+            // 五個角色並排、全部可點之後，這個假設不成立了：點別人會被丟掉，
+            // 選擇永遠停在第 0 個，於是不管點誰，進遊戲的都是同一隻。
+            if (clickedIndex != _activeIndex)
             {
-                _logger.LogDebug("Ignoring click on inactive character '{Name}'.", clickedPlayer.Name);
+                SetActiveCharacter(clickedIndex);
+
+                // 切換選擇不算雙擊的前半 —— 否則緊接著的第二下會被判成
+                // 「雙擊進入遊戲」，等於點兩下不同角色就直接進去了。
+                _lastClickTime = DateTime.MinValue;
+                _lastClickedCharacter = clickedPlayer.Name;
+
+                _logger.LogInformation("Character '{Name}' selected by click.", clickedPlayer.Name);
+                CharacterClicked?.Invoke(this, clickedPlayer.Name);
                 return;
             }
 
