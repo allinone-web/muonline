@@ -5,6 +5,7 @@ using Client.Main.Controls;
 using ImGuiNET;
 using Microsoft.Xna.Framework;
 using NVector2 = System.Numerics.Vector2;
+using NVector3 = System.Numerics.Vector3;
 using NVector4 = System.Numerics.Vector4;
 using MuAssets.Core;
 
@@ -501,6 +502,7 @@ public sealed class EditorUi : IDisposable
         (EditorToolKind.PaintAlpha, "混合"),
         (EditorToolKind.SculptHeight, "高度"),
         (EditorToolKind.PaintAttribute, "屬性"),
+        (EditorToolKind.PaintLight, "光照"),
         (EditorToolKind.PlaceObject, "放置"),
         (EditorToolKind.Scatter, "散佈"),
         (EditorToolKind.SelectObject, "選取"),
@@ -554,6 +556,7 @@ public sealed class EditorUi : IDisposable
         {
             ImGui.TextColored(Muted, "選一個工具開始編輯。");
         ImGui.TextColored(Muted, "按住 Option 點一下 = 吸管（用目前這支筆取樣）");
+            ImGui.TextColored(Muted, "Cmd+C 複製游標周圍一個筆刷大小的區塊，Cmd+V 貼上");
             ImGui.End();
             return;
         }
@@ -650,6 +653,10 @@ public sealed class EditorUi : IDisposable
                 DrawAttributeSettings();
                 break;
 
+            case EditorToolKind.PaintLight:
+                DrawLightSettings();
+                break;
+
             case EditorToolKind.PlaceObject:
                 DrawPlaceSettings();
                 break;
@@ -690,6 +697,53 @@ public sealed class EditorUi : IDisposable
 
         ImGui.Separator();
         DrawObjectUndoRedo();
+    }
+
+    /// <summary>
+    /// 光照筆刷的設定。
+    /// </summary>
+    /// <remarks>
+    /// MU 的地形光照是烘焙在 TerrainLight.OZB 裡的逐格顏色，渲染時乘上去，
+    /// 而且乘 2 —— 所以 128 才是「不加不減」，不是 255。
+    /// 火堆旁邊的地會亮，是因為有人畫上去的，不是即時光源算的。
+    /// </remarks>
+    private void DrawLightSettings()
+    {
+        var modes = new[]
+        {
+            (LightMode.Paint, "塗色"),
+            (LightMode.Brighten, "加亮"),
+            (LightMode.Darken, "壓暗"),
+        };
+
+        foreach (var (mode, label) in modes)
+        {
+            if (ImGui.RadioButton(label, _session.LightMode == mode))
+                _session.LightMode = mode;
+
+            if (mode != modes[^1].Item1)
+                ImGui.SameLine();
+        }
+
+        if (_session.LightMode == LightMode.Paint)
+        {
+            var color = new NVector3(
+                _session.Tools.LightR / 255f,
+                _session.Tools.LightG / 255f,
+                _session.Tools.LightB / 255f);
+
+            if (ImGui.ColorEdit3("顏色", ref color))
+            {
+                _session.Tools.LightR = (byte)Math.Clamp(color.X * 255f, 0f, 255f);
+                _session.Tools.LightG = (byte)Math.Clamp(color.Y * 255f, 0f, 255f);
+                _session.Tools.LightB = (byte)Math.Clamp(color.Z * 255f, 0f, 255f);
+            }
+
+            ImGui.TextColored(Muted, "128,128,128 是「不加不減」—— 渲染時會乘 2");
+        }
+
+        ImGui.Separator();
+        DrawUndoRedo();
     }
 
     /// <summary>

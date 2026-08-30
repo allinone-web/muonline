@@ -96,6 +96,7 @@ public sealed class MapEditorScene : BaseScene
 
         HandleEditing(acceptInput);
         HandleShortcuts(acceptInput);
+        HandleClipboard(acceptInput);
         PushPendingEdits();
 
         if (_session.ObjectsDirty)
@@ -376,6 +377,43 @@ public sealed class MapEditorScene : BaseScene
         }
     }
 
+    /// <summary>
+    /// Cmd+C 複製游標周圍的區塊、Cmd+V 貼到游標處。
+    /// </summary>
+    /// <remarks>
+    /// 複製的範圍用目前的筆刷半徑 —— 少一個「先框出區塊」的步驟，
+    /// 而筆刷半徑本來就是「我現在關心多大範圍」的意思。
+    /// 要精確的範圍就調筆刷半徑，畫面上的筆刷圈圈就是預覽。
+    /// </remarks>
+    private void HandleClipboard(bool acceptInput)
+    {
+        var keyboard = Keyboard.GetState();
+
+        bool command = keyboard.IsKeyDown(Keys.LeftWindows) || keyboard.IsKeyDown(Keys.RightWindows)
+                    || keyboard.IsKeyDown(Keys.LeftControl) || keyboard.IsKeyDown(Keys.RightControl);
+
+        bool copy = command && keyboard.IsKeyDown(Keys.C) && !_previousKeyboard.IsKeyDown(Keys.C);
+        bool paste = command && keyboard.IsKeyDown(Keys.V) && !_previousKeyboard.IsKeyDown(Keys.V);
+
+        _previousKeyboard = keyboard;
+
+        if (!acceptInput || !HoveredTile.Valid)
+            return;
+
+        int radius = Math.Max(1, _session.Brush.Radius);
+
+        if (copy)
+        {
+            _session.CopyRegion(
+                HoveredTile.TileX - radius, HoveredTile.TileY - radius,
+                HoveredTile.TileX + radius, HoveredTile.TileY + radius);
+        }
+        else if (paste)
+        {
+            _session.PasteAt(HoveredTile.TileX - radius, HoveredTile.TileY - radius);
+        }
+    }
+
     /// <summary>拖曳超過這麼多像素才算框選，否則當成單擊。</summary>
     private const float BoxSelectThreshold = 6f;
 
@@ -633,7 +671,13 @@ public sealed class MapEditorScene : BaseScene
             alpha: document.Alpha,
             attributes: document.Attributes,
             heightMap: document.Height?.Data.Select(c => new Color(c.R, c.G, c.B)).ToArray(),
-            lightData: null);
+            // 光照只在真的改過時才送：它會讓渲染端重算整張的頂點色，
+            // 每次下筆都送等於白付一次代價。
+            lightData: _session.LightDirty
+                ? document.Light?.Data.Select(c => new Color(c.R, c.G, c.B)).ToArray()
+                : null);
+
+        _session.LightDirty = false;
 
         _session.TerrainDirty = false;
 

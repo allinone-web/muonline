@@ -11,10 +11,24 @@ public enum EditorToolKind
     PaintAlpha,
     SculptHeight,
     PaintAttribute,
+    PaintLight,
     PlaceObject,
     Scatter,
     SelectObject,
     SpawnArea,
+}
+
+/// <summary>光照筆刷的模式。</summary>
+public enum LightMode
+{
+    /// <summary>往指定顏色塗過去。</summary>
+    Paint,
+
+    /// <summary>加亮。</summary>
+    Brighten,
+
+    /// <summary>壓暗。</summary>
+    Darken,
 }
 
 public enum HeightMode
@@ -42,6 +56,7 @@ public static class EditorTools
         EditorToolKind.PaintAlpha => EditTarget.Alpha,
         EditorToolKind.SculptHeight => EditTarget.Height,
         EditorToolKind.PaintAttribute => EditTarget.Attribute,
+        EditorToolKind.PaintLight => EditTarget.Light,
         _ => EditTarget.Layer1,
     };
 
@@ -51,6 +66,7 @@ public static class EditorTools
         EditorToolKind.PaintLayer2 => "繪製第二層",
         EditorToolKind.PaintAlpha => "繪製混合",
         EditorToolKind.SculptHeight => "雕刻高度",
+        EditorToolKind.PaintLight => "繪製光照",
         EditorToolKind.PaintAttribute => "繪製屬性",
         EditorToolKind.PlaceObject => "放置物件",
         EditorToolKind.SelectObject => "選取物件",
@@ -88,6 +104,10 @@ public static class EditorTools
 
             case EditorToolKind.PaintAttribute:
                 PaintAttribute(session, document, stroke, centerX, centerY);
+                break;
+
+            case EditorToolKind.PaintLight:
+                PaintLight(session, document, stroke, centerX, centerY);
                 break;
         }
     }
@@ -169,6 +189,68 @@ public static class EditorTools
             default: document.Alpha[index] = value; break;
         }
     }
+
+    /// <summary>
+    /// 光照筆刷：往目標顏色逼近，或整體加亮／壓暗。
+    /// </summary>
+    /// <remarks>
+    /// MU 的地形光照是<b>烘焙</b>在 <c>TerrainLight.OZB</c> 裡的逐格顏色，
+    /// 渲染時乘上去（而且乘 2 —— 128 才是「不加不減」）。
+    /// 所以「打光」在這裡不是放光源，是直接畫在地上。
+    ///
+    /// 這也是為什麼火堆旁邊的地會亮：那不是即時光源算出來的，是有人畫上去的。
+    /// 想讓自己畫的地圖有那個味道，就得有這支筆。
+    ///
+    /// 每格的變化量帶筆刷權重與強度，所以同一個地方多刷幾次會愈來愈亮 ——
+    /// 與高度雕刻的手感一致。
+    /// </remarks>
+    private static void PaintLight(
+        ToolSettings settings, MapDocument document, EditStroke stroke, int centerX, int centerY)
+    {
+        if (document.Light?.Data is null)
+            return;
+
+        var brush = settings.Brush;
+        float strength = Math.Clamp(brush.Strength, 0f, 1f);
+
+        brush.ForEachCell(centerX, centerY, (x, y, weight) =>
+        {
+            int index = (y * MapDocument.Size) + x;
+            var current = document.LightAt(index);
+
+            float amount = weight * strength;
+
+            (byte r, byte g, byte b) = settings.LightMode switch
+            {
+                LightMode.Paint => (
+                    Blend(current.R, settings.LightR, amount),
+                    Blend(current.G, settings.LightG, amount),
+                    Blend(current.B, settings.LightB, amount)),
+
+                LightMode.Brighten => (
+                    Blend(current.R, 255, amount),
+                    Blend(current.G, 255, amount),
+                    Blend(current.B, 255, amount)),
+
+                _ => (
+                    Blend(current.R, 0, amount),
+                    Blend(current.G, 0, amount),
+                    Blend(current.B, 0, amount)),
+            };
+
+            int before = EditStroke.PackLight(current.R, current.G, current.B);
+            int after = EditStroke.PackLight(r, g, b);
+
+            if (before == after)
+                return;
+
+            stroke.Record(EditTarget.Light, index, before, after);
+            document.Light.Data[index] = System.Drawing.Color.FromArgb(255, r, g, b);
+        });
+    }
+
+    private static byte Blend(byte from, byte to, float amount)
+        => (byte)Math.Clamp(MathF.Round(from + ((to - from) * amount)), 0f, 255f);
 
     /// <summary>貼圖索引是離散值，不做插值 —— 權重只當成「這格算不算在筆刷內」。</summary>
     private static void PaintIndex(Brush brush, byte[] target, EditStroke stroke, int centerX, int centerY, byte value)

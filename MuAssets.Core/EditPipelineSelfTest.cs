@@ -42,6 +42,8 @@ public static class EditPipelineSelfTest
             EyedropperPick(session, document),
             AutoTransition(session, document),
             BoxSelectAndScatter(session, document),
+            LightBrush(session, document),
+            CopyPasteBlock(session, document),
             ExportToClientFormat(session, document),
             SpawnAreasAndOpenMuExport(session, document),
             Validation(session, document, world),
@@ -541,6 +543,177 @@ public static class EditPipelineSelfTest
              session.ScatterSpacing, session.ScatterAvoidBlocked, session.Brush.Radius) = before;
 
             session.SelectedObjects.Clear();
+        }
+    }
+
+    /// <summary>
+    /// 光照筆刷：塗、加亮、壓暗，而且撤銷要還原。
+    /// </summary>
+    /// <remarks>
+    /// MU 的地形光照是烘焙在 TerrainLight.OZB 裡的逐格顏色，渲染時乘上去 ——
+    /// 「打光」在這裡不是放光源，是直接畫在地上。火堆旁邊的地會亮，
+    /// 是因為有人畫上去的。
+    /// </remarks>
+    private static (string, bool, string) LightBrush(EditSession session, MapDocument document)
+    {
+        const int x = OriginX + 120;
+        const int y = OriginY + 120;
+
+        if (document.Light?.Data is null)
+            return ("光照筆刷", true, "略過（這張圖沒有光照資料）");
+
+        var before = (session.Tool, session.LightMode, session.Brush.Radius,
+                      session.Brush.Falloff, session.Brush.Strength, session.Brush.Shape);
+
+        int index = Index(x, y);
+        var original = document.LightAt(index);
+
+        try
+        {
+            session.Tool = EditorToolKind.PaintLight;
+            session.Brush.Shape = BrushShape.Circle;
+            session.Brush.Radius = 4;
+            session.Brush.Falloff = 0f;
+            session.Brush.Strength = 1f;
+
+            session.LightMode = LightMode.Darken;
+            var darkStroke = new EditStroke(EditTarget.Light, "測試");
+            EditorTools.Apply(session.Tools, document, darkStroke, x, y);
+            bool darkened = document.LightAt(index).R < original.R || original.R == 0;
+
+            session.LightMode = LightMode.Brighten;
+            var brightStroke = new EditStroke(EditTarget.Light, "測試");
+            EditorTools.Apply(session.Tools, document, brightStroke, x, y);
+            bool brightened = document.LightAt(index).R == 255;
+
+            // 撤銷要一路退回原本的顏色。
+            brightStroke.Apply(document, undo: true);
+            darkStroke.Apply(document, undo: true);
+
+            var restored = document.LightAt(index);
+            bool undone = restored.R == original.R && restored.G == original.G && restored.B == original.B;
+
+            // 衰減開著時，邊緣的變化要比中心小。
+            session.Brush.Falloff = 1f;
+            session.LightMode = LightMode.Darken;
+            var falloffStroke = new EditStroke(EditTarget.Light, "測試");
+            EditorTools.Apply(session.Tools, document, falloffStroke, x, y);
+
+            bool ramps = document.LightAt(Index(x + 3, y)).R > document.LightAt(index).R;
+            falloffStroke.Apply(document, undo: true);
+
+            bool passed = darkened && brightened && undone && ramps;
+
+            return ("光照筆刷", passed,
+                $"壓暗 {darkened}、加亮 {brightened}、撤銷還原 {undone}、邊緣較弱 {ramps}");
+        }
+        catch (Exception ex)
+        {
+            return ("光照筆刷", false, ex.Message);
+        }
+        finally
+        {
+            (session.Tool, session.LightMode, session.Brush.Radius,
+             session.Brush.Falloff, session.Brush.Strength, session.Brush.Shape) = before;
+        }
+    }
+
+    /// <summary>
+    /// 區塊複製貼上：地形五種資料與物件都要跟著過去。
+    /// </summary>
+    private static (string, bool, string) CopyPasteBlock(EditSession session, MapDocument document)
+    {
+        // 用絕對座標而不是 OriginX + n：OriginX 是 100，加到 160 就是 260，
+        // 超出 256 的地圖邊界。這一項自己踩過。
+        const int sourceX = 20;
+        const int sourceY = 20;
+        const int targetX = 40;
+        const int targetY = 40;
+        const int size = 6;
+
+        int objectsBefore = document.Objects.Count;
+        int undoBefore = session.History.UndoDepth;
+
+        try
+        {
+            // 先在來源區弄出一個可辨識的圖案。
+            for (int dy = 0; dy < size; dy++)
+            {
+                for (int dx = 0; dx < size; dx++)
+                {
+                    int i = Index(sourceX + dx, sourceY + dy);
+                    document.Layer1[i] = (byte)(10 + dx);
+                    document.Alpha[i] = (byte)(dy * 20);
+                    document.Attributes[i] = dx == 0 ? TWFlags.NoMove : 0;
+                }
+            }
+
+            session.ClipboardIncludesObjects = true;
+            session.CopyRegion(sourceX, sourceY, sourceX + size - 1, sourceY + size - 1);
+
+            bool copied = session.Clipboard is { Width: size, Height: size };
+
+            session.PasteAt(targetX, targetY);
+
+            bool layersMatch = true;
+            bool attributesMatch = true;
+
+            for (int dy = 0; dy < size && layersMatch; dy++)
+            {
+                for (int dx = 0; dx < size; dx++)
+                {
+                    int from = Index(sourceX + dx, sourceY + dy);
+                    int to = Index(targetX + dx, targetY + dy);
+
+                    if (document.Layer1[from] != document.Layer1[to] || document.Alpha[from] != document.Alpha[to])
+                    {
+                        layersMatch = false;
+                        break;
+                    }
+
+                    if (document.Attributes[from] != document.Attributes[to])
+                        attributesMatch = false;
+                }
+            }
+
+            int pastedObjects = document.Objects.Count - objectsBefore;
+
+            // 貼上是一筆多目標筆劃，撤銷一次就該把整塊地形還原。
+            session.Undo();
+
+            bool undone = true;
+            for (int dy = 0; dy < size && undone; dy++)
+            {
+                for (int dx = 0; dx < size; dx++)
+                {
+                    int to = Index(targetX + dx, targetY + dy);
+
+                    if (document.Layer1[to] == (byte)(10 + dx) && document.Alpha[to] == (byte)(dy * 20))
+                    {
+                        undone = false;
+                        break;
+                    }
+                }
+            }
+
+            if (pastedObjects > 0)
+                session.UndoObject();
+
+            bool objectsRestored = document.Objects.Count == objectsBefore;
+            bool passed = copied && layersMatch && attributesMatch && undone && objectsRestored;
+
+            return ("區塊複製貼上", passed,
+                $"複製 {copied}、貼圖與混合一致 {layersMatch}、屬性一致 {attributesMatch}、" +
+                $"物件 {pastedObjects} 個、一次撤銷還原地形 {undone}、物件還原 {objectsRestored}");
+        }
+        catch (Exception ex)
+        {
+            return ("區塊複製貼上", false, ex.Message);
+        }
+        finally
+        {
+            while (session.History.UndoDepth > undoBefore)
+                session.Undo();
         }
     }
 

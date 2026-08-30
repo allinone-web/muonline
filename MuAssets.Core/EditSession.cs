@@ -41,6 +41,7 @@ public class EditSession
     public float FlattenTarget { get => Tools.FlattenTarget; set => Tools.FlattenTarget = value; }
     public TWFlags AttributeFlag { get => Tools.AttributeFlag; set => Tools.AttributeFlag = value; }
     public bool AttributeErase { get => Tools.AttributeErase; set => Tools.AttributeErase = value; }
+    public LightMode LightMode { get => Tools.LightMode; set => Tools.LightMode = value; }
 
     /// <summary>放置與選取時，隨機化用的亂數來源。固定種子，測試才可重現。</summary>
     public Random Random { get; } = new(20260829);
@@ -119,6 +120,9 @@ public class EditSession
     /// <summary>地形資料被改過、還沒推進渲染端。</summary>
     public bool TerrainDirty { get; set; }
 
+    /// <summary>光照被改過。與地形分開，因為推進渲染端的成本不同。</summary>
+    public bool LightDirty { get; set; }
+
     /// <summary>圖層貼圖需要重建（切圖、切層或編輯之後）。</summary>
     public bool LayerViewDirty { get; set; } = true;
 
@@ -149,6 +153,9 @@ public class EditSession
 
         History.Push(stroke);
         TerrainDirty = true;
+
+        if (Tool == EditorToolKind.PaintLight)
+            LightDirty = true;
         LayerViewDirty = true;
         HasUnsavedChanges = true;
     }
@@ -332,6 +339,77 @@ public class EditSession
         StatusMessage = $"撒了 {placed.Count} 個 type {PlaceObjectType}";
 
         return placed.Count;
+    }
+
+    // ── 區塊複製貼上 ──────────────────────────────────────────
+
+    /// <summary>剪貼簿裡的區塊；還沒複製過就是 null。</summary>
+    public MapBlock? Clipboard { get; private set; }
+
+    /// <summary>複製時要不要連物件一起。</summary>
+    public bool ClipboardIncludesObjects { get; set; } = true;
+
+    public void CopyRegion(int ax, int ay, int bx, int by)
+    {
+        var document = Document;
+        if (document is null)
+            return;
+
+        Clipboard = MapClipboard.Copy(document, ax, ay, bx, by, ClipboardIncludesObjects);
+
+        StatusMessage =
+            $"複製 {Clipboard.Width}×{Clipboard.Height} 格" +
+            (Clipboard.Objects.Count > 0 ? $"、{Clipboard.Objects.Count} 個物件" : string.Empty);
+    }
+
+    /// <summary>
+    /// 把剪貼簿貼到某一格（左上角對齊）。
+    /// </summary>
+    /// <remarks>
+    /// 地形與物件的歷史是分開的兩條，所以一次貼上會是兩次撤銷。
+    /// 這件事寫在狀態列上 —— 不然使用者按一次撤銷會看到地形回去了、物件還在。
+    /// </remarks>
+    public void PasteAt(int tileX, int tileY)
+    {
+        var document = Document;
+
+        if (document is null || Clipboard is null)
+            return;
+
+        var stroke = new EditStroke(EditTarget.Layer1, $"貼上 {Clipboard.Width}×{Clipboard.Height}");
+        var pasted = MapClipboard.Paste(document, Clipboard, tileX, tileY, stroke, ClipboardIncludesObjects);
+
+        if (!stroke.IsEmpty)
+        {
+            History.Push(stroke);
+            TerrainDirty = true;
+            LightDirty = true;
+            LayerViewDirty = true;
+        }
+
+        if (pasted.Count > 0)
+        {
+            var edits = new List<ObjectEdit>(pasted.Count);
+
+            foreach (var instance in pasted)
+            {
+                document.Objects.Add(instance);
+                edits.Add(ObjectEdit.Add(instance));
+            }
+
+            ObjectHistory.Push(edits.Count == 1
+                ? edits[0]
+                : ObjectEdit.Batch($"貼上 {edits.Count} 個物件", edits));
+
+            ObjectsDirty = true;
+        }
+
+        HasUnsavedChanges = true;
+        IssuesStale = true;
+
+        StatusMessage = pasted.Count > 0
+            ? $"貼上 {stroke.CellCount} 格與 {pasted.Count} 個物件（地形與物件各算一次撤銷）"
+            : $"貼上 {stroke.CellCount} 格";
     }
 
     /// <summary>用兩個角落建一個生怪區，種類取自 <see cref="SpawnTypeId"/>。</summary>

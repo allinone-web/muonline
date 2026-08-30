@@ -35,6 +35,15 @@ public sealed class ToolSettings
     /// </remarks>
     public bool AutoTransition { get; set; } = true;
 
+    // ── 光照筆刷 ──────────────────────────────────────────────
+
+    /// <summary>光照筆刷要塗的顏色。</summary>
+    public byte LightR { get; set; } = 255;
+    public byte LightG { get; set; } = 255;
+    public byte LightB { get; set; } = 255;
+
+    public LightMode LightMode { get; set; } = LightMode.Paint;
+
     // ── 散佈筆刷 ──────────────────────────────────────────────
 
     /// <summary>一筆撒幾個。</summary>
