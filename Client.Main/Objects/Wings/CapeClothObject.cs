@@ -178,6 +178,15 @@ namespace Client.Main.Objects.Wings
         private const float RibbonSpringStiffness = 9.5f;
         private const int ConstraintIterations = 2;
 
+        /// <summary>
+        /// 披風可以往前飄到離脊椎多近（世界單位）。0 = 剛好停在脊椎那個平面。
+        /// </summary>
+        /// <remarks>
+        /// 正值會把披風往身後推得更遠，負值允許它稍微繞到身側前方。
+        /// 太大會讓披風看起來被硬拉住，太小則擋不住穿透。
+        /// </remarks>
+        private const float FrontClearance = 0f;
+
         private readonly List<ClothPiece> _pieces = new(3);
         private CapeClothProfile _profile;
         private float _accumulator;
@@ -987,6 +996,50 @@ namespace Client.Main.Objects.Wings
                         if (inwardVelocity < 0f)
                             particle.Velocity -= direction * inwardVelocity;
                     }
+                }
+
+                SolveTorsoHalfSpace(bones, player, ownerScale, fallbackDirection);
+            }
+
+            /// <summary>
+            /// 把披風夾在身體後方的半空間裡。
+            /// </summary>
+            /// <remarks>
+            /// <b>只有球體碰撞是不夠的。</b>球是<b>相交測試</b>：披風甩到胸前的那一瞬間
+            /// 如果剛好落在四顆球之外，就什麼事都不會發生 ——
+            /// 而披風有 180 個世界單位長，球半徑只有 25–37 而且全部集中在軀幹同一個高度，
+            /// 所以身體前方與披風下半部都是沒有防護的空隙。
+            /// 這正是「往後退時披風飄到胸前並穿過身體」的成因。
+            ///
+            /// 半空間約束沒有這個問題：它是<b>位置夾制</b>而不是相交測試，
+            /// 不管那一格走了多遠都不會漏掉。而且語意上也對 ——
+            /// 披風掛在肩上，本來就不該出現在胸前。
+            ///
+            /// 頂端那一排是固定在錨點上的，不參與（迴圈從 <c>_columns</c> 開始）。
+            /// </remarks>
+            private void SolveTorsoHalfSpace(Matrix[] bones, PlayerObject player, float ownerScale, Vector3 backward)
+            {
+                if (backward.LengthSquared() < 0.0001f)
+                    return;
+
+                int torsoIndex = Math.Clamp(TorsoBone, 0, bones.Length - 1);
+                Vector3 torsoOrigin = (bones[torsoIndex] * player.WorldPosition).Translation;
+                float limit = FrontClearance * ownerScale;
+
+                for (int particleIndex = _columns; particleIndex < _particles.Length; particleIndex++)
+                {
+                    ref ClothParticle particle = ref _particles[particleIndex];
+
+                    // backward 指向角色背後，所以在身後的粒子這個內積是正的。
+                    float depth = Vector3.Dot(particle.Position - torsoOrigin, backward);
+                    if (depth >= limit)
+                        continue;
+
+                    particle.Position += backward * (limit - depth);
+
+                    float forwardVelocity = Vector3.Dot(particle.Velocity, backward);
+                    if (forwardVelocity < 0f)
+                        particle.Velocity -= backward * forwardVelocity;
                 }
             }
 

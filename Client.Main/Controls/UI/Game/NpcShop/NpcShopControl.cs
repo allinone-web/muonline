@@ -59,8 +59,45 @@ namespace Client.Main.Controls.UI.Game
 
         private static readonly int GRID_WIDTH = SHOP_COLUMNS * SHOP_SQUARE_WIDTH;
         private static readonly int GRID_HEIGHT = SHOP_ROWS * SHOP_SQUARE_HEIGHT;
-        private static readonly int WINDOW_WIDTH = GRID_WIDTH + GRID_PADDING * 2 + WINDOW_MARGIN * 2;
-        private int WindowHeight => HEADER_HEIGHT + SECTION_HEADER_HEIGHT + GRID_PADDING * 2 + GRID_HEIGHT + (_isRepairShop ? BUTTON_AREA_HEIGHT : 0) + FOOTER_HEIGHT + WINDOW_MARGIN;
+
+        // ── 手機：一行一件商品 ──
+        //
+        // 桌面是 8 x 15 的格線，換算成手機就是一個 364 寬、726 高的窄長條，
+        // 幾乎佔滿整個畫面高度；而它靠左對齊，關閉鈕正好落在螢幕左上角的圓角上
+        // ——「看得到但點不到」。格子本身也只有 40 px，圖示認不出是什麼東西。
+        //
+        // 改成清單：一行一件，左邊圖示、中間名稱與價格、右邊一顆固定尺寸的 BUY。
+        // 名稱和價格是玩家真正要看的資訊，格線一格也放不下。
+        private const int MobileRowHeight = 76;
+        private const int MobileRowGap = 4;
+        private const int MobileIconSize = 64;
+        private const int MobileBuyWidth = 110;
+        private const int MobileListWidth = 540;
+        private static int MobileBuyHeight => MobileUi.CloseButtonSize;
+
+        private static int WINDOW_WIDTH => MobileUi.IsMobile
+            ? MobileListWidth
+            : GRID_WIDTH + GRID_PADDING * 2 + WINDOW_MARGIN * 2;
+
+        private int WindowHeight => MobileUi.IsMobile
+            ? MobileWindowHeight
+            : HEADER_HEIGHT + SECTION_HEADER_HEIGHT + GRID_PADDING * 2 + GRID_HEIGHT + (_isRepairShop ? BUTTON_AREA_HEIGHT : 0) + FOOTER_HEIGHT + WINDOW_MARGIN;
+
+        /// <summary>手機的視窗高度：夾在畫面內，放不下的列用捲的。</summary>
+        private int MobileWindowHeight
+        {
+            get
+            {
+                int chrome = HEADER_HEIGHT + 8 + (_isRepairShop ? BUTTON_AREA_HEIGHT : 0) + FOOTER_HEIGHT + WINDOW_MARGIN;
+                int wanted = chrome + Math.Max(1, _items.Count) * (MobileRowHeight + MobileRowGap);
+                return MobileUi.ClampWindowSize(MobileListWidth, wanted).Y;
+            }
+        }
+
+        /// <summary>清單目前捲到第幾列。</summary>
+        private int _mobileScrollRow;
+        private int _mobileVisibleRows = 1;
+        private Rectangle _mobileListRect;
 
         // ═══════════════════════════════════════════════════════════════
         // MODERN DARK THEME
@@ -138,6 +175,13 @@ namespace Client.Main.Controls.UI.Game
         private CharacterState _characterState;
 
         private InventoryItem _hoveredItem;
+
+        /// <summary>目前被按著的 BUY 是第幾列（-1 = 沒有）。按下與放開要在同一顆上才算數。</summary>
+        private int _mobilePressedBuyIndex = -1;
+
+        /// <summary>清單拖曳捲動的起點。</summary>
+        private int _mobileDragStartY = int.MinValue;
+        private int _mobileDragStartScrollRow;
         private Point _hoveredSlot = new(-1, -1);
         private GameTime _currentGameTime;
 
@@ -180,6 +224,17 @@ namespace Client.Main.Controls.UI.Game
         /// </summary>
         private void ForceAlignNow()
         {
+            if (MobileUi.IsMobile)
+            {
+                // 靠右放，把左半邊整片留給背包（見 InventoryControl.SetCompactLayout）。
+                //
+                // 原本是 VerticalCenter | Left，也就是貼著畫面最左邊 —— 關閉鈕
+                // 因此落在螢幕左上角的圓角上，看得到卻點不到。
+                X = Math.Max(MobileUi.LeftEdge, MobileUi.RightEdge - WINDOW_WIDTH);
+                Y = Math.Max(MobileUi.CornerInset, (UiScaler.VirtualSize.Y - WindowHeight) / 2);
+                return;
+            }
+
             if (Parent == null || Align == ControlAlign.None)
                 return;
 
@@ -202,6 +257,12 @@ namespace Client.Main.Controls.UI.Game
 
         private void BuildLayoutMetrics()
         {
+            if (MobileUi.IsMobile)
+            {
+                BuildMobileLayoutMetrics();
+                return;
+            }
+
             int buttonAreaHeight = _isRepairShop ? BUTTON_AREA_HEIGHT : 0;
 
             _headerRect = new Rectangle(0, 0, WINDOW_WIDTH, HEADER_HEIGHT);
@@ -228,7 +289,7 @@ namespace Client.Main.Controls.UI.Game
                 ? new Rectangle(12, (HEADER_HEIGHT - MobileUi.CloseButtonSize) / 2, MobileUi.CloseButtonSize, MobileUi.CloseButtonSize)
                 : new Rectangle(12, 10, 26, 22);
 
-            // Repair buttons in button area
+        // Repair buttons in button area
             int buttonWidth = 100;
             int buttonHeight = 29;
             int buttonSpacing = 10;
@@ -238,6 +299,69 @@ namespace Client.Main.Controls.UI.Game
             _repairButtonRect = new Rectangle(startX, buttonY, buttonWidth, buttonHeight);
             _repairAllButtonRect = new Rectangle(startX + buttonWidth + buttonSpacing, buttonY, buttonWidth, buttonHeight);
         }
+
+        /// <summary>
+        /// 手機的版面：標題列 + 一行一件的清單 + 底列（金幣）。
+        ///
+        /// 視窗靠<b>右</b>放，把左半邊整片留給背包（見 InventoryControl.SetCompactLayout）——
+        /// 兩個都是寬視窗，疊在一起就誰也點不到。
+        /// </summary>
+        private void BuildMobileLayoutMetrics()
+        {
+            int buttonAreaHeight = _isRepairShop ? BUTTON_AREA_HEIGHT : 0;
+            int width = WINDOW_WIDTH;
+            int height = WindowHeight;
+
+            _headerRect = new Rectangle(0, 0, width, HEADER_HEIGHT);
+
+            int listTop = HEADER_HEIGHT + 8;
+            int listBottom = height - WINDOW_MARGIN - FOOTER_HEIGHT - buttonAreaHeight;
+            int listHeight = Math.Max(MobileRowHeight, listBottom - listTop);
+
+            _mobileListRect = new Rectangle(WINDOW_MARGIN, listTop, width - WINDOW_MARGIN * 2, listHeight);
+            _mobileVisibleRows = Math.Max(1, (listHeight + MobileRowGap) / (MobileRowHeight + MobileRowGap));
+            _mobileScrollRow = Math.Clamp(_mobileScrollRow, 0, MaxMobileScrollRow);
+
+            // 桌面才有的格線區在手機上不存在，但仍有程式讀它們 —— 給空矩形。
+            _gridFrameRect = Rectangle.Empty;
+            _gridRect = Rectangle.Empty;
+
+            _buttonAreaRect = new Rectangle(WINDOW_MARGIN, _mobileListRect.Bottom + 2, _mobileListRect.Width, buttonAreaHeight);
+            _footerRect = new Rectangle(WINDOW_MARGIN, _buttonAreaRect.Bottom + 4, _mobileListRect.Width, FOOTER_HEIGHT - 8);
+            _closeButtonRect = MobileUi.WindowCloseButtonRect(new Rectangle(0, 0, width, height));
+
+            int buttonWidth = 100;
+            int buttonHeight = 29;
+            int buttonSpacing = 10;
+            int buttonY = _buttonAreaRect.Y + (_buttonAreaRect.Height - buttonHeight) / 2;
+            int startX = _buttonAreaRect.X + 10;
+            _repairButtonRect = new Rectangle(startX, buttonY, buttonWidth, buttonHeight);
+            _repairAllButtonRect = new Rectangle(startX + buttonWidth + buttonSpacing, buttonY, buttonWidth, buttonHeight);
+        }
+
+        private int MaxMobileScrollRow => Math.Max(0, _items.Count - _mobileVisibleRows);
+
+        /// <summary>第 index 件商品（絕對索引）在畫面上的整列矩形；不在可見範圍內回傳空。</summary>
+        private Rectangle GetMobileRowRect(int index)
+        {
+            int visibleIndex = index - _mobileScrollRow;
+            if (visibleIndex < 0 || visibleIndex >= _mobileVisibleRows)
+                return Rectangle.Empty;
+
+            return new Rectangle(
+                DisplayRectangle.X + _mobileListRect.X,
+                DisplayRectangle.Y + _mobileListRect.Y + visibleIndex * (MobileRowHeight + MobileRowGap),
+                _mobileListRect.Width,
+                MobileRowHeight);
+        }
+
+        /// <summary>該列的 BUY 鈕。所有列共用同一個尺寸與同一條右對齊線。</summary>
+        private static Rectangle GetMobileBuyRect(Rectangle row)
+            => new(row.Right - 12 - MobileBuyWidth,
+                   row.Y + (row.Height - MobileBuyHeight) / 2,
+                   MobileBuyWidth,
+                   MobileBuyHeight);
+
 
         public override async System.Threading.Tasks.Task Load()
         {
@@ -259,6 +383,15 @@ namespace Client.Main.Controls.UI.Game
                     // Warmup done in previous frame, now safe to show
                     Visible = true;
                     BringToFront();
+
+                    // 背包切成窄版面並靠左，商店靠右 —— 兩個都是寬視窗，
+                    // 疊在一起就誰也點不到（使用者回報「無法操作」）。
+                    InventoryControl.Instance?.SetCompactLayout(true);
+
+                    BuildLayoutMetrics();
+                    ForceAlignNow();
+                    InvalidateStaticSurface();
+
                     SoundController.Instance.PlayBuffer("Sound/iCreateWindow.wav");
                     _pendingShow = false;
                     _warmupComplete = false;
@@ -579,7 +712,11 @@ namespace Client.Main.Controls.UI.Game
             var fullRect = new Rectangle(0, 0, WINDOW_WIDTH, WindowHeight);
             DrawWindowBackground(spriteBatch, fullRect);
             DrawModernHeader(spriteBatch);
-            DrawModernGridSection(spriteBatch);
+
+            // 手機沒有格線區：清單的每一列自己畫底（見 DrawMobileShopList）。
+            if (!MobileUi.IsMobile)
+                DrawModernGridSection(spriteBatch);
+
             DrawModernButtonArea(spriteBatch);
             DrawModernFooter(spriteBatch);
         }
@@ -772,6 +909,12 @@ namespace Client.Main.Controls.UI.Game
 
         private void DrawShopItems(SpriteBatch spriteBatch)
         {
+            if (MobileUi.IsMobile)
+            {
+                DrawMobileShopList(spriteBatch);
+                return;
+            }
+
             var font = _font ?? GraphicsManager.Instance.Font;
             Point gridOrigin = new(DisplayRectangle.X + _gridRect.X, DisplayRectangle.Y + _gridRect.Y);
             var pixel = GraphicsManager.Instance.Pixel;
@@ -835,6 +978,112 @@ namespace Client.Main.Controls.UI.Game
                     JewelShineOverlay.DrawBatch(spriteBatch, _jewelEntries, _currentGameTime, Alpha, UiScaler.SpriteTransform);
                 }
             }
+        }
+
+        /// <summary>
+        /// 手機的商店清單：一行一件，左圖示、中名稱與價格、右一顆 BUY。
+        ///
+        /// 格線放不下名稱與價格，而那正是買東西時唯一要看的兩件事 ——
+        /// 玩家不該為了知道「這是什麼、多少錢」而先長按一個 40 px 的小方塊。
+        /// </summary>
+        private void DrawMobileShopList(SpriteBatch spriteBatch)
+        {
+            var font = _font ?? GraphicsManager.Instance.Font;
+            var pixel = GraphicsManager.Instance.Pixel;
+            if (font == null || pixel == null)
+                return;
+
+            _jewelEntries.Clear();
+
+            for (int i = 0; i < _items.Count; i++)
+            {
+                var row = GetMobileRowRect(i);
+                if (row.IsEmpty)
+                    continue;
+
+                var item = _items[i];
+                bool isHovered = item == _hoveredItem;
+
+                spriteBatch.Draw(pixel, row, (isHovered ? Theme.SlotHover : MobileUi.FieldFill * 0.55f) * Alpha);
+
+                // 圖示
+                var iconRect = new Rectangle(row.X + 6, row.Y + (row.Height - MobileIconSize) / 2,
+                                             MobileIconSize, MobileIconSize);
+                var texture = ResolveItemTexture(item, iconRect.Width, iconRect.Height, isHovered);
+                if (texture != null)
+                {
+                    spriteBatch.Draw(texture, iconRect, Color.White * Alpha);
+                    if (JewelShineOverlay.ShouldShine(item))
+                        _jewelEntries.Add((item, iconRect));
+                }
+                else
+                {
+                    ItemGridRenderHelper.DrawItemPlaceholder(spriteBatch, pixel, font, iconRect, item,
+                        Theme.BgLight, Theme.TextGray * 0.8f);
+                }
+
+                // 名稱與價格
+                var buyRect = GetMobileBuyRect(row);
+                int textX = iconRect.Right + 12;
+                int textWidth = Math.Max(40, buyRect.X - 12 - textX);
+
+                var tooltipLines = ItemUiHelper.BuildTooltipLines(item);
+                string name = tooltipLines.Count > 0 ? tooltipLines[0].text : (item.Definition?.Name ?? "?");
+                name = FitToWidth(font, name, textWidth, MobileUi.TextBody);
+                MobileUi.DrawText(spriteBatch, font, name,
+                    new Vector2(textX, row.Y + 12), MobileUi.TextBody, MobileUi.TextPrimary * Alpha);
+
+                int price = ItemPriceCalculator.CalculateBuyPrice(item);
+                MobileUi.DrawText(spriteBatch, font,
+                    price.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) + " Zen",
+                    new Vector2(textX, row.Y + 40), MobileUi.TextLabel, Theme.TextGold * Alpha);
+
+                // BUY —— 每一列同一個尺寸、同一條右對齊線
+                bool pressed = _mobilePressedBuyIndex == i;
+                spriteBatch.Draw(pixel, buyRect,
+                    (pressed ? MobileUi.TitleBarFill * 1.6f : MobileUi.TitleBarFill * MobileUi.PanelAlpha) * Alpha);
+                MobileUi.DrawTextCentered(spriteBatch, font, "BUY", buyRect,
+                    MobileUi.TextHeading, MobileUi.TextPrimary * Alpha);
+            }
+
+            if (_jewelEntries.Count > 0)
+                JewelShineOverlay.DrawBatch(spriteBatch, _jewelEntries, _currentGameTime, Alpha, UiScaler.SpriteTransform);
+
+            DrawMobileScrollbar(spriteBatch, pixel);
+        }
+
+        private void DrawMobileScrollbar(SpriteBatch spriteBatch, Texture2D pixel)
+        {
+            if (MaxMobileScrollRow <= 0)
+                return;
+
+            var track = new Rectangle(
+                DisplayRectangle.X + _mobileListRect.Right - 4,
+                DisplayRectangle.Y + _mobileListRect.Y,
+                4, _mobileListRect.Height);
+
+            float visibleRatio = _mobileVisibleRows / (float)Math.Max(1, _items.Count);
+            int thumbHeight = Math.Max(24, (int)(track.Height * visibleRatio));
+            int travel = Math.Max(0, track.Height - thumbHeight);
+            int thumbY = track.Y + (int)(travel * (_mobileScrollRow / (float)MaxMobileScrollRow));
+
+            MobileUi.DrawScrollbar(spriteBatch, track,
+                new Rectangle(track.X, thumbY, track.Width, thumbHeight), false);
+        }
+
+        /// <summary>把名稱截到欄寬以內。字型沒有 U+2026，截斷一律用 ".."。</summary>
+        private static string FitToWidth(SpriteFont font, string text, int maxWidth, float sizePx)
+        {
+            if (string.IsNullOrEmpty(text) || maxWidth <= 0)
+                return text ?? string.Empty;
+
+            float scale = MobileUi.ScaleFor(sizePx);
+            float width = font.MeasureString(text).X * scale;
+            if (width <= maxWidth)
+                return text;
+
+            int keep = Math.Max(1, (int)(text.Length * (maxWidth / width)) - 2);
+            return text.Substring(0, keep).TrimEnd() + "..";
         }
 
         private void DrawTooltip(SpriteBatch spriteBatch)
@@ -948,8 +1197,95 @@ namespace Client.Main.Controls.UI.Game
         // INPUT HANDLING
         // ═══════════════════════════════════════════════════════════════
 
+        /// <summary>
+        /// 手機的商店輸入：BUY 要「按下再放開同一顆」，其餘拖曳就是捲動清單。
+        ///
+        /// 桌面是「點到商品就買」。那在滑鼠上還行，在觸控上是災難 ——
+        /// 想捲清單或只是想看看是什麼東西，手指一碰就付錢了。
+        /// </summary>
+        private void HandleMobileInput()
+        {
+            if (IsModalDialogOpen() || Scene?.FocusControl != this)
+                return;
+
+            if (InventoryControl.Instance?.GetDraggedItem() != null || VaultControl.Instance?.GetDraggedItem() != null)
+                return;
+
+            var mouse = MuGame.Instance.UiMouseState;
+            var prev = MuGame.Instance.PrevUiMouseState;
+            bool pressed = mouse.LeftButton == ButtonState.Pressed;
+            bool justPressed = pressed && prev.LeftButton == ButtonState.Released;
+            bool justReleased = !pressed && prev.LeftButton == ButtonState.Pressed;
+            Point mousePos = mouse.Position;
+
+            if (justPressed)
+            {
+                if (!DisplayRectangle.Contains(mousePos))
+                    return;
+
+                Scene?.SetMouseInputConsumed();
+
+                _mobilePressedBuyIndex = -1;
+                for (int i = 0; i < _items.Count; i++)
+                {
+                    var row = GetMobileRowRect(i);
+                    if (!row.IsEmpty && GetMobileBuyRect(row).Contains(mousePos))
+                    {
+                        _mobilePressedBuyIndex = i;
+                        break;
+                    }
+                }
+
+                if (_mobilePressedBuyIndex < 0)
+                {
+                    _mobileDragStartY = mousePos.Y;
+                    _mobileDragStartScrollRow = _mobileScrollRow;
+                }
+
+                return;
+            }
+
+            if (pressed && _mobileDragStartY != int.MinValue)
+            {
+                int delta = _mobileDragStartY - mousePos.Y;
+                int rows = delta / (MobileRowHeight + MobileRowGap);
+                _mobileScrollRow = Math.Clamp(_mobileDragStartScrollRow + rows, 0, MaxMobileScrollRow);
+                return;
+            }
+
+            if (!justReleased)
+                return;
+
+            _mobileDragStartY = int.MinValue;
+
+            int buyIndex = _mobilePressedBuyIndex;
+            _mobilePressedBuyIndex = -1;
+
+            if (buyIndex < 0 || buyIndex >= _items.Count)
+                return;
+
+            var buyRow = GetMobileRowRect(buyIndex);
+            if (buyRow.IsEmpty || !GetMobileBuyRect(buyRow).Contains(mousePos))
+                return;
+
+            var boughtItem = _items[buyIndex];
+            byte mobileSlot = (byte)(boughtItem.GridPosition.Y * SHOP_COLUMNS + boughtItem.GridPosition.X);
+            var mobileSvc = MuGame.Network?.GetCharacterService();
+            if (mobileSvc != null)
+            {
+                SoundController.Instance.PlayBuffer("Sound/iButton.wav");
+                _ = mobileSvc.SendBuyItemFromNpcRequestAsync(mobileSlot);
+            }
+        }
+
         private void HandleMouseInput()
         {
+            if (MobileUi.IsMobile)
+            {
+                HandleMobileInput();
+                return;
+            }
+
             var mouse = MuGame.Instance.UiMouseState;
             var prev = MuGame.Instance.PrevUiMouseState;
 
@@ -1000,6 +1336,18 @@ namespace Client.Main.Controls.UI.Game
         {
             if (!DisplayRectangle.Contains(mousePos)) return null;
 
+            if (MobileUi.IsMobile)
+            {
+                for (int i = 0; i < _items.Count; i++)
+                {
+                    var row = GetMobileRowRect(i);
+                    if (!row.IsEmpty && row.Contains(mousePos))
+                        return _items[i];
+                }
+
+                return null;
+            }
+
             Point gridOrigin = new(DisplayRectangle.X + _gridRect.X, DisplayRectangle.Y + _gridRect.Y);
 
             foreach (var item in _items)
@@ -1018,6 +1366,9 @@ namespace Client.Main.Controls.UI.Game
 
         private void HandleVisibilityLost()
         {
+            // 背包回到完整版面（含資訊欄）。
+            InventoryControl.Instance?.SetCompactLayout(false);
+
             SendCloseNpcRequest();
             _characterState?.ClearShopItems();
             _items.Clear();

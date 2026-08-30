@@ -23,12 +23,9 @@ namespace Client.Main.Models
     /// <code>
     /// 戰士   Dark Knight  1,407  →  幻影騎士 Illusion Knight  2,410
     /// 法師   Dark Wizard  1,383  →  魔導士   Mage             2,130
-    /// 弓箭手 Fairy Elf    1,752  →  斬殺者   Slayer           2,296
     /// </code>
-    /// 弓箭手這一個是取捨過的：新職業裡<b>沒有弓手造型</b>。
-    /// 煉金術士最精緻（5,180）但那是現行弓箭手的 2.96 倍，
-    /// 而且粉金長裙讀起來是聖女不是弓手；斬殺者的尖耳與緊身皮甲
-    /// 輪廓最接近，成本也只有 1.3 倍。
+    /// 弓箭手<b>維持原版</b>（Fairy Elf）—— 換成斬殺者之後冒出兩個
+    /// 弓專屬的毛病，而那兩個與身體無關，先不換。
     /// </remarks>
     public static class AppearanceOverride
     {
@@ -37,7 +34,12 @@ namespace Client.Main.Models
         {
             [PlayerClass.DarkKnight] = PlayerClass.IllusionKnight,
             [PlayerClass.DarkWizard] = PlayerClass.Mage,
-            [PlayerClass.FairyElf]   = PlayerClass.Slayer,
+
+            // 弓箭手退回原版 Fairy Elf。斬殺者本身沒問題，但換過去之後
+            // 冒出兩個弓專屬的毛病（箭袋位置、拉弓動作一直播），
+            // 而那兩個都不是身體造成的 —— 先退回來，不要卡在這裡。
+            // 要重新啟用就把下面這行的註解拿掉：
+            // [PlayerClass.FairyElf]   = PlayerClass.Slayer,
         };
 
         /// <summary>把職業換成它的外觀職業；沒有對映就原樣回傳。</summary>

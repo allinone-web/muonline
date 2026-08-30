@@ -84,9 +84,6 @@ namespace Client.Main.Objects.Player
             new(60f, 0f, -90f)  // Weapon 2 (right hand) rotation in degrees (X,Y,Z)
         };
 
-        // 箭袋掛在背上的位置與角度。想調位置就改這兩行。
-        private static readonly Vector3 QuiverOffset = new(0f, 12f, 40f);
-        private static readonly Vector3 QuiverRotationDegrees = new(0f, 0f, 0f);
 
         private bool _weaponsHolstered;
         private FlyingHelperKind _equippedHelperSlotKind = FlyingHelperKind.None;
@@ -2684,21 +2681,11 @@ namespace Client.Main.Objects.Player
             if (weapon == null)
                 return;
 
-            // 箭袋永遠掛在背上，不進手裡 —— 也不受收刀狀態影響。
-            //
-            // 原本箭袋被當成「另一隻手的武器」綁到手部掛點，於是拉弓時
-            // 箭袋會跟著拉弦的那隻手一起動，看起來像箱子黏在手上。
-            // 原版是背在背上的，弓在手、箭在背。
-            if (IsQuiver(weapon))
-            {
-                weapon.ParentBoneLink = BackWeaponBoneIndex;
-                weapon.Position = QuiverOffset;
-                weapon.Angle = new Vector3(
-                    MathHelper.ToRadians(QuiverRotationDegrees.X),
-                    MathHelper.ToRadians(QuiverRotationDegrees.Y),
-                    MathHelper.ToRadians(QuiverRotationDegrees.Z));
-                return;
-            }
+            // 註：箭袋（Arrows/Quiver）目前跟著手走，拉弓時會跟著拉弦的手動。
+            // 試過改掛 BackWeaponBoneIndex（骨頭 47，客戶端自己的 CrossbowGuard
+            // 就是用它掛弩箭），骨頭是對的，但 QuiverOffset 沒調好 ——
+            // 箭袋跑到頭上而且穿透頭部。要重做的話從 IsQuiver 那個判斷開始，
+            // 先把偏移量調對再啟用。
 
             if (holster)
             {
