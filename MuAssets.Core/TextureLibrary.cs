@@ -15,6 +15,15 @@ public sealed record TextureLibraryEntry(
     long Bytes,
     List<TextureUsage> Usages)
 {
+    /// <summary>檔名說的角色（草地槽位、岩石槽位…）。</summary>
+    public TextureSlot Slot { get; set; }
+
+    /// <summary>影像說的外觀（雪白、青綠、土黃…）。與 Slot 不一定一致，見分類器的說明。</summary>
+    public TextureLook Look { get; set; }
+
+    /// <summary>量測結果。還沒分類過就是 null。</summary>
+    public TextureProfile? Profile { get; set; }
+
     /// <summary>被幾張地圖用到。</summary>
     public int WorldCount => Usages.Select(u => u.WorldIndex).Distinct().Count();
 }
@@ -22,6 +31,8 @@ public sealed record TextureLibraryEntry(
 public sealed record TextureLibraryIndex(string DataDirectory, List<TextureLibraryEntry> Entries);
 
 public sealed record ReplaceResult(bool Success, int FilesWritten, string[] BackedUp, string[] Skipped, string? Error);
+
+public sealed record BatchImportResult(int Matched, string[] Applied, string[] Unmatched);
 
 /// <summary>
 /// 跨地圖的共用貼圖庫。
@@ -128,6 +139,119 @@ public static class TextureLibrary
     }
 
     public static string FileNameFor(TextureLibraryEntry entry) => $"{entry.Id}-{entry.Name}";
+
+    /// <summary>匯出／匯入時用的 PNG 檔名。Id 在前，重繪完才對得回來。</summary>
+    public static string PngNameFor(TextureLibraryEntry entry)
+        => $"{entry.Id}-{Path.GetFileNameWithoutExtension(entry.Name)}.png";
+
+    /// <summary>
+    /// 量測並分類庫裡的每一筆。
+    /// </summary>
+    public static int Classify(TextureLibraryIndex index, string libraryDirectory)
+    {
+        int measured = 0;
+
+        foreach (var entry in index.Entries)
+        {
+            string path = Path.Combine(libraryDirectory, FileNameFor(entry));
+
+            if (!File.Exists(path))
+                continue;
+
+            entry.Slot = TerrainTextureClassifier.SlotOf(entry.Name);
+
+            if (TerrainTextureClassifier.Measure(path) is not { } profile)
+                continue;
+
+            entry.Profile = profile;
+            entry.Look = TerrainTextureClassifier.LookOf(profile);
+            measured++;
+        }
+
+        return measured;
+    }
+
+    /// <summary>
+    /// 把庫裡的貼圖解成 PNG 匯出，給美術重繪。
+    /// </summary>
+    /// <remarks>
+    /// 檔名是 <c>{Id}-{原名}.png</c> —— Id 在前，重繪完 <see cref="ImportAsync"/> 才對得回來。
+    /// 改檔名會對不回來，這一點要跟美術講清楚。
+    /// </remarks>
+    public static int Export(
+        TextureLibraryIndex index, string libraryDirectory, string outputDirectory,
+        Func<TextureLibraryEntry, bool>? filter = null)
+    {
+        Directory.CreateDirectory(outputDirectory);
+        int exported = 0;
+
+        foreach (var entry in index.Entries)
+        {
+            if (filter is not null && !filter(entry))
+                continue;
+
+            string source = Path.Combine(libraryDirectory, FileNameFor(entry));
+            if (!File.Exists(source))
+                continue;
+
+            using var image = TextureExporter.DecodeFile(source);
+            if (image is null)
+                continue;
+
+            image.SaveAsPng(Path.Combine(outputDirectory, PngNameFor(entry)));
+            exported++;
+        }
+
+        return exported;
+    }
+
+    /// <summary>
+    /// 從一個目錄批次匯入重繪過的貼圖，依 Id 對回庫裡的項目。
+    /// </summary>
+    /// <remarks>
+    /// 每一筆都會寫進所有用到它的地圖 —— 一個檔案改一次，78 張圖一起變。
+    /// 對不到 Id 的檔案會照實回報，不會安靜跳過。
+    /// </remarks>
+    public static async Task<BatchImportResult> ImportAsync(
+        TextureLibraryIndex index, string sourceDirectory, string libraryDirectory,
+        bool dryRun = true, int quality = 92)
+    {
+        var byId = index.Entries.ToDictionary(e => e.Id, StringComparer.OrdinalIgnoreCase);
+        var applied = new List<string>();
+        var unmatched = new List<string>();
+        int files = 0;
+
+        foreach (string path in Directory.EnumerateFiles(sourceDirectory)
+            .Where(p => Path.GetExtension(p).Equals(".png", StringComparison.OrdinalIgnoreCase))
+            .Order(StringComparer.Ordinal))
+        {
+            string name = Path.GetFileNameWithoutExtension(path);
+            int dash = name.IndexOf('-');
+            string id = dash > 0 ? name[..dash] : name;
+
+            if (!byId.TryGetValue(id, out var entry))
+            {
+                unmatched.Add(Path.GetFileName(path));
+                continue;
+            }
+
+            files++;
+
+            if (dryRun)
+            {
+                applied.Add($"{entry.Name}（{entry.Id}）→ {entry.Usages.Count} 個檔案、{entry.WorldCount} 張圖");
+                continue;
+            }
+
+            var result = await ReplaceAsync(index, entry, path, libraryDirectory, quality);
+
+            applied.Add(result.Success
+                ? $"{entry.Name}（{entry.Id}）→ 改寫 {result.FilesWritten} 個檔案"
+                : $"{entry.Name}（{entry.Id}）→ 失敗：{result.Error}");
+        }
+
+        return new BatchImportResult(files, [.. applied], [.. unmatched]);
+    }
 
     /// <summary>
     /// 用一張新圖取代庫裡的某一筆，並寫回所有用到它的地方。

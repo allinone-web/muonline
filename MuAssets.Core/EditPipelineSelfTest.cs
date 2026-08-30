@@ -44,6 +44,7 @@ public static class EditPipelineSelfTest
             BoxSelectAndScatter(session, document),
             LightBrush(session, document),
             CopyPasteBlock(session, document),
+            TextureClassification(),
             ExportToClientFormat(session, document),
             SpawnAreasAndOpenMuExport(session, document),
             Validation(session, document, world),
@@ -714,6 +715,63 @@ public static class EditPipelineSelfTest
         {
             while (session.History.UndoDepth > undoBefore)
                 session.Undo();
+        }
+    }
+
+    /// <summary>
+    /// 地形貼圖的分類：槽位看檔名、外觀看影像。
+    /// </summary>
+    /// <remarks>
+    /// 分兩軸是因為兩者會不一致而且都是真的 ——
+    /// 迪維亞斯的 TileGrass01 是雪白色，那是「草地槽位裝了雪」不是分類錯誤。
+    /// 這裡驗門檻的順序：先判極端（雪／暗）再看色相，
+    /// 反過來的話雪會先被色相判成水（雪的平均色偏藍）。
+    /// </remarks>
+    private static (string, bool, string) TextureClassification()
+    {
+        try
+        {
+            var slots = new[]
+            {
+                ("TileGrass01.ozj", TextureSlot.Grass),
+                ("TileGround02.OZJ", TextureSlot.Ground),
+                ("TileRock07.ozj", TextureSlot.Rock),
+                ("TileWater01.ozj", TextureSlot.Water),
+                ("ExtTile21.OZJ", TextureSlot.Ext),
+                ("leaf01.ozt", TextureSlot.Effect),
+                ("AlphaTile01.OZT", TextureSlot.Overlay),
+                ("br001.ozj", TextureSlot.Unknown),
+            };
+
+            bool slotOk = slots.All(s => TerrainTextureClassifier.SlotOf(s.Item1) == s.Item2);
+
+            // (檔名, 色相, 飽和, 明度, 期望外觀)
+            var looks = new[]
+            {
+                ("雪地", 191f, 0.07f, 0.91f, TextureLook.Snow),
+                ("青綠", 84f, 0.51f, 0.51f, TextureLook.Green),
+                ("土黃", 38f, 0.28f, 0.53f, TextureLook.Soil),
+                ("深水", 187f, 0.72f, 0.30f, TextureLook.Water),
+                ("暗", 30f, 0.40f, 0.10f, TextureLook.Dark),
+                ("灰岩", 237f, 0.04f, 0.46f, TextureLook.Stone),
+                ("紅岩", 2f, 0.70f, 0.43f, TextureLook.Vivid),
+            };
+
+            var wrong = looks
+                .Where(l => TerrainTextureClassifier.LookOf(
+                    new TextureProfile(64, 64, 0, 0, 0, l.Item2, l.Item3, l.Item4, 0f)) != l.Item5)
+                .Select(l => l.Item1)
+                .ToArray();
+
+            bool passed = slotOk && wrong.Length == 0;
+
+            return ("貼圖分類", passed,
+                $"槽位 {slotOk}、外觀 {looks.Length - wrong.Length}/{looks.Length}" +
+                (wrong.Length > 0 ? $"（錯的：{string.Join("、", wrong)}）" : string.Empty));
+        }
+        catch (Exception ex)
+        {
+            return ("貼圖分類", false, ex.Message);
         }
     }
 

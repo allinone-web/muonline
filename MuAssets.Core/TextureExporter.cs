@@ -81,6 +81,9 @@ public static class TextureExporter
         return false;
     }
 
+    /// <summary>把一張 MU 貼圖解成影像。分類與批次替換要直接拿影像，不是寫檔。</summary>
+    public static Image<Rgba32>? DecodeFile(string path) => Decode(path);
+
     private static Image<Rgba32>? Decode(string path)
     {
         string extension = Path.GetExtension(path).ToLowerInvariant();
@@ -88,7 +91,12 @@ public static class TextureExporter
         return extension switch
         {
             ".ozj" => FromTextureData(new OZJReader().Load(path).GetAwaiter().GetResult(), ChannelOrder.Rgb),
-            ".ozt" => FromTextureData(new OZTReader().Load(path).GetAwaiter().GetResult(), ChannelOrder.Bgra),
+            // .ozt 是 RGBA，不是 BGRA。OZTReader 會把檔案的位元組反序存進 data
+            // （檔案本身是 TGA 式的 B,G,R,A），存完 data 就已經是 RGBA 了 ——
+            // 引擎的 TextureLoader 也是這樣讀的（r = data[0]）。
+            // 這裡本來標成 Bgra，等於再反一次：所有 .ozt 匯出的紅藍是對調的。
+            // 症狀很隱晦：草地疊層變成青色、落葉變成藍色，而遊戲裡是對的。
+            ".ozt" => FromTextureData(new OZTReader().Load(path).GetAwaiter().GetResult(), ChannelOrder.Rgba),
             ".ozp" => FromTextureData(new OZPReader().Load(path).GetAwaiter().GetResult(), ChannelOrder.Rgba),
 
             // .ozd 是壓縮的 DXT，CPU 端解壓不在這支工具的範圍，先跳過。
@@ -99,11 +107,18 @@ public static class TextureExporter
         };
     }
 
+    /// <summary>
+    /// 每個 reader 交出來的 <c>TextureData.Data</c> 是什麼通道順序。
+    /// </summary>
+    /// <remarks>
+    /// 判斷依據是 <c>Client.Main.Content.TextureLoader</c> 怎麼讀那份 data
+    /// （它一律當 <c>r = data[0], g = data[1], b = data[2]</c>）——
+    /// 遊戲畫得對，就以遊戲為準。
+    /// </remarks>
     private enum ChannelOrder
     {
         Rgb,
         Rgba,
-        Bgra,
     }
 
     private static Image<Rgba32> FromTextureData(TextureData data, ChannelOrder order)
@@ -119,7 +134,6 @@ public static class TextureExporter
                 image[x, y] = order switch
                 {
                     ChannelOrder.Rgb => new Rgba32(data.Data[src], data.Data[src + 1], data.Data[src + 2], 255),
-                    ChannelOrder.Bgra => new Rgba32(data.Data[src + 2], data.Data[src + 1], data.Data[src], data.Data[src + 3]),
                     _ => new Rgba32(data.Data[src], data.Data[src + 1], data.Data[src + 2], data.Data[src + 3]),
                 };
             }
