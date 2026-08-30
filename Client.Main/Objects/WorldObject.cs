@@ -411,8 +411,9 @@ namespace Client.Main.Objects
                 return;
 
             // Apply render scale to font scale to maintain consistent size
+            // 滑鼠／手指指到的物件名稱。手機放大，見 MobileUi.WorldTextScale。
             const float baseScale = 0.4f; // 2x smaller than default
-            float scale = baseScale * Constants.RENDER_SCALE;
+            float scale = baseScale * Constants.RENDER_SCALE * Controls.UI.MobileUi.WorldTextScale;
             Vector2 size = _font.MeasureString(name) * scale;
             var sb = GraphicsManager.Instance.Sprite;
 

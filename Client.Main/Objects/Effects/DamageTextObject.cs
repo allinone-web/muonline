@@ -31,8 +31,12 @@ namespace Client.Main.Objects.Effects
         private const float NormalLifetime = 0.82f;
         private const float CriticalLifetime = 1.02f;
 
-        private const float NormalFontSize = 15.5f;
-        private const float CriticalFontSize = 20.0f;
+        /// <summary>
+        /// 傷害數字。桌面 15.5 / 20；手機乘上 MobileUi.WorldTextScale ——
+        /// 它和名牌、掉落物名稱是同一類（投影到世界座標的文字），一起放大才一致。
+        /// </summary>
+        private static float NormalFontSize => 15.5f * Client.Main.Controls.UI.MobileUi.WorldTextScale;
+        private static float CriticalFontSize => 20.0f * Client.Main.Controls.UI.MobileUi.WorldTextScale;
 
         private const float NormalFadeStart = 0.79f;
         private const float CriticalFadeStart = 0.82f;

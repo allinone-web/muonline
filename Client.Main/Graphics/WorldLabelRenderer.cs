@@ -59,15 +59,20 @@ namespace Client.Main.Graphics
             Color bgColor,
             Matrix projection,
             Matrix view,
-            float scale = 0.4f,
+            float scale = 0.4f,   // 呼叫端可覆寫；手機的放大在下面套用
             float layer = 0f)
         {
             Vector3 screen = gd.Viewport.Project(worldPos, projection, view, Matrix.Identity);
             if (screen.Z < 0f || screen.Z > 1f)
                 return;
 
+            // 掉落物的名稱。手機放大，見 MobileUi.WorldTextScale ——
+            // 0.4 是桌面尺寸，在手上的手機幾乎讀不出撿到的是什麼。
+            scale *= Client.Main.Controls.UI.MobileUi.WorldTextScale;
+
             var size = font.MeasureString(text) * scale;
-            int padX = 4, padY = 2;
+            int padX = (int)(4 * Client.Main.Controls.UI.MobileUi.WorldTextScale);
+            int padY = (int)(2 * Client.Main.Controls.UI.MobileUi.WorldTextScale);
             var rect = new Rectangle(
                 (int)(screen.X - size.X * 0.5f) - padX,
                 (int)(screen.Y - size.Y) - padY,

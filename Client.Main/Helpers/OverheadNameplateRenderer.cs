@@ -27,7 +27,12 @@ namespace Client.Main.Helpers
             public float RenderScale { get; }
         }
 
-        private const float BaseNameScale = 0.42f;
+        /// <summary>
+        /// 怪物與玩家頭上的名牌。0.42 是桌面的尺寸，手機要放大
+        /// —— 見 Controls.UI.MobileUi.WorldTextScale。
+        /// 只放大文字，血條的寬高仍由 renderScale 決定，避免名牌整個變成一大塊。
+        /// </summary>
+        private static float BaseNameScale => 0.42f * Client.Main.Controls.UI.MobileUi.WorldTextScale;
         private const float BaseBarWidth = 70f;
         private const float BaseBarHeight = 6f;
         private const float BaseBarOffsetY = 2f;

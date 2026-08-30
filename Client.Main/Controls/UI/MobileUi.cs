@@ -349,6 +349,23 @@ namespace Client.Main.Controls.UI
         /// <summary>角標：數量、等級、耐久。小到只能放兩三個字元。</summary>
         public const float TextCaption = 11f;
 
+        /// <summary>
+        /// <b>世界空間</b>文字的放大倍率：怪物與玩家的名牌、掉落物的名稱、
+        /// 傷害數字、滑鼠指到的物件名稱。
+        ///
+        /// 這些和介面文字是兩回事，所以<b>不走</b>上面那組級距 ——
+        /// 介面文字是畫在虛擬畫布上的，世界文字是投影到 3D 位置的，
+        /// 而且會跟著鏡頭遠近變化。
+        ///
+        /// 它們原本的大小（0.4 / 0.42）是照桌面 1280x720、坐在螢幕前一公尺的
+        /// 距離訂的 —— 原始碼裡甚至寫著「2x smaller than default」。
+        /// 拿在手上的手機看那個尺寸，掉在地上的裝備名稱幾乎讀不出來。
+        ///
+        /// 1.8 倍是「看得清楚」和「不要蓋住畫面」之間的取捨：再大就會在怪物多的
+        /// 時候糊成一片。介面文字不受影響。
+        /// </summary>
+        public static float WorldTextScale => IsMobile ? 1.8f : 1f;
+
         /// <summary>把級距換算成 SpriteBatch.DrawString 的 scale。</summary>
         public static float ScaleFor(float sizePx) => sizePx / Client.Main.Constants.BASE_FONT_SIZE;
 

@@ -20,7 +20,11 @@ namespace Client.Main.Objects.Effects
         private const float DefaultLifetime = 5f;
         private const float OffsetZ = 60f;
         private const int PixelGap = 8;
-        private const int MaxBubbleWidth = 200;
+        /// <summary>
+        /// 泡泡的最大寬度。字放大之後這個值也要跟著放大 ——
+        /// 否則同一句話會被折成兩倍的行數，泡泡變成又窄又高的一長條。
+        /// </summary>
+        private static int MaxBubbleWidth => (int)(200 * Client.Main.Controls.UI.MobileUi.WorldTextScale);
         // Keep UI-backed bubbles in the off-grid update path; labels project from the target each frame.
         private static readonly Vector3 OverlayLifecyclePosition = new(-Constants.TERRAIN_SCALE, -Constants.TERRAIN_SCALE, 0f);
 
@@ -63,7 +67,9 @@ namespace Client.Main.Objects.Effects
             _nameLabel = new LabelControl
             {
                 Text = _playerName,
-                FontSize = 10f,
+                // 角色頭上的對話泡泡。10 是桌面尺寸，手機放大
+                // —— 見 Client.Main.Controls.UI.MobileUi.WorldTextScale。
+                FontSize = 10f * Client.Main.Controls.UI.MobileUi.WorldTextScale,
                 TextColor = Color.Yellow,
                 HasShadow = true,
                 ShadowColor = Color.Black,
@@ -78,7 +84,9 @@ namespace Client.Main.Objects.Effects
             _textLabel = new LabelControl
             {
                 Text = _text,
-                FontSize = 10f,
+                // 角色頭上的對話泡泡。10 是桌面尺寸，手機放大
+                // —— 見 Client.Main.Controls.UI.MobileUi.WorldTextScale。
+                FontSize = 10f * Client.Main.Controls.UI.MobileUi.WorldTextScale,
                 TextColor = Color.White,
                 HasShadow = true,
                 ShadowColor = Color.Black,
