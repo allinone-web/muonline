@@ -110,37 +110,24 @@ namespace Client.Main.Controls.UI.Game.Map
 
             var sb = GraphicsManager.Instance.Sprite;
 
-            if (MobileUi.IsMobile)
-            {
-                // 進入地圖時的名稱橫幅。
-                //
-                // 上一版只畫了一塊方panel，把原本的樣式弄丟了。原版是一條中間亮、
-                // 兩端淡出的橫幅 —— 那個造型是它好看的地方，不能省。
-                // 這裡用程式重畫同一個造型（貼圖是為 1280 寬畫的，放大會糊）：
-                //   1) 中間一條漸亮的底
-                //   2) 上下各一條同樣兩端淡出的細線
-                using (new SpriteBatchScope(
-                       sb,
-                       SpriteSortMode.Deferred,
-                       BlendState.AlphaBlend,
-                       SamplerState.LinearClamp,
-                       transform: UiScaler.SpriteTransform))
-                {
-                    DrawMobileBanner(sb, DisplayRectangle, Alpha);
-                }
-
-                _label.Draw(gameTime);
-                return;
-            }
-
             if (Texture == null)
                 return;
 
+            // <b>這張貼圖是刻意保留的。</b>
+            //
+            // 進入地圖時的名稱橫幅（MapName_I2.ozd）有它自己的造型，使用者兩次
+            // 指名要保留 —— 我先前兩次都自作主張換成程式繪製（第一次畫成方框、
+            // 第二次畫成兩端淡出的橫幅），兩次都是錯的。
+            //
+            // 「一律程式繪製」是通則，不是可以覆蓋明確指示的理由。
+            // 這裡是那個例外，不要再改。見 docs/待清理素材.md 的「刻意保留」。
+            //
+            // 手機用 LinearClamp：PointClamp 在放大時會出現硬邊鋸齒。
             using (new SpriteBatchScope(
                    sb,
                    SpriteSortMode.Deferred,
                    BlendState.NonPremultiplied,
-                   SamplerState.PointClamp,
+                   MobileUi.IsMobile ? SamplerState.LinearClamp : SamplerState.PointClamp,
                    transform: UiScaler.SpriteTransform))
             {
                 sb.Draw(Texture,
@@ -150,40 +137,6 @@ namespace Client.Main.Controls.UI.Game.Map
             }
 
             _label.Draw(gameTime);
-        }
-
-        /// <summary>
-        /// 兩端淡出的橫幅。中央最亮，往左右各自收成透明 —— 沒有硬邊，
-        /// 所以它不像一個「視窗」，而像一條浮在畫面上的標題。
-        /// </summary>
-        private static void DrawMobileBanner(SpriteBatch sb, Rectangle rect, float alpha)
-        {
-            var pixel = GraphicsManager.Instance.Pixel;
-            if (pixel == null || rect.Width <= 0)
-                return;
-
-            const int steps = 48;
-            int sliceWidth = Math.Max(1, rect.Width / steps);
-
-            for (int i = 0; i < steps; i++)
-            {
-                int x = rect.X + i * sliceWidth;
-                int w = (i == steps - 1) ? rect.Right - x : sliceWidth;
-                if (w <= 0)
-                    continue;
-
-                // 距離中心 0..1，用 1 - d^2 收邊，中央保持亮、兩端收得快
-                float d = MathF.Abs((i + 0.5f) / steps * 2f - 1f);
-                float falloff = MathHelper.Clamp(1f - d * d, 0f, 1f);
-
-                sb.Draw(pixel, new Rectangle(x, rect.Y, w, rect.Height),
-                        MobileUi.PanelFill * (0.82f * falloff * alpha));
-
-                sb.Draw(pixel, new Rectangle(x, rect.Y, w, 1),
-                        MobileUi.PanelBorder * (0.75f * falloff * alpha));
-                sb.Draw(pixel, new Rectangle(x, rect.Bottom - 1, w, 1),
-                        MobileUi.PanelBorder * (0.75f * falloff * alpha));
-            }
         }
 
         /// <summary>
