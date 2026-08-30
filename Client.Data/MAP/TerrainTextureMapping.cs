@@ -20,12 +20,23 @@ namespace Client.Data.MAP
         public const byte NoLayerIndex = 255;
 
         /// <summary>
-        /// <c>TerrainLoader</c> 目前只掛載 ExtTile01–16（索引 14–29），
-        /// 但 Season 20 資源裡實際存在 ExtTile01–35。超出這個數字的貼圖現在載不到。
+        /// <b>遊戲客戶端</b>實際掛載的 ExtTile 數量。原版 MuMain 也是這個數字
+        /// （<c>MapManager.cpp</c> 的迴圈是 <c>i = 1..16</c>），所以這不是 muonline 的疏漏。
         /// </summary>
         public const int LoadedExtTileCount = 16;
 
-        public static IReadOnlyDictionary<int, string> Default { get; } = new Dictionary<int, string>
+        /// <summary>
+        /// 資源包裡**實際存在**的 ExtTile 數量。Season 20 的圖用到 ExtTile01–35。
+        /// </summary>
+        /// <remarks>
+        /// 這個數字比 <see cref="LoadedExtTileCount"/> 大，兩者意義不同：
+        /// 前者是「檔案有多少」，後者是「S6 世代的載入器吃得下多少」。
+        /// 工具鏈（編輯器、匯出器、校驗器）要用前者 —— 我們的目的是把資料完整取出來，
+        /// 不是模擬舊載入器的限制。
+        /// </remarks>
+        public const int AvailableExtTileCount = 35;
+
+        private static Dictionary<int, string> Base { get; } = new()
         {
             {   0, "TileGrass01.ozj" },
             {   1, "TileGrass02.ozj" },
@@ -52,15 +63,56 @@ namespace Client.Data.MAP
         };
 
         /// <summary>
+        /// 索引 → 檔名的完整對應。
+        /// </summary>
+        /// <remarks>
+        /// <b>ExtTile 的條目也在這裡面</b>（索引 14 起）。它們本來只有
+        /// <see cref="BuildIndexMap"/> 才會加上去，而直接讀這張表的使用端
+        /// （例如 Godot 匯出器）因此拿不到檔名 —— 實測 81 張圖有 217 個
+        /// 索引 14–29 的使用點會整批掉掉。這張表是「索引叫什麼檔案」的唯一真相，
+        /// 少一半就不叫真相。
+        ///
+        /// 索引 30–32 是草地的 .ozt 疊層，不是 ExtTile17–19 ——
+        /// 那一段的編號規則在這裡斷開，是資料本身就這樣，不是筆誤。
+        /// </remarks>
+        public static IReadOnlyDictionary<int, string> Default { get; } = BuildDefault();
+
+        private static Dictionary<int, string> BuildDefault()
+        {
+            var map = new Dictionary<int, string>(Base);
+
+            for (int i = 1; i <= AvailableExtTileCount; i++)
+            {
+                int index = ExtTileBaseIndex + i;
+
+                // 30–32 已經被草地疊層佔用，不覆蓋。
+                if (!map.ContainsKey(index))
+                    map[index] = $"ExtTile{i:00}.ozj";
+            }
+
+            return map;
+        }
+
+
+        /// <summary>
         /// 產生一份「索引 → 檔名」的完整對應，含 ExtTile 區段。
         /// </summary>
         /// <param name="extTileCount">要掛載的 ExtTile 數量，預設維持客戶端現況的 16。</param>
-        public static Dictionary<int, string> BuildIndexMap(int extTileCount = LoadedExtTileCount)
+        /// <summary>
+        /// 產生索引對應。預設就是 <see cref="Default"/>；
+        /// 傳一個較小的 <paramref name="extTileCount"/> 可以模擬舊載入器的限制。
+        /// </summary>
+        public static Dictionary<int, string> BuildIndexMap(int extTileCount = AvailableExtTileCount)
         {
-            var map = new Dictionary<int, string>(Default);
+            var map = new Dictionary<int, string>(Base);
 
             for (int i = 1; i <= extTileCount; i++)
-                map[ExtTileBaseIndex + i] = $"ExtTile{i:00}.ozj";
+            {
+                int index = ExtTileBaseIndex + i;
+
+                if (!map.ContainsKey(index))
+                    map[index] = $"ExtTile{i:00}.ozj";
+            }
 
             return map;
         }
