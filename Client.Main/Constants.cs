@@ -65,6 +65,21 @@ namespace Client.Main
         // World visuals
         public static bool DRAW_GRASS;
 
+        /// <summary>
+        /// 一格地面長幾叢草。1 = 原版行為（一格一張立牌），完全不改變畫面。
+        /// </summary>
+        /// <remarks>
+        /// 原版的草是「每個地形面一張垂直立牌」，`GrassRenderer` 的註解特別註明
+        /// <i>It is intentionally not a field of random blades</i>。一格 100 世界單位、
+        /// 角色高約 175，所以大約是一平方公尺一張立牌 —— 這是它看起來稀疏的原因，
+        /// 跟貼圖解析度無關。
+        ///
+        /// 大於 1 時每格改成 N 叢：格內隨機位置、隨機朝向、高度與寬度各自抖動，
+        /// 並在底部壓暗做假 AO。三角形數與風力更新的成本都是線性成長，
+        /// 所以這是設定項不是預設 —— 原版外觀必須留得住。
+        /// </remarks>
+        public static int GRASS_TUFTS_PER_TILE = 1;
+
         // Rendering
         public static bool MSAA_ENABLED;
         public static bool ENABLE_DYNAMIC_LIGHTS;

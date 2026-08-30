@@ -47,6 +47,8 @@ public sealed class MapEditorGame : MuGame
         if (EditorSession.Current.ForceGrass)
             Constants.DRAW_GRASS = true;
 
+        Constants.GRASS_TUFTS_PER_TILE = EditorSession.Current.GrassDensity;
+
         if (Services.GetService(typeof(IGraphicsDeviceManager)) is GraphicsDeviceManager graphics)
         {
             graphics.PreferredBackBufferWidth = _options.Width;

@@ -81,6 +81,9 @@ public sealed class EditorSession : EditSession
     /// </remarks>
     public bool ForceGrass { get; set; }
 
+    /// <summary><c>--grass-density N</c>：一格長幾叢草。1 = 原版。</summary>
+    public int GrassDensity { get; set; } = 1;
+
     /// <summary>自我測試是否全數通過；null 表示還沒跑。</summary>
     public bool? SelfTestPassed { get; set; }
 

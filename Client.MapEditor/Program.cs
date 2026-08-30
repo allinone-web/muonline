@@ -1,6 +1,6 @@
 // MU 地圖編輯器。
 //
-//   MuMapEditor [--data <Data目錄>] [--world N] [--tile X,Y] [--size 1600x1000] [--seconds N] [--screenshot <path>] [--grass]
+//   MuMapEditor [--data <Data目錄>] [--world N] [--tile X,Y] [--size 1600x1000] [--seconds N] [--screenshot <path>] [--grass] [--grass-density N]
 //   MuMapEditor --shots <契約.json> --shot <鏡位名> --screenshot <path>   拍黃金影像
 //
 // --seconds / --screenshot 讓它能在終端機裡跑完就退出，用於自動化驗證。
@@ -50,6 +50,12 @@ var options = new EditorOptions(
 
 EditorSession.Current.RunSelfTest = parsed.ContainsKey("selftest");
 EditorSession.Current.ForceGrass = parsed.ContainsKey("grass");
+
+if (parsed.GetValueOrDefault("grass-density") is string densityArg
+    && int.TryParse(densityArg, out int density) && density >= 1)
+{
+    EditorSession.Current.GrassDensity = Math.Min(density, 16);
+}
 
 // --tile 139,84：開起來就站在那一格上，不用自己找。
 if (parsed.GetValueOrDefault("tile") is string tileArg)

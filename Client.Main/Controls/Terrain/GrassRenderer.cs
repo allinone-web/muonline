@@ -44,6 +44,9 @@ namespace Client.Main.Controls.Terrain
         /// </remarks>
         private const float GrassWorldHeight = 128f;
         private const float GrassHorizontalOffset = -50f;
+
+        /// <summary>草叢底部相對頂部的亮度。假 AO —— 讓草看起來長在地上而不是插在地上。</summary>
+        private const float GrassRootShade = 0.55f;
         private const float SpecialHeight = 1200f;
 
         private readonly struct GrassQuad
@@ -331,27 +334,38 @@ namespace Client.Main.Controls.Terrain
                         continue;
                     }
 
-                    float height = GrassWorldHeight;
-                    Vector3 bottomLeft = CreateTerrainPosition(x, y, index1);
-                    Vector3 bottomRight = CreateTerrainPosition(x + 1, y + 1, index3);
-                    float u = x * GrassUvWidth + rowOffsets[y & terrainMask];
-                    var quad = new GrassQuad(
-                        bottomLeft,
-                        bottomRight,
-                        GetTerrainLight(index1),
-                        GetTerrainLight(index2),
-                        GetTerrainLight(index3),
-                        GetTerrainLight(index4),
-                        index1,
-                        index2,
-                        u,
-                        height);
-
                     int chunkX = x / ChunkSize;
                     int chunkY = y / ChunkSize;
                     int batchIndex = (chunkY * chunksPerSide + chunkX) * GrassTextureCount + textureIndex;
-                    (quadLists[batchIndex] ??= new List<GrassQuad>(ChunkSize * ChunkSize / 2)).Add(quad);
-                    ExpandBounds(ref boundsMin[batchIndex], ref boundsMax[batchIndex], quad);
+                    var list = quadLists[batchIndex] ??= new List<GrassQuad>(ChunkSize * ChunkSize / 2);
+
+                    int tufts = Constants.GRASS_TUFTS_PER_TILE;
+                    if (tufts <= 1)
+                    {
+                        float height = GrassWorldHeight;
+                        Vector3 bottomLeft = CreateTerrainPosition(x, y, index1);
+                        Vector3 bottomRight = CreateTerrainPosition(x + 1, y + 1, index3);
+                        float u = x * GrassUvWidth + rowOffsets[y & terrainMask];
+                        var quad = new GrassQuad(
+                            bottomLeft,
+                            bottomRight,
+                            GetTerrainLight(index1),
+                            GetTerrainLight(index2),
+                            GetTerrainLight(index3),
+                            GetTerrainLight(index4),
+                            index1,
+                            index2,
+                            u,
+                            height);
+
+                        list.Add(quad);
+                        ExpandBounds(ref boundsMin[batchIndex], ref boundsMax[batchIndex], quad);
+                    }
+                    else
+                    {
+                        AppendTufts(list, ref boundsMin[batchIndex], ref boundsMax[batchIndex],
+                                    x, y, index1, index2, index3, index4, tufts);
+                    }
                 }
             }
 
@@ -520,6 +534,135 @@ namespace Client.Main.Controls.Terrain
             }
 
             batch.VertexBuffer.SetData(batch.Vertices, 0, batch.Vertices.Length, SetDataOptions.Discard);
+        }
+
+        /// <summary>
+        /// 一格長 <paramref name="tufts"/> 叢草，取代原版的「一格一張立牌」。
+        /// </summary>
+        /// <remarks>
+        /// 三件事讓它不再像一排整齊的柵欄：
+        /// 格內隨機位置、隨機朝向（原版全部沿對角線）、高度與寬度各自抖動。
+        /// 再把底部兩個頂點壓暗當假 AO —— 沒有這個，草看起來是「插在地上」而不是「長在地上」。
+        ///
+        /// 隨機數用座標雜湊而不是 <see cref="Random"/>：重建（切換密度、切地圖回來）
+        /// 必須長出一模一樣的草，否則畫面會閃。
+        /// </remarks>
+        private void AppendTufts(
+            List<GrassQuad> list,
+            ref Vector3 boundsMin,
+            ref Vector3 boundsMax,
+            int x,
+            int y,
+            int index1,
+            int index2,
+            int index3,
+            int index4,
+            int tufts)
+        {
+            float h1 = SampleHeight(index1);
+            float h2 = SampleHeight(index2);
+            float h3 = SampleHeight(index3);
+            float h4 = SampleHeight(index4);
+
+            Color light1 = GetTerrainLight(index1);
+            Color light2 = GetTerrainLight(index2);
+            Color light3 = GetTerrainLight(index3);
+            Color light4 = GetTerrainLight(index4);
+
+            float scale = Constants.TERRAIN_SCALE;
+            float baseX = x * scale;
+            float baseY = y * scale;
+
+            for (int i = 0; i < tufts; i++)
+            {
+                float r0 = Hash01(x, y, i * 8 + 0);
+                float r1 = Hash01(x, y, i * 8 + 1);
+                float r2 = Hash01(x, y, i * 8 + 2);
+                float r3 = Hash01(x, y, i * 8 + 3);
+                float r4 = Hash01(x, y, i * 8 + 4);
+                float r5 = Hash01(x, y, i * 8 + 5);
+
+                // 格內位置。留 0.1 的邊界，免得草叢的中心正好落在格線上、
+                // 兩格的草在同一條線上排成一排。
+                float fx = 0.1f + r0 * 0.8f;
+                float fy = 0.1f + r1 * 0.8f;
+
+                float angle = r2 * MathHelper.TwoPi;
+                float halfWidth = scale * (0.55f + r3 * 0.35f);
+                float height = GrassWorldHeight * (0.75f + r4 * 0.5f);
+
+                float dx = MathF.Cos(angle) * halfWidth;
+                float dy = MathF.Sin(angle) * halfWidth;
+
+                float cx = baseX + fx * scale;
+                float cy = baseY + fy * scale;
+                float cz = Bilinear(h1, h2, h3, h4, fx, fy);
+
+                var bottomLeft = new Vector3(cx - dx, cy - dy, cz);
+                var bottomRight = new Vector3(cx + dx, cy + dy, cz);
+
+                // 一張圖橫排四株，隨機挑一株，不然整片草會是同一個剪影。
+                float u = (int)(r5 * 4f) % 4 * GrassUvWidth;
+
+                Color top = Bilinear(light1, light2, light3, light4, fx, fy);
+                Color bottom = Darken(top, GrassRootShade);
+
+                var quad = new GrassQuad(
+                    bottomLeft,
+                    bottomRight,
+                    top,
+                    top,
+                    bottom,
+                    bottom,
+                    index1,
+                    index2,
+                    u,
+                    height);
+
+                list.Add(quad);
+                ExpandBounds(ref boundsMin, ref boundsMax, quad);
+            }
+        }
+
+        private float SampleHeight(int sampleIndex)
+        {
+            float z = 0f;
+            if (_data.HeightMap != null && (uint)sampleIndex < (uint)_data.HeightMap.Length)
+                z = _data.HeightMap[sampleIndex].R * 1.5f;
+
+            var walls = _data.Attributes?.TerrainWall;
+            if (walls != null && (uint)sampleIndex < (uint)walls.Length &&
+                (walls[sampleIndex] & TWFlags.Height) != 0)
+            {
+                z += SpecialHeight;
+            }
+
+            return z;
+        }
+
+        private static float Bilinear(float v1, float v2, float v3, float v4, float fx, float fy)
+        {
+            float bottom = v1 + (v2 - v1) * fx;   // (0,0) -> (1,0)
+            float top = v4 + (v3 - v4) * fx;      // (0,1) -> (1,1)
+            return bottom + (top - bottom) * fy;
+        }
+
+        private static Color Bilinear(Color c1, Color c2, Color c3, Color c4, float fx, float fy)
+            => new(
+                (int)Bilinear(c1.R, c2.R, c3.R, c4.R, fx, fy),
+                (int)Bilinear(c1.G, c2.G, c3.G, c4.G, fx, fy),
+                (int)Bilinear(c1.B, c2.B, c3.B, c4.B, fx, fy));
+
+        private static Color Darken(Color color, float factor)
+            => new((int)(color.R * factor), (int)(color.G * factor), (int)(color.B * factor));
+
+        /// <summary>座標雜湊，回傳 [0, 1)。同樣的輸入永遠得到同樣的值。</summary>
+        private static float Hash01(int x, int y, int salt)
+        {
+            uint h = (uint)(x * 374761393 + y * 668265263 + salt * 1274126177);
+            h = (h ^ (h >> 13)) * 1274126177u;
+            h ^= h >> 16;
+            return (h & 0xFFFFFF) / (float)0x1000000;
         }
 
         private Vector3 CreateTerrainPosition(int tileX, int tileY, int sampleIndex)

@@ -380,6 +380,21 @@ public sealed class EditorUi : IDisposable
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("草的 billboard（TileGrass01–03.OZT）。\n關掉時只剩地面貼圖，跟遊戲的低／中畫質一樣。");
 
+        if (drawGrass)
+        {
+            // 原版是一格一張立牌（約一平方公尺一張），所以看起來稀疏。
+            // 這裡可以現場加密度比較 —— 遊戲本身維持原版，這個值只活在編輯器裡。
+            int density = _session.GrassDensity;
+            if (ImGui.SliderInt("草的密度", ref density, 1, 12, density == 1 ? "1（原版）" : "%d 叢／格"))
+            {
+                _session.GrassDensity = density;
+                Constants.GRASS_TUFTS_PER_TILE = density;
+                (_game.ActiveScene as MapEditorScene)?.World?.Terrain?.ReloadGrassIfNeeded();
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("一格地面長幾叢草。原版是 1 —— 一格一張立牌。\n拉高會線性增加三角形數與風力更新成本，看右下角的 FPS。");
+        }
+
         ImGui.Separator();
         ImGui.TextColored(Muted, "右鍵拖曳＝旋轉　中鍵拖曳＝平移");
         ImGui.TextColored(Muted, "滾輪＝縮放　WASD＝移動");
