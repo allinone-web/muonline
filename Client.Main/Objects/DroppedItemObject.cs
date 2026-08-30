@@ -218,7 +218,7 @@ return;
             {
                 try
                 {
-var bmd = await BMDLoader.Instance.Prepare("Item\\Gold01.bmd");
+var bmd = await BMDLoader.Instance.Prepare("Item/Gold01.bmd");
 if (!CanContinueLoad(world, loadGeneration))
 return;
                     if (bmd == null)
