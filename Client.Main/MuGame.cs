@@ -1079,6 +1079,9 @@ namespace Client.Main
             }
         }
 
+        // 卡住診斷：同一種繪製例外只印一次完整內容（見 RecordDrawException）
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _drawExceptionCounts = new();
+
         private void RecordDrawException(Exception exception, string phase)
         {
             long sequence = Interlocked.Increment(ref _drawExceptionSequence);
@@ -1095,6 +1098,23 @@ namespace Client.Main
                 "Unhandled draw exception in phase {DrawPhase} on frame {FrameIndex}. Emergency fallback frame will be presented.",
                 phase,
                 FrameIndex);
+
+            // 裝置上的 console provider 預設關閉，LogError 在真機看不到 ——
+            // 而繪製例外一旦每幀重複，畫面會停在 DrawEmergencyFallbackFrame
+            // 貼出來的舊圖上，看起來像整個客戶端凍住（輸入其實還活著）。
+            // 同一種例外只印一次完整內容，之後每 600 幀補一行計數。
+            string key = $"{phase}|{exception.GetType().FullName}|{exception.Message}";
+            long count = _drawExceptionCounts.AddOrUpdate(key, 1, static (_, previous) => previous + 1);
+            if (count == 1)
+            {
+                Console.WriteLine(
+                    $"[DrawEx] frame={FrameIndex} phase={phase} {exception.GetType().FullName}: {exception.Message}");
+                Console.WriteLine($"[DrawEx] {exception.StackTrace}");
+            }
+            else if (count % 600 == 0)
+            {
+                Console.WriteLine($"[DrawEx] frame={FrameIndex} phase={phase} 同一個例外已重複 {count} 次");
+            }
 
             _telemetryPublisher?.PublishEvent(
                 "draw-exception",
