@@ -25,7 +25,7 @@ namespace Client.Main.Worlds
         // 這樣 tools/mu golden 拍出來的取景就等於真機看到的取景 ——
         // 兩邊各寫各的相機，比出來的差異會分不清是「渲染不同」還是「根本沒看同一個地方」。
         private const float CameraYawDegrees = -45f;
-        private const float CameraPitchDegrees = 20f;
+        private const float CameraPitchDegrees = 15f;
         private const float CameraDistance = 1400f;
         private const float StageFieldOfView = 35f;
 
@@ -39,7 +39,7 @@ namespace Client.Main.Worlds
         /// 兩個距離拆開：鏡頭與地形的距離維持 CameraDistance 不動（草地保持細膩），
         /// 只把角色往鏡頭推近。角色模型的解析度撐得住特寫，地形貼圖撐不住。
         /// </summary>
-        private const float CharacterForwardOffset = 520f;
+        private const float CharacterForwardOffset = 300f;
 
         /// <summary>
         /// 選中的角色往鏡頭方向踏出多少。
@@ -47,7 +47,7 @@ namespace Client.Main.Worlds
         /// 位移比發光更容易讀懂 —— 玩家一眼就知道「這個被選中了」，
         /// 而且不需要新的 shader（iOS 的 .fx 在 macOS 編不動，要送 CI）。
         /// </summary>
-        private const float SelectedStepDistance = 95f;
+        private const float SelectedStepDistance = 210f;
 
         /// <summary>選中的角色相對於自己站位的位移。</summary>
         public static Vector3 SelectedStepOffset => TowardCamera * SelectedStepDistance;
@@ -56,7 +56,7 @@ namespace Client.Main.Worlds
         private const float LabelScreenGap = 10f;
 
         /// <summary>角色並排的間距（世界單位，一格 = 100）。翅膀很寬，太小會黏在一起。</summary>
-        private const float SlotSpacing = 310f;
+        private const float SlotSpacing = 250f;
 
         /// <summary>
         /// 角色面向。

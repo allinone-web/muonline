@@ -92,7 +92,12 @@ namespace Client.Main.Scenes
         private bool _isSelectionInProgress = false;
         private Texture2D _backgroundTexture;
         private ProgressBarControl _progressBar;
+
+        /// <summary>載入超過這個時間才顯示進度條，避免快速載入時閃一下。</summary>
+        private static readonly TimeSpan LoadingIndicatorDelay = TimeSpan.FromMilliseconds(600);
+        private TimeSpan? _firstLoadingDrawAt;
         private bool _previousDayNightEnabled;
+        private bool _previousShowNamesOnHover;
         private Vector3 _previousSunDirection;
         private bool _dayNightPatched;
         private ButtonControl _createCharacterButton;
@@ -181,6 +186,10 @@ namespace Client.Main.Scenes
             _dayNightPatched = true;
             _previousDayNightEnabled = Constants.ENABLE_DAY_NIGHT_CYCLE;
             _previousSunDirection = Constants.SUN_DIRECTION;
+            // 角色底下已經有名字標籤了。五個角色都是可點擊的，手指一碰就算 hover，
+            // 頭頂會再冒出一個名字 —— 重複，而且會擋到旁邊的角色。
+            _previousShowNamesOnHover = Constants.SHOW_NAMES_ON_HOVER;
+            Constants.SHOW_NAMES_ON_HOVER = false;
             Constants.ENABLE_DAY_NIGHT_CYCLE = false;
             SunCycleManager.ResetToDefault();
         }
@@ -191,6 +200,7 @@ namespace Client.Main.Scenes
 
             Constants.ENABLE_DAY_NIGHT_CYCLE = _previousDayNightEnabled;
             Constants.SUN_DIRECTION = _previousSunDirection;
+            Constants.SHOW_NAMES_ON_HOVER = _previousShowNamesOnHover;
             _dayNightPatched = false;
         }
 
@@ -1537,10 +1547,20 @@ namespace Client.Main.Scenes
             {
                 GraphicsDevice.Clear(new Color(12, 12, 20));
                 DrawBackground();
-                _progressBar.Progress = _loadingScreen.Progress;
-                _progressBar.StatusText = _loadingScreen.Message;
-                _progressBar.Visible = true;
-                _progressBar.Draw(gameTime);
+
+                // 只有載入真的拖久了才顯示進度條。
+                // 只載舞台附近的物件之後，這段通常不到半秒 —— 進度條閃一下反而
+                // 像「又出現一個載入畫面」，比什麼都不顯示更干擾。
+                _firstLoadingDrawAt ??= gameTime.TotalGameTime;
+                if (gameTime.TotalGameTime - _firstLoadingDrawAt.Value
+                    > LoadingIndicatorDelay)
+                {
+                    _progressBar.Progress = _loadingScreen.Progress;
+                    _progressBar.StatusText = _loadingScreen.Message;
+                    _progressBar.Visible = true;
+                    _progressBar.Draw(gameTime);
+                }
+
                 return;
             }
 

@@ -43,7 +43,14 @@ namespace Client.Main
         public const float BASE_FONT_SIZE = 25f;
         public const int BASE_UI_WIDTH = 1280;
         public const int BASE_UI_HEIGHT = 720;
-        public const bool SHOW_NAMES_ON_HOVER = true;
+        /// <summary>
+        /// 滑鼠／手指停在角色、怪物或 NPC 上時顯示名字。
+        ///
+        /// 改成可變的，是因為選角畫面要暫時關掉：那裡五個角色都可點擊，
+        /// 手指一碰就算 hover，而角色底下本來就有名字標籤 —— 頭頂再冒一個
+        /// 是重複，還會擋到旁邊的角色。與 ENABLE_DAY_NIGHT_CYCLE 同一種用法。
+        /// </summary>
+        public static bool SHOW_NAMES_ON_HOVER = true;
 
         // Distance thresholds
         public const float LOW_QUALITY_DISTANCE = 3500f;
@@ -104,6 +111,24 @@ namespace Client.Main
         /// 一格 100 單位，所以 4000 大約是 40 格。
         /// </remarks>
         public static float GRASS_DRAW_DISTANCE;
+
+        /// <summary>
+        /// 草的 alpha 測試門檻（0..1）。低於這個值的像素直接丟棄。
+        /// </summary>
+        /// <remarks>
+        /// 原版是 0.01 —— 也就是 255 的 1%，幾乎什麼都不丟。
+        /// 問題在於草是「alpha 混合 ＋ **深度寫入開啟**」：
+        /// 一張立牌上 alpha=3、肉眼完全看不見的邊緣像素，照樣會寫進深度緩衝，
+        /// 把後面每一張草都擋掉 —— 擋出來的正好是那張立牌的**矩形輪廓**。
+        ///
+        /// 一格一張時幾乎看不出來（立牌之間本來就不重疊）。
+        /// 密度拉高之後立牌大量重疊，這個假象就變成整片「一塊一塊的色塊」。
+        ///
+        /// 提高門檻（0.3–0.5）等於改成 cutout：只有真的被草蓋住的像素才寫深度。
+        /// 同時也少掉大量混合運算 —— 手機是 tile-based GPU，透明重疊的填充率
+        /// 才是真正的成本，不是三角形數。
+        /// </remarks>
+        public static float GRASS_ALPHA_REFERENCE = 0.01f;
 
         // Rendering
         public static bool MSAA_ENABLED;

@@ -277,6 +277,20 @@ namespace Client.Main.Scenes
                     case ClientConnectionState.Initial:
                         ResetServerSelectionUI();
                         hideAll = true;
+
+                        // 還沒選伺服器就斷線 = 連線伺服器把閒置的連線關掉了
+                        // （OpenMU 的 ConnectServer 有閒置逾時）。玩家什麼都沒做錯，
+                        // 卻會看到一個「Connection lost」而且按了 OK 之後無路可走 ——
+                        // 伺服器清單消失、也沒有任何重試的入口。
+                        // 這種情況直接重連並重新要一次清單，玩家只會看到清單閃一下。
+                        if (_previousStateHandled <= ClientConnectionState.SelectingServer
+                            && _previousStateHandled >= ClientConnectionState.ConnectingToConnectServer)
+                        {
+                            Console.WriteLine("[Net] connect server dropped an idle client; reconnecting");
+                            _ = _networkManager.ConnectToConnectServerAsync();
+                            break;
+                        }
+
                         if (_previousStateHandled >= ClientConnectionState.ConnectingToConnectServer && _previousStateHandled < ClientConnectionState.InGame)
                         {
                             showErrorAndExit = true;

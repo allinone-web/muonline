@@ -276,8 +276,12 @@ namespace Client.Main.Scenes.SelectCharacter
                     ? slot + Worlds.SelectWorld.SelectedStepOffset
                     : slot;
 
-                if (i != index && player.Status == GameControlStatus.Ready)
-                    player.PlayAction(player.GetCorrectIdleAction());
+                if (player.Status != GameControlStatus.Ready)
+                    continue;
+
+                player.PlayAction(i == index
+                    ? (ushort)SignatureAction(player.CharacterClass)
+                    : player.GetCorrectIdleAction());
             }
 
             _activeIndex = index;
@@ -292,6 +296,26 @@ namespace Client.Main.Scenes.SelectCharacter
                     forceFullVisibilityRebuild: !activePlayer.World.IsObjectVisibleInSnapshot(activePlayer));
             }
         }
+
+        /// <summary>
+        /// 選中時播的招牌動作，每個職業不一樣。
+        ///
+        /// 全部用現成的動作編號，不需要任何新素材、也不需要新的 shader
+        /// （iOS 的 .fx 在 macOS 編不動，要送 CI）。
+        /// 職業編號是每四個一組：0-3 法師、4-7 騎士、8-11 精靈、
+        /// 12-13 魔劍士、16- 魔劍公爵，之後是召喚師與格鬥家。
+        /// </summary>
+        private static PlayerAction SignatureAction(CharacterClassNumber characterClass) =>
+            ((int)characterClass / 4) switch
+            {
+                0 => PlayerAction.PlayerSkillHand1,     // 法師：雙手施法
+                1 => PlayerAction.PlayerSkillWeapon1,   // 騎士：武器技
+                2 => PlayerAction.PlayerSkillElf1,      // 精靈：精靈專屬
+                3 => PlayerAction.PlayerSkillWeapon2,   // 魔劍士
+                4 => PlayerAction.PlayerSkillHand2,     // 魔劍公爵
+                5 => PlayerAction.PlayerSkillFlash,     // 召喚師
+                _ => PlayerAction.PlayerAttackFist,     // 格鬥家
+            };
 
         internal void EnsureActiveCharacterVisible(WorldControl world)
         {

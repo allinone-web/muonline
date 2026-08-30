@@ -823,7 +823,9 @@ namespace Client.Main.Controls.UI.Game.Inventory
         {
             if (_zenText != null)
             {
-                _zenText.Text = ZenAmount.ToString();
+                // 千分位。HUD 的金幣是 9,509,902，背包卻寫成 9509902 ——
+                // 同一個數字在同一個畫面上有兩種寫法。
+                _zenText.Text = ZenAmount.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
             }
         }
 
@@ -1096,8 +1098,10 @@ namespace Client.Main.Controls.UI.Game.Inventory
             var pixel = GraphicsManager.Instance.Pixel;
             if (pixel == null || _font == null) return;
 
-            // 區塊標題 —— 統一級距，見 MobileUi 的文字級距
-            float scale = s_mobile ? MobileUi.ScaleFor(MobileUi.TextHeading) : 0.36f;
+            // 區塊標題 —— 統一級距，見 MobileUi 的文字級距。
+            // 手機用 TextLabel（13）而不是 TextHeading（17）：它畫在欄位框的<b>上方</b>，
+            // 而框是之後才畫的；17 px 的字高會被框的上緣切掉半行。
+            float scale = s_mobile ? MobileUi.ScaleFor(MobileUi.TextLabel) : 0.36f;
             Vector2 textSize = _font.MeasureString(title) * scale;
 
             if (s_mobile)
@@ -1246,7 +1250,8 @@ namespace Client.Main.Controls.UI.Game.Inventory
             if (pixel == null) return;
 
             // Section title
-            DrawSectionHeader(spriteBatch, "EQUIPMENT", _paperdollPanelRect.X, _paperdollPanelRect.Y - 18, _paperdollPanelRect.Width);
+            DrawSectionHeader(spriteBatch, "EQUIPMENT", _paperdollPanelRect.X,
+                _paperdollPanelRect.Y - (s_mobile ? 20 : 18), _paperdollPanelRect.Width);
 
             // Main panel background
             DrawPanel(spriteBatch, _paperdollPanelRect, Theme.BgMid);

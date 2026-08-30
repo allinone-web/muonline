@@ -30,9 +30,18 @@ namespace Client.Main.Content
         private static AssetLibrary _library;
         private static Dictionary<ushort, LibraryAsset> _byNumber;
         private static readonly Dictionary<string, BMD> _cache = new(StringComparer.OrdinalIgnoreCase);
-        private static ILogger _logger;
+        private static ILogger _logger = MuGame.AppLoggerFactory?.CreateLogger("LibraryAssetProvider");
 
         public static void UseLogger(ILogger logger) => _logger = logger;
+
+        /// <summary>啟動時印一次現況。沒有這行，「資源庫是空的」在裝置上完全看不出來。</summary>
+        public static string Describe()
+        {
+            var library = Ensure();
+            return _byNumber.Count > 0
+                ? $"資源庫 {library.Root}：{library.Assets.Count} 個資產、{_byNumber.Count} 個綁了編號"
+                : $"資源庫 {library.Root}：沒有綁定編號的資產（找不到目錄或清單是空的）";
+        }
 
         /// <summary>資源庫的根目錄。預設是 <c>~/Documents/mu-studio-library</c>。</summary>
         public static string Root => Ensure().Root;
@@ -49,9 +58,16 @@ namespace Client.Main.Content
                 _library = new AssetLibrary();
                 Reindex();
 
+                // 有沒有東西都要印。之前只在「有」的時候印，於是裝置上資源庫是空的時
+                // 什麼訊息都沒有 —— 看起來就像功能沒做，而不是資料沒推上去。
                 if (_byNumber.Count > 0)
                     _logger?.LogInformation(
                         "資源庫：{Count} 個資產綁了編號（{Root}）", _byNumber.Count, _library.Root);
+                else
+                    _logger?.LogWarning(
+                        "資源庫沒有可用的綁定：{Root}（資產 {Assets} 個）。"
+                      + "裝置上要先推：tools/mu push-assets --library",
+                        _library.Root, _library.Assets.Count);
 
                 return _library;
             }

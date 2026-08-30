@@ -136,6 +136,17 @@ namespace Client.Main.Graphics
         public static readonly int[] GrassQualityLevels = [1, 4, 8];
 
         /// <summary>
+        /// 密度大於 1 時的 alpha 測試門檻。
+        /// </summary>
+        /// <remarks>
+        /// 原版 0.01 幾乎不丟任何像素，而草是「混合 ＋ 深度寫入」——
+        /// 立牌重疊之後，看不見的邊緣像素會寫深度並擋掉後面的草，
+        /// 畫面上就是一塊一塊的矩形色塊。0.35 讓它接近 cutout：
+        /// 只有真的被草蓋住的像素才寫深度，順便省掉大量混合的填充率。
+        /// </remarks>
+        private const float DenseAlphaReference = 0.35f;
+
+        /// <summary>
         /// 套用草地品質。<paramref name="level"/> 是每格的立牌數（1／4／8）。
         /// </summary>
         /// <remarks>
@@ -153,18 +164,21 @@ namespace Client.Main.Graphics
                     Constants.GRASS_TUFTS_PER_TILE = 8;
                     Constants.GRASS_CLUSTER_PLANES = 3;   // 三角，Lineage W 的做法
                     Constants.GRASS_DRAW_DISTANCE = 8000f;
+                    Constants.GRASS_ALPHA_REFERENCE = DenseAlphaReference;
                     break;
 
                 case >= 4:
                     Constants.GRASS_TUFTS_PER_TILE = 4;
                     Constants.GRASS_CLUSTER_PLANES = 2;   // 十字
                     Constants.GRASS_DRAW_DISTANCE = 8000f;
+                    Constants.GRASS_ALPHA_REFERENCE = DenseAlphaReference;
                     break;
 
                 default:
                     Constants.GRASS_TUFTS_PER_TILE = 1;
                     Constants.GRASS_CLUSTER_PLANES = 1;
                     Constants.GRASS_DRAW_DISTANCE = 0f;
+                    Constants.GRASS_ALPHA_REFERENCE = 0.01f;   // 原版
                     break;
             }
         }

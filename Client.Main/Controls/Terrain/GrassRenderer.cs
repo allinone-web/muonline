@@ -424,7 +424,7 @@ namespace Client.Main.Controls.Terrain
                 if (!additive)
                 {
                     alphaEffect.AlphaFunction = CompareFunction.Greater;
-                    alphaEffect.ReferenceAlpha = (int)(255f * 0.01f);
+                    alphaEffect.ReferenceAlpha = (int)(255f * Constants.GRASS_ALPHA_REFERENCE);
                 }
 
                 BoundingFrustum frustum = Camera.Instance.Frustum;

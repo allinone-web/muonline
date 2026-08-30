@@ -45,8 +45,9 @@ namespace Client.Main.Controls.UI
 
             _label = new LabelControl
             {
-                FontSize = 14f,
-                TextColor = Color.White,
+                // 14 不在文字級距上。訊息就是內文，用 TextBody。
+                FontSize = MobileUi.IsMobile ? MobileUi.TextBody : 14f,
+                TextColor = MobileUi.TextPrimary,
                 TextAlign = HorizontalAlign.Center,
             };
             Controls.Add(_label);
@@ -54,9 +55,11 @@ namespace Client.Main.Controls.UI
             _okButton = new Common.ButtonControl
             {
                 Text = "OK",
-                FontSize = 13f,
+                FontSize = MobileUi.IsMobile ? MobileUi.TextHeading : 13f,
                 AutoViewSize = false,
-                ViewSize = new Point(140, 34),
+                // 34 高在 iPhone 上換算不到 15 pt。OK 是這個視窗唯一的按鈕，
+                // 至少要有可以放心點的高度（見 MobileUi.CloseButtonSize）。
+                ViewSize = new Point(180, MobileUi.IsMobile ? MobileUi.CloseButtonSize : 34),
                 BackgroundColor = new Color(52, 62, 78) * 0.95f,
                 HoverBackgroundColor = new Color(72, 86, 106) * 0.95f,
                 PressedBackgroundColor = new Color(34, 42, 54) * 0.95f,
@@ -132,8 +135,17 @@ namespace Client.Main.Controls.UI
                 BlendState.AlphaBlend,
                 transform: UiScaler.SpriteTransform))
             {
-                DrawBackground();
-                DrawBorder();
+                if (MobileUi.IsMobile)
+                {
+                    // 和其他視窗同一塊面板：半透明深色 + 一條細框。
+                    // 原本是 Color.Black * 0.8f 加一條灰框 —— 全遊戲只有這裡是純黑的。
+                    MobileUi.DrawPanel(GraphicsManager.Instance.Sprite, DisplayRectangle);
+                }
+                else
+                {
+                    DrawBackground();
+                    DrawBorder();
+                }
 
                 _label?.Draw(gameTime);
                 _okButton?.Draw(gameTime);

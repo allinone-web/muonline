@@ -1168,7 +1168,11 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             private const int OptionRowHeight = 30;
 
             // ── 手機版面 ──
-            private const int MobilePanelWidth = 1040;
+            // 1040 -> 920：置中之後左緣落在 301，正好壓在左上角那塊
+            // HP / MP / SD / AG 文字底下（它延伸到約 x=350）。HUD 是畫在視窗
+            // 上面的（那是刻意的，否則視窗會擋住自己的開關鈕），於是「AG 25/25」
+            // 就疊在關閉鈕上。縮到 920 之後左緣是 361，讓開了那塊文字。
+            private const int MobilePanelWidth = 920;
             // 560 -> 660：左欄現在是「5 個動作 + 7 個設定分類」共 12 列。
             // 12 x 46 = 552，加上標題列 70 與群組間隔 14 就是 636，560 裝不下。
             // 畫布高度約 756（滿版之後），660 還留得下上下的餘裕。
