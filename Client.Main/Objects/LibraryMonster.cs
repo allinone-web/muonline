@@ -1,5 +1,7 @@
+using System.Linq;
 using System.Threading.Tasks;
 using Client.AssetStudio.Project;
+using Client.Data.BMD;
 using Client.Main.Content;
 
 namespace Client.Main.Objects
@@ -22,21 +24,48 @@ namespace Client.Main.Objects
     {
         public LibraryAsset Asset { get; }
 
-        public LibraryMonster(LibraryAsset asset)
+        private readonly BMD _model;
+        private readonly string _displayName;
+
+        /// <param name="model">
+        /// 已經載好的模型。<see cref="LibraryAssetProvider.TryPrepareAsync"/> 先載過一次，
+        /// 確認載得起來才會走到這裡 —— 載不起來的話生怪流程會退回原本的怪物類別。
+        /// </param>
+        public LibraryMonster(LibraryAsset asset, BMD model)
         {
             Asset = asset;
+            _model = model;
+            _displayName = SafeName(asset);
 
             // 縮放已經在匯入時烘進頂點了（GltfImporter 收 asset.Scale），
             // 這裡再乘一次會變成平方。
             Scale = 1f;
         }
 
-        public override string DisplayName => Asset.Name;
+        public override string DisplayName => _displayName;
 
         public override async Task Load()
         {
-            Model = await LibraryAssetProvider.LoadAsync(Asset);
+            Model = _model;
             await base.Load();
+        }
+
+        /// <summary>
+        /// 把名字換成畫得出來的字。
+        /// </summary>
+        /// <remarks>
+        /// MU 的名牌用的是點陣字型，只有 ASCII。中文名字（「天堂_死亡騎士」）
+        /// 會整串變成「？？？？」—— 這不是編碼壞掉，是字型裡根本沒有那些字。
+        /// 所以非 ASCII 的名字退回用模型檔名（那是英文的，例如 Mon_DeathKnight_UW）。
+        /// </remarks>
+        internal static string SafeName(LibraryAsset asset)
+        {
+            if (!string.IsNullOrEmpty(asset.Name) && asset.Name.All(c => c < 128))
+                return asset.Name;
+
+            // 檔名是提取管線產生的，一定是英文（SK_Mon_DeathKnight_UW）。
+            var fromFile = System.IO.Path.GetFileNameWithoutExtension(asset.Source);
+            return string.IsNullOrEmpty(fromFile) ? "Library Asset" : fromFile;
         }
     }
 }

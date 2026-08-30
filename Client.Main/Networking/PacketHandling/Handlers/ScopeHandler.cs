@@ -1117,11 +1117,16 @@ namespace Client.Main.Networking.PacketHandling.Handlers
 
             // 資源庫的自有資產先看 —— 它的用途就是覆寫遊戲原本的模型，
             // 順序反過來的話永遠蓋不掉。
-            if (Content.LibraryAssetProvider.TryGet(type, out var libraryAsset))
+            // 先確認資產真的載得起來才接管 —— 載不起來就走下面的原路，
+            // 而不是留一隻「看得到名字、看不到身體」的怪。
+            if (await Content.LibraryAssetProvider.TryPrepareAsync(type).ConfigureAwait(false)
+                is var prepared && prepared is not null)
             {
-                obj = new LibraryMonster(libraryAsset);
+                obj = new LibraryMonster(prepared.Value.Asset, prepared.Value.Model);
                 _logger.LogInformation(
-                    "ScopeHandler: TypeID {TypeId} 由資源庫的「{Name}」接管。", type, libraryAsset.Name);
+                    "ScopeHandler: TypeID {TypeId} 由資源庫的「{Name}」接管（{Meshes} 網格、{Actions} 動作）。",
+                    type, prepared.Value.Asset.Name,
+                    prepared.Value.Model.Meshes.Length, prepared.Value.Model.Actions.Length);
             }
             else
             {

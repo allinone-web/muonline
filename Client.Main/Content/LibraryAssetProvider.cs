@@ -149,6 +149,46 @@ namespace Client.Main.Content
                 return _byNumber.TryGetValue(typeId, out asset);
         }
 
+        /// <summary>
+        /// 查出這個編號有沒有被接管，<b>而且確認它真的載得起來</b>。
+        /// </summary>
+        /// <remarks>
+        /// 為什麼要在這裡就把模型載出來，而不是等 <c>LibraryMonster.Load()</c>：
+        ///
+        /// 一開始是那樣做的，結果 glTF 在裝置上載失敗時，<c>Model</c> 留在 null，
+        /// 於是世界裡出現一隻<b>看得到名字、看不到身體</b>的怪 ——
+        /// 而且原本那隻正常的怪也被它取代掉了，等於「覆寫失敗 = 少一隻怪」。
+        ///
+        /// 覆寫失敗應該<b>退回原本的模型</b>，不是留一個洞。
+        /// 所以先載、載得起來才回報接管；BMD 有快取，這一步不會多花成本。
+        /// </remarks>
+        public static async Task<(LibraryAsset Asset, BMD Model)?> TryPrepareAsync(ushort typeId)
+        {
+            if (!TryGet(typeId, out var asset))
+                return null;
+
+            try
+            {
+                var model = await LoadAsync(asset).ConfigureAwait(false);
+
+                if (model.Meshes is not { Length: > 0 })
+                {
+                    _logger?.LogWarning(
+                        "資源庫 {Name}（#{Number}）沒有網格，退回原本的模型。", asset.Name, typeId);
+                    return null;
+                }
+
+                return (asset, model);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex,
+                    "資源庫 {Name}（#{Number}）載入失敗，退回原本的模型：{Message}",
+                    asset.Name, typeId, ex.Message);
+                return null;
+            }
+        }
+
         /// <summary>把資產轉成可以直接指給 <c>ModelObject.Model</c> 的 BMD。</summary>
         public static Task<BMD> LoadAsync(LibraryAsset asset)
         {
