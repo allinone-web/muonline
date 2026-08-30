@@ -3553,7 +3553,9 @@ namespace Client.Main.Objects.Player
             HideHelmMask();
             _helmItemEquipped = false;
 
-            PlayerClass mapped = MapNetworkClassToModelClass(_characterClass);
+            // 外觀汰換：舊職業改用新職業的身體。只影響載哪五個部位檔，
+            // 伺服器送的職業、數值、技能、動作全部不變。見 AppearanceOverride。
+            PlayerClass mapped = AppearanceOverride.Apply(MapNetworkClassToModelClass(_characterClass));
             await SetBodyPartsAsync("Player/",
                 "HelmClass", "ArmorClass", "PantClass", "GloveClass", "BootClass",
                 (int)mapped);
@@ -3571,7 +3573,7 @@ namespace Client.Main.Objects.Player
 
             await SetBodyPartsAsync("Player/",
                 "HelmClass", "ArmorClass", "PantClass", "GloveClass", "BootClass",
-                (int)playerClass);
+                (int)AppearanceOverride.Apply(playerClass));
         }
 
         private bool _bodyPartStateDumped;
