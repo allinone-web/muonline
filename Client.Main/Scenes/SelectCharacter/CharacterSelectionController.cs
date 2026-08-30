@@ -280,9 +280,17 @@ namespace Client.Main.Scenes.SelectCharacter
 
                 if (i == index)
                 {
-                    // PlayAction 設的是循環動作，會被每幀的待機邏輯蓋回去 ——
-                    // 招牌動作要走 PlayEmoteAnimation（既有表情功能用的同一條路徑）。
-                    player.PlayEmoteAnimation(SignatureAction(player.CharacterClass));
+                    // PlayAction 設的是循環動作；招牌動作走 PlayEmoteAnimation，
+                    // 那是既有表情功能用的同一條路徑。
+                    var signature = SignatureAction(player.CharacterClass);
+                    player.PlayEmoteAnimation(signature);
+
+                    // 診斷：裝置的 console provider 對 logger 是關的，只有
+                    // Console.WriteLine 讀得到（見 docs/UI繪製陷阱.md 的教訓）。
+                    Console.WriteLine(
+                        $"[SelDiag] 選中 {player.Name} class={player.CharacterClass} "
+                        + $"招牌動作={signature}({(ushort)signature}) "
+                        + $"目前動作={player.CurrentAction}");
                 }
                 else
                 {
@@ -291,6 +299,20 @@ namespace Client.Main.Scenes.SelectCharacter
             }
 
             _activeIndex = index;
+
+            // 診斷「隊伍看起來斜」：把每個角色到鏡頭的水平距離印出來。
+            // 幾何上排列與視線垂直、應該全部相等 —— 若不相等就是我算錯了，
+            // 若相等就代表那是朝向或透視造成的錯覺，要往別的方向查。
+            {
+                var cam = Worlds.SelectWorld.CameraWorldPosition;
+                for (int d = 0; d < _characters.Count; d++)
+                {
+                    var pos = _characters[d].Position;
+                    float dist = new Vector2(cam.X - pos.X, cam.Y - pos.Y).Length();
+                    Console.WriteLine(
+                        $"[SelDiag] 位置{d} {_characters[d].Name} 距鏡頭 {dist:F1}");
+                }
+            }
 
             var activePlayer = _characters[index];
             activePlayer.PlayAction(activePlayer.GetCorrectIdleAction());
@@ -350,9 +372,24 @@ namespace Client.Main.Scenes.SelectCharacter
                     ? slot + Worlds.SelectWorld.SelectedStepOffset
                     : slot;
 
-                player.Position = Vector3.DistanceSquared(player.Position, target) < 1f
-                    ? target
-                    : Vector3.Lerp(player.Position, target, t);
+                bool arrived = Vector3.DistanceSquared(player.Position, target) < 1f;
+                player.Position = arrived ? target : Vector3.Lerp(player.Position, target, t);
+
+                // 滑動 → 走動：位置是我們自己搬的，走者本身的移動系統沒有參與，
+                // 所以要手動播走路動作，到位再交還給待機／招牌動作。
+                if (!arrived && !player.IsOneShotPlaying)
+                {
+                    var walk = PlayerActionMapper.IsCharacterFemale(player.CharacterClass)
+                        ? PlayerAction.PlayerWalkFemale
+                        : PlayerAction.PlayerWalkMale;
+                    if (player.CurrentAction != walk)
+                        player.PlayAction((ushort)walk);
+                }
+                else if (arrived && !player.IsOneShotPlaying
+                         && player.CurrentAction != (PlayerAction)player.GetCorrectIdleAction())
+                {
+                    player.PlayAction(player.GetCorrectIdleAction());
+                }
 
                 var angle = player.Angle;
                 player.Angle = new Vector3(

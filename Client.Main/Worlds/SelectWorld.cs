@@ -15,21 +15,17 @@ namespace Client.Main.Worlds
     public class SelectWorld : WorldControl
     {
         // === 選角舞台：諾利亞的開闊草地 ===
-        // 格子 (108,111) 與視線方向 (112,119) 都是使用者在遊戲裡挑定的。
-        // 注意：這一帶不是平地 —— 東南方（正是鏡頭望過去的方向）有一個隆起，
-        // 高度從 113 升到 132。背景有起伏比純平地好看，但因為這個世界不是
-        // WalkableWorldControl、角色不會貼地而是共用同一個 Z，
-        // 排開之後若有人落在斜坡上就會半陷或懸空，要看實機再調。
-        private const float StageGroundZ = 174f;   // 高度圖 116 × 1.5
-        private const float StageTileX = 108f;
-        private const float StageTileY = 111f;
+        // 格子 (139,84) 是使用者在遊戲裡站過、挑定的位置。那一帶 7×6 格完全平坦
+        // （地形高度值 113 × 1.5 = 170），五個角色並排站上去不會高低不齊。
+        // 曾經試過 (108,111)／望向 (112,119)，取景不如這裡，已改回。
+        private const float StageGroundZ = 170f;   // 高度圖 113 × 1.5
+        private const float StageTileX = 139f;
+        private const float StageTileY = 84f;
 
         // 鏡頭：接近平視。公式刻意與地圖編輯器的環繞鏡頭一致（EditorCamera.Apply），
         // 這樣 tools/mu golden 拍出來的取景就等於真機看到的取景 ——
         // 兩邊各寫各的相機，比出來的差異會分不清是「渲染不同」還是「根本沒看同一個地方」。
-        // 63.43 度 = 從舞台中心 (108,111) 望向 (112,119) 的方位：
-        //   atan2(119-111, 112-108) = atan2(8, 4)
-        private const float CameraYawDegrees = 63.43f;
+        private const float CameraYawDegrees = -45f;
         private const float CameraPitchDegrees = 12f;
         private const float CameraDistance = 1400f;
         private const float StageFieldOfView = 35f;
