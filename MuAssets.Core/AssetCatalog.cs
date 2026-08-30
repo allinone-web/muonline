@@ -231,6 +231,12 @@ public sealed class AssetCatalog
     /// <param name="placement">
     /// 該圖的擺放統計。傳入時會多一道「從擺放位置推測」的分類 —— 見 <see cref="PlacementStats"/>。
     /// </param>
+    /// <summary>
+    /// 要不要跑「形狀」這一步。它會讀 BMD 與貼圖，掃全部 6863 個模型要花幾分鐘，
+    /// 所以介面上是預設開、報告工具可以關掉來單獨量前面幾條線索的覆蓋率。
+    /// </summary>
+    public bool UseShapeFallback { get; set; } = true;
+
     public AssetEntry[] Scan(
         string dataPath,
         int worldIndex,
@@ -297,6 +303,16 @@ public sealed class AssetCatalog
             PlacementStats.TryClassify(profile, out var fromPlacement))
         {
             return new AssetEntry(id, fileName, path, worldIndex, objectType, fromPlacement, $"擺放位置 ×{profile.Count}");
+        }
+
+        // 再最後一招：看模型自己的形狀與貼圖鏤空。實測只有四個類別分得開
+        // （草木、地面、岩石、水體），其餘全部重疊 —— 見 ModelShapeClassifier 的說明。
+        // 這一步要讀 BMD 與貼圖，比前面幾條貴得多，所以放在最後，只有真的沒轍時才跑。
+        if (UseShapeFallback
+            && ModelShapeClassifier.Measure(path, Path.GetDirectoryName(path)!) is { } shape
+            && ModelShapeClassifier.TryClassify(shape, out var fromShape))
+        {
+            return new AssetEntry(id, fileName, path, worldIndex, objectType, fromShape, "形狀");
         }
 
         return new AssetEntry(id, fileName, path, worldIndex, objectType, AssetCategory.Unclassified, "－");

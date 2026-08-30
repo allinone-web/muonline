@@ -99,6 +99,12 @@ public sealed class EditorUi : IDisposable
     private int _objectSummaryWorldIndex = -1;
     private AssetEntry[] _assets = [];
     private int _assetWorldIndex = -1;
+
+    /// <summary>素材庫裡被選起來的模型，用來批次標註。</summary>
+    private readonly HashSet<string> _selectedAssets = [];
+
+    /// <summary>Shift 範圍選取的錨點。</summary>
+    private string? _assetAnchor;
     private string _assetFilter = string.Empty;
     private AssetCategory _categoryFilter = AssetCategory.Unclassified;
     private float _assetThumbnailSize = 96f;
@@ -1901,6 +1907,8 @@ public sealed class EditorUi : IDisposable
             _assets = _catalog.Scan(_session.DataPath, entry.Index, WorldCatalog.GetTileObjectTypes(entry));
             _assetWorldIndex = entry.Index;
             _assetFilter = string.Empty;
+            _selectedAssets.Clear();
+            _assetAnchor = null;
         }
 
         if (_assets.Length == 0)
@@ -1913,13 +1921,11 @@ public sealed class EditorUi : IDisposable
         DrawAssetToolbar(entry);
         ImGui.Separator();
 
-        var visible = _assets
-            .Where(a => _categoryFilter == AssetCategory.Unclassified || a.Category == _categoryFilter)
-            .Where(a => string.IsNullOrWhiteSpace(_assetFilter)
-                     || a.FileName.Contains(_assetFilter, StringComparison.OrdinalIgnoreCase))
-            .ToArray();
+        var visible = VisibleAssets();
 
-        ImGui.TextColored(Muted, $"{visible.Length} / {_assets.Length} 個模型");
+        ImGui.TextColored(Muted, $"{visible.Length} / {_assets.Length} 個模型　（Cmd 點加選、Shift 點選一段）");
+        DrawBatchLabelling();
+        ImGui.Separator();
 
         if (ImGui.BeginChild("assets", new NVector2(0f, 0f)))
         {
@@ -1991,6 +1997,110 @@ public sealed class EditorUi : IDisposable
         return names;
     }
 
+    private void ToggleAssetSelection(string id)
+    {
+        if (!_selectedAssets.Remove(id))
+            _selectedAssets.Add(id);
+
+        _assetAnchor = id;
+    }
+
+    /// <summary>把畫面上從 <paramref name="from"/> 到 <paramref name="to"/> 之間的整段選起來。</summary>
+    private void SelectAssetRange(string from, string to)
+    {
+        var order = VisibleAssets().Select(a => a.Id).ToList();
+        int a = order.IndexOf(from);
+        int b = order.IndexOf(to);
+
+        if (a < 0 || b < 0)
+            return;
+
+        foreach (string id in order.GetRange(Math.Min(a, b), Math.Abs(a - b) + 1))
+            _selectedAssets.Add(id);
+
+        _assetAnchor = to;
+    }
+
+    /// <summary>目前篩選條件下看得到的素材，順序與畫面一致。</summary>
+    private AssetEntry[] VisibleAssets()
+        => _assets
+            .Where(a => _categoryFilter == AssetCategory.Unclassified || a.Category == _categoryFilter)
+            .Where(a => string.IsNullOrWhiteSpace(_assetFilter)
+                     || a.FileName.Contains(_assetFilter, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+    /// <summary>
+    /// 批次標註列。
+    /// </summary>
+    /// <remarks>
+    /// 剩下 1145 個未分類的模型只能靠人工，而右鍵一個一個標是做不完的。
+    /// 這一排讓「選一批 → 按一個類別」變成兩個動作。
+    ///
+    /// 分類器的自動規則只剩一條（貼圖鏤空 → 草木，精確度 71%），
+    /// 其餘都被實測推翻了 —— 所以人工標註不是備案，是主力。
+    /// </remarks>
+    private void DrawBatchLabelling()
+    {
+        if (_selectedAssets.Count == 0)
+            return;
+
+        ImGui.Separator();
+        ImGui.Text($"選取了 {_selectedAssets.Count} 個");
+
+        ImGui.SameLine();
+        if (ImGui.SmallButton("取消選取"))
+            _selectedAssets.Clear();
+
+        ImGui.SameLine();
+        if (ImGui.SmallButton("全選（目前篩選）"))
+        {
+            foreach (var asset in VisibleAssets())
+                _selectedAssets.Add(asset.Id);
+        }
+
+        ImGui.TextColored(Muted, "按一個類別，整批標註（寫進 object-catalog.json）");
+
+        int index = 0;
+
+        foreach (var category in AssetCategoryNames.All)
+        {
+            if (category == AssetCategory.Unclassified)
+                continue;
+
+            if (ImGui.SmallButton(AssetCategoryNames.Of(category)))
+                ApplyCategoryToSelection(category);
+
+            if (++index % 6 != 0)
+                ImGui.SameLine();
+        }
+
+        ImGui.NewLine();
+
+        if (ImGui.SmallButton("清除分類（回到自動判定）"))
+        {
+            foreach (var asset in _assets.Where(a => _selectedAssets.Contains(a.Id)))
+                _catalog.ClearCategory(asset);
+
+            RefreshAssets();
+        }
+    }
+
+    private void ApplyCategoryToSelection(AssetCategory category)
+    {
+        foreach (var asset in _assets.Where(a => _selectedAssets.Contains(a.Id)))
+            _catalog.SetCategory(asset, category);
+
+        _session.StatusMessage = $"{_selectedAssets.Count} 個模型標成「{AssetCategoryNames.Of(category)}」";
+        _selectedAssets.Clear();
+        RefreshAssets();
+    }
+
+    private void RefreshAssets()
+    {
+        if (_session.LoadedWorld is { } world)
+            _assets = _catalog.Scan(_session.DataPath, world.Index, WorldCatalog.GetTileObjectTypes(world));
+    }
+
     private void DrawAssetCell(AssetEntry asset)
     {
         ImGui.BeginGroup();
@@ -1999,16 +2109,43 @@ public sealed class EditorUi : IDisposable
         var id = _thumbnails.Get(asset.Path);
         var size = new NVector2(_assetThumbnailSize, _assetThumbnailSize);
 
+        bool selected = _selectedAssets.Contains(asset.Id);
+
+        if (selected)
+        {
+            ImGui.PushStyleColor(ImGuiCol.Button, new NVector4(0.3f, 0.55f, 0.9f, 1f));
+            ImGui.PushStyleVar(ImGuiStyleVar.FrameBorderSize, 3f);
+        }
+
         if (id.HasValue)
-            ImGui.Image(id.Value, size);
+            ImGui.Image(id.Value, size, NVector2.Zero, NVector2.One,
+                selected ? new NVector4(0.65f, 0.8f, 1f, 1f) : NVector4.One);
         else
             ImGui.Button("…", size);
 
-        // 點素材＝把它的 type 帶進放置工具，直接就能開始擺。
-        if (ImGui.IsItemClicked() && asset.ObjectType is short clickedType)
+        if (selected)
         {
-            _session.PlaceObjectType = clickedType;
-            _session.Tool = EditorToolKind.PlaceObject;
+            ImGui.PopStyleVar();
+            ImGui.PopStyleColor();
+        }
+
+        // 點擊有兩種意思，用修飾鍵分開：
+        //   單純點  → 把 type 帶進放置工具，直接開始擺
+        //   Cmd 點  → 加進／移出選取（批次標註用）
+        //   Shift 點 → 從錨點到這裡整段選起來
+        if (ImGui.IsItemClicked())
+        {
+            var io = ImGui.GetIO();
+
+            if (io.KeyShift && _assetAnchor is not null)
+                SelectAssetRange(_assetAnchor, asset.Id);
+            else if (io.KeySuper || io.KeyCtrl)
+                ToggleAssetSelection(asset.Id);
+            else if (asset.ObjectType is short clickedType)
+            {
+                _session.PlaceObjectType = clickedType;
+                _session.Tool = EditorToolKind.PlaceObject;
+            }
         }
 
         if (ImGui.IsItemHovered())

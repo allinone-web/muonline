@@ -74,6 +74,24 @@ if (parsed.ContainsKey("catalog-report"))
     return;
 }
 
+if (parsed.ContainsKey("catalog-precision"))
+{
+    AssetCatalogReport.PrintShapePrecision(Constants.DataPath);
+    return;
+}
+
+if (parsed.ContainsKey("catalog-geometry"))
+{
+    AssetCatalogReport.PrintGeometryStudy(Constants.DataPath);
+    return;
+}
+
+if (parsed.ContainsKey("catalog-signal"))
+{
+    AssetCatalogReport.PrintSignalStudy(Constants.DataPath);
+    return;
+}
+
 if (parsed.ContainsKey("catalog-unknown"))
 {
     AssetCatalogReport.PrintUnknownTextures(Constants.DataPath);
