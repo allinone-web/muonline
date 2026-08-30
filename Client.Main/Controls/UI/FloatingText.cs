@@ -83,11 +83,32 @@ namespace Client.Main.Controls.UI
         /// 長出去，右半邊仍然會伸進畫面中央 —— 而畫面中央正是所有視窗的位置。
         /// 靠左之後，公告的長度只會往右延伸，起點永遠在左欄。
         /// </summary>
-        public bool LeftAligned { get; set; }
+        private bool _leftAligned;
+
+        /// <summary>
+        /// 靠左對齊（手機的通知排在左欄）。
+        ///
+        /// <b>設定時要重算位置。</b>這個值是用物件初始設定式指定的，
+        /// 而初始設定式在建構子<b>之後</b>才執行 —— 建構子裡那次 UpdatePosition
+        /// 還是照置中算的，於是 X = 對齊線 - 寬度的一半，變成負數，
+        /// 通知的開頭幾個字被切在螢幕外面（實機截圖：「...vent has been started!」）。
+        /// </summary>
+        public bool LeftAligned
+        {
+            get => _leftAligned;
+            set
+            {
+                if (_leftAligned == value)
+                    return;
+
+                _leftAligned = value;
+                UpdatePosition();
+            }
+        }
 
         private void UpdatePosition()
         {
-            X = LeftAligned
+            X = _leftAligned
                 ? (int)_center.X
                 : (int)(_center.X - ControlSize.X * 0.5f);
             Y = (int)(_center.Y - ControlSize.Y * 0.5f);
@@ -123,7 +144,14 @@ namespace Client.Main.Controls.UI
             var pixel = GraphicsManager.Instance.Pixel;
 
             Vector2 scaledSize = _rawSize * FONT_SCALE;
-            Vector2 drawPos = _center - scaledSize * 0.5f;
+
+            // 繪製也要看 LeftAligned。這裡原本一律照置中算，
+            // 而 X / Y 那一份（UpdatePosition）只影響版面與命中判定 ——
+            // 於是手機的公告雖然「位置」對齊到了左緣，畫出來的還是以左緣為中心，
+            // 開頭幾個字被切在螢幕外面（實機截圖：「...vent has been started!」）。
+            Vector2 drawPos = new(
+                _leftAligned ? _center.X : _center.X - scaledSize.X * 0.5f,
+                _center.Y - scaledSize.Y * 0.5f);
 
             if (pixel != null)
             {

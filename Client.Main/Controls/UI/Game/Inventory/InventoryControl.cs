@@ -2536,6 +2536,18 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 if (state?.PendingMoveFromSlot == itemSlotIndex)
                     continue;
 
+                // 捲動範圍外的道具不畫。
+                //
+                // 格線本身只畫 _gridVisibleRows 列，但道具是照自己的格號畫的 ——
+                // 捲到下面的那幾列會直接畫在視窗外面，看起來像有幾個道具浮在
+                // 面板底下的地上（實機截圖確認）。
+                int itemRow = item.GridPosition.Y;
+                if (itemRow + item.Definition.Height <= _gridScrollRow
+                    || itemRow >= _gridScrollRow + _gridVisibleRows)
+                {
+                    continue;
+                }
+
                 Rectangle itemRect = new(
                     gridTopLeft.X + item.GridPosition.X * INVENTORY_SQUARE_WIDTH,
                     gridTopLeft.Y + item.GridPosition.Y * INVENTORY_SQUARE_HEIGHT,
