@@ -227,7 +227,7 @@ namespace Client.Main.Scenes
                 Visible = false,
                 Enabled = false,
                 BorderThickness = 2,
-                BorderColor = Theme.BorderInner
+                BorderColor = s_mobile ? Color.Transparent : Theme.BorderInner
             };
         }
 
@@ -249,9 +249,15 @@ namespace Client.Main.Scenes
                 Visible = false,
                 Enabled = false,
                 BorderThickness = 1,
-                BorderColor = Theme.BorderInner
+                BorderColor = s_mobile ? Color.Transparent : Theme.BorderInner
             };
         }
+
+        /// <summary>畫面放得下幾張角色卡（見 CalculatePanelLayout）。</summary>
+        private int _visibleCharacterCards = 5;
+
+        /// <summary>面板與畫面上下緣的距離。和其他手機介面同一條邊距。</summary>
+        private static int EdgeMargin => Client.Main.Controls.UI.MobileUi.IsMobile ? Client.Main.Controls.UI.MobileUi.CornerInset : 12;
 
         private void CalculatePanelLayout()
         {
@@ -260,13 +266,33 @@ namespace Client.Main.Scenes
 
             // Calculate panel height based on content
             int buttonSectionHeight = (BUTTON_HEIGHT + BUTTON_SPACING) * 4 + INNER_PADDING * 2; // Buttons only, no header
+
+            // 面板高度是「角色張數」決定的，但畫面高度是固定的。
+            //
+            // 原本只是把面板置中：張數一多，總高度就超過畫面，panelY 變成負值，
+            // 底部的 EXIT 直接被切掉一半 —— 實機上四個角色就會這樣（使用者截圖）。
+            //
+            // 按鈕區不能犧牲（那是唯一的出口），所以要讓步的是角色清單：
+            // 先算出扣掉標題列與按鈕區之後還剩多少高度，再決定放得下幾張卡片。
+            int availableHeight = screenHeight - EdgeMargin * 2;
+            int listBudget = availableHeight - HEADER_HEIGHT - buttonSectionHeight - INNER_PADDING * 2;
+            int cardSlot = CHAR_CARD_HEIGHT + CHAR_CARD_SPACING;
+
             int maxCharCards = Math.Min(_characters.Count, 5);
-            int characterListHeight = maxCharCards * (CHAR_CARD_HEIGHT + CHAR_CARD_SPACING) + INNER_PADDING * 2;
+            if (cardSlot > 0)
+                maxCharCards = Math.Clamp(listBudget / cardSlot, 1, maxCharCards);
+
+            int characterListHeight = maxCharCards * cardSlot + INNER_PADDING * 2;
             int totalPanelHeight = HEADER_HEIGHT + characterListHeight + buttonSectionHeight;
+
+            _visibleCharacterCards = maxCharCards;
 
             // Character panel (right side)
             int panelX = screenWidth - PANEL_WIDTH - PANEL_MARGIN;
             int panelY = (screenHeight - totalPanelHeight) / 2;
+
+            // 就算上面算過了也要夾一次：面板永遠不能超出上下邊緣。
+            panelY = Math.Clamp(panelY, EdgeMargin, Math.Max(EdgeMargin, screenHeight - EdgeMargin - totalPanelHeight));
             _characterPanelRect = new Rectangle(panelX, panelY, PANEL_WIDTH, totalPanelHeight);
 
             // Character list section (top, below header)
@@ -280,7 +306,7 @@ namespace Client.Main.Scenes
             // Calculate character card rectangles
             _characterCardRects.Clear();
             int cardY = listY + INNER_PADDING;
-            for (int i = 0; i < _characters.Count && i < 5; i++)
+            for (int i = 0; i < _characters.Count && i < _visibleCharacterCards; i++)
             {
                 _characterCardRects.Add(new Rectangle(
                     panelX + INNER_PADDING,
@@ -1397,11 +1423,24 @@ namespace Client.Main.Scenes
 
             // Card background
             Color bgColor = isSelected ? Theme.BgLighter : (isHovered ? Theme.BgMid : Theme.BgDark);
-            sb.Draw(pixel, cardRect, s_mobile ? bgColor * 0.85f : bgColor);
+
+            // 手機沒有框線，所以選中必須完全靠底色 —— 差距要拉得夠開才看得出來
+            if (s_mobile)
+                sb.Draw(pixel, cardRect, isSelected
+                    ? Client.Main.Controls.UI.MobileUi.TitleBarFill * 1.35f
+                    : Client.Main.Controls.UI.MobileUi.PanelFill * 0.85f);
+            else
+                sb.Draw(pixel, cardRect, bgColor);
 
             // Card border
+            // 手機：<b>不畫框線</b>。
+            //
+            // 選中與否用底色深淺表達就夠了。一張卡片如果框一個顏色、底一個顏色、
+            // 名字一個顏色、等級再一個顏色，四種顏色卻只傳達一件事（有沒有選中）——
+            // 使用者的要求是「一個按鈕不要有太多顏色」，這是最典型的例子。
+            // 見 docs/手機遊戲界面規格.md。
             Color borderColor = isSelected ? Theme.Accent : Theme.BorderInner;
-            int borderWidth = isSelected ? 2 : 1;
+            int borderWidth = s_mobile ? 0 : (isSelected ? 2 : 1);
             sb.Draw(pixel, new Rectangle(cardRect.X, cardRect.Y, cardRect.Width, borderWidth), borderColor);
             sb.Draw(pixel, new Rectangle(cardRect.X, cardRect.Bottom - borderWidth, cardRect.Width, borderWidth), borderColor);
             sb.Draw(pixel, new Rectangle(cardRect.X, cardRect.Y, borderWidth, cardRect.Height), borderColor);
@@ -1414,14 +1453,19 @@ namespace Client.Main.Scenes
             float infoScale = s_mobile ? 0.72f : 0.6f;
 
             // Name
-            Color nameColor = isSelected ? Theme.TextGold : Theme.TextWhite;
+            // 選中的卡片名字不換顏色 —— 底色已經說了它被選中。換色只是多一種顏色。
+            Color nameColor = s_mobile
+                ? (isSelected ? Client.Main.Controls.UI.MobileUi.TextPrimary : Client.Main.Controls.UI.MobileUi.TextDim)
+                : (isSelected ? Theme.TextGold : Theme.TextWhite);
             sb.DrawString(font, character.Name, new Vector2(textX, textY) + new Vector2(1, 1), Color.Black * 0.7f, 0f, Vector2.Zero, nameScale, SpriteEffects.None, 0f);
             sb.DrawString(font, character.Name, new Vector2(textX, textY), nameColor, 0f, Vector2.Zero, nameScale, SpriteEffects.None, 0f);
             textY += s_mobile ? 30 : 22;
 
             // Class and Level
             string classLevelText = $"{character.Class}  •  Lv.{character.Level}";
-            Color infoColor = isSelected ? Theme.AccentBright : Theme.TextGray;
+            Color infoColor = s_mobile
+                ? Client.Main.Controls.UI.MobileUi.TextDim
+                : (isSelected ? Theme.AccentBright : Theme.TextGray);
             sb.DrawString(font, classLevelText, new Vector2(textX, textY) + new Vector2(1, 1), Color.Black * 0.7f, 0f, Vector2.Zero, infoScale, SpriteEffects.None, 0f);
             sb.DrawString(font, classLevelText, new Vector2(textX, textY), infoColor, 0f, Vector2.Zero, infoScale, SpriteEffects.None, 0f);
         }

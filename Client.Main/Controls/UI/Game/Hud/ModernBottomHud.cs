@@ -139,8 +139,11 @@ namespace Client.Main.Controls.UI.Game.Hud
         // PARTY 換成 SKILL：技能面板原本只有「長按右下角的技能鈕」一條路進得去，
         // 沒人告訴玩家要長按。組隊在手機上還可以從角色資訊那邊處理，
         // 技能沒有第二條路。
-        private static readonly string[] MobileButtonLabels = { "MENU", "CHAR", "BAG", "SKILL", "MAP", "CHAT" };
-        private static readonly int[] MobileButtonActions = { 0, 1, 2, 8, 6, 7 };
+        // CHAR 拿掉了：左上角的頭像本來就是「打開角色資訊」的入口
+        //（見 UpdateMobileTouch 的 avatarWasPressed），一個功能不需要兩顆按鈕。
+        // 少一顆之後右上角是 3 欄 x 2 列裡的 5 格，最後一格留白。
+        private static readonly string[] MobileButtonLabels = { "MENU", "BAG", "SKILL", "MAP", "CHAT" };
+        private static readonly int[] MobileButtonActions = { 0, 2, 8, 6, 7 };
 
         /// <summary>手機右下角的技能鈕數量。直接引用來源常數，避免兩邊各自改動而失準。</summary>
         private const int MobileSkillButtonCount = TouchActionButtonsControl.MaxSkillButtons;
@@ -670,23 +673,17 @@ namespace Client.Main.Controls.UI.Game.Hud
 
             if (pressed && !_mobileWasPressed)
             {
-                // 開著的視窗蓋住的地方不算 HUD。
+                // 規則：<b>看得到的那一層贏</b>。
                 //
-                // HUD 直接讀觸控狀態，不走 UI 的點擊路由，所以視窗<b>不會</b>自動
-                // 擋住它下面的 HUD 按鈕 —— 少了這個判斷，視窗就是可以穿透的：
-                // 點視窗左上角的關閉鈕，同一下也按到了螢幕右上角的 SKILL，
-                // 於是視窗關掉又立刻打開，永遠關不掉（實測）。
+                // HUD 畫在所有視窗上面，所以落在 HUD 元件上的觸控就是要給 HUD ——
+                // 即使那個位置同時也在某個開著的視窗範圍內。
                 //
-                // 聊天輸入列同理，它橫跨畫面下緣、蓋在藥水鈕上面。
-                if (MuGame.Instance.ActiveScene is Scenes.GameScene windowScene &&
-                    windowScene.IsPointOverOpenWindow(position))
-                {
-                    _mobilePressedButton = -1;
-                    _avatarPressed = false;
-                    _mobileWasPressed = true;
-                    return;
-                }
-
+                // 上一版反過來：只要點在開著的視窗上就整個交給視窗。那讓背包與
+                // 技能視窗變成關不掉 —— 背包在手機上幾乎鋪滿畫面，它的範圍蓋住了
+                // 右上角的 BAG 按鈕，於是「再按一次 BAG 關閉」永遠不會被處理。
+                //
+                // ContainsInteractivePoint 本身已經排除了聊天輸入列蓋住的區域
+                // （那一層才是畫在 HUD 上面的）。
                 if (!ContainsInteractivePoint(position))
                 {
                     _mobilePressedButton = -1;
