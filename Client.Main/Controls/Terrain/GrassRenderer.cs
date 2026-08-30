@@ -23,8 +23,26 @@ namespace Client.Main.Controls.Terrain
         private const int GrassTextureCount = 3;
         private const int GrassTextureBaseIndex = 0;
         private const int ChunkSize = 32;
+        /// <summary>
+        /// 一株草在貼圖裡佔的寬度比例。這是**比例**不是像素，所以換更高解析度的
+        /// 貼圖不必動它 —— 一張圖橫排四株，不論 256 寬還是 1024 寬。
+        /// </summary>
         private const float GrassUvWidth = 64f / 256f;
-        private const float GrassHeightMultiplier = 2f;
+
+        /// <summary>
+        /// 一株草在世界裡的高度。
+        /// </summary>
+        /// <remarks>
+        /// 這裡原本是 <c>貼圖像素高度 × 2</c>，也就是草的高度綁在貼圖解析度上。
+        /// 原始貼圖是 64 px 高，所以草是 128 個世界單位（角色約 175）。
+        ///
+        /// 那個相依會讓「換更清晰的貼圖」變成一個陷阱：把貼圖重繪成 256 px 高，
+        /// 草就會變成 512 單位、比角色還高三倍，而且**不會有任何錯誤訊息**。
+        ///
+        /// 改成固定值之後：現有的 64 px 貼圖畫出來完全一樣（128 = 64 × 2），
+        /// 而任何解析度的新貼圖都能直接換上去。
+        /// </remarks>
+        private const float GrassWorldHeight = 128f;
         private const float GrassHorizontalOffset = -50f;
         private const float SpecialHeight = 1200f;
 
@@ -313,7 +331,7 @@ namespace Client.Main.Controls.Terrain
                         continue;
                     }
 
-                    float height = _grassTextures[textureIndex].Height * GrassHeightMultiplier;
+                    float height = GrassWorldHeight;
                     Vector3 bottomLeft = CreateTerrainPosition(x, y, index1);
                     Vector3 bottomRight = CreateTerrainPosition(x + 1, y + 1, index3);
                     float u = x * GrassUvWidth + rowOffsets[y & terrainMask];
