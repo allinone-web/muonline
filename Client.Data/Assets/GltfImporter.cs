@@ -49,7 +49,20 @@ public static class GltfImporter
     private const float ReferenceCharacterHeight = 175f;
 
     /// <summary>動畫取樣率。與匯出端一致：遊戲未經調整時是 4 影格／秒。</summary>
-    public const float DefaultSampleFps = 4f;
+    /// <summary>
+    /// 動畫取樣率。
+    /// </summary>
+    /// <remarks>
+    /// 原本是 4。太低了 —— 一個走路循環只取到 4 個姿勢，客戶端在關鍵影格之間
+    /// 用 Nlerp 內插時，相鄰姿勢的夾角常常超過 90°，四肢會沿直線穿過身體，
+    /// 看起來就是「有動作但扭曲成一團」。
+    ///
+    /// 診斷的關鍵是：把縮圖渲染器改成畫<b>精確的關鍵影格</b>（走路第 2 格）時，
+    /// 姿勢完全正常 —— 也就是資料沒錯，錯的是影格之間。
+    /// MU 自己的模型影格數也不多（走路 6 格），但那是<b>照那個速率手工調過</b>的，
+    /// 姿勢本來就選得能好好內插；重新取樣的動畫沒有這個保證。
+    /// </remarks>
+    public const float DefaultSampleFps = 24f;
 
     /// <summary>GPU 蒙皮的骨骼上限（<c>ModelObject.MaxGpuSkinBones</c>）。超過會退回 CPU 蒙皮。</summary>
     private const int GpuSkinBoneLimit = 256;

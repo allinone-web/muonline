@@ -188,6 +188,103 @@ public static class RuntimeCommands
         return bad;
     }
 
+    /// <summary>
+    /// 骨架的不變性檢查：<b>骨頭長度不會因為動畫而改變</b>。
+    /// </summary>
+    /// <remarks>
+    /// 「動起來扭曲成一團」這種症狀，光看數字（骨骼 24、動作 7、影格 4）
+    /// 完全看不出來 —— 每一項都很正常。但骨架有一條硬性物理限制：
+    /// <b>一根骨頭到父骨的距離，在整段動畫裡必須是固定的</b>。
+    /// 骨頭會伸縮，就代表那一格的區域變換是錯的。
+    ///
+    /// 順便檢查父骨排序：客戶端算世界矩陣時寫的是
+    /// <c>bone.Parent &gt;= 0 &amp;&amp; bone.Parent &lt; i ? local * world[parent] : local</c> ——
+    /// 父骨索引沒有小於子骨的話，那根骨頭會被<b>當成根骨</b>，
+    /// 整條肢體就會從原點長出來。
+    /// </remarks>
+    private static int CheckSkeleton(Client.Data.BMD.BMD model, IEnumerable<int> slots)
+    {
+        var bones = model.Bones;
+        if (bones is not { Length: > 1 }) return 0;
+
+        int problems = 0;
+
+        // 1. 父骨必須排在子骨前面。
+        for (int i = 0; i < bones.Length; i++)
+        {
+            int parent = bones[i]?.Parent ?? -1;
+            if (parent >= i)
+            {
+                Console.Error.WriteLine(
+                    $"      ✗ 骨骼順序：#{i} 的父骨是 #{parent}（排在後面）→ 客戶端會把它當根骨");
+                problems++;
+            }
+        }
+
+        // 2. 每個動作、每根骨頭：長度不能變。
+        foreach (int slot in slots)
+        {
+            if (slot >= model.Actions.Length) continue;
+            int frames = model.Actions[slot].NumAnimationKeys;
+            if (frames <= 1) continue;
+
+            float worstRatio = 1f;
+            int worstBone = -1;
+
+            var world = new System.Numerics.Matrix4x4[bones.Length];
+            var lengths = new float[bones.Length][];
+            for (int b = 0; b < bones.Length; b++) lengths[b] = new float[frames];
+
+            for (int f = 0; f < frames; f++)
+            {
+                for (int b = 0; b < bones.Length; b++)
+                {
+                    world[b] = System.Numerics.Matrix4x4.Identity;
+                    var m = bones[b]?.Matrixes;
+                    if (m is not { Length: > 0 } || slot >= m.Length) continue;
+
+                    var mat = m[slot];
+                    if (mat.Quaternion is not { Length: > 0 } || mat.Position is not { Length: > 0 }) continue;
+
+                    int k = Math.Min(f, Math.Min(mat.Quaternion.Length, mat.Position.Length) - 1);
+                    var local = System.Numerics.Matrix4x4.CreateFromQuaternion(mat.Quaternion[k]);
+                    local.Translation = mat.Position[k];
+
+                    int parent = bones[b].Parent;
+                    world[b] = parent >= 0 && parent < b ? local * world[parent] : local;
+                }
+
+                for (int b = 0; b < bones.Length; b++)
+                {
+                    int parent = bones[b]?.Parent ?? -1;
+                    lengths[b][f] = parent >= 0 && parent < b
+                        ? (world[b].Translation - world[parent].Translation).Length()
+                        : 0f;
+                }
+            }
+
+            for (int b = 0; b < bones.Length; b++)
+            {
+                float min = float.MaxValue, max = 0f;
+                foreach (float len in lengths[b]) { if (len < min) min = len; if (len > max) max = len; }
+                if (max < 0.01f) continue;                      // 根骨或零長度骨，跳過
+
+                float ratio = max / Math.Max(min, 1e-4f);
+                if (ratio > worstRatio) { worstRatio = ratio; worstBone = b; }
+            }
+
+            if (worstRatio > 1.05f)
+            {
+                Console.Error.WriteLine(
+                    $"      ✗ 動作 {slot}：骨頭 #{worstBone} 的長度在動畫中變動 {worstRatio:F2}× "
+                  + "（骨架應該是剛體，長度不該變）");
+                problems++;
+            }
+        }
+
+        return problems;
+    }
+
     /// <summary>每個動作槽該對齊到幾秒，以及理由。</summary>
     private static IEnumerable<(int Slot, double Target, string Why)> Targets(MonsterRow server)
     {
@@ -286,6 +383,9 @@ public static class RuntimeCommands
                 }
 
                 failed += CheckTextures(model);
+                failed += CheckSkeleton(model, asset.Actions
+                    .Where(kv => kv.Value.Length > 0)
+                    .Select(kv => int.Parse(kv.Key)));
             }
             catch (Exception ex)
             {
