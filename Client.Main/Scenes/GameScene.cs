@@ -103,10 +103,6 @@ namespace Client.Main.Scenes
 
         // 手機用的虛擬搖桿，取代點擊移動（見 UpdateVirtualJoystick）
         private VirtualJoystickControl _virtualJoystick;
-        // 卡住診斷的心跳計時（見 UpdateMoveDiagnosticsHeartbeat）
-        private double _moveDiagElapsedSeconds;
-        // 卡住診斷：UpdateVirtualJoystick 這一幀在哪裡跳掉
-        private string _moveDiagSkip = "n/a";
         private TouchActionButtonsControl _touchActionButtons;
         private TouchPickupListControl _touchPickupList;
 
@@ -893,115 +889,29 @@ namespace Client.Main.Scenes
         private void UpdateVirtualJoystick(GameTime gameTime)
         {
             if (_virtualJoystick == null || _hero == null)
-            {
-                _moveDiagSkip = "no-joystick-or-hero";
                 return;
-            }
 
             // 觸控落在技能按鈕上時不要同時驅動搖桿
             var uiMouse = MuGame.Instance.UiMouseState;
             if (_touchActionButtons != null
                 && _touchActionButtons.ContainsPoint(new Vector2(uiMouse.X, uiMouse.Y)))
             {
-                _moveDiagSkip = "action-buttons";
                 return;
             }
 
             if (!_virtualJoystick.ShouldIssueMove(gameTime, out var screenDirection))
-            {
-                _moveDiagSkip = "no-issue";
                 return;
-            }
 
             var worldDirection = ScreenDirectionToWorld(screenDirection);
             if (worldDirection == Vector2.Zero)
-            {
-                _moveDiagSkip = "zero-direction";
                 return;
-            }
-
-            _moveDiagSkip = "issued";
 
             var target = _hero.Location + worldDirection * VirtualJoystickControl.TileDistance;
             var tile = new Vector2(MathF.Round(target.X), MathF.Round(target.Y));
 
-            LogBlockedMove(tile);
-
             // 搖桿是直接操控，不要繞路 —— 用直線路徑，撞到障礙就停住，
             // 這比自動繞遠路更符合手感。
             _hero.MoveTo(tile, sendToServer: true, usePathfinding: false);
-        }
-
-        // 卡住診斷。用 Console.WriteLine 而不是 logger：裝置的 console provider
-        // 預設關掉 Debug 等級，devicectl --console 只讀得到直接輸出。
-
-        /// <summary>
-        /// 搖桿下了移動指令、但直線路徑長度是 0（第一步就被擋住）時，
-        /// 把「客戶端自己認定的角色格子」「目標格」「被擋在哪一格」印出來。
-        /// 伺服器只知道它最後核可的位置，看不到客戶端這一側的漂移，
-        /// 所以卡住的時候要看的是這裡的 hero 值。
-        /// </summary>
-        private void LogBlockedMove(Vector2 tile)
-        {
-            var world = _hero?.World;
-            if (world == null)
-                return;
-
-            var heroTile = new Vector2((int)_hero.Location.X, (int)_hero.Location.Y);
-            if (Pathfinding.BuildDirectPath(heroTile, tile, world).Count > 0)
-                return;
-
-            var step = heroTile;
-            if (step.X != tile.X)
-                step.X += MathF.Sign(tile.X - step.X);
-            if (step.Y != tile.Y)
-                step.Y += MathF.Sign(tile.Y - step.Y);
-
-            Console.WriteLine(
-                $"[MoveDiag] BLOCKED hero=({heroTile.X},{heroTile.Y}) standable={world.IsWalkable(heroTile)} "
-                + $"target=({tile.X},{tile.Y}) blockedAt=({step.X},{step.Y})");
-        }
-
-        /// <summary>
-        /// 每秒一次的心跳。停止輸出的那一秒就是畫面停住的那一秒，
-        /// 而最後一行會留下卡住當下客戶端認定的座標與移動狀態。
-        /// </summary>
-        private void UpdateMoveDiagnosticsHeartbeat(GameTime gameTime)
-        {
-            if (_hero == null)
-                return;
-
-            _moveDiagElapsedSeconds += gameTime.ElapsedGameTime.TotalSeconds;
-            if (_moveDiagElapsedSeconds < 1.0)
-                return;
-
-            _moveDiagElapsedSeconds = 0;
-
-            var world = _hero.World;
-            var heroTile = new Vector2((int)_hero.Location.X, (int)_hero.Location.Y);
-            string standable = world == null ? "n/a" : world.IsWalkable(heroTile).ToString();
-
-            var uiMouse = MuGame.Instance.UiMouseState;
-
-            // 卡住的關鍵：IsPointOverOpenWindow 不看座標，只看 MouseControl。
-            // MouseControl 卡在哪個控制項上，就是它把整個畫面都判定成 UI。
-            var mouseControl = MouseControl;
-            string owner = mouseControl == null
-                ? "null"
-                : ReferenceEquals(mouseControl, World)
-                    ? "World"
-                    : $"{mouseControl.GetType().Name}{mouseControl.DisplayRectangle}";
-
-            string joy = _virtualJoystick == null
-                ? "none"
-                : $"active={_virtualJoystick.ActiveRaw} mag={_virtualJoystick.Magnitude:F2} "
-                  + $"inArea={_virtualJoystick.LastTouchInActivationArea} uiBlocked={_virtualJoystick.LastTouchBlockedByUi}";
-
-            Console.WriteLine(
-                $"[MoveDiag] tick hero=({heroTile.X},{heroTile.Y}) standable={standable} "
-                + $"moving={_hero.IsMoving} intent={_hero.MovementIntent} skip={_moveDiagSkip} "
-                + $"touch=({uiMouse.X},{uiMouse.Y}) pressed={uiMouse.LeftButton == ButtonState.Pressed} {joy} "
-                + $"mouseControl={owner}");
         }
 
         /// <summary>
@@ -1030,7 +940,6 @@ namespace Client.Main.Scenes
         public override void Update(GameTime gameTime)
         {
             UpdateVirtualJoystick(gameTime);
-            UpdateMoveDiagnosticsHeartbeat(gameTime);
 
             if (Status != GameControlStatus.Ready)
             {

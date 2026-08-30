@@ -62,20 +62,6 @@ namespace Client.Main.Controls.UI.Game
         /// <summary>搖桿目前是否有有效輸入。</summary>
         public bool IsActive => _active && _magnitude > DeadZone;
 
-        // ---- 卡住診斷（查完可整段移除）----
-
-        /// <summary>是否已經抓到觸控（尚未判斷推桿量）。</summary>
-        public bool ActiveRaw => _active;
-
-        /// <summary>推桿量，0..1。小於 DeadZone 時 IsActive 為 false。</summary>
-        public float Magnitude => _magnitude;
-
-        /// <summary>最近一次嘗試啟用時，觸控點是否落在左下角的啟用區。</summary>
-        public bool LastTouchInActivationArea { get; private set; }
-
-        /// <summary>最近一次嘗試啟用時，該點是否被 UI 佔用而擋掉。</summary>
-        public bool LastTouchBlockedByUi { get; private set; }
-
         /// <summary>正規化後的方向（螢幕座標系，Y 向下）。</summary>
         public Vector2 Direction => _direction;
 
@@ -110,13 +96,10 @@ namespace Client.Main.Controls.UI.Game
 
             if (!_active)
             {
-                LastTouchInActivationArea = IsInActivationArea(position);
-                LastTouchBlockedByUi = IsBlocked != null && IsBlocked(new Point(mouse.X, mouse.Y));
-
-                if (!LastTouchInActivationArea)
+                if (!IsInActivationArea(position))
                     return;
 
-                if (LastTouchBlockedByUi)
+                if (IsBlocked != null && IsBlocked(new Point(mouse.X, mouse.Y)))
                     return;
 
                 _active = true;

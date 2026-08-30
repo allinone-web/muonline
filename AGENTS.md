@@ -19,6 +19,7 @@
 - Object transform flow: change `Position`, `Angle`, or `Scale`; `WorldObject` recalculates `WorldPosition`.
 - Network handlers can run off the render thread; scene/UI/world mutations should go through `MuGame.ScheduleOnMainThread`.
 - SpriteBatch state should be managed with `SpriteBatchScope` when nesting or restoring graphics state.
+- **Before touching any UI drawing code, read [docs/UI繪製陷阱.md](./docs/UI繪製陷阱.md).** A draw exception is swallowed by `MuGame.Draw` and re-presents the last good frame, so the failure looks like "the client froze" with no error at all: screen static, every UI element gone, but buttons still click and play sounds. Never call `spriteBatch.Begin()/End()` directly, never call `gd.SetRenderTarget` directly (use `SpriteBatchScope.BeginRenderTarget`), and verify on device with `tools/mu ios --committed --console` — the run is only clean if no `[DrawEx]` line appears.
 - For visual/effect parity, verify against `SourceMain5.2` evidence before inventing MonoGame approximations.
 
 # Architecture Facts (updated 2026-06-06)
