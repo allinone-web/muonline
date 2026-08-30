@@ -510,12 +510,47 @@ public static class GltfImporter
         if (names.TryGetValue(key, out var existing))
             return existing;
 
-        string extension = content.Value.IsPng ? ".png" : content.Value.IsJpg ? ".jpg" : ".png";
-        string name = Sanitize(image.Name ?? material?.Name ?? $"texture{image.LogicalIndex}") + extension;
+        // 副檔名與內容都要用 MU 的格式，不能直接留 .png。
+        //
+        // 客戶端的 TextureLoader.FindTexturePath 有一段 MU 的老慣例：
+        // 它會把要求的副檔名<b>換成讀取器對應的格式</b>再去找檔案
+        // （BMD 裡寫 foo.jpg，磁碟上其實是 foo.OZJ）。
+        // .png 對到 OZPReader，於是它實際去找的是 foo.ozp ——
+        // 留一個純 .png 檔在那裡，客戶端<b>永遠找不到</b>，
+        // 而且症狀是「檔案明明在、就是載不出來」。
+        //
+        // 所以這裡直接產生 MU 認得的檔名與檔頭。
+        bool isJpg = content.Value.IsJpg;
+        string baseName = Sanitize(image.Name ?? material?.Name ?? $"texture{image.LogicalIndex}");
 
-        textures.Add(new ImportedTexture(name, content.Value.Content.ToArray()));
+        // Sanitize 之後名字裡可能還留著原本的 .png，去掉免得變成 foo.png.ozp。
+        if (baseName.EndsWith(".png", StringComparison.OrdinalIgnoreCase)
+            || baseName.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase))
+            baseName = baseName[..^4];
+
+        string name = baseName + (isJpg ? ".ozj" : ".ozp");
+        byte[] payload = isJpg
+            ? content.Value.Content.ToArray()
+            : WrapAsOzp(content.Value.Content.ToArray());
+
+        textures.Add(new ImportedTexture(name, payload));
         names[key] = name;
         return name;
+    }
+
+    /// <summary>
+    /// 把純 PNG 包成 OZP：前面補 4 個位元組，後面接原本完整的 PNG。
+    /// </summary>
+    /// <remarks>
+    /// OZP 的結構就是「<c>89 50 4E 47</c> ＋ 一份完整的 PNG」，
+    /// 所以讀取器砍掉前 4 個位元組之後拿到的正好是合法的 PNG。
+    /// </remarks>
+    private static byte[] WrapAsOzp(byte[] png)
+    {
+        var wrapped = new byte[png.Length + 4];
+        wrapped[0] = 0x89; wrapped[1] = 0x50; wrapped[2] = 0x4E; wrapped[3] = 0x47;
+        png.CopyTo(wrapped, 4);
+        return wrapped;
     }
 
     private static string Sanitize(string name)
