@@ -10,6 +10,7 @@
 //   MuAssetStudio --selftest                        匯出／匯入管線的無視窗回歸測試（離開碼 0/1/2）
 //   MuAssetStudio --items [篩選]                     道具模型的語意分類（劍／斧／盔甲…）
 //   MuAssetStudio --skeleton-diff <主模型> --with <部位>  兩個模型的骨頭索引對不對得上
+//   MuAssetStudio --classes                         15 個職業的身體精細度對照
 //   MuAssetStudio --godot-export --world N --out <資料夾> [--max-types 64] [--no-objects]
 //                                                   整張地圖 → map.json + PNG + glTF（給 Godot 原型）
 //   MuAssetStudio --check <相對路徑|名稱>            某個模型的貼圖是否齊全
@@ -184,6 +185,9 @@ if (parsed.TryGetValue("roundtrip", out var roundtripTarget) && roundtripTarget 
     return ImportCommands.RoundTrip(session.Catalog, roundtripTarget, parsed.GetValueOrDefault("out"),
                                     dataPath, parsed.GetValueOrDefault("gltf"), roundtripScale);
 }
+
+if (parsed.ContainsKey("classes"))
+    return ClassReport.Print(session.Catalog, dataPath);
 
 if (parsed.ContainsKey("godot-export"))
 {

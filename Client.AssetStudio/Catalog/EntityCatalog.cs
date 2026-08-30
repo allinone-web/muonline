@@ -74,7 +74,17 @@ public sealed record EntityEntry
     public string Detail { get; init; } = string.Empty;
 
     /// <summary>清單裡的唯一鍵，也是 ImGui 的 ID。</summary>
-    public string Id => ClassName is null ? $"{Kind}:{ModelPath}" : $"{Kind}:{ClassName}";
+    /// <summary>
+    /// 這一筆在介面上的識別碼。<b>必須唯一。</b>
+    /// </summary>
+    /// <remarks>
+    /// 加上 <see cref="Detail"/> 是必要的，不是保險：職業角色那 56 筆共用
+    /// 同一個主模型（<c>Player/Player.bmd</c>），只靠路徑的話 56 筆會撞成同一個 id ——
+    /// ImGui 會抱怨「conflicting ID」，而且選取會同時命中好幾筆。
+    /// </remarks>
+    public string Id => ClassName is not null
+        ? $"{Kind}:{ClassName}"
+        : $"{Kind}:{ModelPath}:{Detail}";
 
     public string Search => $"{Name} {ClassName} {ModelPath} {Number} {Group} {Detail}";
 }
