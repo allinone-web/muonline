@@ -287,7 +287,7 @@ namespace Client.Main.Controls.UI.Game
             var dotCenter = new Vector2(rect.X + 26, rect.Center.Y);
             MobileUi.DrawDisc(sb, dotCenter, 11f, Color.White * ((entry.IsMoney ? 0.55f : 0.28f) * appear));
 
-            const float scale = 0.48f;
+            float scale = MobileUi.ScaleFor(MobileUi.TextBody);
             int maxWidth = rect.Width - 60;
             string label = ResolveLabel(entry.Name, maxWidth, scale);
             var size = _font!.MeasureString(label) * scale;

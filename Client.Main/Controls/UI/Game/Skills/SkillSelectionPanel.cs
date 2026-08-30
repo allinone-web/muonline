@@ -40,7 +40,7 @@ namespace Client.Main.Controls.UI.Game.Skills
         // 於是說明欄永遠是空的，玩家根本讀不到任何技能資訊。
         private const int ASSIGN_BUTTON_HEIGHT = 46;
         private const int ASSIGN_BUTTON_MARGIN = 12;
-        private const int CLOSE_BUTTON_SIZE = 38;
+        private static int CLOSE_BUTTON_SIZE => IsMobile ? MobileUi.CloseButtonSize : 38;
 
         // 手機的格子尺寸。桌面的 28x48 是配著滑鼠與底部快捷列設計的直立小格，
         // 在 iPhone 上換算後只有約 13x19 pt —— 遠低於可以放心點的大小（44 pt）。
@@ -108,7 +108,7 @@ namespace Client.Main.Controls.UI.Game.Skills
             {
                 Text = "Select Skill",
                 TextColor = ModernHudTheme.TextGold,
-                FontSize = 15f,
+                FontSize = MobileUi.TextHeading,
                 X = OUTER_PADDING,
                 Y = 14,
                 ViewSize = new Point(460, 26),
@@ -132,7 +132,7 @@ namespace Client.Main.Controls.UI.Game.Skills
             {
                 Text = "Skill Info",
                 TextColor = ModernHudTheme.TextGold,
-                FontSize = 15f,
+                FontSize = MobileUi.TextHeading,
                 X = DETAIL_PADDING,
                 Y = DETAIL_PADDING,
                 ViewSize = new Point(DETAIL_WIDTH - DETAIL_PADDING * 2, 28)
@@ -143,7 +143,7 @@ namespace Client.Main.Controls.UI.Game.Skills
             {
                 Text = string.Empty,
                 TextColor = ModernHudTheme.SecondaryBright,
-                FontSize = 12f,
+                FontSize = MobileUi.TextLabel,
                 X = DETAIL_PADDING,
                 Y = DETAIL_PADDING + 28,
                 ViewSize = new Point(DETAIL_WIDTH - DETAIL_PADDING * 2, 22)

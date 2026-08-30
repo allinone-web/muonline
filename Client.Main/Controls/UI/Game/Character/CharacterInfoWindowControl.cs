@@ -526,7 +526,9 @@ namespace Client.Main.Controls.UI.Game.Character
                 return;
             }
 
-            float labelScale = 10f / Constants.BASE_FONT_SIZE;
+            // 統一級距。這個視窗整體會再乘上 Scale（手機 1.35），
+            // 所以這裡填的是「設計單位」，實際大小是 TextLabel * 1.35。
+            float labelScale = MobileUi.ScaleFor(MobileUi.TextLabel);
             for (int i = 0; i < BTN_STAT_COUNT; i++)
             {
                 string label = i == BTN_STAT_COUNT - 1 && !_lastIsDarkLordFamily
@@ -781,7 +783,7 @@ namespace Client.Main.Controls.UI.Game.Character
             if (string.IsNullOrEmpty(label))
                 return;
 
-            const float scale = 0.46f;
+            float scale = MobileUi.ScaleFor(MobileUi.TextHeading);
             var size = font.MeasureString(label) * scale;
             var position = new Vector2(
                 rect.X + (rect.Width - size.X) * 0.5f,

@@ -246,6 +246,15 @@ namespace Client.Main.Controls.UI
         public const int CornerInset = 30;
 
         /// <summary>
+        /// 視窗關閉鈕的邊長。
+        ///
+        /// 44 pt 是 Apple 的最小可點擊尺寸；在這個畫布上 46 虛擬像素大約就是那個大小。
+        /// 遊戲內原本有三種：背包 46、技能 38、其餘六個視窗 26x22 ——
+        /// 最後那個只有 14 pt，得瞄準才按得到，而關閉是最常按的東西之一。
+        /// </summary>
+        public const int CloseButtonSize = 46;
+
+        /// <summary>
         /// 畫面右側所有元件的統一寬度（虛擬座標）。
         ///
         /// 這個值來自右上角的介面按鈕區塊：3 欄 x 96 + 2 x 6 = 300。
@@ -309,6 +318,68 @@ namespace Client.Main.Controls.UI
         /// 這個矩形的右緣是否已經對齊 <see cref="RightEdge"/>。除錯用。
         /// </summary>
         public static bool IsRightAligned(Rectangle rect) => rect.Right == RightEdge;
+
+        // ───────────────────────── 文字級距 ─────────────────────────
+        //
+        // 全部的文字只能用這五級。
+        //
+        // 在這之前，介面裡散落著 24 種不同的縮放值（0.30 / 0.32 / 0.33 / 0.35 /
+        // 0.36 / 0.38 / 0.40 / 0.42 / 0.44 / 0.45 / 0.46 / 0.48 / 0.50 …），
+        // 每一個都是當初「看起來差不多」隨手填的。結果是同一個層級的文字
+        // ——例如兩個視窗的標題—— 大小不一樣，而相鄰的兩行字看起來卻一樣大，
+        // 分不出哪個是標題哪個是內容。
+        //
+        // 級距之間至少差 2 px：差 1 px 眼睛分不出來，等於白白多一級。
+        //
+        // 單位是虛擬像素（字型的原生高度是 Constants.BASE_FONT_SIZE = 25）。
+        // 要拿去 DrawString 的話用 ScaleFor()。
+
+        /// <summary>視窗標題。一個視窗只有一個。</summary>
+        public const float TextTitle = 21f;
+
+        /// <summary>區塊標題、分類名稱、按鈕文字。</summary>
+        public const float TextHeading = 17f;
+
+        /// <summary>內文：選項名稱、道具名稱、數值。預設就用這一級。</summary>
+        public const float TextBody = 15f;
+
+        /// <summary>次要說明、欄位標籤、單位。</summary>
+        public const float TextLabel = 13f;
+
+        /// <summary>角標：數量、等級、耐久。小到只能放兩三個字元。</summary>
+        public const float TextCaption = 11f;
+
+        /// <summary>把級距換算成 SpriteBatch.DrawString 的 scale。</summary>
+        public static float ScaleFor(float sizePx) => sizePx / Client.Main.Constants.BASE_FONT_SIZE;
+
+        /// <summary>
+        /// 畫一行帶陰影的文字。陰影是必要的 —— 面板是半透明的，
+        /// 背後可能是任何顏色的場景，沒有陰影的淺色字在亮的地面上會消失。
+        /// </summary>
+        public static void DrawText(SpriteBatch sb, SpriteFont font, string text,
+                                    Vector2 position, float sizePx, Color color)
+        {
+            if (font == null || string.IsNullOrEmpty(text))
+                return;
+
+            float scale = ScaleFor(sizePx);
+            sb.DrawString(font, text, position + Vector2.One, Color.Black * (0.65f * (color.A / 255f)),
+                          0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+            sb.DrawString(font, text, position, color, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+        }
+
+        /// <summary>在矩形內水平置中畫一行文字。</summary>
+        public static void DrawTextCentered(SpriteBatch sb, SpriteFont font, string text,
+                                            Rectangle bounds, float sizePx, Color color)
+        {
+            if (font == null || string.IsNullOrEmpty(text))
+                return;
+
+            var size = font.MeasureString(text) * ScaleFor(sizePx);
+            DrawText(sb, font, text, new Vector2(
+                bounds.X + (bounds.Width - size.X) * 0.5f,
+                bounds.Y + (bounds.Height - size.Y) * 0.5f), sizePx, color);
+        }
 
         // ───────────────────────── 介面樣式 ─────────────────────────
         //

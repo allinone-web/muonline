@@ -135,7 +135,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     sprite.Draw(pixel, new Rectangle(rect.X, rect.Y, 3, rect.Height), ModernHudTheme.Danger * 0.85f);
 
                 string title = Text ?? string.Empty;
-                float titleScale = 15f / Constants.BASE_FONT_SIZE;
+                float titleScale = MobileUi.ScaleFor(MobileUi.TextHeading);
                 var titleSize = font.MeasureString(title) * titleScale;
 
                 bool hasSubtitle = !string.IsNullOrEmpty(Subtitle) && rect.Height >= 52;
@@ -153,7 +153,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 if (!hasSubtitle)
                     return;
 
-                float subScale = 10.5f / Constants.BASE_FONT_SIZE;
+                float subScale = MobileUi.ScaleFor(MobileUi.TextLabel);
                 var subPos = new Vector2(rect.X + 18, rect.Y + rect.Height * 0.62f);
                 sprite.DrawString(font, Subtitle, subPos, MobileUi.TextDim * (0.85f * Alpha),
                                   0f, Vector2.Zero, subScale, SpriteEffects.None, 0f);
@@ -305,7 +305,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     if (IsDanger)
                         sprite.Draw(pixel, new Rectangle(rect.X, rect.Y + 6, 3, rect.Height - 12), ModernHudTheme.Danger * 0.85f);
 
-                    float mobileScale = 15f / Constants.BASE_FONT_SIZE;
+                    float mobileScale = MobileUi.ScaleFor(MobileUi.TextHeading);
                     string mobileLabel = Text ?? string.Empty;
                     Vector2 mobileSize = font.MeasureString(mobileLabel) * mobileScale;
 
@@ -1131,7 +1131,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             private const int MobileOptionColumns = 2;
 
             /// <summary>選項字級。13 太小，15 仍然偏小（實機回報），提到 17。</summary>
-            private const float MobileOptionFontSize = 17f;
+            private static float MobileOptionFontSize => MobileUi.TextHeading;
 
             private int MobileOptionAreaX => MobilePadding + MobileCategoryWidth + MobilePadding + MobileOptionPadding;
             private int MobileOptionAreaWidth => MobilePanelWidth - MobileOptionAreaX - MobilePadding - MobileOptionPadding;
@@ -1165,7 +1165,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 var title = new LabelControl
                 {
                     Text = "SETTINGS",
-                    FontSize = IsMobile ? 18f : 22f,
+                    FontSize = IsMobile ? MobileUi.TextTitle : 22f,
                     TextColor = ModernHudTheme.TextGold,
                     IsBold = true,
                     Align = Models.ControlAlign.HorizontalCenter,
@@ -1812,7 +1812,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     ControlSize = new Point(width, height),
                     ViewSize = new Point(width, height),
                     AutoViewSize = false,
-                    FontSize = IsMobile ? 16f : 10.5f,
+                    FontSize = IsMobile ? MobileUi.TextHeading : 10.5f,
                     TextColor = ModernHudTheme.TextGray
                 };
                 button.Click += (s, e) =>

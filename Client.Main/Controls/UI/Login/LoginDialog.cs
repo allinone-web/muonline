@@ -86,7 +86,13 @@ namespace Client.Main.Controls.UI.Login
             _submitButton = new ButtonControl
             {
                 Text = "LOGIN",
-                FontSize = 13f * _scale,
+                // 字級<b>不</b>乘上面板的設計倍率。
+                //
+                // 虛擬像素在整個 app 裡是絕對的：登入畫面的 13*2=26 px 標題和
+                // 遊戲內視窗的 21 px 標題並排比較時就是兩種大小，而它們是同一個
+                // 層級的東西。版面可以放大兩倍（元素少、要聚焦），但文字級距
+                // 必須跟全app一致，見 MobileUi 的文字級距。
+                FontSize = MobileUi.TextHeading,
                 AutoViewSize = false,
                 ViewSize = new Point(fieldWidth, S(34)),
                 X = fieldX,
@@ -126,7 +132,7 @@ namespace Client.Main.Controls.UI.Login
 
             // Flat 皮膚 = 純程式繪製，任何尺寸都銳利。
             field.Skin = TextFieldSkin.Flat;
-            field.FontSize = 12f * _scale;
+            field.FontSize = MobileUi.TextBody;
             field.BackgroundColor = MobileUi.FieldFill * 0.96f;
             field.BorderColor = MobileUi.PanelBorder * 0.55f;
             field.BorderThickness = 2;
@@ -217,13 +223,13 @@ namespace Client.Main.Controls.UI.Login
             var rect = DisplayRectangle;
             MobileUi.DrawPanel(sprite, rect, S(TitleHeight));
 
-            DrawCentered(sprite, font, "SIGN IN", rect, S(12), 0.62f * _scale, MobileUi.TextPrimary);
+            DrawCentered(sprite, font, "SIGN IN", rect, S(12), MobileUi.ScaleFor(MobileUi.TextTitle), MobileUi.TextPrimary);
 
             // 伺服器名稱放在標題列<b>同一行</b>的右側，而不是自己佔一行。
             // 它是「我要登入哪裡」的補充說明，和標題是同一件事。
             if (!string.IsNullOrEmpty(_serverName))
             {
-                float serverScale = 0.42f * _scale;
+                float serverScale = MobileUi.ScaleFor(MobileUi.TextLabel);
                 var serverSize = font.MeasureString(_serverName) * serverScale;
                 var serverPos = new Vector2(
                     rect.Right - S(SidePadding) - serverSize.X,
@@ -239,7 +245,7 @@ namespace Client.Main.Controls.UI.Login
 
             if (!string.IsNullOrEmpty(_message))
             {
-                float messageScale = 0.40f * _scale;
+                float messageScale = MobileUi.ScaleFor(MobileUi.TextLabel);
                 var lines = WrapMessage(font, _message, rect.Width - S(SidePadding) * 2, messageScale);
                 float y = rect.Y + S(230);
                 foreach (var line in lines)
@@ -297,7 +303,7 @@ namespace Client.Main.Controls.UI.Login
 
         private void DrawLabel(SpriteBatch sprite, SpriteFont font, string text, Rectangle rect, int offsetX, int offsetY)
         {
-            float scale = 0.40f * _scale;
+            float scale = MobileUi.ScaleFor(MobileUi.TextLabel);
             var position = new Vector2(rect.X + offsetX, rect.Y + offsetY);
             sprite.DrawString(font, text, position, MobileUi.TextDim, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
         }

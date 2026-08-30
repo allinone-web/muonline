@@ -43,7 +43,8 @@ namespace Client.Main.Controls.UI
         private const int MobileChannelButtonWidth = 132;
         private const int MobileSendButtonWidth = 120;
         private const int MobileInnerHeight = MobileBarHeight - MobileBarPadding * 2;
-        private const float MobileFontSize = 19f;
+        /// <summary>輸入欄的字級。走統一級距的標題級 —— 打字的內容要看得清楚。</summary>
+        private static float MobileFontSize => MobileUi.TextHeading;
 
         /// <summary>
         /// 輸入列的寬度。
@@ -599,7 +600,7 @@ namespace Client.Main.Controls.UI
             sb.Draw(pixel, new Rectangle(rect.X, rect.Y, rect.Width, 1), MobileUi.PanelBorder * 0.3f);
             sb.Draw(pixel, new Rectangle(rect.X, rect.Bottom - 1, rect.Width, 1), MobileUi.PanelBorder * 0.3f);
 
-            const float scale = 0.56f;
+            float scale = MobileUi.ScaleFor(MobileUi.TextHeading);
             Vector2 size = font.MeasureString(label) * scale;
             var pos = new Vector2(rect.X + (rect.Width - size.X) * 0.5f, rect.Y + (rect.Height - size.Y) * 0.5f);
             sb.DrawString(font, label, pos + Vector2.One, Color.Black * 0.6f, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);

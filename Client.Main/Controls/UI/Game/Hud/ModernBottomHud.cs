@@ -1158,10 +1158,12 @@ namespace Client.Main.Controls.UI.Game.Hud
             const int Corner = MobileUi.CornerInset;
 
             // 手機螢幕小，字要放大才看得清楚
-            _barFontScale = 0.52f;
-            _slotFontScale = 0.44f;
-            _btnFontScale = 0.46f;
-            _expFontScale = 0.40f;
+            // 全部改走統一級距（見 MobileUi 的文字級距）。
+            // 生命／魔力那三行是這個畫面最常看的數字 —— 用內文級，不是標籤級。
+            _barFontScale = MobileUi.ScaleFor(MobileUi.TextBody);
+            _slotFontScale = MobileUi.ScaleFor(MobileUi.TextCaption);
+            _btnFontScale = MobileUi.ScaleFor(MobileUi.TextHeading);
+            _expFontScale = MobileUi.ScaleFor(MobileUi.TextLabel);
 
             // 底部面板整條移除，OnClick 才不會把畫面下緣的觸控全部吃掉
             _panelRect = Rectangle.Empty;
@@ -1773,7 +1775,7 @@ namespace Client.Main.Controls.UI.Game.Hud
             }
 
             string text = _statusText;
-            const float scale = 0.44f;
+            float scale = MobileUi.ScaleFor(MobileUi.TextLabel);
             var size = _font.MeasureString(text) * scale;
 
             DrawTextWithShadow(sb, text,
@@ -1796,7 +1798,8 @@ namespace Client.Main.Controls.UI.Game.Hud
                 _zenText = zen.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
             }
 
-            const float scale = 0.52f;
+            // 金幣比狀態列大一級：它是數值，不是狀態
+            float scale = MobileUi.ScaleFor(MobileUi.TextBody);
             var size = _font.MeasureString(_zenText) * scale;
 
             // 右對齊，和上面的狀態列與按鈕區塊同一條線

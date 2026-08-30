@@ -85,7 +85,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
         // 資訊欄字級的快取（見 DrawMobileItemDetail）
         private InventoryItem _infoScaleItem;
         private int _infoScaleWidth = -1;
-        private float _infoScale = 0.44f;
+        private float _infoScale = MobileUi.ScaleFor(MobileUi.TextBody);
 
         private const int HEADER_HEIGHT = 52;
         private const int SECTION_SPACING = 16;
@@ -1082,7 +1082,8 @@ namespace Client.Main.Controls.UI.Game.Inventory
             var pixel = GraphicsManager.Instance.Pixel;
             if (pixel == null || _font == null) return;
 
-            float scale = 0.36f;
+            // 區塊標題 —— 統一級距，見 MobileUi 的文字級距
+            float scale = s_mobile ? MobileUi.ScaleFor(MobileUi.TextHeading) : 0.36f;
             Vector2 textSize = _font.MeasureString(title) * scale;
 
             if (s_mobile)
@@ -1177,7 +1178,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 if (_font != null)
                 {
                     const string title = "INVENTORY";
-                    const float scale = 0.5f;
+                    float scale = MobileUi.ScaleFor(MobileUi.TextTitle);
                     Vector2 size = _font.MeasureString(title) * scale;
                     var pos = new Vector2((WINDOW_WIDTH - size.X) / 2f, (HEADER_HEIGHT - size.Y) / 2f);
                     spriteBatch.DrawString(_font, title, pos + Vector2.One, Color.Black * 0.6f,
@@ -1314,7 +1315,9 @@ namespace Client.Main.Controls.UI.Game.Inventory
         {
             if (_font == null || string.IsNullOrEmpty(layout.Label)) return;
 
-            const float scale = 0.26f;
+            // 空槽的提示字。刻意用最小的一級 —— 它只是在說「這裡放什麼」，
+            // 一旦裝備上去就被圖示蓋掉，不該和真正的內容搶注意力。
+            float scale = s_mobile ? MobileUi.ScaleFor(MobileUi.TextCaption) : 0.26f;
             Vector2 size = _font.MeasureString(layout.Label) * scale;
             Vector2 center = new(layout.Rect.X + layout.Rect.Width / 2f, layout.Rect.Y + layout.Rect.Height / 2f);
             Vector2 pos = center - size / 2f;
@@ -2837,7 +2840,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
             if (_font != null)
             {
                 string text = "X";
-                float scale = 0.5f;
+                float scale = MobileUi.ScaleFor(MobileUi.TextHeading);
                 Vector2 size = _font.MeasureString(text) * scale;
                 Vector2 pos = new(rect.X + (rect.Width - size.X) / 2, rect.Y + (rect.Height - size.Y) / 2);
 
@@ -2882,7 +2885,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
             // Text
             if (_font != null)
             {
-                float scale = 0.55f;
+                float scale = MobileUi.ScaleFor(MobileUi.TextHeading);
                 Vector2 size = _font.MeasureString(text) * scale;
                 Vector2 pos = new(rect.X + (rect.Width - size.X) / 2, rect.Y + (rect.Height - size.Y) / 2);
 
@@ -2941,7 +2944,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
                     lines.Add(("Cannot be repaired", new Color(255, 100, 100)));
                 }
             }
-            const float scale = 0.44f;
+            float scale = MobileUi.ScaleFor(MobileUi.TextBody);
             const int lineSpacing = 4;
             const int paddingX = 14;
             const int paddingY = 12;
@@ -3051,7 +3054,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
             // 遊戲的字型沒有中文字符，中文會整串變成 ??????（實機截圖確認）。
             // 這一層的字串一律用英文，與其他介面文字也一致。
             const string hint = "SELECT AN ITEM";
-            float scale = 0.46f;
+            float scale = MobileUi.ScaleFor(MobileUi.TextBody);
             var size = _font.MeasureString(hint) * scale;
             var position = new Vector2(
                 infoRect.X + (infoRect.Width - size.X) * 0.5f,

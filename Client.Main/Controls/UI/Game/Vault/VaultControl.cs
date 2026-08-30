@@ -245,7 +245,10 @@ namespace Client.Main.Controls.UI.Game
             // 關閉鈕放<b>左上角</b>：螢幕右上角是六顆介面按鈕（MENU / CHAR / BAG …），
             // 視窗的關閉鈕再放右上角就會疊在同一塊區域，拇指分不開。
             // 遊戲內所有視窗一致，見 docs/手機遊戲界面規格.md。
-            _closeButtonRect = new Rectangle(12, 10, 26, 22);
+            // 統一尺寸：26x22 只有 14 pt，得瞄準才按得到。見 MobileUi.CloseButtonSize。
+            _closeButtonRect = MobileUi.IsMobile
+                ? new Rectangle(12, 10, MobileUi.CloseButtonSize, MobileUi.CloseButtonSize)
+                : new Rectangle(12, 10, 26, 22);
         }
 
         public override async Task Load()
@@ -755,6 +758,14 @@ namespace Client.Main.Controls.UI.Game
 
         private void DrawCloseButton(SpriteBatch spriteBatch)
         {
+            if (MobileUi.IsMobile)
+            {
+                // 外觀也統一：一塊底 + 兩條線畫的叉。原本每個視窗各畫各的 X，
+                // 粗細、顏色、有沒有底都不一樣。
+                MobileUi.DrawCloseGlyph(spriteBatch, Translate(_closeButtonRect), _closeHovered);
+                return;
+            }
+
             var pixel = GraphicsManager.Instance.Pixel;
             if (pixel == null) return;
 

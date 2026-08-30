@@ -239,7 +239,7 @@ namespace Client.Main.Controls.UI.Login
             MobileUi.DrawPanel(sb, _panelRect, TitleHeight);
 
             const string title = "SELECT SERVER";
-            float scale = 0.68f;
+            float scale = MobileUi.ScaleFor(MobileUi.TextTitle);
             var textSize = _font!.MeasureString(title) * scale;
             var position = new Vector2(
                 _panelRect.X + (_panelRect.Width - textSize.X) * 0.5f,
@@ -262,7 +262,8 @@ namespace Client.Main.Controls.UI.Login
                 sb.Draw(pixel, new Rectangle(rect.X, rect.Y, rect.Width, 1), Color.White * 0.35f);
 
             string name = server.ServerName ?? $"Server {server.ServerId}";
-            float nameScale = 0.66f;
+            // 伺服器名稱是這張卡片的主體 —— 標題級，不是內文級
+            float nameScale = MobileUi.ScaleFor(MobileUi.TextHeading);
             var nameSize = _font!.MeasureString(name) * nameScale;
             var namePos = new Vector2(rect.X + 18, rect.Y + 14);
 
@@ -284,7 +285,7 @@ namespace Client.Main.Controls.UI.Login
             }
 
             string loadText = full ? "FULL" : $"{server.LoadPercentage}%";
-            float loadScale = 0.46f;
+            float loadScale = MobileUi.ScaleFor(MobileUi.TextLabel);
             var loadSize = _font.MeasureString(loadText) * loadScale;
             sb.DrawString(_font, loadText,
                 new Vector2(rect.Right - loadSize.X - 18, rect.Y + 12),
@@ -294,7 +295,7 @@ namespace Client.Main.Controls.UI.Login
         private void DrawEmptyState(SpriteBatch sb)
         {
             const string text = "Waiting for server list...";
-            float scale = 0.5f;
+            float scale = MobileUi.ScaleFor(MobileUi.TextBody);
             var size = _font!.MeasureString(text) * scale;
             sb.DrawString(_font, text,
                 new Vector2(_panelRect.X + (_panelRect.Width - size.X) * 0.5f, _panelRect.Y + TitleHeight + 26),
