@@ -1241,10 +1241,17 @@ namespace Client.Main.Controls.UI.Game.Hud
             // 兩者的間距在 TouchActionButtonsControl 有對應的註解。
             const int PotionSize = 64;
             const int PotionGap = 12;
-            const int PotionClusterRightMargin = 300;
+
+            // 藥水列的右緣與技能弧線最左那顆之間要留的距離。
+            //
+            // 原本是寫死的「距離右緣 300」，而技能弧線的位置後來調整過幾次 ——
+            // 兩者就這樣靠到只剩 1 px，使用者回報「幾乎重疊」。
+            // 改成從技能群的實際左緣往回推，任何一邊再被調整都不會再撞上。
+            const int PotionClusterGap = 40;
 
             int potionRowW = PotionSlotCount * PotionSize + (PotionSlotCount - 1) * PotionGap;
-            int potionLeft = vw - PotionClusterRightMargin - potionRowW;
+            int potionRight = Game.TouchActionButtonsControl.ClusterLeftEdge - PotionClusterGap;
+            int potionLeft = Math.Max(MobileUi.LeftEdge, potionRight - potionRowW);
             int potionTop = vh - EdgeMargin - PotionSize;
 
             _slotRects = new Rectangle[SlotCount];

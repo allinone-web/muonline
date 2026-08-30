@@ -96,12 +96,17 @@ namespace Client.Main.Controls.Terrain
             public DynamicVertexBuffer VertexBuffer;
             public int LastWindVersion = int.MinValue;
 
+            /// <summary>前綴裡「每格第一叢」的立牌數。遠處只畫這一段。</summary>
+            public readonly int NearQuadCount;
+
             public GrassBatch(
                 GraphicsDevice graphicsDevice,
                 Texture2D texture,
                 List<GrassQuad> quads,
-                BoundingBox bounds)
+                BoundingBox bounds,
+                int nearQuadCount)
             {
+                NearQuadCount = Math.Clamp(nearQuadCount, 0, quads.Count);
                 Texture = texture;
                 Quads = quads.ToArray();
                 Vertices = new VertexPositionColorTexture[Quads.Length * 6];
@@ -279,6 +284,7 @@ namespace Client.Main.Controls.Terrain
 
             int chunksPerSide = (Constants.TERRAIN_SIZE + ChunkSize - 1) / ChunkSize;
             var quadLists = new List<GrassQuad>[chunksPerSide * chunksPerSide * GrassTextureCount];
+            var farLists = new List<GrassQuad>[quadLists.Length];
             var boundsMin = new Vector3[quadLists.Length];
             var boundsMax = new Vector3[quadLists.Length];
             for (int i = 0; i < quadLists.Length; i++)
@@ -338,6 +344,7 @@ namespace Client.Main.Controls.Terrain
                     int chunkY = y / ChunkSize;
                     int batchIndex = (chunkY * chunksPerSide + chunkX) * GrassTextureCount + textureIndex;
                     var list = quadLists[batchIndex] ??= new List<GrassQuad>(ChunkSize * ChunkSize / 2);
+                    var farList = farLists[batchIndex] ??= new List<GrassQuad>(ChunkSize * ChunkSize / 2);
 
                     int tufts = Constants.GRASS_TUFTS_PER_TILE;
                     if (tufts <= 1)
@@ -363,7 +370,8 @@ namespace Client.Main.Controls.Terrain
                     }
                     else
                     {
-                        AppendTufts(list, ref boundsMin[batchIndex], ref boundsMax[batchIndex],
+                        // list = 每格的第一叢（遠處也畫），farList = 其餘（只有近處畫）。
+                        AppendTufts(list, farList, ref boundsMin[batchIndex], ref boundsMax[batchIndex],
                                     x, y, index1, index2, index3, index4, tufts);
                     }
                 }
@@ -374,12 +382,19 @@ namespace Client.Main.Controls.Terrain
                 if (quadLists[i] == null || quadLists[i].Count == 0)
                     continue;
 
+                // 「每格第一叢」排在前面，其餘接在後面。
+                // 遠處只畫前綴那一段 —— 不必另外建緩衝區，也不必隨鏡頭重建。
+                int nearCount = quadLists[i].Count;
+                if (farLists[i] != null && farLists[i].Count > 0)
+                    quadLists[i].AddRange(farLists[i]);
+
                 int textureIndex = i % GrassTextureCount;
                 _batches.Add(new GrassBatch(
                     _graphicsDevice,
                     _grassTextures[textureIndex],
                     quadLists[i],
-                    new BoundingBox(boundsMin[i], boundsMax[i])));
+                    new BoundingBox(boundsMin[i], boundsMax[i]),
+                    nearCount));
             }
         }
 
@@ -432,6 +447,9 @@ namespace Client.Main.Controls.Terrain
                 Vector3 cameraPosition = Camera.Instance.Position;
                 float maxDistance = Constants.GRASS_DRAW_DISTANCE;
                 float maxDistanceSquared = maxDistance > 0f ? maxDistance * maxDistance : 0f;
+                float denseDistanceSquared = Constants.GRASS_DENSE_DISTANCE > 0f
+                    ? Constants.GRASS_DENSE_DISTANCE * Constants.GRASS_DENSE_DISTANCE
+                    : 0f;
                 for (int i = 0; i < _batches.Count; i++)
                 {
                     GrassBatch batch = _batches[i];
@@ -453,6 +471,16 @@ namespace Client.Main.Controls.Terrain
                         batch.LastWindVersion = windVersion;
                     }
 
+                    // 遠處退回「每格一片」。遠處的草每片只有幾個像素，密度看不出來，
+                    // 但填充率照樣要付 —— 拉遠鏡頭時崩掉的就是這個。
+                    int quadCount = batch.Quads.Length;
+                    if (denseDistanceSquared > 0f
+                        && batch.NearQuadCount > 0
+                        && Vector3.DistanceSquared(cameraPosition, GetCenter(batch.Bounds)) > denseDistanceSquared)
+                    {
+                        quadCount = batch.NearQuadCount;
+                    }
+
                     _graphicsDevice.SetVertexBuffer(batch.VertexBuffer);
                     if (additive)
                         additiveEffect.Texture = batch.Texture;
@@ -465,7 +493,7 @@ namespace Client.Main.Controls.Terrain
                         _graphicsDevice.DrawPrimitives(
                             PrimitiveType.TriangleList,
                             0,
-                            batch.Vertices.Length / 3);
+                            quadCount * 2);
                     }
 
                     Flushes++;
@@ -560,7 +588,8 @@ namespace Client.Main.Controls.Terrain
         /// 必須長出一模一樣的草，否則畫面會閃。
         /// </remarks>
         private void AppendTufts(
-            List<GrassQuad> list,
+            List<GrassQuad> nearList,
+            List<GrassQuad> farList,
             ref Vector3 boundsMin,
             ref Vector3 boundsMax,
             int x,
@@ -669,7 +698,8 @@ namespace Client.Main.Controls.Terrain
                     u,
                     height);
 
-                list.Add(quad);
+                // 第一叢進 nearList（遠處也畫），其餘進 farList（只有近處畫）。
+                (i < planes ? nearList : farList).Add(quad);
                 ExpandBounds(ref boundsMin, ref boundsMax, quad);
             }
         }

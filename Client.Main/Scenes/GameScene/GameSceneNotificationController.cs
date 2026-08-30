@@ -63,6 +63,17 @@ namespace Client.Main.Scenes
 
             foreach (var pending in currentBatch)
             {
+                // 手機：<b>全部走同一個公告區</b>（左上角的 note 區）。
+                //
+                // 原本是分兩處：金色與公會公告飄在畫面左下，藍色的寫進 note 區。
+                // 於是同一件事會出現在兩個地方、兩種字級、兩種底色，而左下那一塊
+                // 又正好在搖桿與藥水鈕附近。同一種東西只該有一個位置。
+                if (MobileUi.IsMobile)
+                {
+                    _chatLog?.AddMessage(string.Empty, pending.Message, ToChatType(pending.Type));
+                    continue;
+                }
+
                 if (NotificationColors.TryGetValue(pending.Type, out Color notificationColor))
                 {
                     if (pending.Type != ServerMessage.MessageType.BlueNormal)
@@ -81,5 +92,13 @@ namespace Client.Main.Scenes
                 }
             }
         }
+
+        /// <summary>公告的種類對應到 note 區的訊息種類（顏色仍然分得出來）。</summary>
+        private static MessageType ToChatType(ServerMessage.MessageType type) => type switch
+        {
+            ServerMessage.MessageType.GuildNotice => MessageType.Guild,
+            ServerMessage.MessageType.GoldenCenter => MessageType.Info,
+            _ => MessageType.System,
+        };
     }
 }

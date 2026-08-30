@@ -163,14 +163,16 @@ namespace Client.Main.Graphics
                 case >= 8:
                     Constants.GRASS_TUFTS_PER_TILE = 8;
                     Constants.GRASS_CLUSTER_PLANES = 3;   // 三角，Lineage W 的做法
-                    Constants.GRASS_DRAW_DISTANCE = 8000f;
+                    Constants.GRASS_DRAW_DISTANCE = 6000f;
+                    Constants.GRASS_DENSE_DISTANCE = 2200f;   // 約 22 格，鏡頭附近才用高密度
                     Constants.GRASS_ALPHA_REFERENCE = DenseAlphaReference;
                     break;
 
                 case >= 4:
                     Constants.GRASS_TUFTS_PER_TILE = 4;
                     Constants.GRASS_CLUSTER_PLANES = 2;   // 十字
-                    Constants.GRASS_DRAW_DISTANCE = 8000f;
+                    Constants.GRASS_DRAW_DISTANCE = 6000f;
+                    Constants.GRASS_DENSE_DISTANCE = 2600f;
                     Constants.GRASS_ALPHA_REFERENCE = DenseAlphaReference;
                     break;
 
@@ -178,6 +180,7 @@ namespace Client.Main.Graphics
                     Constants.GRASS_TUFTS_PER_TILE = 1;
                     Constants.GRASS_CLUSTER_PLANES = 1;
                     Constants.GRASS_DRAW_DISTANCE = 0f;
+                    Constants.GRASS_DENSE_DISTANCE = 0f;
                     Constants.GRASS_ALPHA_REFERENCE = 0.01f;   // 原版
                     break;
             }

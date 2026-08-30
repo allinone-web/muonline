@@ -113,6 +113,19 @@ namespace Client.Main
         public static float GRASS_DRAW_DISTANCE;
 
         /// <summary>
+        /// 超過這個距離之後，每格只畫一片草（退回原版密度）。0 = 不分層。
+        /// </summary>
+        /// <remarks>
+        /// 拉遠鏡頭時 fps 崩掉的原因是**填充率**：畫面上的地面面積變大，
+        /// 草的立牌數與重疊層數跟著線性成長。但遠處的草每片只有幾個像素，
+        /// 密度根本看不出來 —— 花的成本完全沒有回報。
+        ///
+        /// 每格的第一叢排在頂點緩衝區的最前面，所以遠處只要少畫後面那一段就行，
+        /// 不需要另外建緩衝區，也不需要隨鏡頭重建。
+        /// </remarks>
+        public static float GRASS_DENSE_DISTANCE;
+
+        /// <summary>
         /// 草的 alpha 測試門檻（0..1）。低於這個值的像素直接丟棄。
         /// </summary>
         /// <remarks>

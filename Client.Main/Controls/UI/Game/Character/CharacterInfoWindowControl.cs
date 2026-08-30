@@ -30,7 +30,10 @@ namespace Client.Main.Controls.UI.Game.Character
         //
         // 460x660 之後每一列有 96 px 高，說明三行放得開，加點鈕也放得下 52 見方。
         private static int WINDOW_WIDTH => s_mobile ? 460 : 280;
-        private static int WINDOW_HEIGHT => s_mobile ? 660 : 520;
+        // 660 -> 584：底部那一整列按鈕拿掉了（CLOSE 與標題列的關閉鈕重複，
+        // QUEST / PET / MASTER 搬到等級那一行的右側）。面板矮 76 px 之後
+        // 就不再貼著畫面下緣。
+        private static int WINDOW_HEIGHT => s_mobile ? 584 : 520;
         private static int STAT_BOX_WIDTH => s_mobile ? 300 : 170;
         private const int BTN_STAT_COUNT = 5;
 
@@ -372,16 +375,29 @@ namespace Client.Main.Controls.UI.Game.Character
         private const int MobileBottomButtonHeight = 46;
         private const int MobileBottomButtonGap = 10;
 
+        /// <summary>QUEST / PET / MASTER 那一列的 Y。在頭部資訊區裡、等級那一行的右側。</summary>
+        private const int MobileHeaderRowButtonsY = 96;
+
         private static Rectangle CreateBottomBounds(int xOffset, Texture2D texture)
         {
             if (MobileUi.IsMobile)
             {
-                // xOffset 原本是 20/70/120/170（貼圖寬度決定的間距）。
-                // 換算成「第幾顆」再照手機的尺寸重排，才不必動四個呼叫點。
+                // xOffset 原本是 20/70/120/170（貼圖寬度決定的間距），
+                // 換算成「第幾顆」：0 = CLOSE、1 = QUEST、2 = PET、3 = MASTER。
                 int index = Math.Max(0, (xOffset - 20) / 50);
+
+                // CLOSE 不再存在：標題列左上角已經有關閉鈕，底部再放一顆
+                // 是同一件事做兩次。給一個空矩形，按鈕本身也會被設成隱藏。
+                if (index == 0)
+                    return Rectangle.Empty;
+
+                // 其餘三顆搬到等級那一行的右側，靠右排。
+                // 底部那一整列因此可以整個拿掉，面板矮了 76 px，不再貼著畫面下緣。
+                int slot = 3 - index;   // MASTER 最右、QUEST 最左
+                int right = WINDOW_WIDTH - 20;
                 return new Rectangle(
-                    20 + index * (MobileBottomButtonWidth + MobileBottomButtonGap),
-                    WINDOW_HEIGHT - MobileBottomButtonHeight - 14,
+                    right - (slot + 1) * MobileBottomButtonWidth - slot * MobileBottomButtonGap,
+                    MobileHeaderRowButtonsY,
                     MobileBottomButtonWidth,
                     MobileBottomButtonHeight);
             }
@@ -577,12 +593,8 @@ namespace Client.Main.Controls.UI.Game.Character
                 }
             }
 
-            // 底部按鈕列的底。手機的按鈕是 46 高、距下緣 14（見 CreateBottomBounds）。
-            if (s_mobile)
-                DrawModernPanel(spriteBatch,
-                    new Rectangle(14, WINDOW_HEIGHT - MobileBottomButtonHeight - 22, WINDOW_WIDTH - 28, MobileBottomButtonHeight + 16),
-                    ModernHudTheme.BgMid);
-            else
+            // 手機已經沒有底部按鈕列了（見 CreateBottomBounds）。
+            if (!s_mobile)
                 DrawModernPanel(spriteBatch, new Rectangle(14, 472, WINDOW_WIDTH - 28, 38), ModernHudTheme.BgMid);
 
             SpriteFont font = GraphicsManager.Instance.Font;
@@ -874,6 +886,13 @@ namespace Client.Main.Controls.UI.Game.Character
                 return;
             }
 
+            if (MobileUi.IsMobile)
+            {
+                // 沒有紅色。關閉鈕不是這個面板上最重要的東西，不該是最顯眼的顏色。
+                MobileUi.DrawCloseGlyph(spriteBatch, rectangle, _closeHovered);
+                return;
+            }
+
             spriteBatch.Draw(pixel, rectangle, (_closeHovered ? ModernHudTheme.Danger : ModernHudTheme.BgLight) * Alpha);
             UiDrawHelper.DrawBorder(
                 spriteBatch,
@@ -906,12 +925,8 @@ namespace Client.Main.Controls.UI.Game.Character
         {
             if (MobileUi.IsMobile)
             {
-                // 左上角，46 見方（拇指按得到）。右上角是螢幕那六顆介面按鈕的位置。
-                int size = Math.Max(40, (int)MathF.Round(46f * controlScale));
-                return new Rectangle(
-                    DisplayRectangle.X + (int)MathF.Round(10f * controlScale),
-                    DisplayRectangle.Y + (int)MathF.Round(6f * controlScale),
-                    size, size);
+                // 位置與畫法都交給 MobileUi，和背包、技能、地圖、設定完全一致。
+                return MobileUi.WindowCloseButtonRect(DisplayRectangle);
             }
 
             return new Rectangle(
@@ -1085,8 +1100,9 @@ namespace Client.Main.Controls.UI.Game.Character
                 _masterButton.Enabled = masterActive;
             }
 
-            _exitButton.Visible = true;
-            _exitButton.Enabled = true;
+            // 手機沒有底部的 CLOSE：標題列左上角已經有關閉鈕（見 GetHeaderCloseRectangle）。
+            _exitButton.Visible = !s_mobile;
+            _exitButton.Enabled = !s_mobile;
             _questButton.Visible = true;
             _questButton.Enabled = true;
             _petButton.Visible = true;

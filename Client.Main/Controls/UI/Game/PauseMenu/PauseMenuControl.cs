@@ -658,6 +658,19 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             _exitInProgress = true;
             try
             {
+                // 手機上的「離開遊戲」= 登出並回到登入畫面。
+                //
+                // iOS 不允許 app 自行終止（Apple 明文禁止，見 MuGame.RequestExit），
+                // 所以 HandleExitAsync 送完登出封包之後就什麼都不會發生 ——
+                // 玩家按了 EXIT，畫面卻停在原地，看起來像按鈕壞了。
+                // 回到登入畫面是這個平台上唯一做得到、也真的有意義的「離開」。
+                if (MobileUi.IsMobile)
+                {
+                    ExitClicked?.Invoke(this, EventArgs.Empty);
+                    await HandleReturnToServerSelectAsync();
+                    return;
+                }
+
                 ExitClicked?.Invoke(this, EventArgs.Empty);
                 await HandleExitAsync();
             }

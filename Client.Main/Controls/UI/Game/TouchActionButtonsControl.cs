@@ -46,7 +46,13 @@ namespace Client.Main.Controls.UI.Game
         /// 貼著安全區邊界的圓形按鈕還是會被啃掉一角。
         /// </summary>
         private const float SkillArcRightOverhang = 81f;
-        private const float MarginBottom = 120f;
+        /// <summary>
+        /// 主按鈕圓心與畫面下緣的距離。
+        ///
+        /// 120 -> 150：使用者回報有些手機底部容易誤觸（Home 指示條的上滑區）。
+        /// 整群往上移 30 px，大小與排列完全沒有變。
+        /// </summary>
+        private static float MarginBottom => MobileUi.IsMobile ? 150f : 120f;
 
         /// <summary>
         /// 主按鈕圓心與畫面右緣的距離。
@@ -56,7 +62,7 @@ namespace Client.Main.Controls.UI.Game
         /// <b>整個</b>安全區域，而不是像右上角那些按鈕只退圓角的餘裕。
         /// 判定交給 MobileUi.EdgeInsetForBand。
         /// </summary>
-        private float ResolveMarginRight()
+        private static float ResolveMarginRight()
         {
             int bottom = UiScaler.VirtualSize.Y - (int)(MarginBottom - MainButtonRadius);
             int top = bottom - (int)(MainButtonRadius * 2 + SkillArcRadius);
@@ -78,6 +84,25 @@ namespace Client.Main.Controls.UI.Game
         /// <b>大小與排列完全沒有變</b>，只是整群平移。
         /// </summary>
         private const float RightNudge = 72f;
+
+        /// <summary>
+        /// 整群（主按鈕 + 技能弧線）的最左緣，虛擬座標。
+        ///
+        /// 藥水鈕排在它左邊，兩者不能靠在一起 —— 最左那顆技能鈕（150 度）的
+        /// 圓心在主按鈕左邊 114 px，半徑 40，所以整群的左緣是「圓心 - 154」。
+        /// 這個值由 HUD 用來決定藥水列往左排到哪（見 ModernBottomHud 的
+        /// PotionClusterGap）。寫成共用的算式而不是兩邊各填一個數字，
+        /// 是因為只要有一邊被調整過，另一邊就會悄悄靠上去。
+        /// </summary>
+        public static int ClusterLeftEdge
+        {
+            get
+            {
+                float centerX = UiScaler.VirtualSize.X - ResolveMarginRight();
+                float leftmostOffset = MathF.Abs(MathF.Cos(MathHelper.ToRadians(SkillArcStartDegrees))) * SkillArcRadius;
+                return (int)MathF.Round(centerX - leftmostOffset - SkillButtonRadius);
+            }
+        }
 
         /// <summary>技能鈕排在主按鈕左上方的弧線上。</summary>
         private const float SkillArcRadius = 132f;
@@ -113,6 +138,9 @@ namespace Client.Main.Controls.UI.Game
 
         /// <summary>失敗原因，畫在按鈕上方。只閃紅的話玩家不知道要補魔還是換位置。</summary>
         private string? _failureReason;
+
+        /// <summary>上一次把提示送進 note 區的時間。同一個原因不要每按一次就洗一行。</summary>
+        private double _lastReportedAt = double.NegativeInfinity;
         private const double FailureReasonSeconds = 1.6;
         private const float FailureReasonScale = 0.62f;
 
@@ -304,6 +332,25 @@ namespace Client.Main.Controls.UI.Game
                 return;
 
             _failedAt = now;
+
+            // 提示寫進畫面左上角的 note 區，<b>不再畫在按鈕上方</b>。
+            //
+            // 原本它固定畫在主按鈕正上方，而那個位置正好是技能弧線 ——
+            // 「No target nearby」直接蓋在技能圖示上，看不清是哪一顆按不動。
+            // 全遊戲的臨時訊息都在同一個地方，玩家只要盯著那一塊就好。
+            if (MobileUi.IsMobile)
+            {
+                if (_failureReason != reason || now - _lastReportedAt > FailureReasonSeconds)
+                {
+                    _failureReason = reason;
+                    _lastReportedAt = now;
+                    scene.ShowNotificationMessage(
+                        MUnique.OpenMU.Network.Packets.ServerToClient.ServerMessage.MessageType.BlueNormal,
+                        reason);
+                }
+                return;
+            }
+
             _failureReason = reason;
         }
 
@@ -614,6 +661,10 @@ namespace Client.Main.Controls.UI.Game
         /// </summary>
         private void DrawFailureReason(SpriteBatch sb, double now)
         {
+            // 手機的提示改由 note 區顯示（見 ReportFailure）。
+            if (MobileUi.IsMobile)
+                return;
+
             if (_font == null || string.IsNullOrEmpty(_failureReason))
                 return;
 

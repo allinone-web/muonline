@@ -118,6 +118,32 @@ namespace Client.Main.Controls.UI.Game.Inventory
         public static int Columns => s_mobile ? 5 : 8;
 
         /// <summary>
+        /// 與商店／倉庫／交易並排時的窄版面：隱藏最右邊的資訊欄，視窗靠左。
+        ///
+        /// 商店開啟時會連同背包一起開，兩個視窗都是寬的，疊在一起就誰也點不到。
+        /// </summary>
+        public bool CompactLayout { get; private set; }
+
+        /// <summary>由商店／倉庫在開關時呼叫。</summary>
+        public void SetCompactLayout(bool compact)
+        {
+            if (!s_mobile || CompactLayout == compact)
+                return;
+
+            CompactLayout = compact;
+
+            if (ResolveWindowSize())
+            {
+                ControlSize = new Point(WINDOW_WIDTH, WINDOW_HEIGHT);
+                ViewSize = ControlSize;
+                BuildLayoutMetrics();
+            }
+
+            PositionForMobile();
+            InvalidateStaticSurface();
+        }
+
+        /// <summary>
         /// 列數：把 <see cref="TotalSlots"/> 攤成 <see cref="Columns"/> 欄需要幾列。
         /// 5 欄 x 13 列 = 65，比實際的 64 多一格；多出來的那一格不對應任何
         /// 伺服器格號，由 <see cref="IsWithinGrid"/> 與 CanPlaceItem 兩處擋掉。
@@ -434,6 +460,15 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 return;
 
             var canvas = Controllers.UiScaler.VirtualSize;
+
+            // 和商店／倉庫並排時靠左，讓右半邊整片留給對方。
+            if (CompactLayout)
+            {
+                X = MobileUi.LeftEdge;
+                _mobileBaseY = Math.Max(MobileUi.CornerInset, (canvas.Y - WINDOW_HEIGHT) / 2);
+                Y = _mobileBaseY;
+                return;
+            }
 
             // 水平與垂直都置中。少掉底列之後高度剛好落在右上角按鈕區塊的下方，
             // 置中比硬釘在某個 Y 好看，也不會壓到那六顆按鈕。
@@ -759,11 +794,16 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 // 三欄：裝備 ｜ 背包 ｜ 資訊（立體圖放在資訊欄上方）。
                 // 格子放大到 64 之後四欄放不下 —— 與其縮小格子，不如少一欄：
                 // 格子看得清楚比多一欄重要，而立體圖疊在資訊上方反而更大。
+                // 並排模式：資訊欄整欄拿掉。
+                //
+                // 商店開著的時候兩個視窗都要看得到、點得到，而背包本身就有 1208 寬，
+                // 兩個加起來一定超過 1642 的畫布。資訊欄（立體圖 + 說明）是這裡
+                // 唯一可以整欄讓出來的東西 —— 買賣的時候玩家看的是格子，不是說明。
                 int content = PANEL_PADDING * 2
                     + MobileEquipColumnWidth
                     + (Columns * INVENTORY_SQUARE_WIDTH + 20)    // 背包欄（含外框）
-                    + MobileInfoColumnWidth
-                    + MobileColumnGap * 2;
+                    + (CompactLayout ? 0 : MobileInfoColumnWidth + MobileColumnGap)
+                    + MobileColumnGap;
 
                 width = content;
 
@@ -941,7 +981,16 @@ namespace Client.Main.Controls.UI.Game.Inventory
             _gridFrameRect = new Rectangle(gridX - 10, gridY - 10, gridTotalWidth + 20, gridTotalHeight + 20);
             x += gridColumnWidth + ColumnGap;
 
-            // 最右欄：立體圖在上、文字在下，共用一欄。
+            // 最右欄：立體圖在上、文字在下，共用一欄。並排模式沒有這一欄。
+            if (CompactLayout)
+            {
+                _previewPanelRect = Rectangle.Empty;
+                _infoPanelRect = Rectangle.Empty;
+                BuildEquipSlots();
+                BuildMobileChrome();
+                return;
+            }
+
             int infoWidth = Math.Max(0, WINDOW_WIDTH - PANEL_PADDING - x);
             int previewHeight = Math.Min(infoWidth, contentHeight / 2);
             _previewPanelRect = new Rectangle(x, contentTop, infoWidth, previewHeight);
@@ -949,7 +998,12 @@ namespace Client.Main.Controls.UI.Game.Inventory
                                            infoWidth, contentHeight - previewHeight - 8);
 
             BuildEquipSlots();
+            BuildMobileChrome();
+        }
 
+        /// <summary>標題列、關閉鈕、金幣欄。並排模式與一般模式共用。</summary>
+        private void BuildMobileChrome()
+        {
             _headerRect = new Rectangle(0, 0, WINDOW_WIDTH, HEADER_HEIGHT);
             _footerRect = Rectangle.Empty;
 

@@ -90,6 +90,9 @@ public sealed class EditorSession : EditSession
     /// <summary><c>--grass-distance N</c>：草的繪製距離（世界單位）。0 = 不限制。</summary>
     public float GrassDistance { get; set; }
 
+    /// <summary><c>--grass-dense N</c>：超過這個距離退回每格一片。0 = 不分層。</summary>
+    public float GrassDenseDistance { get; set; }
+
     /// <summary>自我測試是否全數通過；null 表示還沒跑。</summary>
     public bool? SelfTestPassed { get; set; }
 
