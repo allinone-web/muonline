@@ -137,9 +137,31 @@ namespace Client.Main.Worlds
             if (count <= 1)
                 return Vector3.Zero;
 
-            float yaw = MathHelper.ToRadians(CameraYawDegrees);
-            var sideways = new Vector3(-MathF.Sin(yaw), MathF.Cos(yaw), 0f);
-            return sideways * ((index - (count - 1) / 2f) * SlotSpacing);
+            // 排成以鏡頭為圓心的弧線，不是直線。
+            //
+            // 直線排列時中間離鏡頭最近、兩端最遠 —— 實測 1069 對 1152，
+            // 差 83 單位（約 7.5%）。透視下兩端就明顯比中間小，
+            // 看起來像整排是斜的。沿著等距的弧線擺，五個人大小才一致。
+            var centre = StageCenter + (TowardCamera * CharacterForwardOffset);
+            var camera = CameraWorldPosition;
+
+            var radial = new Vector2(centre.X - camera.X, centre.Y - camera.Y);
+            float radius = radial.Length();
+            if (radius < 1f)
+                return Vector3.Zero;
+
+            float theta = ((index - (count - 1) / 2f) * SlotSpacing) / radius;
+            float cos = MathF.Cos(theta);
+            float sin = MathF.Sin(theta);
+
+            var rotated = new Vector2(
+                (radial.X * cos) - (radial.Y * sin),
+                (radial.X * sin) + (radial.Y * cos));
+
+            return new Vector3(
+                camera.X + rotated.X - centre.X,
+                camera.Y + rotated.Y - centre.Y,
+                0f);
         }
 
         public SelectWorld() : base(worldIndex: 4)

@@ -36,8 +36,16 @@ namespace Client.Main.Scenes.SelectCharacter
         /// <summary>每個角色沒被選中時該站的位置。選中時往鏡頭方向偏移。</summary>
         private readonly Dictionary<PlayerObject, Vector3> _slotBase = new();
 
-        /// <summary>每秒趨近目標位置的比例。走過去比瞬移好看。</summary>
-        private const float SelectionMoveSpeed = 7f;
+        /// <summary>
+        /// 走位速度（世界單位／秒）。
+        ///
+        /// 用等速而不是指數趨近：指數趨近的尾段愈走愈慢，走路動作卻是等速的，
+        /// 短短一段路會踏出一堆碎步。
+        /// </summary>
+        private const float SelectionMoveSpeed = 430f;
+
+        /// <summary>正在等「走到定位」才表演招牌動作的角色。</summary>
+        private PlayerObject _pendingSignature;
 
         private readonly List<PlayerObject> _characters = new();
         private readonly List<(string Name, CharacterClassNumber Class, ushort Level, byte[] Appearance)> _characterInfos = new();
@@ -280,17 +288,10 @@ namespace Client.Main.Scenes.SelectCharacter
 
                 if (i == index)
                 {
-                    // PlayAction 設的是循環動作；招牌動作走 PlayEmoteAnimation，
-                    // 那是既有表情功能用的同一條路徑。
-                    var signature = SignatureAction(player.CharacterClass);
-                    player.PlayEmoteAnimation(signature);
-
-                    // 診斷：裝置的 console provider 對 logger 是關的，只有
-                    // Console.WriteLine 讀得到（見 docs/UI繪製陷阱.md 的教訓）。
-                    Console.WriteLine(
-                        $"[SelDiag] 選中 {player.Name} class={player.CharacterClass} "
-                        + $"招牌動作={signature}({(ushort)signature}) "
-                        + $"目前動作={player.CurrentAction}");
+                    // 招牌動作不在這裡播 —— 點下去的當下角色還在原地，
+                    // 動作會在走過去的路上被走路動作蓋掉（實測就是這樣）。
+                    // 改成記著，等 UpdateSelectionMotion 走到定位再表演。
+                    _pendingSignature = player;
                 }
                 else
                 {
@@ -300,9 +301,8 @@ namespace Client.Main.Scenes.SelectCharacter
 
             _activeIndex = index;
 
-            // 診斷「隊伍看起來斜」：把每個角色到鏡頭的水平距離印出來。
-            // 幾何上排列與視線垂直、應該全部相等 —— 若不相等就是我算錯了，
-            // 若相等就代表那是朝向或透視造成的錯覺，要往別的方向查。
+            // 診斷：五個人到鏡頭的水平距離。改成弧線排列之後應該全部相等
+            //（選中的那個會因為往前踏一步而比較近，那是預期的）。
             {
                 var cam = Worlds.SelectWorld.CameraWorldPosition;
                 for (int d = 0; d < _characters.Count; d++)
@@ -357,7 +357,7 @@ namespace Client.Main.Scenes.SelectCharacter
             if (deltaSeconds <= 0f)
                 return;
 
-            float t = MathF.Min(1f, deltaSeconds * SelectionMoveSpeed);
+            float step = deltaSeconds * SelectionMoveSpeed;
 
             for (int i = 0; i < _characters.Count; i++)
             {
@@ -372,8 +372,10 @@ namespace Client.Main.Scenes.SelectCharacter
                     ? slot + Worlds.SelectWorld.SelectedStepOffset
                     : slot;
 
-                bool arrived = Vector3.DistanceSquared(player.Position, target) < 1f;
-                player.Position = arrived ? target : Vector3.Lerp(player.Position, target, t);
+                var delta = target - player.Position;
+                float remaining = delta.Length();
+                bool arrived = remaining <= step || remaining < 0.5f;
+                player.Position = arrived ? target : player.Position + (delta / remaining * step);
 
                 // 滑動 → 走動：位置是我們自己搬的，走者本身的移動系統沒有參與，
                 // 所以要手動播走路動作，到位再交還給待機／招牌動作。
@@ -385,10 +387,19 @@ namespace Client.Main.Scenes.SelectCharacter
                     if (player.CurrentAction != walk)
                         player.PlayAction((ushort)walk);
                 }
-                else if (arrived && !player.IsOneShotPlaying
-                         && player.CurrentAction != (PlayerAction)player.GetCorrectIdleAction())
+                else if (arrived)
                 {
-                    player.PlayAction(player.GetCorrectIdleAction());
+                    // 走到定位了才表演招牌動作，而且只表演一次。
+                    if (ReferenceEquals(player, _pendingSignature))
+                    {
+                        _pendingSignature = null;
+                        player.PlayEmoteAnimation(SignatureAction(player.CharacterClass));
+                    }
+                    else if (!player.IsOneShotPlaying
+                             && player.CurrentAction != (PlayerAction)player.GetCorrectIdleAction())
+                    {
+                        player.PlayAction(player.GetCorrectIdleAction());
+                    }
                 }
 
                 var angle = player.Angle;
