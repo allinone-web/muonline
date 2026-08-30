@@ -25,7 +25,7 @@ namespace Client.Main.Worlds
         // 這樣 tools/mu golden 拍出來的取景就等於真機看到的取景 ——
         // 兩邊各寫各的相機，比出來的差異會分不清是「渲染不同」還是「根本沒看同一個地方」。
         private const float CameraYawDegrees = -45f;
-        private const float CameraPitchDegrees = 15f;
+        private const float CameraPitchDegrees = 12f;
         private const float CameraDistance = 1400f;
         private const float StageFieldOfView = 35f;
 
@@ -52,11 +52,44 @@ namespace Client.Main.Worlds
         /// <summary>選中的角色相對於自己站位的位移。</summary>
         public static Vector3 SelectedStepOffset => TowardCamera * SelectedStepDistance;
 
+        /// <summary>鏡頭在世界座標裡的位置。角色要面向它。</summary>
+        public static Vector3 CameraWorldPosition
+        {
+            get
+            {
+                float yaw = MathHelper.ToRadians(CameraYawDegrees);
+                float pitch = MathHelper.ToRadians(CameraPitchDegrees);
+                float horizontal = CameraDistance * MathF.Cos(pitch);
+                return StageCenter
+                     + new Vector3(0f, 0f, CameraFocusHeight)
+                     + new Vector3(-MathF.Cos(yaw) * horizontal,
+                                   -MathF.Sin(yaw) * horizontal,
+                                   CameraDistance * MathF.Sin(pitch));
+            }
+        }
+
+        /// <summary>
+        /// 站在 <paramref name="position"/> 的角色要面向鏡頭時的 Z 軸旋轉（弧度）。
+        ///
+        /// 五個角色共用同一個角度時，兩端的人是側對鏡頭的，看起來就像「右邊比較近、
+        /// 左邊比較遠」。各自朝向鏡頭之後，整排才會對稱。
+        /// 加的那 90 度是模型自己的正面偏移，理由見 CharacterFacingDegrees。
+        /// </summary>
+        public static float FacingAngleFor(Vector3 position)
+        {
+            var camera = CameraWorldPosition;
+            var toCamera = new Vector2(camera.X - position.X, camera.Y - position.Y);
+            if (toCamera.LengthSquared() < 0.0001f)
+                return MathHelper.ToRadians(CharacterFacingDegrees);
+
+            return MathF.Atan2(toCamera.Y, toCamera.X) + MathHelper.PiOver2;
+        }
+
         /// <summary>名字標籤與角色腳底之間留多少空隙（螢幕像素）。</summary>
         private const float LabelScreenGap = 10f;
 
         /// <summary>角色並排的間距（世界單位，一格 = 100）。翅膀很寬，太小會黏在一起。</summary>
-        private const float SlotSpacing = 250f;
+        private const float SlotSpacing = 215f;
 
         /// <summary>
         /// 角色面向。
@@ -216,6 +249,7 @@ namespace Client.Main.Worlds
             if (Status == GameControlStatus.Ready && _controller != null)
             {
                 _controller.EnsureActiveCharacterVisible(this);
+                _controller.UpdateSelectionMotion((float)time.ElapsedGameTime.TotalSeconds);
 
                 foreach (var (player, label) in _controller.Labels)
                 {

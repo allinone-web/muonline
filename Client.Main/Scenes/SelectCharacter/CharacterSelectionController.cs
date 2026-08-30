@@ -33,6 +33,12 @@ namespace Client.Main.Scenes.SelectCharacter
         /// <summary>舞台中心。SetActiveCharacter 要用它重算每個角色的站位。</summary>
         private Vector3 _displayPosition;
 
+        /// <summary>每個角色沒被選中時該站的位置。選中時往鏡頭方向偏移。</summary>
+        private readonly Dictionary<PlayerObject, Vector3> _slotBase = new();
+
+        /// <summary>每秒趨近目標位置的比例。走過去比瞬移好看。</summary>
+        private const float SelectionMoveSpeed = 7f;
+
         private readonly List<PlayerObject> _characters = new();
         private readonly List<(string Name, CharacterClassNumber Class, ushort Level, byte[] Appearance)> _characterInfos = new();
         private readonly Dictionary<PlayerObject, LabelControl> _labels = new();
@@ -270,18 +276,21 @@ namespace Client.Main.Scenes.SelectCharacter
                 if (_labels.TryGetValue(player, out var label))
                     label.Visible = true;
 
-                // 選中的往鏡頭踏一步。位移比發光好讀，而且不必動 shader。
-                var slot = _displayPosition + Worlds.SelectWorld.SlotOffset(i, _characters.Count);
-                player.Position = i == index
-                    ? slot + Worlds.SelectWorld.SelectedStepOffset
-                    : slot;
+                _slotBase[player] = _displayPosition + Worlds.SelectWorld.SlotOffset(i, _characters.Count);
 
                 if (player.Status != GameControlStatus.Ready)
                     continue;
 
-                player.PlayAction(i == index
-                    ? (ushort)SignatureAction(player.CharacterClass)
-                    : player.GetCorrectIdleAction());
+                if (i == index)
+                {
+                    // PlayAction 設的是循環動作，會被每幀的待機邏輯蓋回去 ——
+                    // 招牌動作要走 PlayEmoteAnimation（既有表情功能用的同一條路徑）。
+                    player.PlayEmoteAnimation(SignatureAction(player.CharacterClass));
+                }
+                else
+                {
+                    player.PlayAction(player.GetCorrectIdleAction());
+                }
             }
 
             _activeIndex = index;
@@ -316,6 +325,43 @@ namespace Client.Main.Scenes.SelectCharacter
                 5 => PlayerAction.PlayerSkillFlash,     // 召喚師
                 _ => PlayerAction.PlayerAttackFist,     // 格鬥家
             };
+
+        /// <summary>
+        /// 每幀推進選中的視覺表現：選中的角色走向鏡頭、其餘退回自己的站位，
+        /// 並讓每個角色各自面向鏡頭。
+        ///
+        /// 位置原本是在 SetActiveCharacter 裡直接指派的，看起來是瞬移；
+        /// 改成逐幀趨近才像「往前踏一步」。
+        /// </summary>
+        public void UpdateSelectionMotion(float deltaSeconds)
+        {
+            if (deltaSeconds <= 0f)
+                return;
+
+            float t = MathF.Min(1f, deltaSeconds * SelectionMoveSpeed);
+
+            for (int i = 0; i < _characters.Count; i++)
+            {
+                var player = _characters[i];
+                if (player.Status != GameControlStatus.Ready)
+                    continue;
+
+                if (!_slotBase.TryGetValue(player, out var slot))
+                    continue;
+
+                var target = i == _activeIndex
+                    ? slot + Worlds.SelectWorld.SelectedStepOffset
+                    : slot;
+
+                player.Position = Vector3.DistanceSquared(player.Position, target) < 1f
+                    ? target
+                    : Vector3.Lerp(player.Position, target, t);
+
+                var angle = player.Angle;
+                player.Angle = new Vector3(
+                    angle.X, angle.Y, Worlds.SelectWorld.FacingAngleFor(player.Position));
+            }
+        }
 
         internal void EnsureActiveCharacterVisible(WorldControl world)
         {
@@ -494,6 +540,7 @@ namespace Client.Main.Scenes.SelectCharacter
                 label.Dispose();
             }
             _labels.Clear();
+            _slotBase.Clear();
             _characterInfos.Clear();
             _activeIndex = -1;
         }
@@ -512,6 +559,7 @@ namespace Client.Main.Scenes.SelectCharacter
                 label.Dispose();
             }
             _labels.Clear();
+            _slotBase.Clear();
 
             _characterInfos.Clear();
             _activeIndex = -1;
