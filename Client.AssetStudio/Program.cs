@@ -59,7 +59,7 @@ Console.WriteLine("掃描資源目錄…");
 
 // 道具分類要在目錄之前建好：目錄會用它把 2715 個沒有語意的檔名換成道具名稱。
 session.Items.Build();
-session.Catalog.Build(dataPath, session.Items);
+session.Catalog.Build(dataPath, session.Items, session.Library);
 
 // 刻意用 GetAwaiter().GetResult() 而不是 await：
 // 頂層陳述式裡只要出現一個 await，編譯器就會產生 async Main，

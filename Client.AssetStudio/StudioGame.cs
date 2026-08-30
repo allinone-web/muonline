@@ -157,14 +157,36 @@ public sealed class StudioGame : Game
                 return;
             }
 
-            var model = AnimatedModel.Load(GraphicsDevice, entry.FullPath);
+            AnimatedModel model;
 
-            // 身體部位共用主模型的骨架，掛上去才看得到完整的 NPC／角色。
-            foreach (var part in entry.BodyParts)
+            if (entry.Kind == Catalog.EntityKind.Library)
             {
-                string full = System.IO.Path.Combine(_session.DataPath, part);
-                if (File.Exists(full))
-                    model.AttachPart(full);
+                // 資源庫的項目指向 .glb，不是 .bmd。解析延後到這一刻才做
+                // （見 EntityCatalog.LibraryEntries 的註解），所以這裡要自己跑一次匯入。
+                var asset = _session.Library.Find(entry.Name)
+                    ?? throw new InvalidOperationException($"資源庫裡找不到 {entry.Name}");
+
+                var imported = Import.GltfImporter.Import(
+                    _session.Library.SourcePathOf(asset),
+                    new Import.GltfImporter.Options(Scale: asset.Scale, AutoScale: false));
+
+                string textureDir = _session.Library.TextureDirectoryOf(asset);
+                model = AnimatedModel.FromBmd(
+                    GraphicsDevice, imported.Model,
+                    System.IO.Path.Combine(textureDir, asset.Id),
+                    textureDir);
+            }
+            else
+            {
+                model = AnimatedModel.Load(GraphicsDevice, entry.FullPath);
+
+                // 身體部位共用主模型的骨架，掛上去才看得到完整的 NPC／角色。
+                foreach (var part in entry.BodyParts)
+                {
+                    string full = System.IO.Path.Combine(_session.DataPath, part);
+                    if (File.Exists(full))
+                        model.AttachPart(full);
+                }
             }
 
             _session.Model = model;

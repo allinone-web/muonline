@@ -428,12 +428,29 @@ public sealed partial class StudioUi
             ImGui.Dummy(new NVector2(0f, (rows - lastRow) * rowHeight));
     }
 
+    /// <summary>把資源庫的 glTF 轉成縮圖畫得出來的 BMD。只在縮圖真的要畫時才呼叫。</summary>
+    private (Client.Data.BMD.BMD Model, string TextureDirectory)? LoadLibraryBmd(EntityEntry entry)
+    {
+        var asset = _session.Library.Find(entry.Name);
+        if (asset is null) return null;
+
+        var imported = Import.GltfImporter.Import(
+            _session.Library.SourcePathOf(asset),
+            new Import.GltfImporter.Options(Scale: asset.Scale, AutoScale: false));
+
+        return (imported.Model, _session.Library.TextureDirectoryOf(asset));
+    }
+
     private void DrawThumbnailCell(EntityEntry entry, float size)
     {
         ImGui.BeginGroup();
         ImGui.PushID(entry.Id);
 
-        var id = entry.FullPath is null ? null : _thumbnails.Get(entry.FullPath);
+        var id = entry.FullPath is null
+            ? null
+            : entry.Kind == EntityKind.Library
+                ? _thumbnails.Get(entry.FullPath, () => LoadLibraryBmd(entry))
+                : _thumbnails.Get(entry.FullPath);
         bool selected = _session.Selected?.Id == entry.Id;
 
         if (selected)

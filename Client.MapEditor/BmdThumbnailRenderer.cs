@@ -68,6 +68,21 @@ public sealed class BmdThumbnailRenderer : IDisposable
             return null;
         }
 
+        return Render(model, Path.GetDirectoryName(bmdPath) ?? string.Empty);
+    }
+
+    /// <summary>
+    /// 直接畫一個已經在記憶體裡的 <see cref="BMD"/>。
+    /// </summary>
+    /// <remarks>
+    /// 給資源庫的自有資產用：那些是 glTF，磁碟上沒有 .bmd，
+    /// BMD 是 <c>GltfImporter</c> 當場轉出來的（見 <c>EntityCatalog.LibraryEntries</c>）。
+    /// 沒有這個多載，外部匯入的資產在縮圖牆上永遠只會顯示「...」。
+    /// </remarks>
+    /// <param name="textureDirectory">找貼圖的目錄。BMD 裡存的是檔名，不是路徑。</param>
+    public Texture2D? Render(BMD model, string textureDirectory)
+    {
+        string bmdPath = Path.Combine(textureDirectory, "in-memory.bmd");
         var bones = BuildBoneMatrices(model);
         var meshes = BuildMeshes(model, bones, out var bounds);
 
@@ -89,7 +104,7 @@ public sealed class BmdThumbnailRenderer : IDisposable
 
             ConfigureCamera(bounds);
 
-            string modelDirectory = Path.GetDirectoryName(bmdPath) ?? string.Empty;
+            string modelDirectory = textureDirectory;
 
             foreach (var mesh in meshes)
             {

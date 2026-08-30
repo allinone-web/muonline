@@ -65,6 +65,40 @@ public sealed class BoundedThumbnailCache : IDisposable
     /// 取得縮圖。還沒畫、而且這一幀的預算用完時回傳 null ——
     /// 呼叫端畫個佔位方塊，下一幀再來。
     /// </summary>
+    /// <summary>
+    /// 用呼叫端提供的 BMD 畫縮圖。給資源庫的 glTF 資產用 —— 它們磁碟上沒有 .bmd。
+    /// </summary>
+    /// <param name="key">快取鍵，用 glb 的路徑。</param>
+    /// <param name="load">真的要畫時才會被呼叫。解析 glTF 很貴，不能每幀跑。</param>
+    public IntPtr? Get(string key, Func<(Client.Data.BMD.BMD Model, string TextureDirectory)?> load)
+    {
+        if (_entries.TryGetValue(key, out var hit))
+        {
+            Touch(hit);
+            return hit.TextureId;
+        }
+
+        if (_budgetLeft <= 0)
+            return null;
+
+        _budgetLeft--;
+
+        Microsoft.Xna.Framework.Graphics.Texture2D? texture = null;
+        try
+        {
+            if (load() is { } source)
+                texture = _renderer.Render(source.Model, source.TextureDirectory);
+        }
+        catch
+        {
+            // 畫不出來就記成 null，不要每幀重試。
+        }
+
+        IntPtr? textureId = texture is not null ? _imgui.BindTexture(texture) : null;
+        _entries[key] = new Entry(key, texture, textureId, _recent.AddLast(key));
+        return textureId;
+    }
+
     public IntPtr? Get(string bmdPath)
     {
         if (_entries.TryGetValue(bmdPath, out var cached))

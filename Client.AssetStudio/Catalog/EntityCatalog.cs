@@ -11,6 +11,18 @@ public enum EntityKind
     SkillModel,
     Item,
     Effect,
+
+    /// <summary>
+    /// 從外部匯入、存在資源庫裡的資產（glTF ＋ PNG）。
+    /// </summary>
+    /// <remarks>
+    /// 與其他分類的差別：這一類的 <see cref="EntityEntry.FullPath"/> 指向的是
+    /// <b>.glb</b> 而不是 .bmd，載入時要走 <c>GltfImporter</c>。
+    /// 之所以要讓它出現在主目錄而不是只留在資源庫面板裡，是因為
+    /// 「這隻怪長什麼樣」與「它從哪來」是兩件事 ——
+    /// 要比較天堂的死亡騎士跟 MU 的 Balrog，得能在同一個縮圖牆上並排看。
+    /// </remarks>
+    Library,
 }
 
 /// <summary>目錄裡的一筆資源。可能是「有類別的怪物」，也可能是「沒人引用的孤兒模型」。</summary>
@@ -137,7 +149,7 @@ public sealed class EntityCatalog
     /// <summary>掃描過程中的問題，UI 會顯示出來（例如 Client.Main 有型別載入不了）。</summary>
     public List<string> Warnings { get; } = [];
 
-    public void Build(string dataPath, ItemCatalog? items = null)
+    public void Build(string dataPath, ItemCatalog? items = null, Project.AssetLibrary? library = null)
     {
         Warnings.Clear();
 
@@ -249,6 +261,9 @@ public sealed class EntityCatalog
         // 語意分類。放在最後統一做，因為它與「這一筆是從類別來的還是從檔案來的」無關。
         entries = entries.Select(e => Classify(e, items)).ToList();
 
+        if (library is not null)
+            entries.AddRange(LibraryEntries(library));
+
         Entries = entries
             .OrderBy(e => e.Kind)
             .ThenBy(e => e.Group, StringComparer.Ordinal)
@@ -268,6 +283,34 @@ public sealed class EntityCatalog
                       .ToArray());
 
         Stats = new CatalogStats(classBound, orphans, missing, unresolvedClasses);
+    }
+
+    /// <summary>把資源庫裡的自有資產轉成目錄項目。</summary>
+    /// <remarks>
+    /// 刻意<b>不</b>在這裡解析 glTF。目錄要能在幾十毫秒內建好，
+    /// 而每個 glb 都跑一次 <c>GltfImporter</c> 會讓啟動時間跟資產數量成正比。
+    /// 解析延後到「使用者真的點下去」那一刻（<c>StudioGame.ProcessLoadRequest</c>）。
+    /// </remarks>
+    private static IEnumerable<EntityEntry> LibraryEntries(Project.AssetLibrary library)
+    {
+        foreach (var asset in library.Assets)
+        {
+            string source = library.SourcePathOf(asset);
+
+            yield return new EntityEntry
+            {
+                Kind = EntityKind.Library,
+                Number = asset.BindNumber,
+                Name = asset.Name,
+                ClassName = null,
+                // 子分類用「原本打算取代誰」，這樣同一批匯入的東西會聚在一起。
+                Group = EntityKindNames.Of(asset.Kind),
+                Detail = asset.BindNumber >= 0 ? $"綁定 #{asset.BindNumber}" : string.Empty,
+                ModelPath = asset.Source,
+                FullPath = File.Exists(source) ? source : null,
+                IsReferenced = true,
+            };
+        }
     }
 
     public EntityEntry[] OfKind(EntityKind kind) => Entries.Where(e => e.Kind == kind).ToArray();
@@ -475,6 +518,7 @@ public static class EntityKindNames
         [EntityKind.SkillModel] = "技能模型",
         [EntityKind.Item] = "道具",
         [EntityKind.Effect] = "特效",
+        [EntityKind.Library] = "資源庫",
     };
 
     public static string Of(EntityKind kind) => Names.GetValueOrDefault(kind, kind.ToString());
