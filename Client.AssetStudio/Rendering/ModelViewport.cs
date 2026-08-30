@@ -29,6 +29,15 @@ public sealed class ModelViewport : IDisposable
 
     public ViewportCamera Camera { get; } = new();
 
+    /// <summary>最後一次 <see cref="Render"/> 畫進去的 render target。</summary>
+    /// <remarks>
+    /// 給 <c>--render</c> 用：把模型直接存成 PNG，不必依賴視窗版面。
+    /// 自動化截圖抓的是背景緩衝，而視埠在那個模式下只有 314×134，
+    /// 模型小到看不見 —— 那個尺寸來自 ImGui 的停靠版面，
+    /// 而版面在無人操作的執行裡本來就不會是好的。
+    /// </remarks>
+    public RenderTarget2D? Target => _target;
+
     public bool ShowGrid { get; set; } = true;
 
     public bool ShowSkeleton { get; set; }

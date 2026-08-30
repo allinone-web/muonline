@@ -55,6 +55,23 @@ public sealed partial class StudioUi
     /// <c>RenderTargetUsage.DiscardContents</c> 會把剛清好的畫面丟掉 ——
     /// 症狀是背景隨機閃爍，而且只在某些驅動上出現。
     /// </remarks>
+    /// <summary>目前的視埠尺寸，診斷自動化截圖時用。</summary>
+    public string ViewportSize => $"{_viewportWidth}x{_viewportHeight}";
+
+    /// <summary>把模型單獨算成一張圖，不經過視窗版面。給 --render 用。</summary>
+    public Microsoft.Xna.Framework.Graphics.RenderTarget2D? RenderModel(int size, float yawDegrees)
+    {
+        if (_session.Model is not null)
+            _viewport.Camera.Frame(_session.Model.Bounds);
+
+        // Frame 只決定距離與焦點，不動角度；預設角度看到的是模型背面，
+        // 挑外觀時沒有用。轉 180 度才是正面。
+        _viewport.Camera.Orbit(Microsoft.Xna.Framework.MathHelper.ToRadians(yawDegrees), 0f);
+
+        _viewport.Render(_session.Model, size, size);
+        return _viewport.Target;
+    }
+
     public void PrepareFrame()
     {
         _viewportTexture = _viewport.Render(_session.Model, _viewportWidth, _viewportHeight);

@@ -270,6 +270,14 @@ var options = new StudioOptions(
     Height: height,
     RunSeconds: parsed.TryGetValue("seconds", out var s) && double.TryParse(s, out double seconds) ? seconds : 0d,
     ScreenshotPath: parsed.GetValueOrDefault("screenshot"),
+    RenderPath: parsed.GetValueOrDefault("render"),
+    RenderSize: parsed.TryGetValue("render-size", out var renderSizeText) && int.TryParse(renderSizeText, out int renderSize)
+        ? Math.Clamp(renderSize, 64, 2048)
+        : 640,
+    // 預設轉 180 度：相機的初始角度看到的是模型背面。
+    RenderYaw: parsed.TryGetValue("render-yaw", out var yawText) && float.TryParse(yawText, out float yaw)
+        ? yaw
+        : 180f,
     InitialSelection: parsed.GetValueOrDefault("open"),
     InitialPanels: parsed.GetValueOrDefault("panels"),
     InitialKind: parsed.GetValueOrDefault("kind"),

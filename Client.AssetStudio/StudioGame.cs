@@ -13,6 +13,9 @@ public sealed record StudioOptions(
     int Height,
     double RunSeconds,
     string? ScreenshotPath,
+    string? RenderPath,
+    int RenderSize,
+    float RenderYaw,
     string? InitialSelection,
     string? InitialPanels,
     string? InitialKind,
@@ -311,6 +314,12 @@ public sealed class StudioGame : Game
             if (_options.ScreenshotPath is not null)
                 SaveScreenshot(_options.ScreenshotPath);
 
+            // --render：把模型單獨算成一張圖。
+            // 自動化模式下 ImGui 的停靠版面只給視埠 314×134，模型小到看不見，
+            // 所以抓背景緩衝是驗證不了「模型長什麼樣」的。
+            if (_options.RenderPath is not null)
+                SaveModelRender(_options.RenderPath);
+
             Exit();
         }
 
@@ -319,13 +328,23 @@ public sealed class StudioGame : Game
 
     private void SelectByName(string wanted)
     {
-        var entry = _session.Catalog.Entries.FirstOrDefault(e =>
+        // 比對分三輪，順序不能換。
+        //
+        // Detail 的精確比對一定要排在子字串前面：職業角色的 Detail 是 "Class14"，
+        // 而手套 GloveClass14 的**名稱**也含有 "Class14"。子字串放前面的話
+        // `--open Class14` 會選到那隻手套 —— 而且它還排在職業角色前面
+        // （分類名 "手套" 的碼位小於 "職業角色"）。
+        var entries = _session.Catalog.Entries;
+
+        var entry = entries.FirstOrDefault(e =>
                         e.Name.Equals(wanted, StringComparison.OrdinalIgnoreCase)
                      || e.ClassName?.Equals(wanted, StringComparison.OrdinalIgnoreCase) == true
                      || e.ModelPath.EndsWith(wanted, StringComparison.OrdinalIgnoreCase))
-                    // 精確比對找不到就退成子字串。名稱是「幻影騎士 Illusion Knight」
+                 ?? entries.FirstOrDefault(e =>
+                        e.Detail.Equals(wanted, StringComparison.OrdinalIgnoreCase))
+                    // 最後才退成子字串。名稱是「幻影騎士 Illusion Knight」
                     // 這種中英並列的形式，要求打完整串太苛刻。
-                 ?? _session.Catalog.Entries.FirstOrDefault(e =>
+                 ?? entries.FirstOrDefault(e =>
                         e.Name.Contains(wanted, StringComparison.OrdinalIgnoreCase)
                      || e.Detail.Contains(wanted, StringComparison.OrdinalIgnoreCase));
 
@@ -338,6 +357,31 @@ public sealed class StudioGame : Game
         {
             _session.Report($"找不到「{wanted}」", failed: true);
         }
+    }
+
+    private void SaveModelRender(string path)
+    {
+        if (_session.Model is null)
+        {
+            _session.Report($"沒有載入模型，算不出圖（選取={_session.Selected?.Name ?? "無"}）", failed: true);
+            return;
+        }
+
+        var target = _ui!.RenderModel(_options.RenderSize, _options.RenderYaw);
+        if (target is null)
+        {
+            _session.Report("視埠沒有 render target", failed: true);
+            return;
+        }
+
+        // Render 之後 GraphicsDevice 仍指著 render target，先解開才存得到。
+        GraphicsDevice.SetRenderTarget(null);
+
+        using var stream = File.Create(path);
+        target.SaveAsPng(stream, target.Width, target.Height);
+
+        Console.WriteLine($"已算圖：{_session.Selected?.Name}　→ {path}"
+                        + $"（{target.Width}×{target.Height}）");
     }
 
     private void SaveScreenshot(string path)

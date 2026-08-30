@@ -52,12 +52,19 @@ public static class PlayerPartClassifier
         string name = Path.GetFileNameWithoutExtension(modelPath);
 
         // 少數幾個不照規則的，直接點名。
-        switch (name.ToLowerInvariant())
+        //
+        // 比對前要先去掉結尾數字：檔案是 Helper01～04、Shadow01，
+        // 拿完整檔名去比對的話只有 Angel 與 player 會中，其餘落到「未分類」。
+        //
+        // 分類名稱刻意寫成「不是角色」而不是「其他」：這些東西被 Webzen 放在
+        // Data/Player/ 裡，而目錄是按資料夾分類的，所以它們會跟職業角色排在一起。
+        // 名稱不講清楚的話，第一個看到 Angel 的人會以為分類錯了。
+        switch (name.TrimEnd('0', '1', '2', '3', '4', '5', '6', '7', '8', '9').ToLowerInvariant())
         {
-            case "player": return new Classification("角色骨架", "所有角色動作的來源（約 380 個動作）");
-            case "angel": return new Classification("其他", "守護天使");
-            case "shadow": return new Classification("其他", "影子");
-            case "helper": return new Classification("其他", "輔助物件");
+            case "player": return new Classification("角色骨架", "所有角色動作的來源（380 個動作，本身 0 網格）");
+            case "angel":  return new Classification("不是角色（寵物／影子／骨架）", "守護天使，寵物模型");
+            case "shadow": return new Classification("不是角色（寵物／影子／骨架）", "角色腳下的影子");
+            case "helper": return new Classification("不是角色（寵物／影子／骨架）", "飛行輔助寵物（FlyingHelperObject）");
         }
 
         foreach (var (token, slotName) in Slots)
@@ -91,5 +98,5 @@ public static class PlayerPartClassifier
     }
 
     public static IEnumerable<string> AllGroupNames =>
-        Slots.Select(s => s.Name).Concat(["角色骨架", "其他", "未分類"]);
+        Slots.Select(s => s.Name).Concat(["角色骨架", "不是角色（寵物／影子／骨架）", "未分類"]);
 }
