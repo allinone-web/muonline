@@ -25,15 +25,38 @@ namespace Client.Main.Worlds
         // 這樣 tools/mu golden 拍出來的取景就等於真機看到的取景 ——
         // 兩邊各寫各的相機，比出來的差異會分不清是「渲染不同」還是「根本沒看同一個地方」。
         private const float CameraYawDegrees = -45f;
-        private const float CameraPitchDegrees = 13f;
+        private const float CameraPitchDegrees = 20f;
         private const float CameraDistance = 1400f;
         private const float StageFieldOfView = 35f;
 
         /// <summary>鏡頭焦點抬到胸口高度，角色才不會貼在畫面下緣。</summary>
         private const float CameraFocusHeight = 80f;
 
+        /// <summary>
+        /// 角色整排往鏡頭方向前移多少。
+        ///
+        /// 「角色要更大」與「地圖不要被放大到看得出貼圖模糊」是衝突的，除非把
+        /// 兩個距離拆開：鏡頭與地形的距離維持 CameraDistance 不動（草地保持細膩），
+        /// 只把角色往鏡頭推近。角色模型的解析度撐得住特寫，地形貼圖撐不住。
+        /// </summary>
+        private const float CharacterForwardOffset = 520f;
+
+        /// <summary>
+        /// 選中的角色往鏡頭方向踏出多少。
+        ///
+        /// 位移比發光更容易讀懂 —— 玩家一眼就知道「這個被選中了」，
+        /// 而且不需要新的 shader（iOS 的 .fx 在 macOS 編不動，要送 CI）。
+        /// </summary>
+        private const float SelectedStepDistance = 95f;
+
+        /// <summary>選中的角色相對於自己站位的位移。</summary>
+        public static Vector3 SelectedStepOffset => TowardCamera * SelectedStepDistance;
+
+        /// <summary>名字標籤與角色腳底之間留多少空隙（螢幕像素）。</summary>
+        private const float LabelScreenGap = 10f;
+
         /// <summary>角色並排的間距（世界單位，一格 = 100）。翅膀很寬，太小會黏在一起。</summary>
-        private const float SlotSpacing = 240f;
+        private const float SlotSpacing = 310f;
 
         /// <summary>
         /// 角色面向。
@@ -45,10 +68,24 @@ namespace Client.Main.Worlds
         /// </summary>
         private const float CharacterFacingDegrees = CameraYawDegrees + 270f;
 
-        private readonly Vector3 _characterDisplayPosition =
+        /// <summary>舞台中心：鏡頭取景與物件裁切都以它為準。</summary>
+        private static readonly Vector3 StageCenter =
             new(StageTileX * Constants.TERRAIN_SCALE + Constants.TERRAIN_SCALE / 2f,
                 StageTileY * Constants.TERRAIN_SCALE + Constants.TERRAIN_SCALE / 2f,
                 StageGroundZ);
+
+        /// <summary>從舞台中心指向鏡頭的水平單位向量。</summary>
+        private static Vector3 TowardCamera
+        {
+            get
+            {
+                float yaw = MathHelper.ToRadians(CameraYawDegrees);
+                return new Vector3(-MathF.Cos(yaw), -MathF.Sin(yaw), 0f);
+            }
+        }
+
+        private readonly Vector3 _characterDisplayPosition =
+            StageCenter + (TowardCamera * CharacterForwardOffset);
         private readonly Vector3 _characterDisplayAngle =
             new(0, 0, MathHelper.ToRadians(CharacterFacingDegrees));
         private ILogger<SelectWorld> _logger;
@@ -95,8 +132,8 @@ namespace Client.Main.Worlds
                     MuGame.AppSettings?.Graphics?.Mobile?.SelectSceneZoom ?? 1f);
             }
 
-            var focus = _characterDisplayPosition + new Vector3(0f, 0f, CameraFocusHeight);
-
+            // 鏡頭位置以「舞台中心」算 —— 地形的取景距離因此不受角色前移影響。
+            // 目標則對準角色，角色才會留在畫面中央。
             float yaw = MathHelper.ToRadians(CameraYawDegrees);
             float pitch = MathHelper.ToRadians(CameraPitchDegrees);
             float horizontal = CameraDistance * MathF.Cos(pitch);
@@ -105,11 +142,14 @@ namespace Client.Main.Worlds
                 -MathF.Sin(yaw) * horizontal,
                 CameraDistance * MathF.Sin(pitch));
 
+            var cameraPosition = StageCenter + new Vector3(0f, 0f, CameraFocusHeight) + offset;
+            var target = _characterDisplayPosition + new Vector3(0f, 0f, CameraFocusHeight);
+
             cameraState = cameraState.With(
                 viewFar: MathF.Max(8000f, CameraDistance * 3f),
                 fieldOfView: fieldOfView,
-                position: focus + offset,
-                target: focus);
+                position: cameraPosition,
+                target: target);
         }
 
         public void SetController(CharacterSelectionController controller)
@@ -150,8 +190,8 @@ namespace Client.Main.Worlds
 
         protected override bool ShouldCreateMapObject(Client.Data.OBJS.IMapObject mapObj)
         {
-            float dx = mapObj.Position.X - _characterDisplayPosition.X;
-            float dy = mapObj.Position.Y - _characterDisplayPosition.Y;
+            float dx = mapObj.Position.X - StageCenter.X;
+            float dy = mapObj.Position.Y - StageCenter.Y;
             return (dx * dx) + (dy * dy) <= StageObjectRadius * StageObjectRadius;
         }
 
@@ -209,7 +249,10 @@ namespace Client.Main.Worlds
                     var virtualPos = UiScaler.ToVirtual(new Point((int)sp.X, (int)sp.Y));
 
                     label.X = (int)(virtualPos.X - s.X / 2f);
-                    label.Y = (int)(virtualPos.Y - s.Y - 4);
+
+                    // 排在投影點「下方」而不是上方 —— 錨點本來就在腳底下方一點，
+                    // 原本又往上推一個字高，結果標籤幾乎貼著角色的腳。
+                    label.Y = (int)(virtualPos.Y + LabelScreenGap);
                     label.ControlSize = new Point((int)s.X, (int)s.Y);
                     label.Visible = true;
                 }

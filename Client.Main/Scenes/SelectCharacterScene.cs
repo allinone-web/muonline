@@ -196,6 +196,10 @@ namespace Client.Main.Scenes
 
         private void UpdateLoadProgress(string message, float progress)
         {
+            // 選角場景載入到一半卡住時，這是唯一看得到進度的地方 ——
+            // 載入畫面本身在 LoginScene 底下，玩家與開發者都看不見。
+            Console.WriteLine($"[Scene] select-character {progress:P0}: {message}");
+
             MuGame.ScheduleOnMainThread(() =>
             {
                 if (_loadingScreen != null && _loadingScreen.Visible)
@@ -404,10 +408,17 @@ namespace Client.Main.Scenes
             // 原本是右下角的直排，會擋掉右邊三分之一的舞台 ——
             // 換成諾利亞草地當背景之後，那塊景色不該被按鈕蓋住。
             int left = Client.Main.Controls.UI.MobileUi.LeftEdge;
-            int rowWidth = screenWidth - left - inset;
-            int rowY = screenHeight - inset - BUTTON_HEIGHT;
+            int available = screenWidth - left - inset;
 
-            _characterPanelRect = new Rectangle(left, rowY, rowWidth, BUTTON_HEIGHT);
+            // 只佔可用寬度的八成並置中：螢幕左右下角是圓角，貼著邊緣的按鈕會有
+            // 一部分落在看不到的區域裡。
+            int rowWidth = (int)(available * MobileButtonRowWidthRatio);
+            int rowX = left + ((available - rowWidth) / 2);
+
+            // 再往上抬一點 —— 貼著螢幕最底部容易在滑動或握持時誤觸。
+            int rowY = screenHeight - inset - BUTTON_HEIGHT - MobileButtonRowBottomLift;
+
+            _characterPanelRect = new Rectangle(rowX, rowY, rowWidth, BUTTON_HEIGHT);
             _buttonSectionRect = _characterPanelRect;
             _characterListRect = Rectangle.Empty;
             _characterCardRects.Clear();
@@ -416,6 +427,12 @@ namespace Client.Main.Scenes
 
         /// <summary>手機動作鈕的寬度。比桌面的面板窄 —— 沒有清單就不需要那麼寬。</summary>
         private const int MobileButtonWidth = 320;
+
+        /// <summary>底部按鈕列佔可用寬度的比例。圓角螢幕的兩側看不到內容，不要貼邊。</summary>
+        private const float MobileButtonRowWidthRatio = 0.8f;
+
+        /// <summary>底部按鈕列離螢幕底緣再抬高多少，避免誤觸。</summary>
+        private const int MobileButtonRowBottomLift = 28;
 
         /// <summary>
         /// 角色模型在畫面上的位置（虛擬座標）。左右箭頭要貼著它擺，
@@ -1575,7 +1592,9 @@ namespace Client.Main.Scenes
 
             if (s_mobile)
             {
-                DrawMobileCharacterCaption(sb, pixel, font);
+                // 名字、職業與圓點原本畫在畫面中央 —— 那是「一次只顯示一個角色」
+                // 時代的產物。五個角色並排、各自帶標籤之後，它只是重複，
+                // 而且蓋在中間那個角色身上。
                 return;
             }
 
@@ -1633,62 +1652,6 @@ namespace Client.Main.Scenes
             for (int i = 0; i < _characters.Count && i < _characterCardRects.Count; i++)
             {
                 DrawCharacterCard(sb, pixel, font, i, _characterCardRects[i], _characters[i]);
-            }
-        }
-
-        /// <summary>
-        /// 角色底下的說明：名字、職業與等級，再下面一排圓點表示「總共幾個、現在第幾個」。
-        ///
-        /// 圓點是必要的：拿掉清單之後，玩家沒有別的方式知道自己有幾個角色。
-        /// 這也是清單原本唯一還在做的事 —— 而它連這件事都做錯了（第四個看不到）。
-        /// </summary>
-        private void DrawMobileCharacterCaption(SpriteBatch sb, Texture2D pixel, SpriteFont font)
-        {
-            if (_characters.Count == 0 || _currentCharacterIndex < 0 || _currentCharacterIndex >= _characters.Count)
-                return;
-
-            var anchor = _mobileCharacterAnchor;
-            if (anchor == Vector2.Zero)
-                anchor = new Vector2(ViewSize.X * 0.5f, ViewSize.Y * 0.5f);
-
-            var character = _characters[_currentCharacterIndex];
-
-            // 名字：模型腳底再往下一點。角色高約 220 px（見 TryGetCharacterScreenPosition
-            // 的抬升量），所以從錨點往下 150 就在腳邊。
-            int y = (int)MathF.Round(anchor.Y) + 150;
-            y = Math.Min(y, _buttonSectionRect.Y - 110);
-
-            var nameSize = font.MeasureString(character.Name) *
-                Client.Main.Controls.UI.MobileUi.ScaleFor(Client.Main.Controls.UI.MobileUi.TextTitle);
-            Client.Main.Controls.UI.MobileUi.DrawText(sb, font, character.Name,
-                new Vector2(anchor.X - nameSize.X / 2f, y),
-                Client.Main.Controls.UI.MobileUi.TextTitle,
-                Client.Main.Controls.UI.MobileUi.TextPrimary);
-
-            y += 30;
-            // 字型有 U+2022 但沒有 U+00B7，中間點只能用 • （選角卡片原本就是這樣）。
-            string info = $"{character.Class}  •  Lv.{character.Level}";
-            var infoSize = font.MeasureString(info) *
-                Client.Main.Controls.UI.MobileUi.ScaleFor(Client.Main.Controls.UI.MobileUi.TextLabel);
-            Client.Main.Controls.UI.MobileUi.DrawText(sb, font, info,
-                new Vector2(anchor.X - infoSize.X / 2f, y),
-                Client.Main.Controls.UI.MobileUi.TextLabel,
-                Client.Main.Controls.UI.MobileUi.TextDim);
-
-            // 圓點
-            y += 34;
-            const int dotRadius = 5;
-            const int dotSpacing = 22;
-            float startX = anchor.X - (_characters.Count - 1) * dotSpacing / 2f;
-            for (int i = 0; i < _characters.Count; i++)
-            {
-                bool current = i == _currentCharacterIndex;
-                Client.Main.Controls.UI.MobileUi.DrawDisc(sb,
-                    new Vector2(startX + i * dotSpacing, y),
-                    current ? dotRadius : dotRadius - 1.5f,
-                    (current
-                        ? Client.Main.Controls.UI.MobileUi.TextPrimary
-                        : Client.Main.Controls.UI.MobileUi.TextDim) * (current ? 0.95f : 0.5f));
             }
         }
 

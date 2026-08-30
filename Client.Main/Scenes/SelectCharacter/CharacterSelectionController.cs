@@ -30,6 +30,9 @@ namespace Client.Main.Scenes.SelectCharacter
                 : 1f;
 
         // === Private state ===
+        /// <summary>舞台中心。SetActiveCharacter 要用它重算每個角色的站位。</summary>
+        private Vector3 _displayPosition;
+
         private readonly List<PlayerObject> _characters = new();
         private readonly List<(string Name, CharacterClassNumber Class, ushort Level, byte[] Appearance)> _characterInfos = new();
         private readonly Dictionary<PlayerObject, LabelControl> _labels = new();
@@ -83,6 +86,7 @@ namespace Client.Main.Scenes.SelectCharacter
             _characterInfos.Clear();
             _characterInfos.AddRange(characterInfos);
             _activeIndex = -1;
+            _displayPosition = displayPosition;
 
             if (characterInfos.Count == 0)
             {
@@ -170,6 +174,7 @@ namespace Client.Main.Scenes.SelectCharacter
             var converted = characters.Select(p => (p.Name, (CharacterClassNumber)p.Class, p.Level, Array.Empty<byte>()));
             _characterInfos.AddRange(converted);
             _activeIndex = -1;
+            _displayPosition = displayPosition;
 
             for (int i = 0; i < characters.Count; i++)
             {
@@ -224,7 +229,9 @@ namespace Client.Main.Scenes.SelectCharacter
         {
             return new LabelControl
             {
-                Text = $"Lv.{level}  {name}",
+                // 兩行：等級一行、名字一行。並排展示時單行會太寬，
+                // 相鄰角色的標籤容易左右相碰。
+                Text = $"Lv.{level}\n{name}",
                 FontSize = 14,
                 TextColor = Color.White,
                 HasShadow = true,
@@ -262,6 +269,12 @@ namespace Client.Main.Scenes.SelectCharacter
 
                 if (_labels.TryGetValue(player, out var label))
                     label.Visible = true;
+
+                // 選中的往鏡頭踏一步。位移比發光好讀，而且不必動 shader。
+                var slot = _displayPosition + Worlds.SelectWorld.SlotOffset(i, _characters.Count);
+                player.Position = i == index
+                    ? slot + Worlds.SelectWorld.SelectedStepOffset
+                    : slot;
 
                 if (i != index && player.Status == GameControlStatus.Ready)
                     player.PlayAction(player.GetCorrectIdleAction());
