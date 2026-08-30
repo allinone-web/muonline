@@ -1373,11 +1373,13 @@ namespace Client.Main
             {
                 if (requestGeneration != Volatile.Read(ref _sceneChangeGeneration))
                 {
+                    Console.WriteLine($"[Scene] superseded before start: {newScene.GetType().Name}");
                     newScene.Dispose();
                     return;
                 }
 
                 string sceneName = newScene.GetType().Name;
+                Console.WriteLine($"[Scene] change starting: {sceneName}");
                 _logger?.LogInformation("--- Scene change starting: {SceneType}", sceneName);
                 _telemetryPublisher?.PublishEvent("scene", $"Loading {sceneName}", TelemetrySeverity.Info);
 
@@ -1386,6 +1388,7 @@ namespace Client.Main
                 await YieldToNextFrameAsync(
                     $"SceneChange.{sceneName}.Prepare",
                     MainThreadDispatcher.WorkPriority.Critical);
+                Console.WriteLine($"[Scene] {sceneName}: prepare yield done");
 
                 BaseScene previousScene = ActiveScene;
                 bool activateBeforeInitialization =
@@ -1398,6 +1401,7 @@ namespace Client.Main
                         // visible. Its first active frame therefore already contains the
                         // background and progress UI instead of a cleared black target.
                         await newScene.PrepareForFirstPresentedFrameAsync();
+                        Console.WriteLine($"[Scene] {sceneName}: first frame prepared");
                     }
                     catch (Exception preparationException)
                     {
@@ -1410,6 +1414,9 @@ namespace Client.Main
                             _logger?.LogDebug(disposeException, "Failed disposing scene after presentation preparation error.");
                         }
 
+                        // 場景切換失敗原本只寫進 ILogger，而裝置上的 console provider
+                        // 預設關閉 —— 表現是「按了登入，什麼事都沒發生」，沒有任何線索。
+                        Console.WriteLine($"[Scene] prepare failed for {sceneName}: {preparationException}");
                         _logger?.LogError(
                             preparationException,
                             "Scene presentation preparation failed for {SceneType}.",
@@ -1423,6 +1430,7 @@ namespace Client.Main
 
                     if (requestGeneration != Volatile.Read(ref _sceneChangeGeneration))
                     {
+                        Console.WriteLine($"[Scene] superseded during prepare: {sceneName}");
                         newScene.Dispose();
                         return;
                     }
@@ -1472,7 +1480,9 @@ namespace Client.Main
                     await YieldToNextFrameAsync(
                         $"SceneChange.{sceneName}.Initialize",
                         MainThreadDispatcher.WorkPriority.Critical);
+                    Console.WriteLine($"[Scene] {sceneName}: initializing");
                     await newScene.InitializeWithProgressReporting(null);
+                    Console.WriteLine($"[Scene] {sceneName}: initialized");
 
                     // A scene which was activated before initialization did not have its world
                     // yet when OnActivated was first called. Re-run the activation hook now so
@@ -1500,6 +1510,7 @@ namespace Client.Main
                     }
 
                     _scopeManager?.CompleteWorldTransition();
+                    Console.WriteLine($"[Scene] initialization failed for {sceneName}: {ex}");
                     _logger?.LogError(ex, "Scene initialization failed for {SceneType}.", sceneName);
                     _telemetryPublisher?.PublishEvent(
                         "scene",
@@ -1575,6 +1586,7 @@ namespace Client.Main
             }
             catch (Exception ex)
             {
+                Console.WriteLine("[Scene] unhandled scene change failure: " + ex);
                 _logger?.LogError(ex, "Unhandled scene change failure.");
             }
         }

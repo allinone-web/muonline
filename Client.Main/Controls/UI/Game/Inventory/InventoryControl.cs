@@ -87,7 +87,10 @@ namespace Client.Main.Controls.UI.Game.Inventory
         private int _infoScaleWidth = -1;
         private float _infoScale = MobileUi.ScaleFor(MobileUi.TextBody);
 
-        private const int HEADER_HEIGHT = 52;
+        /// <summary>標題列高度。手機一律用 MobileUi.WindowTitleHeight，
+        /// 和技能、地圖、交易、設定同一個值 —— 每個視窗自己訂一個數字，
+        /// 正是使用者說「每個面板都不一樣」的來源。</summary>
+        private static int HEADER_HEIGHT => MobileUi.IsMobile ? MobileUi.WindowTitleHeight : 52;
         private const int SECTION_SPACING = 16;
         private const int PANEL_PADDING = 12;
         private static readonly int EQUIP_SECTION_HEIGHT = s_mobile ? 400 : 270;
@@ -761,7 +764,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 width = content;
 
                 // 高度只需要容納標題 + 背包格（裝備欄比它矮），不再有底列
-                height = HEADER_HEIGHT + 8 + Rows * INVENTORY_SQUARE_HEIGHT + 16;
+                height = HEADER_HEIGHT + 24 + Rows * INVENTORY_SQUARE_HEIGHT + 16;
 
                 // 一定要夾進畫面。「高度由內容決定」在 720p 的桌面視窗裡沒問題，
                 // 在 756 高的畫布上會直接長到畫面外，而且是無聲的 ——
@@ -903,7 +906,9 @@ namespace Client.Main.Controls.UI.Game.Inventory
         {
             // 手機沒有底列。金幣與修理鈕都併進標題列 ——
             // 少一整列（約 64 px）視窗才矮得下來，才能在畫面上垂直置中。
-            int contentTop = HEADER_HEIGHT + 8;
+            // 區塊標題（EQUIPMENT）畫在欄位上方 18 px 處，所以內容要離標題列遠一點，
+            // 否則那行字會壓進標題列裡被截掉。
+            int contentTop = HEADER_HEIGHT + 24;
             int contentBottom = WINDOW_HEIGHT - 14;
             int contentHeight = contentBottom - contentTop;
 
@@ -948,9 +953,11 @@ namespace Client.Main.Controls.UI.Game.Inventory
             // 右上角，兩者就疊在同一塊區域 —— 想關視窗結果開了另一個，或反過來。
             // 這在滑鼠上不成問題（指標很精準），在拇指上每天都會發生。
             // 遊戲內所有視窗一律左上角關閉，見 docs/手機遊戲界面規格.md。
-            int btnSize = 46;
-            _closeButtonRect = new Rectangle(12, 3, btnSize, btnSize);
-            _footerRightButtonRect = new Rectangle(_closeButtonRect.Right + 10, 3, btnSize, btnSize);
+            // 位置由 MobileUi 決定，和其他視窗一模一樣（左上角、垂直置中）。
+            _closeButtonRect = MobileUi.WindowCloseButtonRect(new Rectangle(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT));
+            _footerRightButtonRect = new Rectangle(
+                _closeButtonRect.Right + 10, _closeButtonRect.Y,
+                MobileUi.CloseButtonSize, MobileUi.CloseButtonSize);
 
             // 金幣改到標題列右側，補上左邊讓出來的位置
             const int zenFieldWidth = 200;
@@ -1416,6 +1423,14 @@ namespace Client.Main.Controls.UI.Game.Inventory
                              iconRect.Width / 4, Theme.AccentBright * 0.6f);
 
             // Zen field background
+            if (MobileUi.IsMobile)
+            {
+                // 一塊底色就夠了。三層（外框 + 內框 + 內部再一塊更深的底）在標題列裡
+                // 只會讓金幣欄看起來像另一個視窗。
+                spriteBatch.Draw(pixel, _zenFieldRect, MobileUi.FieldFill * 0.9f);
+                return;
+            }
+
             DrawPanel(spriteBatch, _zenFieldRect, Theme.SlotBg);
 
             // Inner darker area

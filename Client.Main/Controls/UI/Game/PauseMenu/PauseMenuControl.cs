@@ -31,6 +31,57 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             public int ContentTop { get; set; } = 0;
             public bool DrawContentSurface { get; set; }
 
+            /// <summary>手機的標題文字。由 MobileUi.DrawWindowChrome 統一畫在標題列上。</summary>
+            public string MobileTitle { get; set; }
+
+            /// <summary>關閉鈕是否被按著。位置由 MobileUi.WindowCloseButtonRect 決定。</summary>
+            public bool ClosePressed { get; private set; }
+
+            /// <summary>關閉鈕被按下時要做的事。設了才會畫得動、按得到。</summary>
+            public Action CloseRequested { get; set; }
+
+            private bool _closeWasPressed;
+
+            /// <summary>
+            /// 關閉鈕的觸控處理。
+            ///
+            /// 其他六個視窗都有左上角的關閉鈕，只有設定面板沒有 —— 玩家會先去左上角找，
+            /// 找不到才想起要按底下的 Continue。這裡補上，行為與其他視窗一致：
+            /// 按下與放開都要落在按鈕上才算數。
+            /// </summary>
+            public override void Update(GameTime gameTime)
+            {
+                base.Update(gameTime);
+
+                if (!MobileUi.IsMobile || !Visible || CloseRequested == null)
+                    return;
+
+                var closeRect = MobileUi.WindowCloseButtonRect(DisplayRectangle);
+                var mouse = MuGame.Instance.UiMouseState;
+                bool pressed = mouse.LeftButton == Microsoft.Xna.Framework.Input.ButtonState.Pressed;
+                var position = new Point(mouse.X, mouse.Y);
+
+                if (pressed && !_closeWasPressed)
+                {
+                    ClosePressed = closeRect.Contains(position);
+                }
+                else if (!pressed && _closeWasPressed)
+                {
+                    bool activate = ClosePressed && closeRect.Contains(position);
+                    ClosePressed = false;
+                    _closeWasPressed = false;
+
+                    if (activate)
+                    {
+                        Controllers.SoundController.Instance.PlayBuffer("Sound/iButtonClick.wav");
+                        CloseRequested();
+                    }
+                    return;
+                }
+
+                _closeWasPressed = pressed;
+            }
+
             public PausePanelControl()
             {
                 BackgroundColor = Color.Transparent;
@@ -48,6 +99,18 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 var rect = DisplayRectangle;
                 if (pixel == null)
                 {
+                    base.Draw(gameTime);
+                    return;
+                }
+
+                if (MobileUi.IsMobile)
+                {
+                    // 和背包、技能、地圖完全一樣的外框。桌面那套是「兩層投影 + 面板漸層 +
+                    // 標題列漸層 + 一條金色底線 + 內容區底 + 外框 + 內框 + 四角托架」共八層，
+                    // 在手機上那八層只會讓一個面板看起來像三個疊在一起的面板。
+                    MobileUi.DrawWindowChrome(sprite, GraphicsManager.Instance.Font, rect,
+                        MobileTitle ?? string.Empty, ClosePressed);
+
                     base.Draw(gameTime);
                     return;
                 }
@@ -1110,7 +1173,8 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             // 12 x 46 = 552，加上標題列 70 與群組間隔 14 就是 636，560 裝不下。
             // 畫布高度約 756（滿版之後），660 還留得下上下的餘裕。
             private const int MobilePanelHeight = 660;
-            private const int MobileHeaderHeight = 64;
+            /// <summary>標題列高度：和背包、技能、地圖、交易同一個值。</summary>
+            private static int MobileHeaderHeight => MobileUi.WindowTitleHeight;
             private const int MobilePadding = 16;
             // 分類的字放大之後，250 會讓 "World & Visibility" 之類的字被截掉
             private const int MobileCategoryWidth = 290;
@@ -1152,20 +1216,26 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 Interactive = true;
                 HeaderHeight = IsMobile ? MobileHeaderHeight : 184;
                 ContentTop = IsMobile ? MobileHeaderHeight + 6 : 190;
+                MobileTitle = "SETTINGS";
+                CloseRequested = () => _owner.Visible = false;
                 DrawContentSurface = true;
                 _panelWidth = ControlSize.X;
 
-                var title = new LabelControl
+                // 手機的標題由 DrawWindowChrome 畫（和所有視窗同一個位置、同一個級距）。
+                if (!IsMobile)
                 {
-                    Text = "SETTINGS",
-                    FontSize = IsMobile ? MobileUi.TextTitle : 22f,
-                    TextColor = ModernHudTheme.TextGold,
-                    IsBold = true,
-                    Align = Models.ControlAlign.HorizontalCenter,
-                    X = 0,
-                    Y = IsMobile ? 20 : 18
-                };
-                Controls.Add(title);
+                    var title = new LabelControl
+                    {
+                        Text = "SETTINGS",
+                        FontSize = 22f,
+                        TextColor = ModernHudTheme.TextGold,
+                        IsBold = true,
+                        Align = Models.ControlAlign.HorizontalCenter,
+                        X = 0,
+                        Y = 18
+                    };
+                    Controls.Add(title);
+                }
 
                 // 手機不放副標：一句沒有資訊的句子換走 30 px 的垂直空間不划算
                 if (!IsMobile)
@@ -1232,11 +1302,15 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
 
                 if (IsMobile)
                 {
-                    AddActionRow("Continue", () => _owner.Visible = false);
-                    AddActionRow("Party", () => _owner.TogglePartyPanelFromMenu());
-                    AddActionRow("Character", () => _ = _owner.LeaveToCharacterSelectAsync());
-                    AddActionRow("Server", () => _ = _owner.LeaveToServerSelectAsync());
-                    AddActionRow("Exit", () => _ = _owner.ExitGameAsync(), isDanger: true);
+                    // 全大寫，和遊戲裡其他按鈕（ENTER GAME / SEND / ASSIGN）一致。
+                    //
+                    // <b>手機沒有 EXIT。</b>iOS 不允許 app 自行終止（見 MuGame.RequestExit），
+                    // 那一列按下去只會登出然後什麼都不發生 —— 一顆看得到、按得到、
+                    // 但做不了事的按鈕比沒有這顆更糟。要換伺服器請用 SERVER。
+                    AddActionRow("CONTINUE", () => _owner.Visible = false);
+                    AddActionRow("PARTY", () => _owner.TogglePartyPanelFromMenu());
+                    AddActionRow("CHARACTER", () => _ = _owner.LeaveToCharacterSelectAsync());
+                    AddActionRow("SERVER", () => _ = _owner.LeaveToServerSelectAsync());
                 }
 
                 _closeButton = new PauseMenuButtonControl
@@ -1792,7 +1866,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
 
             private void AddActionRow(string label, Action onClick, bool isDanger = false)
             {
-                const int count = 5;
+                const int count = 4;
                 int areaX = MobileOptionAreaX;
                 int areaWidth = MobileOptionAreaWidth;
                 int gap = MobileActionBarGap;
@@ -1808,7 +1882,8 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     ControlSize = new Point(width, MobileActionBarHeight),
                     ViewSize = new Point(width, MobileActionBarHeight),
                     AutoViewSize = false,
-                    FontSize = 14f,
+                    // 14 不在文字級距上。動作列和左欄的分類是同一個層級，用同一級。
+                    FontSize = MobileUi.TextHeading,
                     TextColor = ModernHudTheme.TextGray
                 };
                 button.Click += (s, e) => onClick();
@@ -2163,16 +2238,16 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                         Text = label,
                         X = ContentPaddingX,
                         Y = y,
-                        FontSize = 11.5f,
+                        FontSize = MobileUi.IsMobile ? MobileUi.TextBody : 11.5f,
                         TextColor = ModernHudTheme.TextWhite,
                         HasShadow = false
                     };
 
                     _valueLabel = new LabelControl
                     {
-                        X = panelWidth - 210,
+                        X = MobileUi.IsMobile ? panelWidth - 240 : panelWidth - 210,
                         Y = y,
-                        FontSize = 11f,
+                        FontSize = MobileUi.IsMobile ? MobileUi.TextBody : 11f,
                         TextColor = ModernHudTheme.TextGold,
                         BackgroundColor = new Color(8, 12, 18, 180),
                         UseControlSizeBackground = true,
@@ -2182,36 +2257,49 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                         ViewSize = new Point(70, 24)
                     };
 
+                    // 手機的加減鈕要能用拇指按：28x24 換算後只有約 12 pt，
+                    // 遠低於可以放心點的 44 pt。放大到 46 見方，並排在數值右邊。
+                    bool mobile = MobileUi.IsMobile;
+                    int stepSize = mobile ? MobileUi.CloseButtonSize : 28;
+                    int stepHeight = mobile ? MobileUi.CloseButtonSize : 24;
+                    int minusX = mobile ? panelWidth - stepSize * 2 - 12 - 8 : panelWidth - 130;
+                    int plusX = mobile ? panelWidth - stepSize - 12 : panelWidth - 96;
+                    int stepY = mobile ? y - (stepHeight - 24) / 2 : y - 2;
+                    var stepFill = mobile ? MobileUi.TitleBarFill * MobileUi.PanelAlpha : new Color(28, 35, 46, 230);
+                    var stepPressed = mobile ? MobileUi.TitleBarFill * 1.6f : new Color(18, 23, 31, 245);
+
                     _minusButton = new ButtonControl
                     {
                         Text = "-",
-                        ControlSize = new Point(28, 24),
-                        ViewSize = new Point(28, 24),
+                        ControlSize = new Point(stepSize, stepHeight),
+                        ViewSize = new Point(stepSize, stepHeight),
                         AutoViewSize = false,
-                        X = panelWidth - 130,
-                        Y = y - 2,
-                        BackgroundColor = new Color(28, 35, 46, 230),
-                        HoverBackgroundColor = new Color(48, 58, 73, 240),
-                        PressedBackgroundColor = new Color(18, 23, 31, 245),
-                        FontSize = 11f,
+                        X = minusX,
+                        Y = stepY,
+                        BackgroundColor = stepFill,
+                        // 手機的 hover 只在按著的時候出現（見 ButtonControl.ShowHover），
+                        // 所以停留色就是按下色，不再另外一種顏色。
+                        HoverBackgroundColor = mobile ? stepPressed : new Color(48, 58, 73, 240),
+                        PressedBackgroundColor = stepPressed,
+                        FontSize = mobile ? MobileUi.TextHeading : 11f,
                         TextColor = ModernHudTheme.TextWhite,
-                        HoverTextColor = ModernHudTheme.TextGold
+                        HoverTextColor = mobile ? ModernHudTheme.TextWhite : ModernHudTheme.TextGold
                     };
 
                     _plusButton = new ButtonControl
                     {
                         Text = "+",
-                        ControlSize = new Point(28, 24),
-                        ViewSize = new Point(28, 24),
+                        ControlSize = new Point(stepSize, stepHeight),
+                        ViewSize = new Point(stepSize, stepHeight),
                         AutoViewSize = false,
-                        X = panelWidth - 96,
-                        Y = y - 2,
-                        BackgroundColor = new Color(28, 35, 46, 230),
-                        HoverBackgroundColor = new Color(48, 58, 73, 240),
-                        PressedBackgroundColor = new Color(18, 23, 31, 245),
-                        FontSize = 11f,
+                        X = plusX,
+                        Y = stepY,
+                        BackgroundColor = stepFill,
+                        HoverBackgroundColor = mobile ? stepPressed : new Color(48, 58, 73, 240),
+                        PressedBackgroundColor = stepPressed,
+                        FontSize = mobile ? MobileUi.TextHeading : 11f,
                         TextColor = ModernHudTheme.TextWhite,
-                        HoverTextColor = ModernHudTheme.TextGold
+                        HoverTextColor = mobile ? ModernHudTheme.TextWhite : ModernHudTheme.TextGold
                     };
 
                     _minusButton.Click += (s, e) => AdjustVolume(-_step);

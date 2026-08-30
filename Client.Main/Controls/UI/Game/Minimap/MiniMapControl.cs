@@ -919,6 +919,13 @@ namespace Client.Main.Controls.UI.Game
                 return;
             }
 
+            // 手機的地圖名稱已經是視窗標題（見 DrawWindowChrome），
+            // 再在地圖裡印一次就是同一個字出現兩次。
+            if (Mobile)
+            {
+                return;
+            }
+
             const float scale = 0.36f;
             string caption = _worldName.ToUpperInvariant();
             Vector2 size = _font.MeasureString(caption) * scale;

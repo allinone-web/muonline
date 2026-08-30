@@ -35,6 +35,17 @@ namespace Client.Main.Controls.UI.Common
             }
         }
         public Color TextColor { get; set; } = Color.White;
+        /// <summary>
+        /// 是否要畫成「滑鼠停留」的樣子。
+        ///
+        /// <b>手機上必須同時按著才算。</b>觸控沒有「停留」這個狀態：手指離開之後，
+        /// 游標會停在最後一次觸控的位置，那顆按鈕就永遠是 hover 樣式 ——
+        /// 設定面板裡總有一顆 + 或 - 看起來被選中，玩家會以為那是目前的設定值。
+        /// （同一個 bug 在選角卡片與 ModernBottomHud 各修過一次，這裡是第三處，
+        /// 所以直接修在按鈕的共同基底上。）
+        /// </summary>
+        private bool ShowHover => IsMouseOver && (!MobileUi.IsMobile || IsMousePressed);
+
         public Color HoverTextColor { get; set; } = Color.Yellow;
         public Color DisabledTextColor { get; set; } = Color.DarkGray;
         public Color HoverBackgroundColor { get; set; } = new Color(80, 80, 120, 200);
@@ -92,7 +103,7 @@ namespace Client.Main.Controls.UI.Common
                     baseTileY = (this.Texture.Height / this.TileHeight) > 3 ? 3 : 0;
                 }
                 else if (IsMousePressed) baseTileY = 2;
-                else if (IsMouseOver) baseTileY = 1;
+                else if (ShowHover) baseTileY = 1;
 
                 int maxTileY = (this.Texture.Height / this.TileHeight) - 1;
                 if (maxTileY < 0) maxTileY = 0;
@@ -118,7 +129,7 @@ namespace Client.Main.Controls.UI.Common
                 {
                     currentBgColor = PressedBackgroundColor * Alpha;
                 }
-                else if (IsMouseOver)
+                else if (ShowHover)
                 {
                     currentBgColor = HoverBackgroundColor * Alpha;
                 }
@@ -151,7 +162,7 @@ namespace Client.Main.Controls.UI.Common
                     _truncatedText = TruncateTextToFit(Text, DisplaySize.X - (TextPaddingX * 2));
                 }
 
-                Color currentTextColor = Enabled ? (IsMouseOver ? HoverTextColor : TextColor) : DisabledTextColor;
+                Color currentTextColor = Enabled ? (ShowHover ? HoverTextColor : TextColor) : DisabledTextColor;
                 Vector2 textSize = font.MeasureString(_truncatedText) * scale;
 
                 // Center text within the button's display rectangle
