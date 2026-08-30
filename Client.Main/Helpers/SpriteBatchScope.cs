@@ -65,18 +65,27 @@ namespace Client.Main.Helpers
             private readonly GraphicsDevice _device;
             private readonly RenderTargetBinding[] _previousTargets;
             private readonly bool _suspended;
+            private readonly ScopeEntry _suspendedEntry;
 
             internal RenderTargetSection(GraphicsDevice device, RenderTarget2D target)
             {
                 _device = device;
 
                 // 先把外層批次送出去 —— 此時綁定的還是原本的 target，內容才會畫對地方。
+                //
+                // 一定要 Pop 而不是 Peek：批次已經 End 了，若還留在堆疊上，section 內部
+                // 再開一個狀態不同的 SpriteBatchScope 時，建構子會以為它還開著而再 End
+                // 一次，丟出「Begin must be called before calling End」。那個例外會讓整個
+                // Scene.DrawUi 階段中止，畫面退回 DrawEmergencyFallbackFrame 的舊圖 ——
+                // 症狀是畫面靜止、UI 全部消失，但 Update 與輸入完全正常。
+                // 實際發生過：倉庫視窗（VaultControl 內層用 LinearClamp，與外層不同）。
                 var stack = Stack;
                 _suspended = stack.Count > 0;
+                _suspendedEntry = default;
                 if (_suspended)
                 {
-                    ScopeEntry current = stack.Peek();
-                    current.State.End(current.Batch);
+                    _suspendedEntry = stack.Pop();
+                    _suspendedEntry.State.End(_suspendedEntry.Batch);
                 }
 
                 _previousTargets = device.GetRenderTargets();
@@ -90,12 +99,8 @@ namespace Client.Main.Helpers
                 if (!_suspended)
                     return;
 
-                var stack = Stack;
-                if (stack.Count == 0)
-                    return;
-
-                ScopeEntry current = stack.Peek();
-                current.State.Begin(current.Batch);
+                Stack.Push(_suspendedEntry);
+                _suspendedEntry.State.Begin(_suspendedEntry.Batch);
             }
         }
 
