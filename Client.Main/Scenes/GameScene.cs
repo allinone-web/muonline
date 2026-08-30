@@ -105,6 +105,8 @@ namespace Client.Main.Scenes
         private VirtualJoystickControl _virtualJoystick;
         // 卡住診斷的心跳計時（見 UpdateMoveDiagnosticsHeartbeat）
         private double _moveDiagElapsedSeconds;
+        // 卡住診斷：UpdateVirtualJoystick 這一幀在哪裡跳掉
+        private string _moveDiagSkip = "n/a";
         private TouchActionButtonsControl _touchActionButtons;
         private TouchPickupListControl _touchPickupList;
 
@@ -891,22 +893,34 @@ namespace Client.Main.Scenes
         private void UpdateVirtualJoystick(GameTime gameTime)
         {
             if (_virtualJoystick == null || _hero == null)
+            {
+                _moveDiagSkip = "no-joystick-or-hero";
                 return;
+            }
 
             // 觸控落在技能按鈕上時不要同時驅動搖桿
             var uiMouse = MuGame.Instance.UiMouseState;
             if (_touchActionButtons != null
                 && _touchActionButtons.ContainsPoint(new Vector2(uiMouse.X, uiMouse.Y)))
             {
+                _moveDiagSkip = "action-buttons";
                 return;
             }
 
             if (!_virtualJoystick.ShouldIssueMove(gameTime, out var screenDirection))
+            {
+                _moveDiagSkip = "no-issue";
                 return;
+            }
 
             var worldDirection = ScreenDirectionToWorld(screenDirection);
             if (worldDirection == Vector2.Zero)
+            {
+                _moveDiagSkip = "zero-direction";
                 return;
+            }
+
+            _moveDiagSkip = "issued";
 
             var target = _hero.Location + worldDirection * VirtualJoystickControl.TileDistance;
             var tile = new Vector2(MathF.Round(target.X), MathF.Round(target.Y));
@@ -967,9 +981,16 @@ namespace Client.Main.Scenes
             var heroTile = new Vector2((int)_hero.Location.X, (int)_hero.Location.Y);
             string standable = world == null ? "n/a" : world.IsWalkable(heroTile).ToString();
 
+            var uiMouse = MuGame.Instance.UiMouseState;
+            string joy = _virtualJoystick == null
+                ? "none"
+                : $"active={_virtualJoystick.ActiveRaw} mag={_virtualJoystick.Magnitude:F2} "
+                  + $"inArea={_virtualJoystick.LastTouchInActivationArea} uiBlocked={_virtualJoystick.LastTouchBlockedByUi}";
+
             Console.WriteLine(
                 $"[MoveDiag] tick hero=({heroTile.X},{heroTile.Y}) standable={standable} "
-                + $"moving={_hero.IsMoving} intent={_hero.MovementIntent}");
+                + $"moving={_hero.IsMoving} intent={_hero.MovementIntent} skip={_moveDiagSkip} "
+                + $"touch=({uiMouse.X},{uiMouse.Y}) pressed={uiMouse.LeftButton == ButtonState.Pressed} {joy}");
         }
 
         /// <summary>
