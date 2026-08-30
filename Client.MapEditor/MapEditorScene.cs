@@ -130,6 +130,7 @@ public sealed class MapEditorScene : BaseScene
     /// </summary>
     private const int ObjectSettleTimeoutFrames = 600;
 
+    private bool _startupTileApplied;
     private bool _pendingReport;
     private int _settleFrames;
     private int _waitedFrames;
@@ -929,7 +930,23 @@ public sealed class MapEditorScene : BaseScene
 
             World = world;
             _session.LoadedWorldIndex = worldIndex;
-            _session.Camera.FrameWholeMap();
+            // --tile 指定了就對到那一格（環繞、貼近地面），否則看全圖。
+            // 只在第一次載入時用 —— 之後在編輯器裡切地圖應該回到全圖，
+            // 不然換一張圖還停在上一張的座標上，會以為地圖載錯了。
+            if (_session.StartupTile is (int startX, int startY) && !_startupTileApplied)
+            {
+                _startupTileApplied = true;
+                _session.Camera.Mode = CameraMode.Orbit;
+                _session.Camera.Distance = 1400f;
+                _session.Camera.Yaw = MathHelper.ToRadians(-45f);
+                _session.Camera.Pitch = MathHelper.ToRadians(30f);
+                _session.Camera.FocusTile(startX, startY);
+                _session.StatusMessage = $"對準格 ({startX}, {startY})";
+            }
+            else
+            {
+                _session.Camera.FrameWholeMap();
+            }
 
             // 物件是非同步載入的：Initialize() 回來時模型還在排隊，
             // 載不到的也還沒被 RemoveFailed 移掉。這時候數是數不準的，

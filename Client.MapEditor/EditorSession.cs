@@ -28,6 +28,11 @@ public sealed class EditorSession : EditSession
     /// <summary>--world：啟動時要開哪一張圖；null 表示用預設。</summary>
     public int? StartupWorldIndex { get; set; }
 
+    /// <summary>
+    /// <c>--tile X,Y</c>：載完地圖後把相機對到這一格，而不是看全圖。
+    /// </summary>
+    public (int X, int Y)? StartupTile { get; set; }
+
     /// <summary>UI 想切到的 world index。場景處理完會清成 null。</summary>
     public int? RequestedWorldIndex { get; set; }
 

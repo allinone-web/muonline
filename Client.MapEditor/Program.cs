@@ -1,6 +1,6 @@
 // MU 地圖編輯器。
 //
-//   MuMapEditor [--data <Data目錄>] [--world N] [--size 1600x1000] [--seconds N] [--screenshot <path>] [--grass]
+//   MuMapEditor [--data <Data目錄>] [--world N] [--tile X,Y] [--size 1600x1000] [--seconds N] [--screenshot <path>] [--grass]
 //   MuMapEditor --shots <契約.json> --shot <鏡位名> --screenshot <path>   拍黃金影像
 //
 // --seconds / --screenshot 讓它能在終端機裡跑完就退出，用於自動化驗證。
@@ -50,6 +50,22 @@ var options = new EditorOptions(
 
 EditorSession.Current.RunSelfTest = parsed.ContainsKey("selftest");
 EditorSession.Current.ForceGrass = parsed.ContainsKey("grass");
+
+// --tile 139,84：開起來就站在那一格上，不用自己找。
+if (parsed.GetValueOrDefault("tile") is string tileArg)
+{
+    var tileParts = tileArg.Split(',', 'x', 'X');
+    if (tileParts.Length == 2
+        && int.TryParse(tileParts[0].Trim(), out int tileX)
+        && int.TryParse(tileParts[1].Trim(), out int tileY))
+    {
+        EditorSession.Current.StartupTile = (tileX, tileY);
+    }
+    else
+    {
+        Console.WriteLine($"--tile 看不懂「{tileArg}」，要 X,Y（例：139,84）。改看全圖。");
+    }
+}
 
 // 鏡位自己帶世界編號，不讓 --world 蓋過去 —— 否則同一個鏡位在不同地圖上拍，
 // 基準圖對不上而且看不出原因。
