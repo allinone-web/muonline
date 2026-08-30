@@ -685,14 +685,16 @@ namespace Client.Main.Controls.UI.Game
 
             try
             {
+                DrawMapSurface(spriteBatch);
+
+                // 手機<b>不畫面板底</b>。使用者的原話：地圖原本就是半透明浮在遊戲上，
+                // 那個設計是對的，加一塊黑底只是把景色遮掉。
+                // 但關閉鈕要留 —— 其他視窗都有，只有地圖沒有會讓人先在左上角白找一次。
                 if (Mobile)
                 {
-                    MobileUi.DrawWindowChrome(spriteBatch, _font, DisplayRectangle,
-                        string.IsNullOrWhiteSpace(_worldName) ? "MAP" : _worldName.ToUpperInvariant(),
-                        _closePressed);
+                    MobileUi.DrawCloseGlyph(spriteBatch,
+                        MobileUi.WindowCloseButtonRect(DisplayRectangle), _closePressed);
                 }
-
-                DrawMapSurface(spriteBatch);
                 DrawOverlayCaption(spriteBatch);
                 DrawTooltip(spriteBatch);
             }
@@ -919,12 +921,6 @@ namespace Client.Main.Controls.UI.Game
                 return;
             }
 
-            // 手機的地圖名稱已經是視窗標題（見 DrawWindowChrome），
-            // 再在地圖裡印一次就是同一個字出現兩次。
-            if (Mobile)
-            {
-                return;
-            }
 
             const float scale = 0.36f;
             string caption = _worldName.ToUpperInvariant();

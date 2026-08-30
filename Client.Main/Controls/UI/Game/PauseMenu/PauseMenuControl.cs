@@ -1222,7 +1222,9 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 ContentTop = IsMobile ? MobileHeaderHeight + 6 : 190;
                 MobileTitle = "SETTINGS";
                 CloseRequested = () => _owner.Visible = false;
-                DrawContentSurface = true;
+                // 手機不畫內容區的外框。使用者的原話：「面板有很多線框裝飾，很多線條，
+                // 我非常反對過度裝飾」。內容區靠位置與間距就分得出來，不需要再框一圈。
+                DrawContentSurface = !IsMobile;
                 _panelWidth = ControlSize.X;
 
                 // 手機的標題由 DrawWindowChrome 畫（和所有視窗同一個位置、同一個級距）。
@@ -1270,6 +1272,15 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 int categoriesPerRow = 3;
                 int categoryIndex = 0;
 
+                // 「GAME」放在最上面：離開遊戲的入口是玩家最常找的東西。
+                // 這些動作原本排在面板底部一整排，正好壓在右下角的 ATK 鈕上 ——
+                // 想按 CONTINUE 結果攻擊了，想攻擊結果離開了遊戲。
+                if (IsMobile)
+                {
+                    AddCategoryButton("Game", () => BuildGameCategory(), categoryStartY,
+                        ref categoryX, categoryWidth, categoryHeight, categorySpacing, categoriesPerRow, ref categoryIndex);
+                }
+
                 AddCategoryButton("Audio", () => BuildAudioCategory(), categoryStartY,
                     ref categoryX, categoryWidth, categoryHeight, categorySpacing, categoriesPerRow, ref categoryIndex);
                 // Display 在手機上整組無效：解析度與全螢幕都由系統決定，MuGame 一律
@@ -1304,18 +1315,6 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 AddCategoryButton("Performance", () => BuildPerformanceCategory(), categoryStartY,
                     ref categoryX, categoryWidth, categoryHeight, categorySpacing, categoriesPerRow, ref categoryIndex);
 
-                if (IsMobile)
-                {
-                    // 全大寫，和遊戲裡其他按鈕（ENTER GAME / SEND / ASSIGN）一致。
-                    //
-                    // <b>手機沒有 EXIT。</b>iOS 不允許 app 自行終止（見 MuGame.RequestExit），
-                    // 那一列按下去只會登出然後什麼都不發生 —— 一顆看得到、按得到、
-                    // 但做不了事的按鈕比沒有這顆更糟。要換伺服器請用 SERVER。
-                    AddActionRow("CONTINUE", () => _owner.Visible = false);
-                    AddActionRow("PARTY", () => _owner.TogglePartyPanelFromMenu());
-                    AddActionRow("CHARACTER", () => _ = _owner.LeaveToCharacterSelectAsync());
-                    AddActionRow("SERVER", () => _ = _owner.LeaveToServerSelectAsync());
-                }
 
                 _closeButton = new PauseMenuButtonControl
                 {
@@ -1412,6 +1411,38 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                         _owner.ApplySoundEffectsVolume();
                     }, ref currentY, OptionRowHeight);
                 });
+            }
+
+            /// <summary>
+            /// 「GAME」分類：離開遊戲的幾個動作。
+            ///
+            /// 這些原本是面板底部的一整排按鈕，正好落在右下角 ATK 鈕的位置上 ——
+            /// 想按 CONTINUE 結果打了一下，想攻擊結果離開了遊戲。
+            /// 改成左欄的一個分類，動作就和其他設定一樣顯示在右側，
+            /// 拇指也不必伸到底部。
+            ///
+            /// <b>沒有 CONTINUE。</b>關掉這個面板就是繼續遊戲，而每個視窗左上角
+            /// 都已經有關閉鈕 —— 再放一顆做同一件事的按鈕只是多一個選擇。
+            /// </summary>
+            private void BuildGameCategory()
+            {
+                BuildCategory("Game", (ref int currentY) =>
+                {
+                    AddAction("PARTY", () => _owner.TogglePartyPanelFromMenu());
+                    AddAction("CHOOSE CHARACTER", () => _ = _owner.LeaveToCharacterSelectAsync());
+                    AddAction("CHOOSE SERVER", () => _ = _owner.LeaveToServerSelectAsync());
+                    AddAction("EXIT", () => _ = _owner.ExitGameAsync());
+                });
+            }
+
+            /// <summary>整列都是按鈕的選項。只有手機用得到（桌面的動作在第一層選單）。</summary>
+            private void AddAction(string label, Action onClick)
+            {
+                var option = new OptionAction(label, onClick, MobileOptionAreaX, ContentTop,
+                    MobileOptionColumnWidth, MobileUi.CloseButtonSize, MobileOptionFontSize);
+                option.AddTo(Controls);
+                option.CollectControls(_dynamicControls);
+                _options.Add(option);
             }
 
             private void BuildWorldCategory()
@@ -1854,48 +1885,6 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 Y = _baseY + _openAnimation.OffsetPixels;
             }
 
-            /// <summary>
-            /// 動作列（Continue / Party / Character Select / Server Select / Exit Game）。
-            ///
-            /// 放在<b>右側區域的底部</b>，橫向一排 —— 不是塞進左欄。
-            /// 左欄是「設定分類」的清單，動作和它們不是同一種東西：分類是
-            /// 「切換右邊要看什麼」，動作是「離開這個畫面去做別的事」。
-            /// 混在同一欄會讓左欄變成一份沒有邏輯的十二項清單。
-            ///
-            /// 橫排在右下角還有一個好處：它就在拇指的位置。
-            /// </summary>
-            private const int MobileActionBarHeight = 56;
-            private const int MobileActionBarGap = 10;
-            private int _mobileActionIndex;
-
-            private void AddActionRow(string label, Action onClick, bool isDanger = false)
-            {
-                const int count = 4;
-                int areaX = MobileOptionAreaX;
-                int areaWidth = MobileOptionAreaWidth;
-                int gap = MobileActionBarGap;
-                int width = (areaWidth - gap * (count - 1)) / count;
-
-                var button = new MenuTabButtonControl
-                {
-                    Text = label,
-                    IsAction = true,
-                    IsDanger = isDanger,
-                    X = areaX + _mobileActionIndex * (width + gap),
-                    Y = MobilePanelHeight - MobilePadding - MobileActionBarHeight,
-                    ControlSize = new Point(width, MobileActionBarHeight),
-                    ViewSize = new Point(width, MobileActionBarHeight),
-                    AutoViewSize = false,
-                    // 14 不在文字級距上。動作列和左欄的分類是同一個層級，用同一級。
-                    FontSize = MobileUi.TextHeading,
-                    TextColor = ModernHudTheme.TextGray
-                };
-                button.Click += (s, e) => onClick();
-                Controls.Add(button);
-
-                _mobileActionIndex++;
-            }
-
             private void AddCategoryButton(string label, Action onClick, int startY,
                 ref int currentX, int width, int height, int spacing, int perRow, ref int index)
             {
@@ -1982,8 +1971,8 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 if (IsMobile)
                 {
                     // 兩欄由上而下填：先填滿左欄再換右欄。
-                    // 底部那一排動作鈕佔掉的高度要先扣掉，否則最後幾個選項會壓在上面
-                    int optionsBottom = MobilePanelHeight - MobilePadding - MobileActionBarHeight - MobileActionBarGap;
+                    // 底部已經沒有動作列了（動作搬進左欄的 GAME 分類），整片高度都能用。
+                    int optionsBottom = MobilePanelHeight - MobilePadding;
                     int perColumn = Math.Max(1, (optionsBottom - ContentTop) / MobileOptionRowHeight);
                     int column = Math.Min(_mobileOptionIndex / perColumn, MobileOptionColumns - 1);
                     int row = _mobileOptionIndex - column * perColumn;
@@ -1991,10 +1980,10 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     int x = MobileOptionAreaX + column * (MobileOptionColumnWidth + MobilePadding);
                     int y = ContentTop + row * MobileOptionRowHeight;
 
+                    // 開關做到 46 高（可以放心點的下限）、110 寬。
+                    // 42 高換算後不到 18 pt，而它是這個面板上最常按的東西。
                     option = new OptionToggle(label, getter, apply,
-                        // 開關的文字改成 ON / OFF 之後，104 寬變得過大 ——
-                        // 讓出來的 34 px 給標籤，被截斷的選項名就少了幾個。
-                        x, y, MobileOptionColumnWidth, 70, 42, MobileOptionFontSize);
+                        x, y, MobileOptionColumnWidth, 110, MobileUi.CloseButtonSize, MobileOptionFontSize);
                     _mobileOptionIndex++;
                 }
                 else
@@ -2028,15 +2017,22 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 columns = Math.Max(1, columns);
                 int rowsPerColumn = (count + columns - 1) / columns;
 
+                // 只用一欄時就把整個右側區域給它。沿用兩欄的欄寬會讓每一列只有
+                // 一半寬，標籤被截成「Music Vo」而數值疊在上面 —— 而右邊那一半
+                // 根本是空的。
+                int columnWidth = columns == 1
+                    ? MobileOptionAreaWidth
+                    : MobileOptionColumnWidth;
+
                 for (int i = 0; i < count; i++)
                 {
                     int column = Math.Min(i / rowsPerColumn, columns - 1);
                     int row = i - column * rowsPerColumn;
 
                     _options[i].SetPosition(
-                        MobileOptionAreaX + column * (MobileOptionColumnWidth + MobilePadding),
+                        MobileOptionAreaX + column * (columnWidth + MobilePadding),
                         ContentTop + row * MobileOptionRowHeight,
-                        MobileOptionColumnWidth);
+                        columnWidth);
                 }
             }
 
@@ -2093,6 +2089,8 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 private readonly ButtonControl _button;
                 private readonly Func<bool> _getter;
                 private readonly Action<bool> _setter;
+                /// <summary>未截斷的標籤，欄寬改變時重新截。</summary>
+                private readonly string _labelText;
 
                 public OptionToggle(string label, Func<bool> getter, Action<bool> setter, int y, int panelWidth)
                     : this(label, getter, setter, ContentPaddingX, y, panelWidth - ContentPaddingX - 40, 110, 26, 11.5f)
@@ -2112,6 +2110,7 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     // 標籤和開關在同一列，長標籤會直接壓在開關上（實機截圖：
                     // 「Dynamic Lighting Shader」和 ENABLED 疊在一起）。
                     // 先量過再決定要不要截斷，並且左右都留邊距。
+                    _labelText = label;
                     string display = FitLabel(label, width - buttonWidth - 20, fontSize);
 
                     _label = new LabelControl
@@ -2189,12 +2188,15 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 {
                     _label.X = x;
                     _label.Y = y;
+                    // 欄寬會變（只有一欄時整個右側都給它），標籤要從原文重新截一次，
+                    // 否則永遠停在建立時那個較窄的寬度：「Background..」。
+                    _label.Text = FitLabel(_labelText, width - _button.ViewSize.X - 20, _label.FontSize);
                     _button.X = x + width - _button.ViewSize.X;
                     _button.Y = y - 4;
                 }
 
-                /// <summary>把標籤截到指定寬度以內，超出的部分以刪節號結尾。</summary>
-                private static string FitLabel(string text, int maxWidth, float fontSize)
+                /// <summary>把標籤截到指定寬度以內，超出的部分以 .. 結尾。</summary>
+                internal static string FitLabel(string text, int maxWidth, float fontSize)
                 {
                     var font = GraphicsManager.Instance?.Font;
                     if (font == null || maxWidth <= 0 || string.IsNullOrEmpty(text))
@@ -2215,6 +2217,56 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 }
             }
 
+            /// <summary>
+            /// 一整列都是按鈕的選項列（GAME 分類用）。
+            /// 和開關列共用同一個高度與字級，右欄看起來才是同一份清單。
+            /// </summary>
+            private sealed class OptionAction : IOptionRow
+            {
+                private readonly ButtonControl _button;
+
+                public OptionAction(string label, Action onClick, int x, int y, int width, int height, float fontSize)
+                {
+                    _button = new ButtonControl
+                    {
+                        Text = label,
+                        ControlSize = new Point(width, height),
+                        ViewSize = new Point(width, height),
+                        AutoViewSize = false,
+                        X = x,
+                        Y = y,
+                        BackgroundColor = MobileUi.TitleBarFill * MobileUi.PanelAlpha,
+                        // 手機的 hover 只在按著時出現（見 ButtonControl.ShowHover），
+                        // 所以停留色就是按下色 —— 一顆按鈕不需要三種顏色。
+                        HoverBackgroundColor = MobileUi.TitleBarFill * 1.6f,
+                        PressedBackgroundColor = MobileUi.TitleBarFill * 1.6f,
+                        FontSize = fontSize,
+                        TextColor = MobileUi.TextPrimary,
+                        HoverTextColor = MobileUi.TextPrimary,
+                        Interactive = true,
+                        BorderThickness = 0,
+                        BorderColor = Color.Transparent
+                    };
+                    _button.Click += (s, e) => onClick();
+                }
+
+                public void AddTo(ChildrenCollection<GameControl> controls) => controls.Add(_button);
+
+                public void Refresh()
+                {
+                }
+
+                public void CollectControls(List<GameControl> controls) => controls.Add(_button);
+
+                public void SetPosition(int x, int y, int width)
+                {
+                    _button.X = x;
+                    _button.Y = y;
+                    _button.ControlSize = new Point(width, _button.ControlSize.Y);
+                    _button.ViewSize = _button.ControlSize;
+                }
+            }
+
             private sealed class OptionVolume : IOptionRow
             {
                 private readonly LabelControl _label;
@@ -2226,6 +2278,8 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 private readonly float _minValue;
                 private readonly float _maxValue;
                 private readonly float _step;
+                /// <summary>未截斷的標籤。欄寬改變時要從原文重新截一次。</summary>
+                private readonly string _labelText;
                 private readonly string _valueSuffix;
 
                 public OptionVolume(string label, Func<float> getter, Action<float> setter, int y, int panelWidth, float minValue = 0f, float maxValue = 100f, float step = 5f, string valueSuffix = "%")
@@ -2237,12 +2291,16 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     _step = step;
                     _valueSuffix = string.IsNullOrWhiteSpace(valueSuffix) ? string.Empty : valueSuffix;
 
+                    _labelText = label;
+
                     _label = new LabelControl
                     {
                         Text = label,
                         X = ContentPaddingX,
                         Y = y,
-                        FontSize = MobileUi.IsMobile ? MobileUi.TextBody : 11.5f,
+                        // 和開關列的標籤同一級。原本 11.5 換算後只有 5 pt，
+                        // 使用者回報「Music Volume 特別小」就是這裡。
+                        FontSize = MobileUi.IsMobile ? MobileUi.TextHeading : 11.5f,
                         TextColor = ModernHudTheme.TextWhite,
                         HasShadow = false
                     };
@@ -2359,6 +2417,9 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
 
                     _label.X = x;
                     _label.Y = y;
+                    // 標籤要在數值左邊停住。不截的話「Music Volume」會一路壓到
+                    // 「50%」上面，兩串字疊在一起誰也讀不出來。
+                    _label.Text = OptionToggle.FitLabel(_labelText, width - valueW - minusW - plusW - gap * 4, _label.FontSize);
 
                     _plusButton.X = x + width - plusW;
                     _plusButton.Y = y - 2;

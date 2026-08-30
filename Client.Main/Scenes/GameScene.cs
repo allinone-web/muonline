@@ -398,7 +398,10 @@ namespace Client.Main.Scenes
             // 把整個左下角讓給搖桿。
             _chatLog = new ChatLogWindow
             {
-                X = UseVirtualJoystick ? 14 : 5,
+                // 對齊線，不是「盡量靠左」。畫布是滿版的，14 就等於貼著實體螢幕邊緣，
+                // 長一點的系統訊息會被螢幕圓角切掉開頭幾個字（實機截圖：
+                // 「...vent has been started!」）。
+                X = UseVirtualJoystick ? MobileUi.LeftEdge : 5,
                 Y = UseVirtualJoystick
                     ? MobileChatLogTop
                     : UiScaler.VirtualSize.Y - 160 - ChatInputBoxControl.CHATBOX_HEIGHT

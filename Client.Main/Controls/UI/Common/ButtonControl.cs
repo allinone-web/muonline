@@ -123,7 +123,11 @@ namespace Client.Main.Controls.UI.Common
                 Color currentBgColor = base.BackgroundColor; // Use base.BackgroundColor to avoid recursion
                 if (!Enabled)
                 {
-                    currentBgColor = Color.DarkSlateGray * 0.8f * Alpha;
+                    // 不能是 DarkSlateGray —— 那是 (47,79,79)，一個明顯的藍綠色。
+                    // 設定面板裡音量已經到 100% 時，那顆「+」就會變成一塊青綠色的方塊，
+                    // 看起來像被選中或被強調，實際上是「按不動」。
+                    // 停用就是把自己的底色壓暗，不要換色相。
+                    currentBgColor = base.BackgroundColor * 0.45f * Alpha;
                 }
                 else if (IsMousePressed)
                 {

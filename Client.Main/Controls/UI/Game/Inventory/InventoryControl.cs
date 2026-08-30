@@ -102,29 +102,33 @@ namespace Client.Main.Controls.UI.Game.Inventory
         private int _equipCenterX;
 
         /// <summary>
-        /// 背包格線的<b>欄數</b>。桌面與手機都是 8，也就是伺服器原本的排法。
+        /// 背包格線的<b>欄數</b>。桌面 8，手機 <b>5</b>。
         ///
-        /// 這個值純粹是排版：伺服器送來的是 0..63 的平面格號，
-        /// 客戶端用 <c>x = index % Columns, y = index / Columns</c> 攤成格子，
-        /// 送回去時再 <c>index = y * Columns + x</c> 折回來。
+        /// 這個值純粹是排版：伺服器送來的是平面格號，客戶端用
+        /// <c>x = index % Columns, y = index / Columns</c> 攤成格子，
+        /// 送回去時再 <c>index = y * Columns + x</c> 折回來。兩者互為反函數，
+        /// 所以欄數怎麼設都不影響協議 —— 前提是道具都是 1x1，
+        /// 由 <see cref="Core.Utilities.ItemDatabase.SingleSlotItems"/> 保證。
         ///
-        /// 手機一度改成 5 欄（想讓視窗窄一點），代價是要 13 列才裝得下 64 格 ——
-        /// 視窗因此高達 914 px，而畫布只有 756，底下兩列半永遠看不到，
-        /// 而且 5x13 = 65 比實際的 64 多出一格幽靈格，得在兩個地方特別擋掉。
-        ///
-        /// 橫置的手機有 1642 px 寬、只有 756 px 高：<b>缺的是高度不是寬度</b>。
-        /// 8 欄 x 8 列（512 x 512）整個視窗只有 594 高，一次全部看得到、
-        /// 不用捲動、也沒有幽靈格，而且格號與伺服器一模一樣。
+        /// <b>手機一定是 5 欄</b>（使用者指定，且強調過三次）。8 欄要 512 px，
+        /// 加上裝備欄與資訊欄之後整個視窗寬得離譜。5 欄只要 320 px，
+        /// 代價是列數變多、要捲動 —— 對手機來說那是划算的交換，
+        /// 而捲動本來就是手機最自然的動作。
         /// </summary>
-        public static int Columns => 8;
-
-        /// <summary>列數。<c>Rows * Columns</c> 剛好等於 <see cref="TotalSlots"/>。</summary>
-        public static int Rows => 8;
+        public static int Columns => s_mobile ? 5 : 8;
 
         /// <summary>
-        /// 背包實際的格數。8 x 8 剛好等於 64，沒有多出來的格子。
-        /// （<see cref="IsWithinGrid"/> 與 CanPlaceItem 仍然會擋 <c>Rows * Columns</c>
-        /// 大於這個值的情形 —— 欄數若再被改動，那兩道防護要繼續留著。）
+        /// 列數：把 <see cref="TotalSlots"/> 攤成 <see cref="Columns"/> 欄需要幾列。
+        /// 5 欄 x 13 列 = 65，比實際的 64 多一格；多出來的那一格不對應任何
+        /// 伺服器格號，由 <see cref="IsWithinGrid"/> 與 CanPlaceItem 兩處擋掉。
+        /// </summary>
+        public static int Rows => s_mobile
+            ? (TotalSlots + Columns - 1) / Columns
+            : 8;
+
+        /// <summary>
+        /// 背包實際的格數，<b>由伺服器決定</b>（目前 64）。
+        /// 伺服器若擴充到 100，只要改這一個數字，列數與捲動範圍會自己跟著算。
         /// </summary>
         public const int TotalSlots = 64;
         internal const int InventorySlotOffsetConstant = 12;
@@ -763,8 +767,10 @@ namespace Client.Main.Controls.UI.Game.Inventory
 
                 width = content;
 
-                // 高度只需要容納標題 + 背包格（裝備欄比它矮），不再有底列
-                height = HEADER_HEIGHT + 24 + Rows * INVENTORY_SQUARE_HEIGHT + 16;
+                // 高度只需要容納標題 + 背包格（裝備欄比它矮），不再有底列。
+                // 13 列裝不進畫面是正常的 —— ClampWindowSize 會夾住，
+                // BuildMobileLayoutMetrics 再算出放得下幾列，其餘用捲的。
+                height = HEADER_HEIGHT + 8 + Rows * INVENTORY_SQUARE_HEIGHT + 16;
 
                 // 一定要夾進畫面。「高度由內容決定」在 720p 的桌面視窗裡沒問題，
                 // 在 756 高的畫布上會直接長到畫面外，而且是無聲的 ——
@@ -908,9 +914,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
         {
             // 手機沒有底列。金幣與修理鈕都併進標題列 ——
             // 少一整列（約 64 px）視窗才矮得下來，才能在畫面上垂直置中。
-            // 區塊標題（EQUIPMENT）畫在欄位上方 18 px 處，所以內容要離標題列遠一點，
-            // 否則那行字會壓進標題列裡被截掉。
-            int contentTop = HEADER_HEIGHT + 24;
+            int contentTop = HEADER_HEIGHT + 8;
             int contentBottom = WINDOW_HEIGHT - 14;
             int contentHeight = contentBottom - contentTop;
 
@@ -1250,8 +1254,10 @@ namespace Client.Main.Controls.UI.Game.Inventory
             if (pixel == null) return;
 
             // Section title
-            DrawSectionHeader(spriteBatch, "EQUIPMENT", _paperdollPanelRect.X,
-                _paperdollPanelRect.Y - (s_mobile ? 20 : 18), _paperdollPanelRect.Width);
+            // 手機不畫「EQUIPMENT」這行字：底下就是一整排裝備格，不需要標籤說明，
+            // 而且它畫在欄位框上方，正好被右上角的介面按鈕壓住。
+            if (!s_mobile)
+                DrawSectionHeader(spriteBatch, "EQUIPMENT", _paperdollPanelRect.X, _paperdollPanelRect.Y - 18, _paperdollPanelRect.Width);
 
             // Main panel background
             DrawPanel(spriteBatch, _paperdollPanelRect, Theme.BgMid);
@@ -2738,6 +2744,12 @@ namespace Client.Main.Controls.UI.Game.Inventory
             }
             else
             {
+                // 手機同上：沒有按著就不畫停留效果。
+                if (s_mobile && MuGame.Instance.UiMouseState.LeftButton != ButtonState.Pressed)
+                {
+                    return;
+                }
+
                 // Match vault/NPC shop hover overlays: highlight hovered slot and occupied slots only
                 ItemGridRenderHelper.DrawGridOverlays(
                     spriteBatch,
@@ -2758,6 +2770,13 @@ namespace Client.Main.Controls.UI.Game.Inventory
         {
             var pixel = GraphicsManager.Instance?.Pixel;
             if (pixel == null || _hoveredEquipSlot < 0)
+            {
+                return;
+            }
+
+            // 手機只在手指按著的時候才畫。放開之後游標停在最後一次觸控的位置，
+            // 那一格就會永遠亮著 —— 使用者回報那看起來像「等待刪除」的狀態。
+            if (s_mobile && MuGame.Instance.UiMouseState.LeftButton != ButtonState.Pressed)
             {
                 return;
             }

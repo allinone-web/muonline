@@ -77,8 +77,12 @@ namespace Client.Main.Controls.UI.Game.Common
         // ── 格子 ──
         public static readonly Color SlotBg = Mobile ? MobileUi.FieldFill * 0.82f : new Color(12, 15, 20, 240);
         public static readonly Color SlotBorder = Mobile ? new Color(58, 66, 80) * 0.59f : new Color(45, 52, 65, 180);
-        public static readonly Color SlotHover = Mobile ? new Color(96, 108, 128) * 0.55f : new Color(70, 85, 110, 150);
-        public static readonly Color SlotSelected = Mobile ? new Color(200, 208, 220) * 0.43f : new Color(212, 175, 85, 100);
+        // 手機的「停留」底色刻意做得很淡。觸控沒有停留這個狀態，手指離開之後
+        // 游標留在原地，那一格就會一直亮著 —— 太明顯的話玩家會以為那格被選中了，
+        // 甚至以為它正等著被丟棄。0.55 -> 0.22。
+        public static readonly Color SlotHover = Mobile ? new Color(96, 108, 128) * 0.22f : new Color(70, 85, 110, 150);
+        // 選中同理：0.43 的淺藍灰在深色面板上非常搶眼，使用者回報「看起來像等待刪除」。
+        public static readonly Color SlotSelected = Mobile ? new Color(200, 208, 220) * 0.20f : new Color(212, 175, 85, 100);
 
         // ── 文字 ──
         public static readonly Color TextWhite = Mobile ? MobileUi.TextPrimary : new Color(240, 240, 245);
