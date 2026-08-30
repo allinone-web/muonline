@@ -26,13 +26,22 @@ public sealed record TextureLibraryEntry(
 
     /// <summary>被幾張地圖用到。</summary>
     public int WorldCount => Usages.Select(u => u.WorldIndex).Distinct().Count();
+
+    /// <summary>
+    /// 被幾張<b>會長草</b>的地圖用到。只對搖動的草有意義 ——
+    /// 客戶端寫死了一份不長草的地圖清單，那些圖裡的草貼圖是躺著不動的。
+    /// </summary>
+    public int GrassWorldCount => Usages
+        .Select(u => u.WorldIndex)
+        .Distinct()
+        .Count(TerrainTextureClassifier.WorldHasGrass);
 }
 
 public sealed record TextureLibraryIndex(string DataDirectory, List<TextureLibraryEntry> Entries);
 
 public sealed record ReplaceResult(bool Success, int FilesWritten, string[] BackedUp, string[] Skipped, string? Error);
 
-public sealed record BatchImportResult(int Matched, string[] Applied, string[] Unmatched);
+public sealed record BatchImportResult(int Matched, string[] Applied, string[] Unmatched, string[] Warnings);
 
 /// <summary>
 /// 跨地圖的共用貼圖庫。
@@ -158,7 +167,14 @@ public static class TextureLibrary
             if (!File.Exists(path))
                 continue;
 
-            entry.Slot = TerrainTextureClassifier.SlotOf(entry.Name);
+            // 槽位要看**所有**用到它的檔名，不是只看第一個。
+            // 同一份內容在不同地圖裡可能叫不同名字，而只要有一處是以
+            // 搖動草的檔名被引用，引擎就會把它當草載進去。
+            // 實測：只看第一個名字會漏掉 6 張草貼圖（34 而不是 40）。
+            entry.Slot = entry.Usages
+                .Select(u => TerrainTextureClassifier.SlotOf(u.FileName))
+                .OrderBy(slot => slot == TextureSlot.GrassBillboard ? 0 : slot == TextureSlot.Unknown ? 2 : 1)
+                .First();
 
             if (TerrainTextureClassifier.Measure(path) is not { } profile)
                 continue;
@@ -219,6 +235,7 @@ public static class TextureLibrary
         var byId = index.Entries.ToDictionary(e => e.Id, StringComparer.OrdinalIgnoreCase);
         var applied = new List<string>();
         var unmatched = new List<string>();
+        var warnings = new List<string>();
         int files = 0;
 
         foreach (string path in Directory.EnumerateFiles(sourceDirectory)
@@ -237,6 +254,24 @@ public static class TextureLibrary
 
             files++;
 
+            // 搖動的草有一個會坑人的相依：它在世界裡的高度是從**貼圖的像素高度**
+            // 算出來的（GrassRenderer：height = 貼圖高度 × 2）。
+            // 所以把 64px 高的草重繪成 256px，草會變成四倍高 ——
+            // 比角色還高三倍，而且不會有任何錯誤訊息。
+            if (entry.Slot == TextureSlot.GrassBillboard && entry.Profile is { } original)
+            {
+                var replacement = TerrainTextureClassifier.Measure(path);
+
+                if (replacement is not null && replacement.Height != original.Height)
+                {
+                    warnings.Add(
+                        $"{entry.Name}（{entry.Id}）高度從 {original.Height} 變成 {replacement.Height} px —— " +
+                        $"搖動的草在世界裡的高度 = 貼圖像素高度 × 2，" +
+                        $"這會讓草變成 {(float)replacement.Height / original.Height:F1} 倍高。" +
+                        "要提升解析度就只加寬、不加高，或同時改 GrassRenderer 的 GrassHeightMultiplier。");
+                }
+            }
+
             if (dryRun)
             {
                 applied.Add($"{entry.Name}（{entry.Id}）→ {entry.Usages.Count} 個檔案、{entry.WorldCount} 張圖");
@@ -250,7 +285,7 @@ public static class TextureLibrary
                 : $"{entry.Name}（{entry.Id}）→ 失敗：{result.Error}");
         }
 
-        return new BatchImportResult(files, [.. applied], [.. unmatched]);
+        return new BatchImportResult(files, [.. applied], [.. unmatched], [.. warnings]);
     }
 
     /// <summary>

@@ -7,6 +7,25 @@ namespace MuAssets.Core;
 public enum TextureSlot
 {
     Unknown,
+
+    /// <summary>
+    /// 會搖動的草 —— 地形上長出來的billboard，不是地面貼圖。
+    /// </summary>
+    /// <remarks>
+    /// 這是客戶端<b>寫死</b>的一組檔案，不是猜的：
+    /// <c>GrassRenderer</c> 只載 <c>TileGrass01/02/03.ozt</c>
+    /// （特殊混合圖是 <c>TileGrass01_R.jpg</c>），
+    /// 而畫質設定的「Draw Grass」關掉的就是它們。
+    ///
+    /// 把它從草地地面（<see cref="Grass"/>，那是 .ozj 的地面貼圖）分出來，
+    /// 因為兩者的替換價值差很多：草是站在地上、離鏡頭最近、
+    /// 而且每張圖都有 —— 貼圖粗糙的話第一眼就看得到。
+    ///
+    /// 實測：145 個檔案、**內容唯一只有 40 個**，涵蓋 58 張會長草的地圖。
+    /// 換掉那 40 張，全部地圖的草一起換。
+    /// </remarks>
+    GrassBillboard,
+
     Grass,
     Ground,
     Rock,
@@ -116,6 +135,10 @@ public static class TerrainTextureClassifier
         string name = Path.GetFileNameWithoutExtension(fileName).ToLowerInvariant();
 
         if (name.StartsWith("exttile", StringComparison.Ordinal)) return TextureSlot.Ext;
+        // 搖動的草只有這幾個檔名，而且必須是 .ozt（或特殊混合圖的 _R.jpg）——
+        // 依據是 GrassRenderer 載入哪些檔案，不是猜的。
+        if (IsGrassBillboard(fileName)) return TextureSlot.GrassBillboard;
+
         if (name.StartsWith("tilegrass", StringComparison.Ordinal)) return TextureSlot.Grass;
         if (name.StartsWith("tileground", StringComparison.Ordinal)) return TextureSlot.Ground;
         if (name.StartsWith("tilerock", StringComparison.Ordinal)) return TextureSlot.Rock;
@@ -134,6 +157,38 @@ public static class TerrainTextureClassifier
 
         return TextureSlot.Unknown;
     }
+
+    /// <summary>
+    /// 這個檔案是不是「會搖動的草」的貼圖。
+    /// </summary>
+    /// <remarks>
+    /// 對應 <c>GrassRenderer</c> 的載入邏輯：三張 <c>TileGrass0N.ozt</c>，
+    /// 特殊混合圖的第一張換成 <c>TileGrass01_R.jpg</c>。
+    /// </remarks>
+    public static bool IsGrassBillboard(string fileName)
+    {
+        string name = Path.GetFileNameWithoutExtension(fileName);
+        string extension = Path.GetExtension(fileName);
+
+        if (name.Equals("TileGrass01_R", StringComparison.OrdinalIgnoreCase)
+            && extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return extension.Equals(".ozt", StringComparison.OrdinalIgnoreCase)
+            && (name.Equals("TileGrass01", StringComparison.OrdinalIgnoreCase)
+             || name.Equals("TileGrass02", StringComparison.OrdinalIgnoreCase)
+             || name.Equals("TileGrass03", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// 這張圖會不會長草。客戶端寫死了一份不長草的清單。
+    /// </summary>
+    /// <remarks>對應 <c>GrassRenderer.IsGrassDisabledWorld</c>。</remarks>
+    public static bool WorldHasGrass(int worldIndex)
+        => worldIndex != 7 && worldIndex != 67 && worldIndex != 52
+        && (worldIndex < 11 || worldIndex > 17);
 
     /// <summary>
     /// 從影像判斷外觀。
