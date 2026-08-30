@@ -451,14 +451,13 @@ namespace Client.Main.Scenes
                 X = UseVirtualJoystick ? MobileCharWindowLeft : 20,
                 Y = UseVirtualJoystick ? InventoryControl.MobileTopSafeY : 50,
 
-                // 手機放大 1.35 倍。
+                // 不再整體放大。
                 //
-                // 這個視窗的版面是照 280x520 寫死的（每個數值、每一列的 Y 都是
-                // 常數），在 1600 寬的畫布上又小又擠，字距行距全部黏在一起。
-                // 整體縮放會把文字、行距、按鈕一起放大，比逐一改常數安全得多 ——
-                // 繪製本來就已經全程乘上 Scale（見 CharacterInfoWindowControl 的
-                // controlScale）。1.35 之後是 378x702，756 高的畫布剛好放得下。
-                Scale = UseVirtualJoystick ? 1.35f : 1f,
+                // 1.35 倍只是「變大的擁擠」—— 280 寬要塞下屬性名、數值、三行說明
+                // 和加點鈕，放大之後每一欄仍然只有幾十像素。
+                // 改成讓 CharacterInfoWindowControl 自己有一套手機版面
+                // （460x660、每列 96 高、加點鈕 52 見方），這裡就不需要縮放了。
+                Scale = 1f,
                 Visible = false
             };
             Controls.Add(_characterInfoWindow);

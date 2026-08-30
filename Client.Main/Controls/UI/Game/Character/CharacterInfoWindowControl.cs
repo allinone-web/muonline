@@ -20,12 +20,30 @@ namespace Client.Main.Controls.UI.Game.Character
 {
     public class CharacterInfoWindowControl : UIControl, IUiTexturePreloadable
     {
-        private const int WINDOW_WIDTH = 280;
-        private const int WINDOW_HEIGHT = 520;
-        private const int STAT_BOX_WIDTH = 170;
+        private static readonly bool s_mobile = MobileUi.IsMobile;
+
+        // ── 版面 ──
+        //
+        // 桌面沿用原本的 280x520。手機是自己一套，不是把桌面那套放大：
+        // 280 寬要塞下「屬性名 + 數值 + 三行說明 + 加點鈕」，每一欄都只有幾十像素，
+        // 放大之後仍然是同樣的擁擠，只是變大的擁擠。
+        //
+        // 460x660 之後每一列有 96 px 高，說明三行放得開，加點鈕也放得下 52 見方。
+        private static int WINDOW_WIDTH => s_mobile ? 460 : 280;
+        private static int WINDOW_HEIGHT => s_mobile ? 660 : 520;
+        private static int STAT_BOX_WIDTH => s_mobile ? 300 : 170;
         private const int BTN_STAT_COUNT = 5;
 
-        private static readonly float[] s_statRowY =
+        /// <summary>手機：屬性列的高度與起點。桌面用原本那張表。</summary>
+        private const int MobileHeaderHeight = 160;
+        // 660 - 標題與頭部資訊 160 - 底部按鈕列 76 = 424，五列各 82 —— 剛好放得下，
+        // 而且每列扣掉 8 px 間距後還有 74 可用（屬性名一行 + 說明三行）。
+        private const int MobileStatRowHeight = 82;
+
+        /// <summary>加點鈕的邊長。這是這個視窗唯一要按的東西，不能小。</summary>
+        private const int MobileStatButtonSize = 52;
+
+        private static readonly float[] s_statRowYDesktop =
         {
             140f,
             200f,
@@ -33,6 +51,12 @@ namespace Client.Main.Controls.UI.Game.Character
             340f,
             410f
         };
+
+        /// <summary>第 i 列的 Y。手機是等距的，桌面是原本那張手調的表。</summary>
+        private static float StatRowY(int index)
+            => s_mobile
+                ? MobileHeaderHeight + index * MobileStatRowHeight
+                : s_statRowYDesktop[index];
 
         private static readonly string[] s_statShortNames = { "STR", "AGI", "STA", "ENE", "CMD" };
 
@@ -212,9 +236,14 @@ namespace Client.Main.Controls.UI.Game.Character
             _buttons.Clear();
 
             float statBoxLeft = GetStatBoxLeft();
-            float statValueLeft = statBoxLeft + 70f;
-            float statValueYoffset = -2f;
-            float statDetailYOffset = 15f;
+
+            // 手機：數值往右拉開、說明往下讓出一行的距離。
+            // 桌面 70/15/16 是配 280 寬與 10 px 字設計的，在 460 寬、13 px 字之下
+            // 數值會貼著屬性名，說明三行也會黏成一團。
+            float statValueLeft = statBoxLeft + (s_mobile ? 150f : 70f);
+            float statValueYoffset = s_mobile ? 0f : -2f;
+            float statDetailYOffset = s_mobile ? 24f : 15f;
+            float detailLineHeight = s_mobile ? 19f : 16f;
 
             _nameText = CreateText(new Vector2(WINDOW_WIDTH / 2f, 7f), MobileUi.TextHeading, ModernHudTheme.TextWhite, TextAlignment.Center);
             _classText = CreateText(new Vector2(WINDOW_WIDTH / 2f, 25f), MobileUi.TextLabel, ModernHudTheme.TextGold, TextAlignment.Center);
@@ -222,40 +251,48 @@ namespace Client.Main.Controls.UI.Game.Character
             _expText = CreateText(new Vector2(26f, 79f), MobileUi.TextCaption, ModernHudTheme.TextGray);
             _fruitProbText = CreateText(new Vector2(26f, 97f), MobileUi.TextCaption, ModernHudTheme.SecondaryBright);
             _fruitStatsText = CreateText(new Vector2(26f, 115f), MobileUi.TextCaption, ModernHudTheme.SecondaryBright);
-            _statPointsText = CreateText(new Vector2(158f, 61f), 11f, ModernHudTheme.Warning);
+            _statPointsText = CreateText(new Vector2(158f, 61f), MobileUi.TextLabel, ModernHudTheme.Warning);
 
             for (int i = 0; i < BTN_STAT_COUNT; i++)
             {
-                float rowY = s_statRowY[i];
-                _statValueTexts[i] = CreateText(new Vector2(statValueLeft, rowY + statValueYoffset), 11f, ModernHudTheme.TextGold, TextAlignment.Left);
+                float rowY = StatRowY(i);
+                _statValueTexts[i] = CreateText(new Vector2(statValueLeft, rowY + statValueYoffset), MobileUi.TextBody, ModernHudTheme.TextGold, TextAlignment.Left);
             }
 
-            _strDetail1Text = CreateText(new Vector2(25f, s_statRowY[0] + statDetailYOffset), 10f, ModernHudTheme.TextGray);
-            _strDetail2Text = CreateText(new Vector2(25f, s_statRowY[0] + statDetailYOffset + 16f), 10f, ModernHudTheme.TextGray);
+            _strDetail1Text = CreateText(new Vector2(25f, StatRowY(0) + statDetailYOffset), MobileUi.TextCaption, ModernHudTheme.TextGray);
+            _strDetail2Text = CreateText(new Vector2(25f, StatRowY(0) + statDetailYOffset + detailLineHeight), MobileUi.TextCaption, ModernHudTheme.TextGray);
 
-            _agiDetail1Text = CreateText(new Vector2(25f, s_statRowY[1] + statDetailYOffset), 10f, ModernHudTheme.TextGray);
-            _agiDetail2Text = CreateText(new Vector2(25f, s_statRowY[1] + statDetailYOffset + 16f), 10f, ModernHudTheme.TextGray);
-            _agiDetail3Text = CreateText(new Vector2(25f, s_statRowY[1] + statDetailYOffset + 32f), 10f, ModernHudTheme.TextGray);
+            _agiDetail1Text = CreateText(new Vector2(25f, StatRowY(1) + statDetailYOffset), MobileUi.TextCaption, ModernHudTheme.TextGray);
+            _agiDetail2Text = CreateText(new Vector2(25f, StatRowY(1) + statDetailYOffset + detailLineHeight), MobileUi.TextCaption, ModernHudTheme.TextGray);
+            _agiDetail3Text = CreateText(new Vector2(25f, StatRowY(1) + statDetailYOffset + detailLineHeight * 2f), MobileUi.TextCaption, ModernHudTheme.TextGray);
 
-            _vitDetail1Text = CreateText(new Vector2(25f, s_statRowY[2] + statDetailYOffset), 10f, ModernHudTheme.TextGray);
-            _vitDetail2Text = CreateText(new Vector2(25f, s_statRowY[2] + statDetailYOffset + 16f), 10f, ModernHudTheme.TextGray);
+            _vitDetail1Text = CreateText(new Vector2(25f, StatRowY(2) + statDetailYOffset), MobileUi.TextCaption, ModernHudTheme.TextGray);
+            _vitDetail2Text = CreateText(new Vector2(25f, StatRowY(2) + statDetailYOffset + detailLineHeight), MobileUi.TextCaption, ModernHudTheme.TextGray);
 
-            _eneDetail1Text = CreateText(new Vector2(25f, s_statRowY[3] + statDetailYOffset), 10f, ModernHudTheme.TextGray);
-            _eneDetail2Text = CreateText(new Vector2(25f, s_statRowY[3] + statDetailYOffset + 16f), 10f, ModernHudTheme.TextGray);
-            _eneDetail3Text = CreateText(new Vector2(25f, s_statRowY[3] + statDetailYOffset + 32f), 10f, ModernHudTheme.TextGray);
+            _eneDetail1Text = CreateText(new Vector2(25f, StatRowY(3) + statDetailYOffset), MobileUi.TextCaption, ModernHudTheme.TextGray);
+            _eneDetail2Text = CreateText(new Vector2(25f, StatRowY(3) + statDetailYOffset + detailLineHeight), MobileUi.TextCaption, ModernHudTheme.TextGray);
+            _eneDetail3Text = CreateText(new Vector2(25f, StatRowY(3) + statDetailYOffset + detailLineHeight * 2f), MobileUi.TextCaption, ModernHudTheme.TextGray);
 
-            _pvmInfo1Text = CreateText(new Vector2(25f, s_statRowY[4] + 18f), 10f, ModernHudTheme.Warning);
-            _pvmInfo2Text = CreateText(new Vector2(25f, s_statRowY[4] + 35f), 10f, ModernHudTheme.Warning);
+            _pvmInfo1Text = CreateText(new Vector2(25f, StatRowY(4) + statDetailYOffset), MobileUi.TextCaption, ModernHudTheme.Warning);
+            _pvmInfo2Text = CreateText(new Vector2(25f, StatRowY(4) + statDetailYOffset + detailLineHeight), MobileUi.TextCaption, ModernHudTheme.Warning);
 
             // Stat increase buttons
             for (int i = 0; i < BTN_STAT_COUNT; i++)
             {
                 int statIndex = i;
-                var bounds = new Rectangle(
-                    WINDOW_WIDTH - 70,
-                    (int)(s_statRowY[i] - 2f),
-                    16,
-                    15);
+                // 加點鈕。桌面是 16x15 的貼圖鈕（換算不到 9 pt，手機上根本點不到）。
+                // 手機給 52 見方並靠右對齊 —— 它是這個視窗唯一真正要按的東西。
+                var bounds = s_mobile
+                    ? new Rectangle(
+                        WINDOW_WIDTH - MobileStatButtonSize - 18,
+                        (int)(StatRowY(i) + (MobileStatRowHeight - MobileStatButtonSize) / 2f - 14f),
+                        MobileStatButtonSize,
+                        MobileStatButtonSize)
+                    : new Rectangle(
+                        WINDOW_WIDTH - 70,
+                        (int)(StatRowY(i) - 2f),
+                        16,
+                        15);
 
                 Rectangle? normal = null;
                 Rectangle? hover = null;
@@ -331,7 +368,7 @@ namespace Client.Main.Controls.UI.Game.Character
         }
 
         /// <summary>手機的底部按鈕尺寸。桌面用貼圖的原尺寸（約 36x29，換算不到 20 pt）。</summary>
-        private const int MobileBottomButtonWidth = 120;
+        private const int MobileBottomButtonWidth = 100;
         private const int MobileBottomButtonHeight = 46;
         private const int MobileBottomButtonGap = 10;
 
@@ -508,7 +545,11 @@ namespace Client.Main.Controls.UI.Game.Character
                 UiDrawHelper.DrawHorizontalGradient(spriteBatch, new Rectangle(140, 47, 120, 1), ModernHudTheme.BorderInner, Color.Transparent);
             }
 
-            DrawModernPanel(spriteBatch, new Rectangle(14, 53, WINDOW_WIDTH - 28, 78), ModernHudTheme.BgMid);
+            // 頭部資訊區（等級、經驗、果實）。手機的標題列高 46，區塊要接在它下面
+            // 並一路到屬性列的起點。
+            int headerTop = s_mobile ? 56 : 53;
+            int headerHeight = s_mobile ? MobileHeaderHeight - headerTop - 10 : 78;
+            DrawModernPanel(spriteBatch, new Rectangle(14, headerTop, WINDOW_WIDTH - 28, headerHeight), ModernHudTheme.BgMid);
 
             // 頭像區左側那條藍色豎槓：手機不畫。它是唯一一處把顏色用在裝飾上的地方。
             if (!MobileUi.IsMobile)
@@ -518,9 +559,13 @@ namespace Client.Main.Controls.UI.Game.Character
 
             for (int i = 0; i < BTN_STAT_COUNT; i++)
             {
-                int rowTop = (int)s_statRowY[i] - 5;
-                int rowBottom = i + 1 < BTN_STAT_COUNT ? (int)s_statRowY[i + 1] - 8 : 466;
-                Rectangle row = new(14, rowTop, WINDOW_WIDTH - 28, Math.Max(48, rowBottom - rowTop));
+                // 手機：每一列固定高度、之間留 8 px。桌面沿用原本「下一列起點減 8」的算法
+                // （那張表的間距本來就不等距）。
+                int rowTop = (int)StatRowY(i) - (s_mobile ? 10 : 5);
+                int rowHeight = s_mobile
+                    ? MobileStatRowHeight - 8
+                    : Math.Max(48, (i + 1 < BTN_STAT_COUNT ? (int)StatRowY(i + 1) - 8 : 466) - rowTop);
+                Rectangle row = new(14, rowTop, WINDOW_WIDTH - 28, rowHeight);
                 DrawModernPanel(spriteBatch, row, ModernHudTheme.SlotBg);
 
                 // 每一列原本再加一條左側豎槓與一條中線。列本身已經有底色和外框，
@@ -528,11 +573,17 @@ namespace Client.Main.Controls.UI.Game.Character
                 if (!MobileUi.IsMobile)
                 {
                     spriteBatch.Draw(pixel, new Rectangle(row.X + 4, row.Y + 5, 2, row.Height - 10), ModernHudTheme.AccentDim * 0.8f);
-                    spriteBatch.Draw(pixel, new Rectangle(row.X + 10, (int)s_statRowY[i] + 13, row.Width - 20, 1), ModernHudTheme.BorderInner * 0.35f);
+                    spriteBatch.Draw(pixel, new Rectangle(row.X + 10, (int)StatRowY(i) + 13, row.Width - 20, 1), ModernHudTheme.BorderInner * 0.35f);
                 }
             }
 
-            DrawModernPanel(spriteBatch, new Rectangle(14, 472, WINDOW_WIDTH - 28, 38), ModernHudTheme.BgMid);
+            // 底部按鈕列的底。手機的按鈕是 46 高、距下緣 14（見 CreateBottomBounds）。
+            if (s_mobile)
+                DrawModernPanel(spriteBatch,
+                    new Rectangle(14, WINDOW_HEIGHT - MobileBottomButtonHeight - 22, WINDOW_WIDTH - 28, MobileBottomButtonHeight + 16),
+                    ModernHudTheme.BgMid);
+            else
+                DrawModernPanel(spriteBatch, new Rectangle(14, 472, WINDOW_WIDTH - 28, 38), ModernHudTheme.BgMid);
 
             SpriteFont font = GraphicsManager.Instance.Font;
             if (font == null)
@@ -548,7 +599,7 @@ namespace Client.Main.Controls.UI.Game.Character
                 string label = i == BTN_STAT_COUNT - 1 && !_lastIsDarkLordFamily
                     ? "COMBAT"
                     : s_statShortNames[i];
-                Vector2 position = new(23f, s_statRowY[i] - 1f);
+                Vector2 position = new(s_mobile ? 30f : 23f, StatRowY(i) - 1f);
                 spriteBatch.DrawString(font, label, position + Vector2.One, Color.Black * 0.6f,
                     0f, Vector2.Zero, labelScale, SpriteEffects.None, 0f);
                 spriteBatch.DrawString(font, label, position, ModernHudTheme.TextGold,
