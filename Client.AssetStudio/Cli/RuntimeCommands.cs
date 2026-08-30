@@ -2,6 +2,7 @@ using Client.AssetStudio.Project;
 using Client.Main.Content;
 using Client.Main.Models;
 using Client.AssetStudio.Server;
+using Client.Data.Texture;
 
 namespace Client.AssetStudio.Cli;
 
@@ -132,6 +133,77 @@ public static class RuntimeCommands
         return 0;
     }
 
+    /// <summary>
+    /// 逐張貼圖用<b>客戶端自己的讀取器</b>真的解碼一次。
+    /// </summary>
+    /// <remarks>
+    /// 光看「檔案在不在」不夠。踩過的坑：資源庫的貼圖是純 PNG，而客戶端把
+    /// <c>.png</c> 對應到 <c>OZPReader</c> —— OZP 是「4 位元組前綴 ＋ 完整 PNG」，
+    /// 那個讀取器會無條件砍掉前 4 個位元組，於是純 PNG 剩下
+    /// <c>0D 0A 1A 0A IHDR…</c>，不是合法 PNG，直接拋例外。
+    ///
+    /// 結果就是：模型有網格、有骨骼、名牌也出得來，<b>就是畫不出來</b>。
+    /// 檔案存在、路徑正確、格式合法 —— 每一項單看都沒問題。
+    /// 所以這裡不驗「存不存在」，直接把讀取器叫起來解一次。
+    /// </remarks>
+    private static int CheckTextures(Client.Data.BMD.BMD model)
+    {
+        var readers = new Dictionary<string, Client.Data.BaseReader<TextureData>>(StringComparer.OrdinalIgnoreCase)
+        {
+            [".ozt"] = new OZTReader(), [".tga"] = new OZTReader(),
+            [".ozj"] = new OZJReader(), [".jpg"] = new OZJReader(),
+            [".ozp"] = new OZPReader(), [".png"] = new OZPReader(),
+            [".ozd"] = new OZDReader(), [".dds"] = new OZDReader(),
+        };
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int bad = 0;
+
+        foreach (var mesh in model.Meshes)
+        {
+            string name = mesh.TexturePath ?? string.Empty;
+            if (name.Length == 0 || !seen.Add(name)) continue;
+
+            string full = Client.Main.Content.BMDLoader.Instance.GetTexturePath(model, name);
+
+            if (full is null || !File.Exists(full))
+            {
+                Console.Error.WriteLine($"      ✗ 貼圖找不到：{name}");
+                bad++;
+                continue;
+            }
+
+            string ext = Path.GetExtension(full);
+            if (!readers.TryGetValue(ext, out var reader))
+            {
+                Console.Error.WriteLine($"      ✗ 沒有 {ext} 的讀取器：{name}");
+                bad++;
+                continue;
+            }
+
+            try
+            {
+                var data = reader.Load(full).GetAwaiter().GetResult();
+                if (data is null || data.Width == 0 || data.Height == 0)
+                {
+                    Console.Error.WriteLine($"      ✗ 貼圖解出來是空的：{name}");
+                    bad++;
+                }
+                else
+                {
+                    Console.WriteLine($"      貼圖 {name}  {data.Width}×{data.Height}  ✓");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"      ✗ 貼圖解碼失敗 {name}：{ex.GetType().Name} {ex.Message}");
+                bad++;
+            }
+        }
+
+        return bad;
+    }
+
     /// <summary>每個動作槽該對齊到幾秒，以及理由。</summary>
     private static IEnumerable<(int Slot, double Target, string Why)> Targets(MonsterRow server)
     {
@@ -228,6 +300,8 @@ public static class RuntimeCommands
 
                     if (!inRange || keys <= 1) failed++;
                 }
+
+                failed += CheckTextures(model);
             }
             catch (Exception ex)
             {
