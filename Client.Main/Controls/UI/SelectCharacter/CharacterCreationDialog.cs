@@ -61,7 +61,7 @@ namespace Client.Main.Controls.UI.SelectCharacter
         private int _selectedClassIndex = 0;
         
         private LabelControl _titleLabel;
-        private TextBoxControl _nameInput;
+        private TextFieldControl _nameInput;
         private LabelControl _classLabel;
         private LabelControl _classDescriptionLabel;
         private ButtonControl _previousClassButton;
@@ -147,19 +147,20 @@ namespace Client.Main.Controls.UI.SelectCharacter
             Controls.Add(nameLabel);
 
             // Character name input
-            _nameInput = new TextBoxControl
-            {
-                X = 50,
-                Y = 100,
-                ViewSize = new Point(550, 36),
-                MaxLength = 10,
-                PlaceholderText = "Enter name (3-10 chars)...",
-                FontSize = MobileUi.TextBody,
-                BackgroundColor = Theme.BgDark,
-                TextColor = Theme.TextWhite,
-                BorderColor = Theme.BorderInner,
-                BorderThickness = 1
-            };
+            // 必須用 TextFieldControl.Create()，不能用 TextBoxControl。
+            //
+            // TextBoxControl 只讀桌面鍵盤（Keyboard.GetState()），手機上永遠收不到
+            // 任何輸入 —— 這就是「名字打不了字」的原因。
+            // TextFieldControl 有 OnFocus 與手機鍵盤的橋接，而且要走 Create()：
+            // MuIos.Program 會把 ControlType 換成 IosTextFieldControl，
+            // new 出來的話拿到的是桌面版。
+            _nameInput = TextFieldControl.Create();
+            _nameInput.X = 50;
+            _nameInput.Y = 100;
+            _nameInput.ViewSize = new Point(550, 36);
+            _nameInput.Placeholder = "Enter name (3-10 chars)...";
+            _nameInput.FontSize = MobileUi.TextBody;
+            _nameInput.TextColor = Theme.TextWhite;
             Controls.Add(_nameInput);
 
             // Class selection section
@@ -281,7 +282,7 @@ namespace Client.Main.Controls.UI.SelectCharacter
 
         private void OnCreateButtonClick(object sender, EventArgs e)
         {
-            string characterName = _nameInput?.Text?.Trim() ?? "";
+            string characterName = _nameInput?.Value?.Trim() ?? "";
             
             if (string.IsNullOrWhiteSpace(characterName))
             {

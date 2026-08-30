@@ -62,7 +62,7 @@ namespace Client.Main.Controls.UI.SelectCharacter
         private LabelControl _titleLabel;
         private LabelControl _messageLabel;
         private LabelControl _securityCodeLabel;
-        private TextBoxControl _securityCodeInput;
+        private TextFieldControl _securityCodeInput;
         private ButtonControl _confirmButton;
         private ButtonControl _cancelButton;
 
@@ -122,19 +122,20 @@ namespace Client.Main.Controls.UI.SelectCharacter
             Controls.Add(_securityCodeLabel);
 
             // Security code input
-            _securityCodeInput = new TextBoxControl
-            {
-                X = 50,
-                Y = 230,
-                ViewSize = new Point(450, 36),
-                MaxLength = 20,
-                PlaceholderText = "Enter security code...",
-                FontSize = 8f,
-                BackgroundColor = Theme.BgDark,
-                TextColor = Theme.TextWhite,
-                BorderColor = Theme.BorderInner,
-                BorderThickness = 1
-            };
+            // 同樣要用 TextFieldControl.Create() —— 理由見 CharacterCreationDialog。
+            //
+            // 提示文字改成講清楚要填什麼：帳號沒有設安全碼時，OpenMU 會拿這一格
+            // 去比對「帳號密碼」（DeleteCharacterAction 的 checkAsPassword 分支），
+            // 而測試帳號的密碼等於帳號名。原本只寫「Enter security code」，
+            // 沒設過安全碼的人根本不知道該填什麼。
+            _securityCodeInput = TextFieldControl.Create();
+            _securityCodeInput.X = 50;
+            _securityCodeInput.Y = 230;
+            _securityCodeInput.ViewSize = new Point(450, 36);
+            _securityCodeInput.Placeholder = "Security code, or your password if unset";
+            _securityCodeInput.FontSize = MobileUi.TextBody;
+            _securityCodeInput.TextColor = Theme.TextWhite;
+            _securityCodeInput.MaskValue = true;
             Controls.Add(_securityCodeInput);
             _securityCodeInput.Focus();
 
@@ -176,7 +177,7 @@ namespace Client.Main.Controls.UI.SelectCharacter
 
         private void OnConfirmClick(object sender, EventArgs e)
         {
-            string securityCode = _securityCodeInput.Text.Trim();
+            string securityCode = _securityCodeInput.Value.Trim();
             DeleteConfirmed?.Invoke(this, securityCode);
         }
 

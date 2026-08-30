@@ -1786,12 +1786,32 @@ namespace Client.Main.Scenes
             _ = _networkManager.SendSelectCharacterRequestAsync(_currentlySelectedCharacterName);
         }
 
+        /// <summary>
+        /// 送出登出再關閉程式。等一小段時間是為了讓封包真的送出去 ——
+        /// 直接 Exit() 會讓連線被硬斷，伺服器要等逾時才釋放帳號。
+        /// </summary>
+        private async Task ExitGameAsync()
+        {
+            try
+            {
+                await _networkManager.GetCharacterService()
+                    .SendLogoutRequestAsync(LogOutType.CloseGame);
+                await Task.Delay(400);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to send logout before exit; closing anyway.");
+            }
+
+            MuGame.Instance.Exit();
+        }
+
         private void OnExitButtonClick(object sender, EventArgs e)
         {
             if (_isIntentionalLogout)
                 return;
 
-            _logger.LogInformation("Exit button clicked - returning to login.");
+            _logger.LogInformation("Exit button clicked - closing the game.");
             _isIntentionalLogout = true;
             _isSelectionInProgress = true;
 
@@ -1804,14 +1824,17 @@ namespace Client.Main.Scenes
                 Controls.Add(_loadingScreen);
             }
 
-            _loadingScreen.Message = "Returning to login...";
+            _loadingScreen.Message = "Exiting...";
             _loadingScreen.Progress = 0f;
             _loadingScreen.Visible = true;
             _loadingScreen.BringToFront();
             Cursor?.BringToFront();
             UpdateNavigationButtonState();
 
-            _ = _networkManager.GetCharacterService().SendLogoutRequestAsync(LogOutType.BackToServerSelection);
+            // EXIT 是「離開遊戲」，不是「回伺服器選擇」。
+            // 先送 CloseGame 讓伺服器釋放帳號佔用 —— 不送就直接關的話，
+            // 伺服器會有一段時間仍視為在線，下次登入拿到 AccountAlreadyConnected。
+            _ = ExitGameAsync();
         }
     }
 }

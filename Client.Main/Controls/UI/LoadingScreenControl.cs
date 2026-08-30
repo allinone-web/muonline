@@ -49,11 +49,17 @@ namespace Client.Main.Controls.UI.Game
                 RasterizerState.CullNone,
                 transform: UiScaler.SpriteTransform))
             {
-                // Background Dim
+                // 純黑、不透明。
+                //
+                // 原本是 75% 半透明黑，於是背後那張 Background 貼圖會透出來一半，
+                // 看起來像「背景被某個顏色蓋住、變暗了」。改成完全不透明，
+                // 載入畫面就是一片乾淨的黑 —— 之後要換成自己的背景圖，
+                // 也是在這裡畫，不必動那張共用貼圖（LoadScene／LoginScene／
+                // ServerConfigScene／GameScene 都在用它）。
                 spriteBatch.Draw(
                     GraphicsManager.Instance.Pixel,
                     new Rectangle(0, 0, UiScaler.VirtualSize.X, UiScaler.VirtualSize.Y),
-                    Color.Black * 0.75f); // Semi-transparent black background
+                    Color.Black);
 
                 // 訊息與進度條<b>不在這裡畫</b>。
                 //
