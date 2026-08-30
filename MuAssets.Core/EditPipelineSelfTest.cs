@@ -45,6 +45,7 @@ public static class EditPipelineSelfTest
             LightBrush(session, document),
             CopyPasteBlock(session, document),
             TextureClassification(),
+            TextureRoundTrip(),
             ExportToClientFormat(session, document),
             SpawnAreasAndOpenMuExport(session, document),
             Validation(session, document, world),
@@ -773,6 +774,125 @@ public static class EditPipelineSelfTest
         {
             return ("貼圖分類", false, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// 貼圖寫回去再讀出來，顏色要一樣。
+    /// </summary>
+    /// <remarks>
+    /// <b>必須用非對稱的顏色。</b>綠色 (0,255,0) 在紅藍對調下不變，
+    /// 紫色、黃色才看得出來 —— 我用綠色測過一次，尺寸、檔長、列順序全部通過，
+    /// 而寫出去的檔案紅藍是反的（草變成青色）。
+    ///
+    /// <c>.ozt</c> 的檔案位元組是 B,G,R,A（TGA 式），<c>.ozj</c> 是 JPEG。
+    /// 這一項同時守住兩種格式的通道順序與方向。
+    /// </remarks>
+    private static (string, bool, string) TextureRoundTrip()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"mu-editor-selftest-texture-{Environment.ProcessId}");
+
+        try
+        {
+            Directory.CreateDirectory(directory);
+
+            // 四個象限各一塊不對稱的顏色，順便驗上下方向。
+            // **用色塊不用單一像素**：JPEG 的色度次取樣會把孤立的一點抹掉，
+            // 那樣測出來的失敗是測試自己的問題，不是寫入端的。
+            const int size = 32;
+            const int half = size / 2;
+
+            var expected = new (int X, int Y, byte R, byte G, byte B)[]
+            {
+                (half / 2, half / 2, 255, 40, 10),              // 左上　紅
+                (half + (half / 2), half / 2, 10, 40, 255),     // 右上　藍
+                (half / 2, half + (half / 2), 255, 220, 20),    // 左下　黃
+                (half + (half / 2), half + (half / 2), 180, 20, 200), // 右下　紫
+            };
+
+            using var source = new SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>(size, size);
+
+            foreach (var (px, py, r, g, b) in expected)
+            {
+                int originX = px < half ? 0 : half;
+                int originY = py < half ? 0 : half;
+
+                for (int y = originY; y < originY + half; y++)
+                {
+                    for (int x = originX; x < originX + half; x++)
+                        source[x, y] = new SixLabors.ImageSharp.PixelFormats.Rgba32(r, g, b, 255);
+                }
+            }
+
+            var results = new List<string>();
+            bool passed = true;
+
+            foreach (string extension in new[] { ".ozt", ".ozj" })
+            {
+                // 用一個真的原檔當標頭來源 —— TextureWriter 一律沿用原檔標頭。
+                string path = Path.Combine(directory, "probe" + extension);
+                File.WriteAllBytes(path, SyntheticHeader(extension, size, size));
+
+                var original = await_read(path);
+                File.WriteAllBytes(path, TextureWriter.Build(source, path, original, quality: 100));
+
+                using var decoded = TextureExporter.DecodeFile(path);
+
+                if (decoded is null)
+                {
+                    results.Add($"{extension} 讀不回來");
+                    passed = false;
+                    continue;
+                }
+
+                int wrong = 0;
+
+                foreach (var (x, y, r, g, b) in expected)
+                {
+                    var pixel = decoded[x, y];
+
+                    // JPEG 是有損的，容許一點誤差；通道對調的話差距是幾十以上。
+                    if (Math.Abs(pixel.R - r) > 40 || Math.Abs(pixel.G - g) > 40 || Math.Abs(pixel.B - b) > 40)
+                        wrong++;
+                }
+
+                results.Add($"{extension} {expected.Length - wrong}/{expected.Length}");
+
+                if (wrong > 0)
+                    passed = false;
+            }
+
+            return ("貼圖寫回", passed, string.Join("、", results));
+        }
+        catch (Exception ex)
+        {
+            return ("貼圖寫回", false, ex.Message);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static byte[] await_read(string path) => File.ReadAllBytes(path);
+
+    /// <summary>造一個最小可用的標頭，讓 TextureWriter 有東西可以沿用。</summary>
+    private static byte[] SyntheticHeader(string extension, int width, int height)
+    {
+        if (extension == ".ozt")
+        {
+            // 16 byte 標頭 + 寬高 + 深度 + 一個用途未明的位元組，之後是像素。
+            var buffer = new byte[16 + 6 + (width * height * 4)];
+            BitConverter.TryWriteBytes(buffer.AsSpan(16), (short)width);
+            BitConverter.TryWriteBytes(buffer.AsSpan(18), (short)height);
+            buffer[20] = 32;
+            return buffer;
+        }
+
+        // .ozj：24 byte 標頭 + JPEG。標頭第 17 個位元組是 top-down 旗標。
+        var ozj = new byte[24];
+        ozj[17] = 1;
+        return ozj;
     }
 
     private static (string, bool, string) SaveAndReloadProject(EditSession session, MapDocument document)

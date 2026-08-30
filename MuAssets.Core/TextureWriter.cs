@@ -94,7 +94,14 @@ public static class TextureWriter
         span[4] = 32;                       // 位元深度，讀取端只接受 32
         span[5] = originalBytes[OztHeaderLength + 5];   // 用途未明的那個位元組，原樣保留
 
-        // 像素由下而上、每格 R G B A —— 與 OZTReader 的讀法對稱。
+        // 像素由下而上，每格 **B G R A** —— 檔案是 TGA 式的順序。
+        //
+        // 這裡踩過一次：寫成 R G B A 看起來很自然，而且尺寸、檔長、列順序全部驗得過，
+        // 因為那三項都與通道無關。結果是紅藍對調 —— 草變成青色。
+        // 驗證通道順序的唯一辦法是用非對稱的顏色（綠色在 R/B 對調下不變，看不出來）。
+        //
+        // 依據：OZTReader 把 file[0] 放進 data[2]、file[2] 放進 data[0]，
+        // 而引擎讀 data 是 r = data[0] —— 所以 file[0] 是 B。
         const int offset = OztHeaderLength + 6;
 
         int cursor = offset;
@@ -108,9 +115,9 @@ public static class TextureWriter
                 for (int x = 0; x < row.Length; x++)
                 {
                     var pixel = row[x];
-                    buffer[cursor++] = pixel.R;
-                    buffer[cursor++] = pixel.G;
                     buffer[cursor++] = pixel.B;
+                    buffer[cursor++] = pixel.G;
+                    buffer[cursor++] = pixel.R;
                     buffer[cursor++] = pixel.A;
                 }
             }
