@@ -551,8 +551,9 @@ namespace Client.Main.Controls.UI.Game
             Client.Main.Graphics.UiRenderTargetPool.Return(_staticSurface);
             _staticSurface = Client.Main.Graphics.UiRenderTargetPool.Rent(gd, WINDOW_WIDTH, WindowHeight);
 
-            var previousTargets = gd.GetRenderTargets();
-            gd.SetRenderTarget(_staticSurface);
+            // 切換 render target 之前必須先把外層批次送出去，否則畫面上排隊中的
+            // 東西會被畫進這張表面裡（見 SpriteBatchScope.BeginRenderTarget）。
+            using var __rtSection = SpriteBatchScope.BeginRenderTarget(gd, _staticSurface);
             gd.Clear(Color.Transparent);
 
             var spriteBatch = GraphicsManager.Instance.Sprite;
@@ -561,7 +562,6 @@ namespace Client.Main.Controls.UI.Game
                 DrawStaticElements(spriteBatch);
             }
 
-            gd.SetRenderTargets(previousTargets);
             _staticSurfaceDirty = false;
         }
 

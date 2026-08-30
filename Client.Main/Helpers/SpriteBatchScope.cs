@@ -30,6 +30,76 @@ namespace Client.Main.Helpers
         public static bool BatchIsBegun => Stack.Count > 0;
 
         /// <summary>
+        /// 切換 render target 之前，把目前開著的批次<b>結束掉</b>；離開時再開回來。
+        ///
+        /// <para>
+        /// 為什麼一定要這樣做：SpriteBatch 是延遲送出的，Begin 之後排進去的東西
+        /// 要到 End 才真正畫下去 —— 而畫到<b>那一刻綁定的 render target</b>。
+        /// 直接 SetRenderTarget 再開新的批次，會讓外層批次在切換之後才被 End
+        /// （SpriteBatchScope 的建構子遇到狀態不同的外層就會先 End 它），
+        /// 於是外層排隊中的所有東西全部被畫進那張新的 render target 裡面。
+        /// </para>
+        ///
+        /// <para>
+        /// 實際症狀：小地圖把自己畫進一張 render target，而畫面上的聊天訊息
+        /// 「testgmDw entered the game.」就這樣被烤進地圖的貼圖裡，
+        /// 跟著地圖一起顯示在畫面中央 —— 使用者回報的「map 和 note 的文字合併重疊」。
+        /// 這不是滑鼠時代的 bug，是 render target 與批次的順序問題。
+        /// </para>
+        ///
+        /// 用法：
+        /// <code>
+        /// using (var section = SpriteBatchScope.BeginRenderTarget(gd, target))
+        /// {
+        ///     gd.Clear(Color.Transparent);
+        ///     using (new SpriteBatchScope(sprite, ...)) { ... }
+        /// }
+        /// </code>
+        /// </summary>
+        public static RenderTargetSection BeginRenderTarget(GraphicsDevice device, RenderTarget2D target)
+            => new(device, target);
+
+        /// <summary>見 <see cref="BeginRenderTarget"/>。</summary>
+        public readonly struct RenderTargetSection : IDisposable
+        {
+            private readonly GraphicsDevice _device;
+            private readonly RenderTargetBinding[] _previousTargets;
+            private readonly bool _suspended;
+
+            internal RenderTargetSection(GraphicsDevice device, RenderTarget2D target)
+            {
+                _device = device;
+
+                // 先把外層批次送出去 —— 此時綁定的還是原本的 target，內容才會畫對地方。
+                var stack = Stack;
+                _suspended = stack.Count > 0;
+                if (_suspended)
+                {
+                    ScopeEntry current = stack.Peek();
+                    current.State.End(current.Batch);
+                }
+
+                _previousTargets = device.GetRenderTargets();
+                device.SetRenderTarget(target);
+            }
+
+            public void Dispose()
+            {
+                _device.SetRenderTargets(_previousTargets);
+
+                if (!_suspended)
+                    return;
+
+                var stack = Stack;
+                if (stack.Count == 0)
+                    return;
+
+                ScopeEntry current = stack.Peek();
+                current.State.Begin(current.Batch);
+            }
+        }
+
+        /// <summary>
         /// Clears a corrupted nested SpriteBatch scope after a contained render exception.
         /// Only the currently active batch is ended; all bookkeeping entries are then removed
         /// so the next object starts from a known state.

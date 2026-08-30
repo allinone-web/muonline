@@ -752,10 +752,15 @@ namespace Client.Main.Controls.UI.Game
                 _mapSurface = Client.Main.Graphics.UiRenderTargetPool.Rent(graphicsDevice, MapSize, MapSize);
             }
 
-            RenderTargetBinding[] previousTargets = graphicsDevice.GetRenderTargets();
+            // 切換 render target 之前必須先把外層批次送出去。
+            //
+            // 少了這一步，畫面上排隊中的東西（聊天訊息、公告）會在切換之後才被
+            // 送出，於是全部畫進這張地圖表面裡，跟著地圖一起顯示在畫面中央 ——
+            // 使用者回報了很多次的「map 和 note 的文字合併重疊」就是這個。
+            // 詳見 SpriteBatchScope.BeginRenderTarget 的說明。
+            using var __rtSection = SpriteBatchScope.BeginRenderTarget(graphicsDevice, _mapSurface);
             try
             {
-                graphicsDevice.SetRenderTarget(_mapSurface);
                 graphicsDevice.Clear(Color.Transparent);
 
                 SpriteBatch spriteBatch = GraphicsManager.Instance.Sprite;
@@ -803,7 +808,8 @@ namespace Client.Main.Controls.UI.Game
             }
             finally
             {
-                graphicsDevice.SetRenderTargets(previousTargets);
+                // render target 的還原交給 __rtSection（using），
+                // 它同時會把外層批次重新開起來。
             }
         }
 

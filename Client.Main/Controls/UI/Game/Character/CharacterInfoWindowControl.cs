@@ -462,8 +462,9 @@ namespace Client.Main.Controls.UI.Game.Character
             Client.Main.Graphics.UiRenderTargetPool.Return(_staticSurface);
             _staticSurface = Client.Main.Graphics.UiRenderTargetPool.Rent(graphicsDevice, WINDOW_WIDTH, WINDOW_HEIGHT);
 
-            var previousTargets = graphicsDevice.GetRenderTargets();
-            graphicsDevice.SetRenderTarget(_staticSurface);
+            // 切換 render target 之前必須先把外層批次送出去，否則畫面上排隊中的
+            // 東西會被畫進這張表面裡（見 SpriteBatchScope.BeginRenderTarget）。
+            using var __rtSection = SpriteBatchScope.BeginRenderTarget(graphicsDevice, _staticSurface);
             graphicsDevice.Clear(Color.Transparent);
 
             var spriteBatch = GraphicsManager.Instance.Sprite;
@@ -472,7 +473,6 @@ namespace Client.Main.Controls.UI.Game.Character
                 DrawStaticElements(spriteBatch);
             }
 
-            graphicsDevice.SetRenderTargets(previousTargets);
             _staticSurfaceDirty = false;
         }
 
