@@ -48,6 +48,16 @@ namespace Client.Main.Configuration
         /// 使用者在設定選單選擇的畫面縮放比例。null 表示沿用畫質預設的值。
         /// </summary>
         public float? RenderScale { get; set; }
+
+        /// <summary>
+        /// 草地品質：一格地面長幾片草。1 = 原版（一格一片），4 = 中，8 = 高。
+        /// null 表示沒選過，維持原版。
+        /// </summary>
+        /// <remarks>
+        /// 存的是「每格的立牌數」而不是 low/medium/high，因為這個數字就是成本本身 ——
+        /// 三角形數與它成正比，看到 8 就知道是原版的八倍。
+        /// </remarks>
+        public int? GrassQuality { get; set; }
     }
 
     /// <summary>

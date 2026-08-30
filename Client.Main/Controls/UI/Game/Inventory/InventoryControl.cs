@@ -99,30 +99,29 @@ namespace Client.Main.Controls.UI.Game.Inventory
         private int _equipCenterX;
 
         /// <summary>
-        /// 背包格線的<b>欄數</b>。
+        /// 背包格線的<b>欄數</b>。桌面與手機都是 8，也就是伺服器原本的排法。
         ///
         /// 這個值純粹是排版：伺服器送來的是 0..63 的平面格號，
         /// 客戶端用 <c>x = index % Columns, y = index / Columns</c> 攤成格子，
-        /// 送回去時再 <c>index = y * Columns + x</c> 折回來。兩者互為反函數，
-        /// 所以欄數怎麼設都不影響協議 —— <b>前提是道具都是 1x1</b>，
-        /// 而這正是 <see cref="Core.Utilities.ItemDatabase.SingleSlotItems"/> 保證的
-        /// （伺服器那邊由 OPENMU_SINGLE_SLOT_ITEMS 保證，兩邊必須一致）。
+        /// 送回去時再 <c>index = y * Columns + x</c> 折回來。
         ///
-        /// 桌面維持 8 欄。手機改成 5 欄：8 欄要 8x64 = 512 px 寬，
-        /// 加上裝備欄與資訊欄，整個視窗就寬得離譜。5 欄只要 320 px，
-        /// 換來的是要捲動 —— 對手機來說那是划算的交換。
+        /// 手機一度改成 5 欄（想讓視窗窄一點），代價是要 13 列才裝得下 64 格 ——
+        /// 視窗因此高達 914 px，而畫布只有 756，底下兩列半永遠看不到，
+        /// 而且 5x13 = 65 比實際的 64 多出一格幽靈格，得在兩個地方特別擋掉。
+        ///
+        /// 橫置的手機有 1642 px 寬、只有 756 px 高：<b>缺的是高度不是寬度</b>。
+        /// 8 欄 x 8 列（512 x 512）整個視窗只有 594 高，一次全部看得到、
+        /// 不用捲動、也沒有幽靈格，而且格號與伺服器一模一樣。
         /// </summary>
-        public static int Columns => s_mobile ? 5 : 8;
+        public static int Columns => 8;
+
+        /// <summary>列數。<c>Rows * Columns</c> 剛好等於 <see cref="TotalSlots"/>。</summary>
+        public static int Rows => 8;
 
         /// <summary>
-        /// 列數。必須讓 <c>Rows * Columns</c> 蓋得住全部 64 格。
-        /// 5 欄需要 13 列（65 格），最後一列有一格是不存在的 —— 見 <see cref="TotalSlots"/>。
-        /// </summary>
-        public static int Rows => s_mobile ? 13 : 8;
-
-        /// <summary>
-        /// 背包實際的格數。<c>Rows * Columns</c> 可能比它大（5x13 = 65），
-        /// 多出來的那一格不對應任何伺服器格號，不能放東西也不能點。
+        /// 背包實際的格數。8 x 8 剛好等於 64，沒有多出來的格子。
+        /// （<see cref="IsWithinGrid"/> 與 CanPlaceItem 仍然會擋 <c>Rows * Columns</c>
+        /// 大於這個值的情形 —— 欄數若再被改動，那兩道防護要繼續留著。）
         /// </summary>
         public const int TotalSlots = 64;
         internal const int InventorySlotOffsetConstant = 12;
@@ -759,10 +758,18 @@ namespace Client.Main.Controls.UI.Game.Inventory
                     + MobileInfoColumnWidth
                     + MobileColumnGap * 2;
 
-                width = Math.Min(content, canvas.X - 24);
+                width = content;
 
                 // 高度只需要容納標題 + 背包格（裝備欄比它矮），不再有底列
                 height = HEADER_HEIGHT + 8 + Rows * INVENTORY_SQUARE_HEIGHT + 16;
+
+                // 一定要夾進畫面。「高度由內容決定」在 720p 的桌面視窗裡沒問題，
+                // 在 756 高的畫布上會直接長到畫面外，而且是無聲的 ——
+                // 玩家只會看到背包底下少了幾列，沒有任何提示。
+                // 夾完之後 BuildMobileLayoutMetrics 會自己算出放得下幾列並開始捲動。
+                var clamped = Client.Main.Controls.UI.MobileUi.ClampWindowSize(width, height);
+                width = clamped.X;
+                height = clamped.Y;
             }
             else
             {

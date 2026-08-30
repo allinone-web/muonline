@@ -229,6 +229,8 @@ namespace Client.Main.Networking
             if (cancellationToken.IsCancellationRequested) return;
 
             UpdateState(ClientConnectionState.ConnectingToConnectServer);
+            // 回到連線伺服器 = 上一輪的換伺服器流程已經結束（成功或放棄都算）。
+            _expectingGameServerSwitch = false;
             _packetRouter.SetRoutingMode(true); // Set routing to CS mode
 
             if (await _connectionManager.ConnectAsync(_settings.ConnectServerHost, _settings.ConnectServerPort, false, cancellationToken))
@@ -268,6 +270,7 @@ namespace Client.Main.Networking
             _serverList.Clear();
             _currentHost = string.Empty;
             _currentPort = 0;
+            _expectingGameServerSwitch = false;
             UpdateState(ClientConnectionState.Disconnected);
 
             await ConnectToConnectServerAsync();
@@ -323,6 +326,9 @@ namespace Client.Main.Networking
 
             _logger.LogInformation("Requesting connection info for Server ID: {ServerId}", serverId);
             UpdateState(ClientConnectionState.RequestingConnectionInfo);
+
+            // 從這一刻起，連線伺服器把連線關掉是預期行為（見 _expectingGameServerSwitch）。
+            _expectingGameServerSwitch = true;
             await _connectServerService.RequestConnectionInfoAsync(serverId);
         }
 
@@ -505,6 +511,11 @@ namespace Client.Main.Networking
             {
                 var oldState = _currentState;
                 _logger.LogInformation(">>> UpdateState: Changing state from {OldState} to {NewState}", oldState, newState);
+
+                // 裝置上的 logger console provider 預設關閉，連線流程在真機與模擬器上
+                // 完全看不到。連線階段的狀態轉換就這幾次，直接印出來 ——
+                // 「選了伺服器卻回報 Connection lost」這種問題沒有它就只能猜。
+                Console.WriteLine($"[Net] {oldState} -> {newState}");
                 _currentState = newState;
                 _logger.LogInformation("=== UpdateState: _currentState is now {CurrentState}", _currentState);
 
@@ -530,6 +541,7 @@ namespace Client.Main.Networking
 
         internal void OnErrorOccurred(string message)
         {
+            Console.WriteLine($"[Net] error: {message}");
             _logger.LogError("Network Error: {Message}", message);
             MuGame.ScheduleOnMainThread(() =>
             {
@@ -548,6 +560,7 @@ namespace Client.Main.Networking
             // Cache the last received list for potential fallback usage
             try { _lastCharacterList = characters?.Select(c => (c.Name, c.Class, c.Level, c.Appearance?.ToArray() ?? Array.Empty<byte>())).ToList() ?? new(); }
             catch { _lastCharacterList = characters ?? new(); }
+            Console.WriteLine($"[Net] character list packet: count={characters?.Count ?? -1}");
             _logger.LogInformation(">>> ProcessCharacterList: Received list with {Count} characters. Raising event on UI thread...", characters?.Count ?? 0);
             MuGame.ScheduleOnMainThread(() =>
             {
@@ -585,9 +598,16 @@ namespace Client.Main.Networking
 
         internal async void SwitchToGameServer(string host, int port)
         {
-            if (_currentState != ClientConnectionState.RequestingConnectionInfo && _currentState != ClientConnectionState.ReceivedConnectionInfo)
+            // 連線伺服器送出遊戲伺服器位址之後<b>就會立刻關掉連線</b>，
+            // 那個關閉是預期中的，不是斷線。詳見 _expectingGameServerSwitch。
+            bool expected = _expectingGameServerSwitch;
+
+            if (_currentState != ClientConnectionState.RequestingConnectionInfo
+                && _currentState != ClientConnectionState.ReceivedConnectionInfo
+                && !(expected && _currentState == ClientConnectionState.Disconnected))
             {
                 _logger.LogWarning("Received game server info in unexpected state ({CurrentState}). Ignoring.", _currentState);
+                _expectingGameServerSwitch = false;
                 return;
             }
             UpdateState(ClientConnectionState.ReceivedConnectionInfo);
@@ -614,9 +634,14 @@ namespace Client.Main.Networking
                 gsConnection.PacketReceived += HandlePacketAsync;
                 gsConnection.Disconnected += HandleDisconnectAsync;
                 _connectionManager.StartReceiving(_managerCts.Token);
+
+                // 換伺服器完成，之後的斷線就是真的斷線了。
+                // 一定要在掛上 Disconnected 之後才解除，否則中間那一瞬間的斷線會漏掉。
+                _expectingGameServerSwitch = false;
             }
             else
             {
+                _expectingGameServerSwitch = false;
                 OnErrorOccurred($"Connection to Game Server {host}:{port} failed.");
                 UpdateState(ClientConnectionState.Disconnected);
             }
@@ -631,6 +656,7 @@ namespace Client.Main.Networking
 
         internal void ProcessLoginSuccess()
         {
+            Console.WriteLine("[Net] login OK, requesting character list");
             _logger.LogInformation(">>> ProcessLoginSuccess: Login OK. Updating state back to ConnectedToGameServer and requesting character list...");
             // Change state back to allow character selection
             UpdateState(ClientConnectionState.ConnectedToGameServer);
@@ -775,9 +801,32 @@ namespace Client.Main.Networking
             return new ValueTask(_packetRouter.RoutePacketAsync(sequence));
         }
 
+        /// <summary>
+        /// 已經向連線伺服器要過遊戲伺服器位址，正在等著換過去。
+        ///
+        /// OpenMU 的連線伺服器送完位址就<b>主動關掉連線</b>。那個關閉是流程的一部分，
+        /// 不是斷線 —— 但它和「收到位址」是兩件獨立的事件，誰先到不一定。
+        /// 關閉先到的話，狀態會被改成 Disconnected，於是：
+        ///   1. 登入畫面彈出「Connection lost to the server.」
+        ///   2. 隨後真的收到位址時，SwitchToGameServer 看到狀態不對，直接放棄
+        /// 結果就是「選伺服器有時候會連不上，再選一次又好了」。
+        ///
+        /// 這個旗標讓那一段期間的關閉被忽略。
+        /// </summary>
+        private volatile bool _expectingGameServerSwitch;
+
         private ValueTask HandleDisconnectAsync()
         {
             var previousState = _currentState;
+
+            if (_expectingGameServerSwitch)
+            {
+                _logger.LogInformation(
+                    "Connect Server closed the connection while switching to the game server. This is expected; ignoring. (State: {PreviousState})",
+                    previousState);
+                return new ValueTask(Task.CompletedTask);
+            }
+
             _logger.LogWarning("Connection lost. Previous state: {PreviousState}", previousState);
             UpdateState(ClientConnectionState.Disconnected);
 

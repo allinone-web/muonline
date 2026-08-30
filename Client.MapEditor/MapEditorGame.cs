@@ -48,6 +48,8 @@ public sealed class MapEditorGame : MuGame
             Constants.DRAW_GRASS = true;
 
         Constants.GRASS_TUFTS_PER_TILE = EditorSession.Current.GrassDensity;
+        Constants.GRASS_CLUSTER_PLANES = EditorSession.Current.GrassPlanes;
+        Constants.GRASS_DRAW_DISTANCE = EditorSession.Current.GrassDistance;
 
         if (Services.GetService(typeof(IGraphicsDeviceManager)) is GraphicsDeviceManager graphics)
         {

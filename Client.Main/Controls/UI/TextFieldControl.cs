@@ -120,6 +120,11 @@ namespace Client.Main.Controls.UI
             _showCursor = false;
             _cursorBlinkTimer = 0;
 
+            // 失焦後這個控制項不一定還會被 Update（視窗可能同時被關掉），
+            // 位移必須在這裡就還原，否則會永久留在畫面上。
+            if (ReferenceEquals(s_shiftOwner, this))
+                ReleaseKeyboardShift();
+
             _logger?.LogDebug("TextFieldControl: OnBlur called. Unsubscribing from TextInput.");
 
 #if ANDROID
@@ -130,6 +135,95 @@ namespace Client.Main.Controls.UI
 
         public new void Focus() => OnFocus();
         public new void Blur() => OnBlur();
+
+        // ─────────────────── 鍵盤避讓 ───────────────────
+        //
+        // 橫置時 iOS 鍵盤佔掉將近一半的畫面高度。登入面板是置中的，密碼欄與
+        // LOGIN 鈕正好落在鍵盤底下 —— 玩家看不到自己打了什麼，也按不到送出。
+        //
+        // 位移寫在 Offset 而不是 Y：Y 每一幀都會被 AlignControl() 依對齊方式重算，
+        // 寫進去等於沒寫；Offset 是加在最後的顯示座標上的，不受對齊影響。
+        //
+        // 同一時間只有一個欄位是聚焦的，而同一個視窗裡的欄位共用一份位移，
+        // 因此狀態是靜態的：換欄位時沿用同一份，換視窗時先把舊的還原。
+
+        /// <summary>目前被挪動的視窗，null = 沒有任何視窗被挪動。</summary>
+        private static GameControl s_shiftedWindow;
+
+        /// <summary>
+        /// 造成目前這份位移的欄位。只有它可以還原 —— 否則同一個視窗裡的另一個欄位
+        /// 會在同一幀先還原、再由聚焦中的欄位重新套用，面板每一幀跳一次。
+        /// </summary>
+        private static TextFieldControl s_shiftOwner;
+
+        /// <summary>挪動前的 Offset.Y，還原時用。</summary>
+        private static int s_shiftBaseOffsetY;
+
+        /// <summary>目前挪了多少（正值 = 往上）。</summary>
+        private static int s_shiftAmount;
+
+        /// <summary>欄位下緣與鍵盤上緣之間至少要留的距離。</summary>
+        private const int KeyboardGap = 24;
+
+        /// <summary>視窗根 —— 直接掛在場景底下的那一層，也就是要整個挪動的東西。</summary>
+        private GameControl WindowRoot()
+        {
+            GameControl control = this;
+            while (control.Parent != null && control.Parent is not Client.Main.Scenes.BaseScene)
+                control = control.Parent;
+            return control;
+        }
+
+        private void UpdateKeyboardAvoidance()
+        {
+            if (!IsFocused || !Visible || MobileUi.KeyboardHeight <= 0f)
+            {
+                if (ReferenceEquals(s_shiftOwner, this))
+                    ReleaseKeyboardShift();
+                return;
+            }
+
+            var window = WindowRoot();
+            if (window == null)
+                return;
+
+            if (!ReferenceEquals(window, s_shiftedWindow))
+            {
+                ReleaseKeyboardShift();
+                s_shiftedWindow = window;
+                s_shiftBaseOffsetY = window.Offset.Y;
+                s_shiftAmount = 0;
+            }
+
+            s_shiftOwner = this;
+
+            int keyboardTop = UiScaler.VirtualSize.Y - (int)MathF.Ceiling(MobileUi.KeyboardHeight);
+
+            // DisplayRectangle 已經含了目前的位移，先加回去換算成「沒挪動時」的位置，
+            // 否則每一幀都會在上一幀的結果上再挪一次。
+            int bottomIfUnshifted = DisplayRectangle.Bottom + s_shiftAmount;
+
+            // 上限是把視窗頂到畫面最上緣為止 —— 再往上就整個看不到了。
+            int maxShift = Math.Max(0, window.DisplayRectangle.Y + s_shiftAmount);
+            int desired = Math.Clamp(bottomIfUnshifted + KeyboardGap - keyboardTop, 0, maxShift);
+
+            if (desired == s_shiftAmount)
+                return;
+
+            s_shiftAmount = desired;
+            window.Offset = new Point(window.Offset.X, s_shiftBaseOffsetY - desired);
+        }
+
+        private static void ReleaseKeyboardShift()
+        {
+            if (s_shiftedWindow == null)
+                return;
+
+            s_shiftedWindow.Offset = new Point(s_shiftedWindow.Offset.X, s_shiftBaseOffsetY);
+            s_shiftedWindow = null;
+            s_shiftOwner = null;
+            s_shiftAmount = 0;
+        }
 
         public void MoveCursorToEnd()
         {
@@ -252,6 +346,9 @@ namespace Client.Main.Controls.UI
         public override void Update(GameTime gameTime)
         {
             base.Update(gameTime);
+
+            if (MobileUi.IsMobile)
+                UpdateKeyboardAvoidance();
 
             if (!IsFocused || !Visible) return;
 

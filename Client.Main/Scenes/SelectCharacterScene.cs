@@ -211,44 +211,71 @@ namespace Client.Main.Scenes
 
         private ButtonControl CreateModernNavigationButton(string arrow)
         {
+            var mobileFill = Client.Main.Controls.UI.MobileUi.PanelFill * 0.72f;
+
             return new ButtonControl
             {
                 Text = arrow,
-                FontSize = 48f,
+                // 箭頭是圖形不是文字，不走文字級距。72 px 讓 "<" 在 88 見方的
+                // 按鈕裡看起來像一個箭頭，而不是一個標點符號。
+                FontSize = s_mobile ? 72f : 48f,
                 AutoViewSize = false,
-                ViewSize = new Point(70, 70),
-                BackgroundColor = Theme.BgMid,
-                HoverBackgroundColor = Theme.BgLight,
-                PressedBackgroundColor = Theme.BgDark,
-                TextColor = Theme.Accent,
-                HoverTextColor = Theme.AccentBright,
+                ViewSize = s_mobile ? new Point(88, 88) : new Point(70, 70),
+                BackgroundColor = s_mobile ? mobileFill : Theme.BgMid,
+                HoverBackgroundColor = s_mobile ? mobileFill : Theme.BgLight,
+                PressedBackgroundColor = s_mobile
+                    ? Client.Main.Controls.UI.MobileUi.TitleBarFill * 1.3f
+                    : Theme.BgDark,
+                TextColor = s_mobile ? Client.Main.Controls.UI.MobileUi.TextPrimary : Theme.Accent,
+                HoverTextColor = s_mobile ? Client.Main.Controls.UI.MobileUi.TextPrimary : Theme.AccentBright,
                 DisabledTextColor = Theme.TextDark,
                 Interactive = true,
                 Visible = false,
                 Enabled = false,
-                BorderThickness = 2,
+                BorderThickness = s_mobile ? 0 : 2,
                 BorderColor = s_mobile ? Color.Transparent : Theme.BorderInner
             };
         }
 
+        /// <summary>
+        /// 動作鈕。
+        ///
+        /// 手機上<b>只有刪除保留顏色</b>。原本進入是綠、刪除是紅、建立是藍，
+        /// 三顆飽和色排在一起，眼睛第一個看到的是最鮮豔的那一顆，而不是最常用的
+        /// 那一顆。顏色只留給帶資訊的東西 —— 這裡唯一帶資訊的是「這個動作會
+        /// 把角色刪掉」。主要動作（進入遊戲）靠底色比其他鈕亮一階來表達。
+        /// </summary>
         private ButtonControl CreateModernButton(string text, Color baseColor)
         {
+            var fill = baseColor;
+            if (s_mobile)
+            {
+                bool danger = baseColor == Theme.Danger;
+                fill = danger
+                    ? new Color(132, 54, 54) * 0.95f
+                    : baseColor == Theme.Success
+                        ? new Color(72, 86, 106) * 0.95f      // 主要動作：亮一階的中性灰
+                        : new Color(40, 48, 60) * 0.95f;      // 其餘：面板同色系
+            }
+
+            int width = s_mobile ? MobileButtonWidth : PANEL_WIDTH - INNER_PADDING * 2;
+
             return new ButtonControl
             {
                 Text = text,
                 FontSize = BUTTON_FONT_SIZE,
                 AutoViewSize = false,
-                ViewSize = new Point(PANEL_WIDTH - INNER_PADDING * 2, BUTTON_HEIGHT),
-                BackgroundColor = baseColor,
-                HoverBackgroundColor = Color.Lerp(baseColor, Color.White, 0.2f),
-                PressedBackgroundColor = Color.Lerp(baseColor, Color.Black, 0.2f),
+                ViewSize = new Point(width, BUTTON_HEIGHT),
+                BackgroundColor = fill,
+                HoverBackgroundColor = Color.Lerp(fill, Color.White, 0.2f),
+                PressedBackgroundColor = Color.Lerp(fill, Color.Black, 0.2f),
                 TextColor = Theme.TextWhite,
                 HoverTextColor = Theme.TextWhite,
                 DisabledTextColor = Theme.TextDark,
                 Interactive = true,
                 Visible = false,
                 Enabled = false,
-                BorderThickness = 1,
+                BorderThickness = s_mobile ? 0 : 1,
                 BorderColor = s_mobile ? Color.Transparent : Theme.BorderInner
             };
         }
@@ -263,6 +290,12 @@ namespace Client.Main.Scenes
         {
             int screenWidth = ViewSize.X;
             int screenHeight = ViewSize.Y;
+
+            if (s_mobile)
+            {
+                CalculateMobileLayout(screenWidth, screenHeight);
+                return;
+            }
 
             // Calculate panel height based on content
             int buttonSectionHeight = (BUTTON_HEIGHT + BUTTON_SPACING) * 4 + INNER_PADDING * 2; // Buttons only, no header
@@ -318,6 +351,67 @@ namespace Client.Main.Scenes
             }
         }
 
+        /// <summary>
+        /// 手機的選角版面：<b>沒有角色清單</b>。
+        ///
+        /// 清單的問題不是樣式而是容量 —— 面板高度由「放得下幾張卡」決定，
+        /// 而畫面只有 756 高，扣掉四顆動作鈕之後只剩三張卡的空間。
+        /// 帳號有四個角色時第四個直接看不到，而且沒有任何捲動的提示，
+        /// 玩家會以為角色不見了。
+        ///
+        /// 改成手機遊戲的標準做法（使用者指定）：畫面中央就是角色本人，
+        /// 左右兩顆箭頭切換，名字與等級寫在角色底下，下方一排圓點表示
+        /// 總共有幾個、目前在第幾個。幾個角色都放得下，而且角色是用「看的」
+        /// 不是用「讀清單的」—— 這正是 3D 選角畫面存在的意義。
+        /// </summary>
+        private void CalculateMobileLayout(int screenWidth, int screenHeight)
+        {
+            int inset = Client.Main.Controls.UI.MobileUi.CornerInset;
+            int buttonSectionHeight = (BUTTON_HEIGHT + BUTTON_SPACING) * 4;
+
+            // 動作鈕靠右下角，和遊戲內的對齊線同一條。
+            int panelX = screenWidth - MobileButtonWidth - inset;
+            int panelY = screenHeight - inset - buttonSectionHeight;
+
+            _characterPanelRect = new Rectangle(panelX, panelY, MobileButtonWidth, buttonSectionHeight);
+            _buttonSectionRect = _characterPanelRect;
+            _characterListRect = Rectangle.Empty;
+            _characterCardRects.Clear();
+            _visibleCharacterCards = 0;
+        }
+
+        /// <summary>手機動作鈕的寬度。比桌面的面板窄 —— 沒有清單就不需要那麼寬。</summary>
+        private const int MobileButtonWidth = 320;
+
+        /// <summary>
+        /// 角色模型在畫面上的位置（虛擬座標）。左右箭頭要貼著它擺，
+        /// 不能寫死 —— 鏡頭的垂直視角在手機上會依長寬比補償（見 SelectWorld）。
+        /// 投影不出來時回傳 false，呼叫端退回畫面中央。
+        /// </summary>
+        private bool TryGetCharacterScreenPosition(out Vector2 position)
+        {
+            position = Vector2.Zero;
+
+            if (World is not Client.Main.Worlds.SelectWorld selectWorld)
+                return false;
+
+            var camera = Client.Main.Graphics.Camera.Instance;
+            var device = GraphicsManager.Instance?.GraphicsDevice;
+            if (camera == null || device == null)
+                return false;
+
+            // 角色站的位置是腳底，往上抬一點才是身體的中心。
+            var world = selectWorld.CharacterDisplayPosition + new Vector3(0f, 0f, 180f);
+            var projected = device.Viewport.Project(world, camera.Projection, camera.View, Matrix.Identity);
+
+            if (projected.Z < 0f || projected.Z > 1f)
+                return false;
+
+            // Viewport 是實際像素，UI 走的是虛擬座標。
+            position = new Vector2(projected.X * UiScaler.InverseScaleX, projected.Y * UiScaler.InverseScaleY);
+            return true;
+        }
+
         private void PositionNavigationButtons()
         {
             // Early exit if buttons not created yet (called during construction)
@@ -336,26 +430,29 @@ namespace Client.Main.Scenes
             bool canCreate = _characters.Count < 5;
 
             // Position navigation arrows
-            if (_previousCharacterButton != null)
+            if (s_mobile)
+            {
+                PositionMobileArrows(ready && _characters.Count > 1);
+            }
+            else if (_previousCharacterButton != null && _nextCharacterButton != null)
             {
                 _previousCharacterButton.X = (ViewSize.X / 2) - 250;
                 _previousCharacterButton.Y = (ViewSize.Y - _previousCharacterButton.ViewSize.Y) / 2;
-            }
 
-            if (_nextCharacterButton != null)
-            {
                 _nextCharacterButton.X = (ViewSize.X / 2) + 180;
                 _nextCharacterButton.Y = (ViewSize.Y - _nextCharacterButton.ViewSize.Y) / 2;
             }
 
             // Position action buttons in button section (bottom of panel)
             int panelX = _characterPanelRect.X;
-            int buttonY = _buttonSectionRect.Y + INNER_PADDING;
+            // 手機的動作鈕自己就是一欄，沒有外框面板，所以不需要內距。
+            int buttonX = s_mobile ? panelX : panelX + INNER_PADDING;
+            int buttonY = _buttonSectionRect.Y + (s_mobile ? 0 : INNER_PADDING);
 
             // ENTER GAME button (top of button section)
             if (_enterGameButton != null)
             {
-                _enterGameButton.X = panelX + INNER_PADDING;
+                _enterGameButton.X = buttonX;
                 _enterGameButton.Y = buttonY;
                 _enterGameButton.Enabled = ready && hasCharacters && hasSelection;
                 _enterGameButton.Visible = ready && hasCharacters && hasSelection;
@@ -366,7 +463,7 @@ namespace Client.Main.Scenes
             // DELETE CHARACTER button (shows when character selected)
             if (_deleteCharacterButton != null)
             {
-                _deleteCharacterButton.X = panelX + INNER_PADDING;
+                _deleteCharacterButton.X = buttonX;
                 _deleteCharacterButton.Y = buttonY;
                 _deleteCharacterButton.Enabled = ready && hasSelection;
                 _deleteCharacterButton.Visible = ready && hasSelection;
@@ -380,7 +477,7 @@ namespace Client.Main.Scenes
             // CREATE CHARACTER button
             if (_createCharacterButton != null)
             {
-                _createCharacterButton.X = panelX + INNER_PADDING;
+                _createCharacterButton.X = buttonX;
                 _createCharacterButton.Y = buttonY;
                 _createCharacterButton.Enabled = ready && canCreate;
                 _createCharacterButton.Visible = ready;
@@ -391,7 +488,7 @@ namespace Client.Main.Scenes
             // EXIT button (very bottom)
             if (_exitButton != null)
             {
-                _exitButton.X = panelX + INNER_PADDING;
+                _exitButton.X = buttonX;
                 _exitButton.Y = buttonY;
                 _exitButton.Enabled = ready && !_isSelectionInProgress;
                 _exitButton.Visible = ready;
@@ -401,6 +498,10 @@ namespace Client.Main.Scenes
 
         private void UpdateNavigationButtonState()
         {
+            // 手機的箭頭是唯一的切換方式，狀態由 PositionMobileArrows 決定。
+            if (s_mobile)
+                return;
+
             // Navigation buttons are permanently disabled
             if (_previousCharacterButton != null)
             {
@@ -414,6 +515,42 @@ namespace Client.Main.Scenes
                 _nextCharacterButton.Visible = false;
             }
         }
+
+        /// <summary>
+        /// 左右箭頭貼著角色模型擺。只有一個角色時整個藏起來 ——
+        /// 按了不會有事的按鈕比沒有按鈕更糟。
+        /// </summary>
+        private void PositionMobileArrows(bool show)
+        {
+            if (_previousCharacterButton == null || _nextCharacterButton == null)
+                return;
+
+            if (!TryGetCharacterScreenPosition(out var center))
+                center = new Vector2(ViewSize.X * 0.5f, ViewSize.Y * 0.5f);
+
+            _mobileCharacterAnchor = center;
+
+            const int gap = 150;   // 半個角色的寬度 + 一點餘裕
+            int size = _previousCharacterButton.ViewSize.Y;
+            int y = (int)MathF.Round(center.Y - size / 2f);
+            y = Math.Clamp(y, Client.Main.Controls.UI.MobileUi.CornerInset,
+                           ViewSize.Y - Client.Main.Controls.UI.MobileUi.CornerInset - size);
+
+            _previousCharacterButton.X = Math.Max(Client.Main.Controls.UI.MobileUi.LeftEdge,
+                (int)MathF.Round(center.X) - gap - size);
+            _previousCharacterButton.Y = y;
+
+            _nextCharacterButton.X = (int)MathF.Round(center.X) + gap;
+            _nextCharacterButton.Y = y;
+
+            _previousCharacterButton.Visible = show;
+            _previousCharacterButton.Enabled = show;
+            _nextCharacterButton.Visible = show;
+            _nextCharacterButton.Enabled = show;
+        }
+
+        /// <summary>角色模型在畫面上的位置，名字與圓點都排在它下面。</summary>
+        private Vector2 _mobileCharacterAnchor;
 
         private void MoveSelection(int direction)
         {
@@ -1356,6 +1493,12 @@ namespace Client.Main.Scenes
             var font = GraphicsManager.Instance.Font;
             if (pixel == null || font == null) return;
 
+            if (s_mobile)
+            {
+                DrawMobileCharacterCaption(sb, pixel, font);
+                return;
+            }
+
             // Panel background excluding button section (so buttons are visible on top)
             var panelWithoutButtons = new Rectangle(
                 _characterPanelRect.X,
@@ -1410,6 +1553,62 @@ namespace Client.Main.Scenes
             for (int i = 0; i < _characters.Count && i < _characterCardRects.Count; i++)
             {
                 DrawCharacterCard(sb, pixel, font, i, _characterCardRects[i], _characters[i]);
+            }
+        }
+
+        /// <summary>
+        /// 角色底下的說明：名字、職業與等級，再下面一排圓點表示「總共幾個、現在第幾個」。
+        ///
+        /// 圓點是必要的：拿掉清單之後，玩家沒有別的方式知道自己有幾個角色。
+        /// 這也是清單原本唯一還在做的事 —— 而它連這件事都做錯了（第四個看不到）。
+        /// </summary>
+        private void DrawMobileCharacterCaption(SpriteBatch sb, Texture2D pixel, SpriteFont font)
+        {
+            if (_characters.Count == 0 || _currentCharacterIndex < 0 || _currentCharacterIndex >= _characters.Count)
+                return;
+
+            var anchor = _mobileCharacterAnchor;
+            if (anchor == Vector2.Zero)
+                anchor = new Vector2(ViewSize.X * 0.5f, ViewSize.Y * 0.5f);
+
+            var character = _characters[_currentCharacterIndex];
+
+            // 名字：模型腳底再往下一點。角色高約 220 px（見 TryGetCharacterScreenPosition
+            // 的抬升量），所以從錨點往下 150 就在腳邊。
+            int y = (int)MathF.Round(anchor.Y) + 150;
+            y = Math.Min(y, _buttonSectionRect.Y - 110);
+
+            var nameSize = font.MeasureString(character.Name) *
+                Client.Main.Controls.UI.MobileUi.ScaleFor(Client.Main.Controls.UI.MobileUi.TextTitle);
+            Client.Main.Controls.UI.MobileUi.DrawText(sb, font, character.Name,
+                new Vector2(anchor.X - nameSize.X / 2f, y),
+                Client.Main.Controls.UI.MobileUi.TextTitle,
+                Client.Main.Controls.UI.MobileUi.TextPrimary);
+
+            y += 30;
+            // 字型有 U+2022 但沒有 U+00B7，中間點只能用 • （選角卡片原本就是這樣）。
+            string info = $"{character.Class}  •  Lv.{character.Level}";
+            var infoSize = font.MeasureString(info) *
+                Client.Main.Controls.UI.MobileUi.ScaleFor(Client.Main.Controls.UI.MobileUi.TextLabel);
+            Client.Main.Controls.UI.MobileUi.DrawText(sb, font, info,
+                new Vector2(anchor.X - infoSize.X / 2f, y),
+                Client.Main.Controls.UI.MobileUi.TextLabel,
+                Client.Main.Controls.UI.MobileUi.TextDim);
+
+            // 圓點
+            y += 34;
+            const int dotRadius = 5;
+            const int dotSpacing = 22;
+            float startX = anchor.X - (_characters.Count - 1) * dotSpacing / 2f;
+            for (int i = 0; i < _characters.Count; i++)
+            {
+                bool current = i == _currentCharacterIndex;
+                Client.Main.Controls.UI.MobileUi.DrawDisc(sb,
+                    new Vector2(startX + i * dotSpacing, y),
+                    current ? dotRadius : dotRadius - 1.5f,
+                    (current
+                        ? Client.Main.Controls.UI.MobileUi.TextPrimary
+                        : Client.Main.Controls.UI.MobileUi.TextDim) * (current ? 0.95f : 0.5f));
             }
         }
 

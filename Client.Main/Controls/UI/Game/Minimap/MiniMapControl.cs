@@ -29,12 +29,21 @@ namespace Client.Main.Controls.UI.Game
             Portal
         }
 
-        private const int WindowWidth = 560;
-        private const int WindowHeight = 475;
+        // 手機的地圖視窗和其他視窗一樣：面板 + 標題列 + 左上角關閉鈕。
+        //
+        // 原本它是一張「浮在畫面上的地圖」，沒有面板、沒有標題、也沒有關閉鈕 ——
+        // 只能再按一次右上角的 MAP 才關得掉。其他六個視窗都有關閉鈕，
+        // 只有這一個沒有，玩家會先在左上角找，找不到才想到要按 MAP。
+        private static bool Mobile => MobileUi.IsMobile;
+
         private const int MapSize = 520;
         private const int MapDisplayHeight = 455;
-        private const int MapLeft = 20;
-        private const int MapTop = 10;
+        private const int MobileMapPadding = 16;
+
+        private static int MapLeft => Mobile ? MobileMapPadding : 20;
+        private static int MapTop => Mobile ? MobileUi.WindowTitleHeight + 8 : 10;
+        private static int WindowWidth => Mobile ? MapSize + MobileMapPadding * 2 : 560;
+        private static int WindowHeight => Mobile ? MapTop + MapDisplayHeight + MobileMapPadding : 475;
         private const int EdgeMaskSize = 128;
         private const int TerrainSize = 256;
         private const int TerrainTexturePadding = 128;
@@ -590,6 +599,40 @@ namespace Client.Main.Controls.UI.Game
             }
 
             UpdateTooltip(mousePosition, mapRectangle);
+
+            if (Mobile)
+                UpdateCloseButton(mousePosition);
+        }
+
+        /// <summary>關閉鈕的按下狀態。位置與繪製都交給 MobileUi，兩邊用同一個算法。</summary>
+        private bool _closePressed;
+        private bool _closeWasPressed;
+
+        private void UpdateCloseButton(Point mousePosition)
+        {
+            var closeRect = MobileUi.WindowCloseButtonRect(DisplayRectangle);
+            bool pressed = MuGame.Instance.UiMouseState.LeftButton == ButtonState.Pressed;
+
+            if (pressed && !_closeWasPressed)
+            {
+                _closePressed = closeRect.Contains(mousePosition);
+            }
+            else if (!pressed && _closeWasPressed)
+            {
+                // 「按下」與「放開」都要落在按鈕上才算數 —— 手指按下後滑開就是取消。
+                bool activate = _closePressed && closeRect.Contains(mousePosition);
+                _closePressed = false;
+                _closeWasPressed = false;
+
+                if (activate)
+                {
+                    Controllers.SoundController.Instance.PlayBuffer("Sound/iButtonClick.wav");
+                    Hide();
+                }
+                return;
+            }
+
+            _closeWasPressed = pressed;
         }
 
         private void UpdateTooltip(Point mousePosition, Rectangle mapRectangle)
@@ -642,6 +685,13 @@ namespace Client.Main.Controls.UI.Game
 
             try
             {
+                if (Mobile)
+                {
+                    MobileUi.DrawWindowChrome(spriteBatch, _font, DisplayRectangle,
+                        string.IsNullOrWhiteSpace(_worldName) ? "MAP" : _worldName.ToUpperInvariant(),
+                        _closePressed);
+                }
+
                 DrawMapSurface(spriteBatch);
                 DrawOverlayCaption(spriteBatch);
                 DrawTooltip(spriteBatch);

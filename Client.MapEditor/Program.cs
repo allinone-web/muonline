@@ -1,6 +1,6 @@
 // MU 地圖編輯器。
 //
-//   MuMapEditor [--data <Data目錄>] [--world N] [--tile X,Y] [--size 1600x1000] [--seconds N] [--screenshot <path>] [--grass] [--grass-density N]
+//   MuMapEditor [--data <Data目錄>] [--world N] [--tile X,Y] [--size 1600x1000] [--seconds N] [--screenshot <path>] [--grass] [--grass-density N] [--grass-planes N] [--grass-distance N]
 //   MuMapEditor --shots <契約.json> --shot <鏡位名> --screenshot <path>   拍黃金影像
 //
 // --seconds / --screenshot 讓它能在終端機裡跑完就退出，用於自動化驗證。
@@ -55,6 +55,18 @@ if (parsed.GetValueOrDefault("grass-density") is string densityArg
     && int.TryParse(densityArg, out int density) && density >= 1)
 {
     EditorSession.Current.GrassDensity = Math.Min(density, 16);
+}
+
+if (parsed.GetValueOrDefault("grass-planes") is string planesArg
+    && int.TryParse(planesArg, out int planes) && planes >= 1)
+{
+    EditorSession.Current.GrassPlanes = Math.Min(planes, 4);
+}
+
+if (parsed.GetValueOrDefault("grass-distance") is string distArg
+    && float.TryParse(distArg, out float grassDistance) && grassDistance >= 0f)
+{
+    EditorSession.Current.GrassDistance = grassDistance;
 }
 
 // --tile 139,84：開起來就站在那一格上，不用自己找。

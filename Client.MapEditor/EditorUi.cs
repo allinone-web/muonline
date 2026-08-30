@@ -392,7 +392,17 @@ public sealed class EditorUi : IDisposable
                 (_game.ActiveScene as MapEditorScene)?.World?.Terrain?.ReloadGrassIfNeeded();
             }
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("一格地面長幾叢草。原版是 1 —— 一格一張立牌。\n拉高會線性增加三角形數與風力更新成本，看右下角的 FPS。");
+                ImGui.SetTooltip("一格地面長幾片草。原版是 1 —— 一格一張立牌。\n拉高會線性增加三角形數與風力更新成本，看右下角的 FPS。");
+
+            int planes = _session.GrassPlanes;
+            if (ImGui.SliderInt("交叉片數", ref planes, 1, 4, planes == 1 ? "1（平板）" : planes == 2 ? "2（十字）" : planes == 3 ? "3（三角）" : "%d"))
+            {
+                _session.GrassPlanes = planes;
+                Constants.GRASS_CLUSTER_PLANES = planes;
+                (_game.ActiveScene as MapEditorScene)?.World?.Terrain?.ReloadGrassIfNeeded();
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("幾片草共用一個圓心、夾角散開。\n這個值不會增加三角形數 —— 只是把上面那些立牌重新分組。");
         }
 
         ImGui.Separator();

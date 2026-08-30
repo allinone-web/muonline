@@ -84,6 +84,12 @@ public sealed class EditorSession : EditSession
     /// <summary><c>--grass-density N</c>：一格長幾叢草。1 = 原版。</summary>
     public int GrassDensity { get; set; } = 1;
 
+    /// <summary><c>--grass-planes N</c>：一叢草由幾片交叉組成。1 = 平板，2 = 十字，3 = 三角。</summary>
+    public int GrassPlanes { get; set; } = 1;
+
+    /// <summary><c>--grass-distance N</c>：草的繪製距離（世界單位）。0 = 不限制。</summary>
+    public float GrassDistance { get; set; }
+
     /// <summary>自我測試是否全數通過；null 表示還沒跑。</summary>
     public bool? SelfTestPassed { get; set; }
 

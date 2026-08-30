@@ -297,17 +297,13 @@ namespace Client.Main.Scenes
                             msg.Closed += (s, e) =>
                             {
                                 _logger.LogInformation("Closing game after connection lost message.");
-#if !IOS
-                                MuGame.ScheduleOnMainThread(() => MuGame.Instance.Exit());
-#endif
+                                MuGame.RequestExit();
                             };
                         }
                         else
                         {
                             _logger.LogError("Failed to show MessageWindow for connection lost. Exiting game directly.");
-#if !IOS
-                            MuGame.ScheduleOnMainThread(() => MuGame.Instance.Exit());
-#endif
+                            MuGame.RequestExit();
                         }
                     }
                 }
@@ -409,8 +405,13 @@ namespace Client.Main.Scenes
         {
             MuGame.ScheduleOnMainThread(() =>
             {
+                // 這一段的診斷全部走 Console：裝置與模擬器的 logger console provider
+                // 預設關閉，登入之後卡在「...」而不進選角畫面時，沒有它就只能猜。
+                Console.WriteLine($"[Net] character list on UI thread: count={characters?.Count ?? -1} state={_networkManager.CurrentState} activeScene={MuGame.Instance.ActiveScene?.GetType().Name}");
+
                 if (_networkManager.CurrentState < ClientConnectionState.ConnectedToGameServer)
                 {
+                    Console.WriteLine("[Net] character list ignored: state too early");
                     _logger.LogWarning("HandleCharacterListReceived (UI Thread): Received character list but current state is {State}. Ignoring.", _networkManager.CurrentState);
                     return;
                 }
@@ -420,6 +421,7 @@ namespace Client.Main.Scenes
 
                 if (MuGame.Instance.ActiveScene != this)
                 {
+                    Console.WriteLine("[Net] character list ignored: active scene is not the login scene");
                     _logger.LogWarning("HandleCharacterListReceived (UI Thread): Scene changed. Aborting.");
                     return;
                 }
@@ -433,10 +435,12 @@ namespace Client.Main.Scenes
                         _logger.LogInformation("--- SelectCharacterScene instance created.");
                         _logger.LogInformation("--- Calling ChangeScene...");
                         MuGame.Instance.ChangeScene(newScene);
+                        Console.WriteLine("[Net] ChangeScene(SelectCharacterScene) requested");
                         _logger.LogInformation("--- ChangeScene call finished (async void).");
                     }
                     catch (Exception ex)
                     {
+                        Console.WriteLine("[Net] scene change failed: " + ex);
                         _logger.LogError(ex, "!!! Exception DURING scene creation or ChangeScene call.");
                         MessageWindow.Show("Error preparing character selection scene.");
                         _networkManager?.UpdateState(ClientConnectionState.ConnectedToGameServer);

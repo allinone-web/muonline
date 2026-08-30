@@ -429,11 +429,23 @@ namespace Client.Main.Controls.Terrain
 
                 BoundingFrustum frustum = Camera.Instance.Frustum;
                 int windVersion = _wind.Version;
+                Vector3 cameraPosition = Camera.Instance.Position;
+                float maxDistance = Constants.GRASS_DRAW_DISTANCE;
+                float maxDistanceSquared = maxDistance > 0f ? maxDistance * maxDistance : 0f;
                 for (int i = 0; i < _batches.Count; i++)
                 {
                     GrassBatch batch = _batches[i];
                     if (frustum.Contains(batch.Bounds) == ContainmentType.Disjoint)
                         continue;
+
+                    // 距離剔除。原版只有視錐剔除 —— 視野最遠處那些每片不到一個像素的草，
+                    // 照樣要跑完整的頂點處理，還要在每次風力更新時被回寫一遍。
+                    // 密度拉高之後這是主要成本，手機更明顯。
+                    if (maxDistanceSquared > 0f
+                        && Vector3.DistanceSquared(cameraPosition, GetCenter(batch.Bounds)) > maxDistanceSquared)
+                    {
+                        continue;
+                    }
 
                     if (batch.LastWindVersion != windVersion)
                     {
@@ -573,13 +585,23 @@ namespace Client.Main.Controls.Terrain
             float baseX = x * scale;
             float baseY = y * scale;
 
+            // 幾片立牌共用一個圓心。planes 只改變分組方式，立牌總數不變 ——
+            // 所以三角形數與 planes 無關。
+            int planes = Math.Clamp(Constants.GRASS_CLUSTER_PLANES, 1, 4);
+            if (planes > tufts)
+                planes = tufts;
+
             for (int i = 0; i < tufts; i++)
             {
-                float r0 = Hash01(x, y, i * 8 + 0);
-                float r1 = Hash01(x, y, i * 8 + 1);
-                float r2 = Hash01(x, y, i * 8 + 2);
-                float r3 = Hash01(x, y, i * 8 + 3);
-                float r4 = Hash01(x, y, i * 8 + 4);
+                // 同一叢的幾片共用位置與尺寸的亂數，只有角度不同。
+                int cluster = i / planes;
+                int plane = i % planes;
+
+                float r0 = Hash01(x, y, cluster * 8 + 0);
+                float r1 = Hash01(x, y, cluster * 8 + 1);
+                float r2 = Hash01(x, y, cluster * 8 + 2);
+                float r3 = Hash01(x, y, cluster * 8 + 3);
+                float r4 = Hash01(x, y, cluster * 8 + 4);
                 float r5 = Hash01(x, y, i * 8 + 5);
 
                 // 格內位置。留 0.1 的邊界，免得草叢的中心正好落在格線上、
@@ -587,7 +609,9 @@ namespace Client.Main.Controls.Terrain
                 float fx = 0.1f + r0 * 0.8f;
                 float fy = 0.1f + r1 * 0.8f;
 
-                float angle = r2 * MathHelper.TwoPi;
+                // 一叢之內平均分掉 180 度：兩片＝十字，三片＝三角。
+                // 立牌沒有正反面（CullNone），所以分 180 度而不是 360 度。
+                float angle = r2 * MathHelper.TwoPi + plane * (MathHelper.Pi / planes);
                 float halfWidth = scale * (0.55f + r3 * 0.35f);
                 float height = GrassWorldHeight * (0.75f + r4 * 0.5f);
 
@@ -623,6 +647,8 @@ namespace Client.Main.Controls.Terrain
                 ExpandBounds(ref boundsMin, ref boundsMax, quad);
             }
         }
+
+        private static Vector3 GetCenter(in BoundingBox box) => (box.Min + box.Max) * 0.5f;
 
         private float SampleHeight(int sampleIndex)
         {

@@ -80,6 +80,31 @@ namespace Client.Main
         /// </remarks>
         public static int GRASS_TUFTS_PER_TILE = 1;
 
+        /// <summary>
+        /// 一叢草由幾片立牌交叉組成。1 = 各自獨立（平板），2 = 十字，3 = 三角。
+        /// </summary>
+        /// <remarks>
+        /// 這個值**不會增加三角形數** —— <see cref="GRASS_TUFTS_PER_TILE"/> 是每格的立牌總數，
+        /// 這個值只決定那些立牌怎麼分組。8 片獨立擺 vs 分成 2 叢各 4 片交叉，
+        /// GPU 的工作量一模一樣。
+        ///
+        /// 差別在於平板從側面看會消失。全部獨立擺時，任何角度都有一部分草變成一條線；
+        /// 共用圓心夾角散開之後，每一叢從任何方向看都有正對鏡頭的那一片。
+        /// Lineage W 的 3D 版也是這個做法（三片圍成三角）。
+        /// </remarks>
+        public static int GRASS_CLUSTER_PLANES = 1;
+
+        /// <summary>
+        /// 草的繪製距離（世界單位）。0 = 不限制，也就是原版行為。
+        /// </summary>
+        /// <remarks>
+        /// 原版只做視錐剔除，沒有距離剔除 —— 視野內最遠處那些每片只有次像素大小的草，
+        /// 照樣要跑完整的頂點處理與每次風力更新的頂點回寫。
+        /// 密度拉高之後這就是主要成本，而且手機吃不消。
+        /// 一格 100 單位，所以 4000 大約是 40 格。
+        /// </remarks>
+        public static float GRASS_DRAW_DISTANCE;
+
         // Rendering
         public static bool MSAA_ENABLED;
         public static bool ENABLE_DYNAMIC_LIGHTS;

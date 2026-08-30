@@ -24,7 +24,10 @@ namespace Client.Main.Controls.UI.Game.Skills
     {
         private const int COLUMNS = 6;
         private const int OUTER_PADDING = 14;
-        private const int HEADER_HEIGHT = 52;
+        /// <summary>標題列高度。手機一律用 <see cref="MobileUi.WindowTitleHeight"/>，
+        /// 才會和背包、交易、商店等視窗一樣高 —— 使用者指名「每個面板都不一樣」的
+        /// 就是這一類各自訂一個數字的地方。</summary>
+        private static int HEADER_HEIGHT => IsMobile ? MobileUi.WindowTitleHeight : 52;
         private const int CONTENT_GAP = 12;
         private const int GRID_PADDING = 12;
         private const int SLOT_GAP = 10;
@@ -181,7 +184,9 @@ namespace Client.Main.Controls.UI.Game.Skills
                 .ThenBy(s => s.SkillId)
                 .ToList();
 
+            // 手機的標題由 DrawWindowChrome 統一畫（全大寫、TextTitle 級距、置中）。
             _titleLabel.Text = $"Select Skill ({skills.Count} available)";
+            _titleLabel.Visible = !IsMobile;
 
             foreach (var slot in _skillSlots)
             {
@@ -318,11 +323,9 @@ namespace Client.Main.Controls.UI.Game.Skills
                 // 介面按鈕（MENU / CHAR / BAG / SKILL / MAP / CHAT）上面 ——
                 // 實測按下去是關掉技能視窗的同時又把它重新打開，永遠關不掉。
                 // 遊戲內所有視窗一律左上角，見 docs/手機遊戲界面規格.md。
-                _closeRectLocal = new Rectangle(
-                    OUTER_PADDING,
-                    (HEADER_HEIGHT - CLOSE_BUTTON_SIZE) / 2,
-                    CLOSE_BUTTON_SIZE,
-                    CLOSE_BUTTON_SIZE);
+                // 位置與外觀都交給 MobileUi —— 命中判定與繪製必須用同一個算法，
+                // 否則會出現「看得到但點不到」。
+                _closeRectLocal = MobileUi.WindowCloseButtonRect(new Rectangle(0, 0, totalWidth, totalHeight));
             }
             else
             {
@@ -404,45 +407,29 @@ namespace Client.Main.Controls.UI.Game.Skills
                 Rectangle rect = ToDisplayRect(_assignRectLocal);
                 bool ready = _previewSkill != null;
 
+                // 一顆純色按鈕。可用時亮一階、按下時再亮一階，沒有框線 ——
+                // 框一個色、底一個色、字一個色，三種顏色卻只在講同一件事。
                 Color fill = ready
-                    ? (_assignPressed ? new Color(70, 110, 160) : new Color(44, 72, 108)) * alpha
-                    : new Color(26, 30, 38) * (0.8f * alpha);
+                    ? (_assignPressed ? new Color(72, 86, 106) * 1.25f : new Color(72, 86, 106))
+                    : new Color(34, 40, 50);
 
-                UiDrawHelper.DrawPanel(
-                    spriteBatch,
-                    rect,
-                    fill,
-                    ModernHudTheme.BorderInner * alpha,
-                    ModernHudTheme.BorderOuter * alpha,
-                    ModernHudTheme.BorderHighlight * 0.3f * alpha);
+                var pixelTexture = GraphicsManager.Instance.Pixel;
+                if (pixelTexture != null)
+                    spriteBatch.Draw(pixelTexture, rect, fill * alpha);
 
                 if (font != null)
                 {
+                    // 字型沒有 U+2192（→），畫出來會是一個問號。
                     string label = ready
-                        ? (string.IsNullOrEmpty(AssignTargetLabel) ? "ASSIGN" : $"ASSIGN → {AssignTargetLabel}")
+                        ? (string.IsNullOrEmpty(AssignTargetLabel) ? "ASSIGN" : $"ASSIGN -> {AssignTargetLabel}")
                         : "TAP A SKILL";
 
-                    Color textColor = (ready ? ModernHudTheme.TextGold : ModernHudTheme.TextGray) * alpha;
-                    DrawCenteredText(spriteBatch, font, label, rect, 0.62f, textColor);
+                    MobileUi.DrawTextCentered(spriteBatch, font, label, rect, MobileUi.TextHeading,
+                        (ready ? MobileUi.TextPrimary : MobileUi.TextDim) * alpha);
                 }
             }
 
-            if (_closeRectLocal.Width > 0)
-            {
-                Rectangle rect = ToDisplayRect(_closeRectLocal);
-                UiDrawHelper.DrawPanel(
-                    spriteBatch,
-                    rect,
-                    (_closePressed ? new Color(120, 52, 52) : new Color(40, 26, 26)) * alpha,
-                    ModernHudTheme.BorderInner * alpha,
-                    ModernHudTheme.BorderOuter * alpha,
-                    ModernHudTheme.BorderHighlight * 0.3f * alpha);
-
-                if (font != null)
-                {
-                    DrawCenteredText(spriteBatch, font, "X", rect, 0.7f, ModernHudTheme.TextWhite * alpha);
-                }
-            }
+            // 關閉鈕由 DrawWindowChrome 畫（左上角、和所有視窗同一個樣式）。
         }
 
         private static void DrawCenteredText(SpriteBatch spriteBatch, SpriteFont font, string text,
@@ -478,6 +465,20 @@ namespace Client.Main.Controls.UI.Game.Skills
         private void DrawWindowFrame(SpriteBatch spriteBatch, Texture2D pixel, float alpha)
         {
             Rectangle rect = DisplayRectangle;
+
+            if (IsMobile)
+            {
+                // 和其他視窗完全一樣的外框：半透明面板 + 標題列 + 左上角關閉鈕。
+                // 桌面那套（外框、漸層、四角托架、標題列再一層漸層、底下再一條金線）
+                // 在小螢幕上只是把一個面板拆成六條互相干擾的線。
+                MobileUi.DrawWindowChrome(spriteBatch, GraphicsManager.Instance.Font, rect, "SKILLS", _closePressed);
+
+                // 兩個內容區只用底色分隔，不畫框。
+                spriteBatch.Draw(pixel, ToDisplayRect(_gridRectLocal), MobileUi.FieldFill * (0.55f * alpha));
+                spriteBatch.Draw(pixel, ToDisplayRect(_detailRectLocal), MobileUi.FieldFill * (0.55f * alpha));
+                return;
+            }
+
             spriteBatch.Draw(pixel, rect, ModernHudTheme.BorderOuter * alpha);
 
             Rectangle inner = new(rect.X + 1, rect.Y + 1, Math.Max(1, rect.Width - 2), Math.Max(1, rect.Height - 2));

@@ -242,9 +242,40 @@ namespace Client.Main.Controllers
             }
         }
 
+        /// <summary>
+        /// 同一個音效在這段時間內只播一次。
+        ///
+        /// 使用者回報選伺服器的畫面「有時候會連續播放按鈕音效」。觸控的按下狀態
+        /// 偶爾會在單次按壓中閃回「放開」再變回「按下」，而 UI 有很多處各自
+        /// 判斷「按下再放開」就播音效 —— 每一處都自己加防抖是防不完的，
+        /// 因為下一個新加的地方又會漏掉。
+        ///
+        /// 在播放這一端擋掉最省事，而且不會誤傷：60 毫秒之內的第二次同一個音效
+        /// 不是人按出來的（人手最快的連點大約 100 毫秒一次），而且就算真的是，
+        /// 兩個完全重疊的相同音效聽起來也只是變大聲而已。
+        /// 不同的音效互不影響。
+        /// </summary>
+        private const double DuplicateSoundWindowMs = 60.0;
+
+        private readonly Dictionary<string, double> _lastPlayedMs = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Stopwatch _playClock = Stopwatch.StartNew();
+
         public void PlayBuffer(string relativePath)
         {
             if (!Constants.SOUND_EFFECTS) return;
+            if (string.IsNullOrEmpty(relativePath)) return;
+
+            lock (_lastPlayedMs)
+            {
+                double now = _playClock.Elapsed.TotalMilliseconds;
+                if (_lastPlayedMs.TryGetValue(relativePath, out double previous)
+                    && now - previous < DuplicateSoundWindowMs)
+                {
+                    return;
+                }
+
+                _lastPlayedMs[relativePath] = now;
+            }
 
             string fullPath = Path.Combine(Constants.DataPath, relativePath);
             SoundEffect sfx = GetCachedOrBeginLoad(fullPath);

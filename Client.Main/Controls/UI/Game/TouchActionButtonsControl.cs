@@ -60,8 +60,24 @@ namespace Client.Main.Controls.UI.Game
         {
             int bottom = UiScaler.VirtualSize.Y - (int)(MarginBottom - MainButtonRadius);
             int top = bottom - (int)(MainButtonRadius * 2 + SkillArcRadius);
-            return MobileUi.EdgeInsetForBand(top, bottom) + SkillArcRightOverhang;
+            float inset = MobileUi.EdgeInsetForBand(top, bottom) - RightNudge;
+            return MathF.Max(MobileUi.CornerInset, inset) + SkillArcRightOverhang;
         }
+
+        /// <summary>
+        /// 整群往右挪多少。
+        ///
+        /// <see cref="MobileUi.EdgeInsetForBand"/> 把畫面高度的中間 60% 都當成
+        /// 鏡頭挖孔的範圍，那是刻意保守的判定。這一群裡真正靠近右緣的只有
+        /// 第四顆技能鈕（288 度，圓心在主按鈕右邊 41 px、上方 125 px），
+        /// 它的垂直位置在畫面高度的 0.62–0.73 之間 —— 已經在挖孔下緣附近，
+        /// 但保守判定仍然讓整群退掉整個安全區域，實機上看起來離右緣非常遠。
+        ///
+        /// 72 px 是使用者在 iPhone Air 上看著實機給的量。挪完之後整群的最右緣
+        /// 距離螢幕邊緣約 66 px，仍然比右上角那排按鈕的 30 px 保守。
+        /// <b>大小與排列完全沒有變</b>，只是整群平移。
+        /// </summary>
+        private const float RightNudge = 72f;
 
         /// <summary>技能鈕排在主按鈕左上方的弧線上。</summary>
         private const float SkillArcRadius = 132f;

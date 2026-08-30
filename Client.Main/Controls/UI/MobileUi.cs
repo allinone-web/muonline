@@ -446,6 +446,75 @@ namespace Client.Main.Controls.UI
             sb.Draw(pixel, new Rectangle(rect.Right - 1, rect.Y, 1, rect.Height), border);
         }
 
+        // ───────────────────────── 視窗的共同尺寸 ─────────────────────────
+        //
+        // 使用者的原話：「右上角六個按鈕點擊後打開的面板，都非常不統一」。
+        // 不統一的來源是每個視窗各自訂了一套標題列高度、內距與標題字級 ——
+        // 背包 52、技能 38、商店 44…… 玩家每開一個視窗就要重新適應一次。
+        //
+        // 這幾個值是<b>所有</b>手機視窗共用的。要改樣式改這裡，不要在單一視窗裡改。
+
+        /// <summary>
+        /// 視窗標題列的高度。關閉鈕（46）加上下各 6 的餘裕 ——
+        /// 比這個小，關閉鈕就會穿出標題列壓到內容區。
+        /// </summary>
+        public static int WindowTitleHeight => CloseButtonSize + 12;
+
+        /// <summary>視窗邊界與內容之間的距離。</summary>
+        public const int WindowPadding = 16;
+
+        /// <summary>
+        /// 把想要的視窗尺寸夾進畫面。
+        ///
+        /// 「面板高度由內容決定」在桌面上沒問題，在 756 高的畫布上會直接長到畫面外 ——
+        /// 背包算出來是 914 高，底下兩列半永遠看不到，而且沒有任何提示。
+        /// 每一個視窗在決定尺寸時都要經過這裡。
+        /// </summary>
+        public static Point ClampWindowSize(int desiredWidth, int desiredHeight)
+        {
+            var canvas = UiScaler.VirtualSize;
+            return new Point(
+                Math.Clamp(desiredWidth, 1, Math.Max(1, canvas.X - CornerInset * 2)),
+                Math.Clamp(desiredHeight, 1, Math.Max(1, canvas.Y - CornerInset * 2)));
+        }
+
+        /// <summary>視窗置中之後的左上角座標。</summary>
+        public static Point CenterWindow(Point size)
+        {
+            var canvas = UiScaler.VirtualSize;
+            return new Point(
+                Math.Max(CornerInset, (canvas.X - size.X) / 2),
+                Math.Max(CornerInset, (canvas.Y - size.Y) / 2));
+        }
+
+        /// <summary>
+        /// 視窗的共同外觀：半透明面板 + 標題列 + 置中的標題 + 左上角的關閉鈕。
+        ///
+        /// <paramref name="rect"/> 用<b>螢幕座標</b>（已經加上視窗位置）。
+        /// 關閉鈕的矩形由 <see cref="WindowCloseButtonRect"/> 算，兩邊必須用同一個算法，
+        /// 否則會出現「看得到但點不到」。
+        /// </summary>
+        public static void DrawWindowChrome(SpriteBatch sb, SpriteFont font, Rectangle rect,
+                                            string title, bool closePressed)
+        {
+            DrawPanel(sb, rect, WindowTitleHeight);
+
+            if (font != null && !string.IsNullOrEmpty(title))
+            {
+                var titleBar = new Rectangle(rect.X, rect.Y, rect.Width, WindowTitleHeight);
+                DrawTextCentered(sb, font, title, titleBar, TextTitle, TextPrimary);
+            }
+
+            DrawCloseGlyph(sb, WindowCloseButtonRect(rect), closePressed);
+        }
+
+        /// <summary>關閉鈕的位置：一律標題列左端，垂直置中。</summary>
+        public static Rectangle WindowCloseButtonRect(Rectangle windowRect) => new(
+            windowRect.X + 12,
+            windowRect.Y + (WindowTitleHeight - CloseButtonSize) / 2,
+            CloseButtonSize,
+            CloseButtonSize);
+
         /// <summary>
         /// 在給定的列數與視窗其餘高度之下，格子最大可以多大而視窗仍然放得進畫面。
         ///
@@ -603,5 +672,14 @@ namespace Client.Main.Controls.UI
 
         /// <summary>手機的可用區域（虛擬座標）。UiScaler 已把安全區域併入縮放，因此就是整個虛擬畫布。</summary>
         public static Rectangle SafeArea => new(0, 0, UiScaler.VirtualSize.X, UiScaler.VirtualSize.Y);
+
+        /// <summary>
+        /// 系統鍵盤目前從畫面底部吃掉的高度（虛擬像素）。0 = 沒有鍵盤。
+        ///
+        /// 橫置時 iOS 鍵盤大約佔掉畫面的一半，被聚焦的輸入框很容易整個落在鍵盤底下 ——
+        /// 玩家看不到自己打了什麼。由平台端（MuIos）在鍵盤動畫開始時設定，
+        /// <see cref="TextFieldControl"/> 據此把整個視窗往上挪。
+        /// </summary>
+        public static float KeyboardHeight { get; set; }
     }
 }

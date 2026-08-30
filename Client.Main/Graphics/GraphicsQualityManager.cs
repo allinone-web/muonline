@@ -132,6 +132,43 @@ namespace Client.Main.Graphics
             return GraphicsQualityPreset.Medium;
         }
 
+        /// <summary>草地品質等級可選的值。數字＝每格的立牌數。</summary>
+        public static readonly int[] GrassQualityLevels = [1, 4, 8];
+
+        /// <summary>
+        /// 套用草地品質。<paramref name="level"/> 是每格的立牌數（1／4／8）。
+        /// </summary>
+        /// <remarks>
+        /// 交叉片數（planes）不影響三角形數 —— 它只決定那些立牌是各自獨立擺，
+        /// 還是共用圓心夾角散開。所以往上一級同時給更多片與更好的排列，成本只跟立牌數走。
+        ///
+        /// 繪製距離只在密度大於原版時才設限：原版一格一片，遠處的成本本來就低，
+        /// 加距離限制只會讓地平線出現一條草消失的界線。
+        /// </remarks>
+        public static void ApplyGrassQuality(int level)
+        {
+            switch (level)
+            {
+                case >= 8:
+                    Constants.GRASS_TUFTS_PER_TILE = 8;
+                    Constants.GRASS_CLUSTER_PLANES = 3;   // 三角，Lineage W 的做法
+                    Constants.GRASS_DRAW_DISTANCE = 8000f;
+                    break;
+
+                case >= 4:
+                    Constants.GRASS_TUFTS_PER_TILE = 4;
+                    Constants.GRASS_CLUSTER_PLANES = 2;   // 十字
+                    Constants.GRASS_DRAW_DISTANCE = 8000f;
+                    break;
+
+                default:
+                    Constants.GRASS_TUFTS_PER_TILE = 1;
+                    Constants.GRASS_CLUSTER_PLANES = 1;
+                    Constants.GRASS_DRAW_DISTANCE = 0f;
+                    break;
+            }
+        }
+
         private static void ApplyProfile(GraphicsQualityPreset preset)
         {
             switch (preset)

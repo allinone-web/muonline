@@ -252,6 +252,28 @@ namespace Client.Main
         /// Schedules an action to be executed on the main game thread during the next Update cycle.
         /// </summary>
         /// <param name="action">The action to execute.</param>
+        /// <summary>
+        /// 結束遊戲。<b>行動平台上什麼都不做。</b>
+        ///
+        /// iOS 不允許 app 自行終止（Apple 的規範明文禁止，而且玩家看到的是
+        /// 「遊戲莫名其妙關掉了」而不是「我按了離開」）。
+        ///
+        /// 原本這幾處是用 <c>#if !IOS</c> 包起來的，但那個符號在 Client.Main 裡
+        /// <b>從來沒有生效過</b>：IOS 只在 MuIos.csproj 加，而 Client.Main 是以
+        /// net10.0 建置的（見 ClientMainTargetFramework），csproj 裡那段
+        /// 「TargetFramework 等於 net10.0-ios 就加 IOS」永遠不成立。
+        /// 實際結果是 iPhone 上「連線中斷 → 按 OK」會直接把 app 關掉。
+        ///
+        /// 改成執行期判斷，就不會再被建置設定悄悄關掉。
+        /// </summary>
+        public static void RequestExit()
+        {
+            if (Controls.UI.MobileUi.IsMobile)
+                return;
+
+            ScheduleOnMainThread(() => Instance?.Exit());
+        }
+
         public static void ScheduleOnMainThread(
             Action action,
             MainThreadDispatcher.WorkPriority priority = MainThreadDispatcher.WorkPriority.Normal,
@@ -634,9 +656,7 @@ namespace Client.Main
             if (AppSettings == null || !ValidateSettings(AppSettings, bootLogger)) // Add validation
             {
                 bootLogger.LogCritical("❌ Invalid application settings found in appsettings.json. Shutting down.");
-#if !IOS
-                Exit(); // Stop the game if settings are invalid
-#endif
+                RequestExit(); // Stop the game if settings are invalid（行動平台不關閉，見 RequestExit）
                 return;
             }
             bootLogger.LogInformation("✅ Configuration loaded.");
@@ -703,6 +723,10 @@ namespace Client.Main
             // 使用者在設定選單的個別選擇要蓋在預設之上。
             // （先前放在預設之前，等於完全沒有效果。）
             ApplyPersistedRenderToggles(AppSettings?.Graphics);
+
+            // 草地品質。沒選過就是 null，維持原版的一格一片。
+            GraphicsQualityManager.ApplyGrassQuality(AppSettings?.Graphics?.GrassQuality ?? 1);
+
             if (AppSettings?.Graphics?.RenderScale is float savedScale && savedScale > 0.05f)
             {
                 Constants.RENDER_SCALE = savedScale;
@@ -2380,6 +2404,36 @@ namespace Client.Main
             catch (Exception ex)
             {
                 logger?.LogWarning(ex, "Failed to persist render scale.");
+            }
+        }
+
+        public static void PersistGrassQuality(int level)
+        {
+            var logger = AppLoggerFactory?.CreateLogger<MuGame>();
+            try
+            {
+                Directory.CreateDirectory(WritableConfigDirectory ?? ConfigDirectory ?? AppContext.BaseDirectory);
+
+                JsonObject root = LoadLocalSettings(logger);
+                if (root["MuOnlineSettings"] is not JsonObject muSettings)
+                {
+                    muSettings = new JsonObject();
+                    root["MuOnlineSettings"] = muSettings;
+                }
+                if (muSettings["Graphics"] is not JsonObject graphics)
+                {
+                    graphics = new JsonObject();
+                    muSettings["Graphics"] = graphics;
+                }
+
+                graphics["GrassQuality"] = level;
+
+                var options = new JsonSerializerOptions { WriteIndented = true };
+                File.WriteAllText(LocalSettingsPath, root.ToJsonString(options));
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Failed to persist grass quality.");
             }
         }
 

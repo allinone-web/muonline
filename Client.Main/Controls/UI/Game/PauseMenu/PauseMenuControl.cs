@@ -900,19 +900,12 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     UnsubscribeLogoutHandler(net);
                 }
 
-                MuGame.ScheduleOnMainThread(() =>
-                {
-#if !IOS
-                    MuGame.Instance.Exit();
-#endif
-                });
+                MuGame.RequestExit();
             }
             catch (Exception ex)
             {
                 _logger?.LogError(ex, "PauseMenu: Error while exiting the game. Forcing shutdown.");
-#if !IOS
-                MuGame.ScheduleOnMainThread(() => MuGame.Instance.Exit());
-#endif
+                MuGame.RequestExit();
             }
         }
 
@@ -1219,6 +1212,8 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     ref categoryX, categoryWidth, categoryHeight, categorySpacing, categoriesPerRow, ref categoryIndex);
                 AddCategoryButton("Render Scale", () => BuildRenderScaleCategory(), categoryStartY,
                     ref categoryX, categoryWidth, categoryHeight, categorySpacing, categoriesPerRow, ref categoryIndex);
+                AddCategoryButton("Grass Quality", () => BuildGrassQualityCategory(), categoryStartY,
+                    ref categoryX, categoryWidth, categoryHeight, categorySpacing, categoriesPerRow, ref categoryIndex);
                 AddCategoryButton("Graphics", () => BuildGraphicsCategory(), categoryStartY,
                     ref categoryX, categoryWidth, categoryHeight, categorySpacing, categoriesPerRow, ref categoryIndex);
                 AddCategoryButton("Lighting", () => BuildLightingCategory(), categoryStartY,
@@ -1384,6 +1379,44 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                         if (value) _owner.ApplyQualityPreset(GraphicsQualityPreset.High, RefreshOptions);
                     }, ref currentY, OptionRowHeight);
                 });
+            }
+
+            /// <summary>
+            /// 草地品質。數字是「一格地面長幾片草」，也就是成本本身 ——
+            /// 三角形數與它成正比。原版是 1。
+            /// </summary>
+            /// <remarks>
+            /// 需要「Draw Grass」是開的才看得到效果，所以這裡也放一份提示。
+            /// 切換之後必須重建草的頂點緩衝區，不然畫面不會變。
+            /// </remarks>
+            private void BuildGrassQualityCategory()
+            {
+                BuildCategory("Grass Quality", (ref int currentY) =>
+                {
+                    AddOption("Original (1 per tile)", () => Constants.GRASS_TUFTS_PER_TILE <= 1, value =>
+                    {
+                        if (value) SetGrassQuality(1);
+                    }, ref currentY, OptionRowHeight);
+                    AddOption("Medium (4 per tile, crossed)", () => Constants.GRASS_TUFTS_PER_TILE is > 1 and < 8, value =>
+                    {
+                        if (value) SetGrassQuality(4);
+                    }, ref currentY, OptionRowHeight);
+                    AddOption("High (8 per tile, 3-plane)", () => Constants.GRASS_TUFTS_PER_TILE >= 8, value =>
+                    {
+                        if (value) SetGrassQuality(8);
+                    }, ref currentY, OptionRowHeight);
+                });
+            }
+
+            private void SetGrassQuality(int level)
+            {
+                GraphicsQualityManager.ApplyGrassQuality(level);
+                MuGame.PersistGrassQuality(level);
+
+                var scene = MuGame.Instance?.ActiveScene as BaseScene;
+                scene?.World?.Terrain?.ReloadGrassIfNeeded();
+
+                RefreshOptions();
             }
 
             private void BuildRenderScaleCategory()

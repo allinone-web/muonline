@@ -31,13 +31,37 @@ namespace Client.Main.Controls.UI.Game.Trade
         // WINDOW DIMENSIONS
         // ═══════════════════════════════════════════════════════════════
         /// <summary>
-        /// 視窗寬度。桌面固定 396；手機由格線寬度推算 —— 格子放大到 64 之後
-        /// 8 欄就是 512，寫死的 396 會讓格線直接長到視窗外面。
+        /// 視窗寬度。桌面固定 396。
+        ///
+        /// 手機是<b>兩個格線並排</b>（見 <see cref="BuildLayoutMetrics"/>），
+        /// 因此寬度是兩個格線框加中間的間距。
         /// </summary>
         private static int WINDOW_WIDTH => MobileUi.IsMobile
-            ? TRADE_COLUMNS * TRADE_SQUARE_WIDTH + WINDOW_MARGIN * 2 + 20
+            ? WINDOW_MARGIN * 2 + GRID_FRAME_WIDTH * 2 + MOBILE_GRID_GAP
             : 396;
-        private const int WINDOW_HEIGHT = 650;
+
+        /// <summary>
+        /// 視窗高度。桌面固定 650。
+        ///
+        /// 手機原本也用 650，但上下疊兩個 8x4 的格線、格子又放大到 64 之後，
+        /// 光是兩個格線就要 552 px，加上標題列、兩行姓名、兩行金錢與送出鈕，
+        /// 內容總高超過 800 —— 視窗底部的送出鈕整個被裁掉，玩家根本點不到。
+        /// 直立疊放在橫置的手機上本來就是錯的版面：畫面有 1642 px 寬卻只有
+        /// 756 px 高，該並排的東西不該疊起來。
+        /// </summary>
+        private static int WINDOW_HEIGHT => MobileUi.IsMobile
+            ? HEADER_HEIGHT + MOBILE_INFO_HEIGHT + GRID_FRAME_HEIGHT + 8
+              + MONEY_INPUT_HEIGHT + 8 + TRADE_BUTTON_HEIGHT + MOBILE_BOTTOM_MARGIN
+            : 650;
+
+        /// <summary>兩個格線之間的間距（手機的並排版面）。</summary>
+        private const int MOBILE_GRID_GAP = 16;
+
+        /// <summary>並排版面裡「對方 / 自己」那一行姓名的高度。</summary>
+        private const int MOBILE_INFO_HEIGHT = 26;
+
+        /// <summary>送出鈕下方留白。</summary>
+        private const int MOBILE_BOTTOM_MARGIN = 12;
 
         /// <summary>
         /// 標題列高度。手機至少要放得下 46 見方的關閉鈕再加上下各 6 的餘裕 ——
@@ -69,6 +93,8 @@ namespace Client.Main.Controls.UI.Game.Trade
 
         private static readonly int GRID_WIDTH = TRADE_COLUMNS * TRADE_SQUARE_WIDTH;
         private static readonly int GRID_HEIGHT = TRADE_ROWS * TRADE_SQUARE_HEIGHT;
+        private static readonly int GRID_FRAME_WIDTH = GRID_WIDTH + GRID_PADDING * 2;
+        private static readonly int GRID_FRAME_HEIGHT = GRID_HEIGHT + GRID_PADDING * 2;
 
         // ═══════════════════════════════════════════════════════════════
         // MODERN DARK THEME
@@ -318,6 +344,12 @@ namespace Client.Main.Controls.UI.Game.Trade
         // ═══════════════════════════════════════════════════════════════
         private void BuildLayoutMetrics()
         {
+            if (MobileUi.IsMobile)
+            {
+                BuildMobileLayoutMetrics();
+                return;
+            }
+
             int currentY = 0;
 
             // Header
@@ -380,6 +412,53 @@ namespace Client.Main.Controls.UI.Game.Trade
             _closeButtonRect = MobileUi.IsMobile
                 ? new Rectangle(12, (HEADER_HEIGHT - MobileUi.CloseButtonSize) / 2, MobileUi.CloseButtonSize, MobileUi.CloseButtonSize)
                 : new Rectangle(12, 10, 26, 22);
+        }
+
+        /// <summary>
+        /// 手機的版面：兩個格線<b>並排</b>，左邊對方、右邊自己。
+        ///
+        /// 桌面是直立疊放的，那是為 4:3 的視窗畫的。橫置的手機是 1642 x 756 ——
+        /// 寬度多到用不完、高度卻不夠疊兩個格線，硬套桌面版面的結果是送出鈕
+        /// 被裁在畫面外。並排之後總高只有約 460，還能整個容進畫面。
+        ///
+        /// 左右兩欄的內容一一對應（姓名、格線、金錢），玩家用同一個高度就能
+        /// 比對「我給的」和「他給的」，比上下對照更快。
+        /// </summary>
+        private void BuildMobileLayoutMetrics()
+        {
+            int leftX = WINDOW_MARGIN;
+            int rightX = WINDOW_MARGIN + GRID_FRAME_WIDTH + MOBILE_GRID_GAP;
+            int width = WINDOW_WIDTH;
+
+            _headerRect = new Rectangle(0, 0, width, HEADER_HEIGHT);
+
+            int infoY = HEADER_HEIGHT;
+            _partnerInfoRect = new Rectangle(leftX, infoY, GRID_FRAME_WIDTH, MOBILE_INFO_HEIGHT);
+            _myInfoRect = new Rectangle(rightX, infoY, GRID_FRAME_WIDTH, MOBILE_INFO_HEIGHT);
+
+            int gridY = infoY + MOBILE_INFO_HEIGHT;
+            _partnerGridFrameRect = new Rectangle(leftX, gridY, GRID_FRAME_WIDTH, GRID_FRAME_HEIGHT);
+            _myGridFrameRect = new Rectangle(rightX, gridY, GRID_FRAME_WIDTH, GRID_FRAME_HEIGHT);
+            _partnerGridRect = new Rectangle(leftX + GRID_PADDING, gridY + GRID_PADDING, GRID_WIDTH, GRID_HEIGHT);
+            _myGridRect = new Rectangle(rightX + GRID_PADDING, gridY + GRID_PADDING, GRID_WIDTH, GRID_HEIGHT);
+
+            // 「Zen:」的標籤畫在金額框左邊（見 DrawPartnerSection），因此金額框
+            // 要離格線左緣一段距離才放得下標籤。
+            const int moneyLabelSpace = 62;
+            int moneyY = gridY + GRID_FRAME_HEIGHT + 8;
+            _partnerMoneyRect = new Rectangle(leftX + moneyLabelSpace, moneyY, GRID_FRAME_WIDTH - moneyLabelSpace, MONEY_INPUT_HEIGHT);
+            _myMoneyInputRect = new Rectangle(rightX + moneyLabelSpace, moneyY, GRID_FRAME_WIDTH - moneyLabelSpace, MONEY_INPUT_HEIGHT);
+
+            // 上下疊放時中間需要一條分隔線把「他的」和「我的」分開；
+            // 並排之後左右已經分得很清楚，那條線只是多餘的裝飾。
+            _dividerRect = Rectangle.Empty;
+
+            int buttonY = moneyY + MONEY_INPUT_HEIGHT + 8;
+            const int buttonWidth = 320;
+            _tradeButtonRect = new Rectangle((width - buttonWidth) / 2, buttonY, buttonWidth, TRADE_BUTTON_HEIGHT);
+
+            _closeButtonRect = new Rectangle(12, (HEADER_HEIGHT - MobileUi.CloseButtonSize) / 2,
+                MobileUi.CloseButtonSize, MobileUi.CloseButtonSize);
         }
 
         // ═══════════════════════════════════════════════════════════════
@@ -675,10 +754,10 @@ namespace Client.Main.Controls.UI.Game.Trade
 
             if (MobileUi.IsMobile)
             {
-                // 和登入、選伺服器、背包同一個面板：半透明底 + 一條細框。
+                // 和登入、選伺服器、背包同一個面板：半透明底 + 一條細框 + 標題列。
                 // 桌面那套（外框 + 漸層 + 內框高光 + 四角托架）在手機上
                 // 只是把一個面板拆成五條互相干擾的線。
-                MobileUi.DrawPanel(spriteBatch, rect);
+                MobileUi.DrawPanel(spriteBatch, rect, HEADER_HEIGHT);
                 return;
             }
 
@@ -695,6 +774,17 @@ namespace Client.Main.Controls.UI.Game.Trade
 
         private void DrawPanel(SpriteBatch spriteBatch, Rectangle rect, Color bgColor, bool withBorder = true)
         {
+            // 手機只畫一塊底色。桌面的 DrawPanel 是「外框 + 內框 + 高光」三層線，
+            // 而視窗本身已經有一條細框了 —— 一個面板裡再套四條線，
+            // 看起來像是每個區塊都被框住，而不是同一個面板的一部分。
+            if (MobileUi.IsMobile)
+            {
+                var pixel = GraphicsManager.Instance.Pixel;
+                if (pixel != null)
+                    spriteBatch.Draw(pixel, rect, bgColor);
+                return;
+            }
+
             UiDrawHelper.DrawPanel(spriteBatch, rect, bgColor,
                 withBorder ? Theme.BorderInner * 0.8f : (Color?)null,
                 withBorder ? Theme.BorderOuter : (Color?)null,
@@ -720,20 +810,37 @@ namespace Client.Main.Controls.UI.Game.Trade
             var pixel = GraphicsManager.Instance.Pixel;
             if (pixel == null) return;
 
+            // 手機：標題列的底已經由 DrawWindowBackground 畫掉了，這裡只放標題文字。
+            // 「面板裡再放一塊面板、標題後面再墊一塊光暈」在小螢幕上只是多兩層邊界。
+            if (MobileUi.IsMobile)
+            {
+                MobileUi.DrawTextCentered(spriteBatch, _font, "TRADE", _headerRect,
+                    MobileUi.TextTitle, MobileUi.TextPrimary);
+
+                // 提醒原本畫在中間那條分隔線上，並排版面沒有那條線了。
+                // 它是這個視窗唯一真正重要的一句話（東西送出去就拿不回來），
+                // 移到標題列右側 —— 位置固定、不跟著格線內容跑。
+                if (_font != null)
+                {
+                    const string warning = "CHECK ITEMS BEFORE ACCEPTING";
+                    var size = _font.MeasureString(warning) * MobileUi.ScaleFor(MobileUi.TextCaption);
+                    MobileUi.DrawText(spriteBatch, _font, warning,
+                        new Vector2(_headerRect.Right - size.X - 16, _headerRect.Y + (HEADER_HEIGHT - size.Y) / 2),
+                        MobileUi.TextCaption, MobileUi.TextDim);
+                }
+                return;
+            }
+
             var headerBg = new Rectangle(8, 6, WINDOW_WIDTH - 16, HEADER_HEIGHT - 8);
             DrawPanel(spriteBatch, headerBg, Theme.BgMid);
 
-            // 標題上緣那兩條裝飾橫槓：手機不畫，標題列本身已經有底色了。
-            if (!MobileUi.IsMobile)
-            {
-                spriteBatch.Draw(pixel, new Rectangle(20, 8, WINDOW_WIDTH - 40, 2), Theme.Accent * 0.8f);
-                spriteBatch.Draw(pixel, new Rectangle(30, 10, WINDOW_WIDTH - 60, 1), Theme.AccentDim * 0.4f);
-            }
+            spriteBatch.Draw(pixel, new Rectangle(20, 8, WINDOW_WIDTH - 40, 2), Theme.Accent * 0.8f);
+            spriteBatch.Draw(pixel, new Rectangle(30, 10, WINDOW_WIDTH - 60, 1), Theme.AccentDim * 0.4f);
 
             if (_font != null)
             {
                 string title = "TRADE";
-                float scale = MobileUi.IsMobile ? MobileUi.ScaleFor(MobileUi.TextTitle) : 0.50f;
+                const float scale = 0.50f;
                 Vector2 size = _font.MeasureString(title) * scale;
                 Vector2 pos = new((WINDOW_WIDTH - size.X) / 2, (HEADER_HEIGHT - size.Y) / 2 + 2);
 
@@ -783,6 +890,9 @@ namespace Client.Main.Controls.UI.Game.Trade
         {
             var pixel = GraphicsManager.Instance.Pixel;
             if (pixel == null) return;
+
+            // 並排版面沒有中間那條分隔線（見 BuildMobileLayoutMetrics）。
+            if (_dividerRect.IsEmpty) return;
 
             int sepY = _dividerRect.Y + 2;
             UiDrawHelper.DrawHorizontalGradient(spriteBatch, new Rectangle(30, sepY, (WINDOW_WIDTH - 60) / 2, 1),
@@ -910,14 +1020,22 @@ namespace Client.Main.Controls.UI.Game.Trade
                 _ => _tradeButtonHovered ? Theme.Accent : Theme.BorderInner
             };
 
-            // Background
-            spriteBatch.Draw(pixel, rect, bgColor);
+            // 手機：一顆純色按鈕，按下時整塊變亮。
+            // 框一個色、底一個色、字一個色，三種顏色卻只在講同一件事（狀態），
+            // 在小螢幕上只會讓按鈕看起來很吵 —— 狀態用底色明暗表達就夠了。
+            if (MobileUi.IsMobile)
+            {
+                spriteBatch.Draw(pixel, rect, _tradeButtonHovered ? bgColor * 1.35f : bgColor);
+            }
+            else
+            {
+                spriteBatch.Draw(pixel, rect, bgColor);
 
-            // Border
-            spriteBatch.Draw(pixel, new Rectangle(rect.X, rect.Y, rect.Width, 2), borderColor);
-            spriteBatch.Draw(pixel, new Rectangle(rect.X, rect.Bottom - 2, rect.Width, 2), borderColor);
-            spriteBatch.Draw(pixel, new Rectangle(rect.X, rect.Y, 2, rect.Height), borderColor);
-            spriteBatch.Draw(pixel, new Rectangle(rect.Right - 2, rect.Y, 2, rect.Height), borderColor);
+                spriteBatch.Draw(pixel, new Rectangle(rect.X, rect.Y, rect.Width, 2), borderColor);
+                spriteBatch.Draw(pixel, new Rectangle(rect.X, rect.Bottom - 2, rect.Width, 2), borderColor);
+                spriteBatch.Draw(pixel, new Rectangle(rect.X, rect.Y, 2, rect.Height), borderColor);
+                spriteBatch.Draw(pixel, new Rectangle(rect.Right - 2, rect.Y, 2, rect.Height), borderColor);
+            }
 
             // Text
             string text = _myButtonState switch

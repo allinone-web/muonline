@@ -16,14 +16,15 @@
   </PropertyGroup>
 
   <!--
-    本機修改：Client.Main 原始碼裡有多處 #if IOS / #if !IOS，但 .NET SDK 為
-    net10.0-ios 定義的符號是 __IOS__（Xamarin 慣例），並非 IOS。只有 MuIos.csproj
-    自己明確加了 IOS，因此那些守衛在 Client.Main 中全部失效，例如：
-      MuGame.cs:531                 設定無效時仍呼叫 Exit()（iOS 不允許程式自行終止）
-      LoginScene.cs:320/328         連線中斷後仍呼叫 Exit()
-      PauseMenuControl.cs:702/710   離開遊戲時仍呼叫 Exit()
-      MuGame.cs:1385                桌面專用的 vsync/FixedTimeStep 設定照樣套用
-    在這裡補上 IOS，讓這些守衛按作者原意生效。
+    Client.Main 原始碼裡曾經有多處 #if IOS / #if !IOS，但那個符號在這裡
+    <b>從來沒有生效過</b>：.NET SDK 為 net10.0-ios 定義的是 __IOS__（Xamarin 慣例），
+    而 IOS 只有 MuIos.csproj 自己加；Client.Main 又是以 net10.0 建置的
+    （見上面的 ClientMainTargetFramework，MuIos 設的同名屬性不會傳進來），
+    所以下面這個條件永遠不成立。
+
+    真正會出事的幾處（連線中斷後呼叫 Exit()、離開遊戲呼叫 Exit()、設定無效呼叫 Exit()）
+    已經改成執行期判斷 MuGame.RequestExit()，不再依賴這個符號。
+    這段保留是為了讓「以 net10.0-ios 建置 Client.Main」的組態仍然正確。
   -->
   <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-ios'">
     <DefineConstants>$(DefineConstants);IOS</DefineConstants>
