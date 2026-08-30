@@ -56,7 +56,13 @@ namespace Client.Main.Objects.Player
 
         private async Task OnChangeTypeAsync()
         {
-            ParentBoneLink = IsRightHand ? 10 : 15;
+            // 10 與 15 是 Bip01 R Thigh 與 Bip01 R Toe02 —— 大腿與腳趾，顯然是錯的。
+            // 目前沒有活的程式碼會設 Type，所以這一行實際上不會執行；
+            // 真正決定掛點的是 PlayerObject.ApplyWeaponAttachment。
+            // 改成正確的手部掛點，免得哪天有人把 Type 用起來又踩一次。
+            ParentBoneLink = IsRightHand
+                ? PlayerObject.RightHandBoneIndex
+                : PlayerObject.LeftHandBoneIndex;
 
             string modelPath = GetWeaponPath(Type);
             if (string.IsNullOrEmpty(modelPath))

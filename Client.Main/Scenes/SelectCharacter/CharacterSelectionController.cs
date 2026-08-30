@@ -158,11 +158,8 @@ namespace Client.Main.Scenes.SelectCharacter
             _logger.LogInformation("Finished creating and loading character objects and labels.");
         }
 
-        private static void SwapPreviewWeaponHands(PlayerObject player)
-        {
-            player.Weapon1.ParentBoneLink = PlayerObject.RightHandBoneIndex;
-            player.Weapon2.ParentBoneLink = PlayerObject.LeftHandBoneIndex;
-        }
+        // 換手的邏輯搬進 PlayerObject —— 那裡才知道哪些裝備不該進手裡（例如箭袋）。
+        private static void SwapPreviewWeaponHands(PlayerObject player) => player.SwapPreviewWeaponHands();
 
         // Overload for TestAnimationScene compatibility (uses PlayerClass and AppearanceConfig)
         public async Task CreateCharactersAsync(

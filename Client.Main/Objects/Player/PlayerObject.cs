@@ -64,7 +64,9 @@ namespace Client.Main.Objects.Player
 
         internal const int LeftHandBoneIndex = 33;
         internal const int RightHandBoneIndex = 42;
-        private const int BackWeaponBoneIndex = 47; // Same anchor used by wings
+        // 背部掛點。翅膀用它，客戶端自己的 CrossbowGuard 也用它掛弩箭
+        // （那個 NPC 的註解就寫 "Back bone for bolt"），所以箭袋掛這裡是對的。
+        private const int BackWeaponBoneIndex = 47;
         private const short WingOfStormIndex = 36;
         private const short WingOfRuinIndex = 39;
         private string _helmModelPath;
@@ -81,6 +83,10 @@ namespace Client.Main.Objects.Player
             new(60f, 0f, 90f), // Weapon 1 (left hand) rotation in degrees (X,Y,Z)
             new(60f, 0f, -90f)  // Weapon 2 (right hand) rotation in degrees (X,Y,Z)
         };
+
+        // 箭袋掛在背上的位置與角度。想調位置就改這兩行。
+        private static readonly Vector3 QuiverOffset = new(0f, 12f, 40f);
+        private static readonly Vector3 QuiverRotationDegrees = new(0f, 0f, 0f);
 
         private bool _weaponsHolstered;
         private FlyingHelperKind _equippedHelperSlotKind = FlyingHelperKind.None;
@@ -2658,10 +2664,41 @@ namespace Client.Main.Objects.Player
                 MathHelper.ToRadians(degrees.Z));
         }
 
+        /// <summary>
+        /// 這件「武器」其實是箭袋嗎。
+        /// </summary>
+        /// <remarks>
+        /// 箭與箭袋跟弓同屬道具群組 4，所以光看 <c>ItemGroup</c> 分不出來。
+        /// 但它們的模型檔名是固定的（<c>Arrows01/02.bmd</c>、<c>Quiver_*.bmd</c>），
+        /// 而 <see cref="WeaponObject.TexturePath"/> 存的就是模型路徑
+        /// （名字取得不好，它不是貼圖），所以直接看檔名最準，
+        /// 不必去猜群組裡哪幾個 id 是箭。
+        /// </remarks>
+        internal static bool IsQuiver(WeaponObject weapon)
+            => weapon.TexturePath is string path
+            && (path.Contains("Arrows", StringComparison.OrdinalIgnoreCase)
+             || path.Contains("Quiver", StringComparison.OrdinalIgnoreCase));
+
         private void ApplyWeaponAttachment(WeaponObject weapon, bool isLeftHand, bool holster)
         {
             if (weapon == null)
                 return;
+
+            // 箭袋永遠掛在背上，不進手裡 —— 也不受收刀狀態影響。
+            //
+            // 原本箭袋被當成「另一隻手的武器」綁到手部掛點，於是拉弓時
+            // 箭袋會跟著拉弦的那隻手一起動，看起來像箱子黏在手上。
+            // 原版是背在背上的，弓在手、箭在背。
+            if (IsQuiver(weapon))
+            {
+                weapon.ParentBoneLink = BackWeaponBoneIndex;
+                weapon.Position = QuiverOffset;
+                weapon.Angle = new Vector3(
+                    MathHelper.ToRadians(QuiverRotationDegrees.X),
+                    MathHelper.ToRadians(QuiverRotationDegrees.Y),
+                    MathHelper.ToRadians(QuiverRotationDegrees.Z));
+                return;
+            }
 
             if (holster)
             {
@@ -2699,6 +2736,19 @@ namespace Client.Main.Objects.Player
 
             worldMatrix = Matrix.Identity;
             return false;
+        }
+
+        /// <summary>
+        /// 選角畫面把兩把武器左右手對調。<b>箭袋不參與</b> —— 它在背上。
+        /// </summary>
+        /// <remarks>
+        /// 放在這裡而不是留在選角控制器裡：決定「哪件裝備掛哪根骨頭」的邏輯
+        /// 只能有一個地方，散出去就會像外觀汰換那次一樣漏掉呼叫端。
+        /// </remarks>
+        public void SwapPreviewWeaponHands()
+        {
+            ApplyWeaponAttachment(Weapon1, isLeftHand: false, holster: false);
+            ApplyWeaponAttachment(Weapon2, isLeftHand: true, holster: false);
         }
 
         public bool TryGetHandWorldMatrix(bool isLeftHand, out Matrix worldMatrix) =>
