@@ -591,7 +591,17 @@ namespace Client.Main.Controls.Terrain
             if (planes > tufts)
                 planes = tufts;
 
-            for (int i = 0; i < tufts; i++)
+            // 每格的立牌數整叢地上下浮動 —— 三種情形機率相同，所以**平均等於 tufts**，
+            // 效能估算不受影響，但草地不再是「每一格都一樣多」。
+            //
+            // 以整叢為單位加減（不是加減一片），交叉的分組才不會被打散。
+            // 固定叢數是「一組一組」的來源之一：格子是 100 單位的規則網格，
+            // 每格塞同樣多的草，眼睛就會把一格讀成一個單位。
+            float countRoll = Hash01(x, y, 97);
+            int total = tufts + (countRoll < 0.33f ? -planes : countRoll > 0.66f ? planes : 0);
+            total = Math.Max(planes, total);
+
+            for (int i = 0; i < total; i++)
             {
                 // 同一叢的幾片共用位置與尺寸的亂數，只有角度不同。
                 int cluster = i / planes;
@@ -604,10 +614,19 @@ namespace Client.Main.Controls.Terrain
                 float r4 = Hash01(x, y, cluster * 8 + 4);
                 float r5 = Hash01(x, y, i * 8 + 5);
 
-                // 格內位置。留 0.1 的邊界，免得草叢的中心正好落在格線上、
-                // 兩格的草在同一條線上排成一排。
-                float fx = 0.1f + r0 * 0.8f;
-                float fy = 0.1f + r1 * 0.8f;
+                // 格內位置用滿 [0, 1]，不留邊界。
+                //
+                // 先前是 0.1 + r * 0.8，也就是每格留 10% 的邊界。量過的後果：
+                // 格內位置直方圖的頭尾兩段完全是 0 —— 每 100 世界單位就有一條
+                // 20 單位寬、一株草都沒有的空帶，橫豎都有。那就是「一行一行」。
+                //
+                // 試過讓草叢溢出格子（-0.15 到 1.15）來打散網格，結果更糟：
+                // 邊界帶會同時收到兩格的草，空帶變成**密帶**（實測邊緣 15-16% vs 中間 7%）。
+                // 均勻取滿整格才是對的 —— 中心落在格線上本來就沒有問題。
+                float fx = r0;
+                float fy = r1;
+                float sx = fx;
+                float sy = fy;
 
                 // 一叢之內平均分掉 180 度：兩片＝十字，三片＝三角。
                 // 立牌沒有正反面（CullNone），所以分 180 度而不是 360 度。
@@ -620,7 +639,7 @@ namespace Client.Main.Controls.Terrain
 
                 float cx = baseX + fx * scale;
                 float cy = baseY + fy * scale;
-                float cz = Bilinear(h1, h2, h3, h4, fx, fy);
+                float cz = Bilinear(h1, h2, h3, h4, sx, sy);
 
                 var bottomLeft = new Vector3(cx - dx, cy - dy, cz);
                 var bottomRight = new Vector3(cx + dx, cy + dy, cz);
@@ -628,8 +647,15 @@ namespace Client.Main.Controls.Terrain
                 // 一張圖橫排四株，隨機挑一株，不然整片草會是同一個剪影。
                 float u = (int)(r5 * 4f) % 4 * GrassUvWidth;
 
-                Color top = Bilinear(light1, light2, light3, light4, fx, fy);
+                Color top = Bilinear(light1, light2, light3, light4, sx, sy);
                 Color bottom = Darken(top, GrassRootShade);
+
+                // 風的取樣點跟著草叢的位置走，不是整格共用 index1／index2。
+                // 整格共用的話一格裡的草會**完全同步搖動**，
+                // 於是一格 100 單位就成為一個看得出來的運動單位 ——
+                // 這是「一組一組」在動態上的來源，靜態截圖看不出來。
+                int windA = sx < 0.5f ? (sy < 0.5f ? index1 : index4) : (sy < 0.5f ? index2 : index3);
+                int windB = sx < 0.5f ? (sy < 0.5f ? index2 : index3) : (sy < 0.5f ? index4 : index1);
 
                 var quad = new GrassQuad(
                     bottomLeft,
@@ -638,8 +664,8 @@ namespace Client.Main.Controls.Terrain
                     top,
                     bottom,
                     bottom,
-                    index1,
-                    index2,
+                    windA,
+                    windB,
                     u,
                     height);
 
