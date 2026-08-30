@@ -1880,7 +1880,9 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     int y = ContentTop + row * MobileOptionRowHeight;
 
                     option = new OptionToggle(label, getter, apply,
-                        x, y, MobileOptionColumnWidth, 104, 38, MobileOptionFontSize);
+                        // 開關的文字改成 ON / OFF 之後，104 寬變得過大 ——
+                        // 讓出來的 34 px 給標籤，被截斷的選項名就少了幾個。
+                        x, y, MobileOptionColumnWidth, 70, 42, MobileOptionFontSize);
                     _mobileOptionIndex++;
                 }
                 else
@@ -2043,7 +2045,22 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 public void Refresh()
                 {
                     bool value = _getter();
-                    _button.Text = value ? "ENABLED" : "DISABLED";
+                    // ON / OFF 而不是 ENABLED / DISABLED：後者在 110 px 寬的按鈕裡
+                    // 一定會被截斷（實機截圖是「DISABL…」），而且截掉之後兩個狀態
+                    // 開頭都是 "ENABL" / "DISAB"，反而更難分辨。
+                    _button.Text = value ? "ON" : "OFF";
+
+                    if (MobileUi.IsMobile)
+                    {
+                        // 不用綠／紅。一個設定面板裡有二十個開關，二十個飽和色塊
+                        // 會蓋過所有真正需要注意的東西。開＝亮，關＝暗，就夠了。
+                        _button.BackgroundColor = value ? MobileUi.TitleBarFill * 1.5f : MobileUi.PanelFill * 0.9f;
+                        _button.HoverBackgroundColor = MobileUi.TitleBarFill * 1.8f;
+                        _button.TextColor = value ? MobileUi.TextPrimary : MobileUi.TextDim;
+                        _button.HoverTextColor = MobileUi.TextPrimary;
+                        return;
+                    }
+
                     _button.BackgroundColor = value ? new Color(34, 74, 55, 225) : new Color(55, 37, 43, 220);
                     _button.HoverBackgroundColor = value ? new Color(45, 96, 70, 240) : new Color(78, 47, 55, 238);
                     _button.TextColor = value ? new Color(150, 235, 180) : new Color(210, 145, 150);
@@ -2076,8 +2093,13 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                     if (width <= maxWidth)
                         return text;
 
-                    int keep = Math.Max(1, (int)(text.Length * (maxWidth / width)) - 1);
-                    return text.Substring(0, keep).TrimEnd() + "…";
+                    // 用 ".." 而不是 "…"。
+                    // 遊戲字型沒有 U+2026 這個字符，畫出來是一個問號 ——
+                    // 實機截圖裡的「Day-Night Cycle (R?」「Optimize for Integ?」
+                    // 看起來像句子被寫成疑問句，其實那個問號就是缺字。
+                    // 同一個坑之前在中文字上踩過（整串變成 ??????）。
+                    int keep = Math.Max(1, (int)(text.Length * (maxWidth / width)) - 2);
+                    return text.Substring(0, keep).TrimEnd() + "..";
                 }
             }
 
@@ -2199,12 +2221,28 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
 
                 public void SetPosition(int x, int y, int width)
                 {
-                    int dy = y - _label.Y;
-                    int dx = x - _label.X;
-                    _label.X = x; _label.Y = y;
-                    _valueLabel.X += dx; _valueLabel.Y += dy;
-                    _minusButton.X += dx; _minusButton.Y += dy;
-                    _plusButton.X += dx; _plusButton.Y += dy;
+                    // <b>相對於這一欄</b>排版，不能只是把三個控制項跟著標籤平移。
+                    //
+                    // 它們建立時是用 panelWidth - 210 / -130 / -96 定位的，也就是
+                    // 貼著整個面板的右緣。手機把選項排成兩欄之後，平移只會讓它們
+                    // 停在「欄位左緣 + 面板寬」的位置 —— 也就是面板外面。
+                    // 實機截圖裡「35% - +」浮在設定面板右邊，就是這個。
+                    int plusW = _plusButton.ViewSize.X;
+                    int minusW = _minusButton.ViewSize.X;
+                    int valueW = _valueLabel.ViewSize.X;
+                    const int gap = 6;
+
+                    _label.X = x;
+                    _label.Y = y;
+
+                    _plusButton.X = x + width - plusW;
+                    _plusButton.Y = y - 2;
+
+                    _minusButton.X = _plusButton.X - gap - minusW;
+                    _minusButton.Y = y - 2;
+
+                    _valueLabel.X = _minusButton.X - gap - valueW;
+                    _valueLabel.Y = y;
                 }
             }
         }
