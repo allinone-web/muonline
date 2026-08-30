@@ -172,12 +172,26 @@ namespace Client.Main.Controls.UI.Game.Character
             }
         }
 
+        /// <summary>
+        /// 那五張按鈕貼圖手機不載入 —— 按鈕已經改成自繪的文字鈕
+        /// （見 DrawMobileTextButton）。清單見 docs/待清理素材.md。
+        /// </summary>
         public IEnumerable<string> GetPreloadTexturePaths()
-            => s_additionalPreloadTextures;
+            => MobileUi.IsMobile ? System.Array.Empty<string>() : s_additionalPreloadTextures;
 
         public override async Task Load()
         {
             await base.Load();
+
+            if (MobileUi.IsMobile)
+            {
+                // 貼圖不載。CreateBottomBounds 在手機上自己算尺寸，
+                // 不再依賴貼圖的影格大小。
+                InitializeLayout();
+                InvalidateStaticSurface();
+                UpdateDisplayData();
+                return;
+            }
 
             var tl = TextureLoader.Instance;
 
@@ -202,12 +216,12 @@ namespace Client.Main.Controls.UI.Game.Character
             float statValueYoffset = -2f;
             float statDetailYOffset = 15f;
 
-            _nameText = CreateText(new Vector2(WINDOW_WIDTH / 2f, 7f), 13f, ModernHudTheme.TextWhite, TextAlignment.Center);
-            _classText = CreateText(new Vector2(WINDOW_WIDTH / 2f, 25f), 11f, ModernHudTheme.TextGold, TextAlignment.Center);
-            _levelText = CreateText(new Vector2(26f, 61f), 11f, ModernHudTheme.TextWhite);
-            _expText = CreateText(new Vector2(26f, 79f), 10f, ModernHudTheme.TextGray);
-            _fruitProbText = CreateText(new Vector2(26f, 97f), 10f, ModernHudTheme.SecondaryBright);
-            _fruitStatsText = CreateText(new Vector2(26f, 115f), 10f, ModernHudTheme.SecondaryBright);
+            _nameText = CreateText(new Vector2(WINDOW_WIDTH / 2f, 7f), MobileUi.TextHeading, ModernHudTheme.TextWhite, TextAlignment.Center);
+            _classText = CreateText(new Vector2(WINDOW_WIDTH / 2f, 25f), MobileUi.TextLabel, ModernHudTheme.TextGold, TextAlignment.Center);
+            _levelText = CreateText(new Vector2(26f, 61f), MobileUi.TextLabel, ModernHudTheme.TextWhite);
+            _expText = CreateText(new Vector2(26f, 79f), MobileUi.TextCaption, ModernHudTheme.TextGray);
+            _fruitProbText = CreateText(new Vector2(26f, 97f), MobileUi.TextCaption, ModernHudTheme.SecondaryBright);
+            _fruitStatsText = CreateText(new Vector2(26f, 115f), MobileUi.TextCaption, ModernHudTheme.SecondaryBright);
             _statPointsText = CreateText(new Vector2(158f, 61f), 11f, ModernHudTheme.Warning);
 
             for (int i = 0; i < BTN_STAT_COUNT; i++)
