@@ -367,13 +367,15 @@ namespace Client.Main.Scenes
         private void CalculateMobileLayout(int screenWidth, int screenHeight)
         {
             int inset = Client.Main.Controls.UI.MobileUi.CornerInset;
-            int buttonSectionHeight = (BUTTON_HEIGHT + BUTTON_SPACING) * 4;
 
-            // 動作鈕靠右下角，和遊戲內的對齊線同一條。
-            int panelX = screenWidth - MobileButtonWidth - inset;
-            int panelY = screenHeight - inset - buttonSectionHeight;
+            // 動作鈕排成畫面底部的一整條橫列。
+            // 原本是右下角的直排，會擋掉右邊三分之一的舞台 ——
+            // 換成諾利亞草地當背景之後，那塊景色不該被按鈕蓋住。
+            int left = Client.Main.Controls.UI.MobileUi.LeftEdge;
+            int rowWidth = screenWidth - left - inset;
+            int rowY = screenHeight - inset - BUTTON_HEIGHT;
 
-            _characterPanelRect = new Rectangle(panelX, panelY, MobileButtonWidth, buttonSectionHeight);
+            _characterPanelRect = new Rectangle(left, rowY, rowWidth, BUTTON_HEIGHT);
             _buttonSectionRect = _characterPanelRect;
             _characterListRect = Rectangle.Empty;
             _characterCardRects.Clear();
@@ -432,7 +434,8 @@ namespace Client.Main.Scenes
             // Position navigation arrows
             if (s_mobile)
             {
-                PositionMobileArrows(ready && _characters.Count > 1);
+                // 手機直接點角色就能選，左右箭頭是多餘的，而且會擋住舞台。
+                PositionMobileArrows(false);
             }
             else if (_previousCharacterButton != null && _nextCharacterButton != null)
             {
@@ -441,6 +444,12 @@ namespace Client.Main.Scenes
 
                 _nextCharacterButton.X = (ViewSize.X / 2) + 180;
                 _nextCharacterButton.Y = (ViewSize.Y - _nextCharacterButton.ViewSize.Y) / 2;
+            }
+
+            if (s_mobile)
+            {
+                LayoutMobileButtonRow(ready, hasCharacters, hasSelection, canCreate);
+                return;
             }
 
             // Position action buttons in button section (bottom of panel)
@@ -494,6 +503,37 @@ namespace Client.Main.Scenes
                 _exitButton.Visible = ready;
             }
 
+        }
+
+        /// <summary>
+        /// 手機：ENTER / DELETE / CREATE / EXIT 排成畫面底部的一整條橫列。
+        ///
+        /// 四欄的位置固定，不隨顯示與否遞補 —— 按鈕會依選中狀態隱藏，
+        /// 若讓後面的補上來，位置就會在選中／取消之間跳來跳去。
+        /// </summary>
+        private void LayoutMobileButtonRow(bool ready, bool hasCharacters, bool hasSelection, bool canCreate)
+        {
+            var row = _characterPanelRect;
+            const int columns = 4;
+            int slotWidth = (row.Width - BUTTON_SPACING * (columns - 1)) / columns;
+
+            void Place(ButtonControl button, int column, bool visible, bool enabled)
+            {
+                if (button == null)
+                    return;
+
+                button.ViewSize = new Point(slotWidth, BUTTON_HEIGHT);
+                button.X = row.X + column * (slotWidth + BUTTON_SPACING);
+                button.Y = row.Y;
+                button.Visible = visible;
+                button.Enabled = enabled;
+            }
+
+            bool canEnter = ready && hasCharacters && hasSelection;
+            Place(_enterGameButton, 0, canEnter, canEnter);
+            Place(_deleteCharacterButton, 1, ready && hasSelection, ready && hasSelection);
+            Place(_createCharacterButton, 2, ready, ready && canCreate);
+            Place(_exitButton, 3, ready, ready && !_isSelectionInProgress);
         }
 
         private void UpdateNavigationButtonState()

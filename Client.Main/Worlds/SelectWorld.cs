@@ -26,17 +26,24 @@ namespace Client.Main.Worlds
         // 兩邊各寫各的相機，比出來的差異會分不清是「渲染不同」還是「根本沒看同一個地方」。
         private const float CameraYawDegrees = -45f;
         private const float CameraPitchDegrees = 13f;
-        private const float CameraDistance = 2000f;
+        private const float CameraDistance = 1400f;
         private const float StageFieldOfView = 35f;
 
         /// <summary>鏡頭焦點抬到胸口高度，角色才不會貼在畫面下緣。</summary>
         private const float CameraFocusHeight = 80f;
 
-        /// <summary>角色並排的間距（世界單位，一格 = 100）。</summary>
-        private const float SlotSpacing = 130f;
+        /// <summary>角色並排的間距（世界單位，一格 = 100）。翅膀很寬，太小會黏在一起。</summary>
+        private const float SlotSpacing = 240f;
 
-        /// <summary>角色面向。先給一個猜測值，看過真機截圖再調這一個數字就好。</summary>
-        private const float CharacterFacingDegrees = CameraYawDegrees + 180f;
+        /// <summary>
+        /// 角色面向。
+        ///
+        /// 直覺會寫「鏡頭方位 + 180」，但實測是錯的：那樣角色會面向畫面左方。
+        /// 模型自己的正面比世界方位少 90 度，所以要再加 90 —— 也就是 +270。
+        /// （鏡頭在焦點西北方往東南看，畫面左方是世界方位 45 度；
+        /// 設 135 度卻看到 45 度，差的就是這 90 度。）
+        /// </summary>
+        private const float CharacterFacingDegrees = CameraYawDegrees + 270f;
 
         private readonly Vector3 _characterDisplayPosition =
             new(StageTileX * Constants.TERRAIN_SCALE + Constants.TERRAIN_SCALE / 2f,
