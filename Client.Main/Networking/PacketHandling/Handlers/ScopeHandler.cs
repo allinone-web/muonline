@@ -2493,6 +2493,13 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                         ArrowProjectileSpawner.SpawnNormal(remoteArcher, targetId);
                     }
 
+                    // 別人的攻擊也要有聲音。怪物走的是下面的 OnPerformAttack，
+                    // 玩家本來只有 PlayAction —— 所以其他玩家揮劍射箭全是無聲的。
+                    if (walker is PlayerObject remoteAttacker)
+                    {
+                        remoteAttacker.PlayRemoteAttackSound(clientActionToPlay);
+                    }
+
                     if (walker is MonsterObject monster && monsterAction.HasValue &&
                         (monsterAction == MonsterActionType.Attack1 || monsterAction == MonsterActionType.Attack2))
                     {

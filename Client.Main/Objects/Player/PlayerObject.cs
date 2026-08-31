@@ -3568,7 +3568,37 @@ namespace Client.Main.Objects.Player
                 _ => GetRandomMeleeSwingSound() // Swords, axes, maces, etc.
             };
 
-            Controllers.SoundController.Instance.PlayBuffer(soundPath);
+            // 自己的攻擊不衰減（永遠在鏡頭中心）；別人的要按距離衰減，
+            // 否則地圖另一頭的人揮劍會跟貼在耳邊一樣大聲。
+            if (IsMainWalker || World is not WalkableWorldControl walkableWorld)
+            {
+                Controllers.SoundController.Instance.PlayBuffer(soundPath);
+                return;
+            }
+
+            Controllers.SoundController.Instance.PlayBufferWithAttenuation(
+                soundPath, Position, walkableWorld.Walker.Position);
+        }
+
+        /// <summary>遠端玩家的攻擊音效。伺服器送動作封包過來時呼叫。</summary>
+        /// <remarks>
+        /// <b>本來只有怪物有聲音。</b>動作封包的處理端（<c>ScopeHandler</c>）對怪物會叫
+        /// <c>OnPerformAttack</c>（裡面播音效），對玩家卻只有 <c>PlayAction</c> ——
+        /// 所以別的玩家揮劍、射箭全都是無聲的，只有自己的攻擊有聲音。
+        ///
+        /// <b>用伺服器送來的動作判斷，不要用武器。</b>遠端玩家的裝備在客戶端只有
+        /// 外觀封包那份，查本地背包會查到自己的東西（<see cref="GetCrossbowSound"/>
+        /// 就踩過這個）。動作是伺服器算好的，比猜可靠。
+        /// </remarks>
+        public void PlayRemoteAttackSound(PlayerAction action)
+        {
+            if (IsMainWalker)
+                return;             // 自己的攻擊在 Attack() 裡已經播過，不要播兩次
+
+            if (_animationController?.GetAnimationType((ushort)action) != AnimationType.Attack)
+                return;
+
+            PlayWeaponSwingSound();
         }
 
         /// <summary>
@@ -3576,7 +3606,9 @@ namespace Client.Main.Objects.Player
         /// </summary>
         private string GetCrossbowSound()
         {
-            if (_networkManager == null)
+            // IsMainWalker 這一條不能少：_networkManager 是共用的，
+            // 遠端玩家查下去會查到「自己」背包裡的弩，判成藍翼就播錯音效。
+            if (!IsMainWalker || _networkManager == null)
                 return "Sound/eCrossbow.wav";
 
             var charState = _networkManager.GetCharacterState();
