@@ -149,7 +149,11 @@ public static class GltfImporter
     // ── 骨骼 ─────────────────────────────────────────────────────
 
     /// <summary>重排過的關節：父在前、子在後。</summary>
-    private sealed record Joint(Node Node, Matrix4x4 InverseBind, int Parent);
+    /// <param name="Chain">
+    /// 自己與父關節之間的<b>非關節</b>節點，由近到遠。
+    /// 根關節的 Chain 一路到場景根。取樣時它們的變換（含動畫）要烘進這個關節的區域變換。
+    /// </param>
+    private sealed record Joint(Node Node, Matrix4x4 InverseBind, int Parent, Node[] Chain);
 
     /// <summary>
     /// 取出關節並<b>拓撲排序</b>。
@@ -177,6 +181,31 @@ public static class GltfImporter
         }
 
         var index = raw.Select((j, i) => (j.Node, i)).ToDictionary(x => x.Node, x => x.i);
+
+        // 父關節不能只看直接的 VisualParent —— 3ds Max 系的骨架（Bip01）匯出後，
+        // 關節之間常夾著<b>非關節</b>節點：Pelvis → Spine(非關節) → Spine2(關節)。
+        // 只看一層的話 Spine2 會被誤判成根骨、烘一個固定矩陣 ——
+        // 於是上半身不跟著骨盆動，「手還能揮、身體卻倒地扭曲」就是這樣來的。
+        // 正確規則：沿 VisualParent 一路往上，遇到的第一個關節才是父；
+        // 沿途的非關節節點記進 Chain，取樣時烘進這個關節的區域變換。
+        (int Parent, Node[] Chain) FindParent(int i)
+        {
+            var chain = new List<Node>();
+            var p = raw[i].Node.VisualParent;
+            while (p is not null)
+            {
+                if (index.TryGetValue(p, out int parentIndex))
+                    return (parentIndex, chain.ToArray());
+                chain.Add(p);
+                p = p.VisualParent;
+            }
+            return (-1, chain.ToArray());
+        }
+
+        var rawParents = new (int Parent, Node[] Chain)[raw.Count];
+        for (int i = 0; i < raw.Count; i++)
+            rawParents[i] = FindParent(i);
+
         var ordered = new List<int>(raw.Count);
         var visiting = new HashSet<int>();
 
@@ -185,9 +214,8 @@ public static class GltfImporter
             if (ordered.Contains(i) || !visiting.Add(i))
                 return;
 
-            var parent = raw[i].Node.VisualParent;
-            if (parent is not null && index.TryGetValue(parent, out int parentIndex))
-                Visit(parentIndex);
+            if (rawParents[i].Parent >= 0)
+                Visit(rawParents[i].Parent);
 
             ordered.Add(i);
         }
@@ -203,13 +231,11 @@ public static class GltfImporter
         for (int sorted = 0; sorted < ordered.Count; sorted++)
         {
             int original = ordered[sorted];
-            var parent = raw[original].Node.VisualParent;
+            var (rawParent, chain) = rawParents[original];
 
-            int parentIndex = parent is not null && index.TryGetValue(parent, out int p)
-                ? position[p]
-                : -1;
-
-            joints[sorted] = new Joint(raw[original].Node, raw[original].InverseBind, parentIndex);
+            joints[sorted] = new Joint(
+                raw[original].Node, raw[original].InverseBind,
+                rawParent >= 0 ? position[rawParent] : -1, chain);
         }
 
         if (!ordered.Select((o, i) => o == i).All(x => x))
@@ -254,11 +280,7 @@ public static class GltfImporter
         // 正確的規則是「把根骨之上的世界矩陣也算進來」：
         //   自己匯出的：parentWorld = conv⁻¹，乘上 conv 之後剛好抵銷 → 原封不動回來
         //   Blender 匯出的：parentWorld = 單位矩陣 → 就是單純的 Y 軸向上轉 Z 軸向上
-        var rootParentWorld = joints.Length > 0 && joints[0].Node.VisualParent is { } above
-            ? above.WorldMatrix
-            : Matrix4x4.Identity;
-
-        var rootTransform = rootParentWorld * Matrix4x4.CreateFromQuaternion(YUpToZUp);
+        var conversion = Matrix4x4.CreateFromQuaternion(YUpToZUp);
 
         for (int i = 0; i < joints.Length; i++)
         {
@@ -276,43 +298,50 @@ public static class GltfImporter
 
                 for (int k = 0; k < keys; k++)
                 {
-                    // GetDecomposed()：glTF 的節點變換可以存成「T/R/S 三個欄位」，
-                    // 也可以存成一個 4×4 矩陣。存成矩陣時直接讀 .Scale / .Rotation 會丟
-                    // InvalidOperationException（"Needs to be in SRT representation"）。
-                    // 兩種寫法都合法而且都會遇到 —— Blender 兩種都可能輸出，
-                    // 這個專案自己的兩個匯出器就剛好一邊一種。
-                    var local = (animation is null
-                        ? joint.Node.LocalTransform
-                        : joint.Node.GetLocalTransform(animation, k / fps)).GetDecomposed();
+                    float t = k / fps;
 
-                    if (!scaleWarned && (local.Scale - Vector3.One).Length() > 0.01f)
+                    // GetLocalTransform4x4：glTF 的節點變換可以存成 T/R/S 三欄位，
+                    // 也可以存成 4×4 矩陣；統一取矩陣，用矩陣乘法組鏈最不會出錯。
+                    Matrix4x4 Local(Node node) => animation is null
+                        ? node.LocalMatrix
+                        : node.GetLocalTransform(animation, t).Matrix;
+
+                    // 有效區域變換 = 自己 × 沿途的非關節節點（由近到遠）。
+                    // 根關節的 Chain 一路到場景根，最後再乘座標系轉換。
+                    // 這些中間節點<b>可能帶動畫</b>（assimp 產的 Bip01 常是 root motion 的載體），
+                    // 所以每一格都要重新取樣，不能只取綁定姿勢。
+                    var effective = Local(joint.Node);
+                    foreach (var mid in joint.Chain)
+                        effective *= Local(mid);
+
+                    if (joint.Parent < 0)
+                        effective *= conversion;
+
+                    // MU 的骨骼矩陣只有旋轉與位移，縮放放不進去。
+                    // 但 assimp 產的中間節點常帶均勻縮放（實測 0.39）——
+                    // 丟掉縮放、同時把位移「反縮放」回未縮放尺寸，
+                    // 讓整副骨架回到一致的原始比例；全域尺寸由匯入後的
+                    // SuggestedScale 統一補償。只丟不補的話，根骨的位移是
+                    // 縮過的、子骨的位移是沒縮過的，骨盆高度跟腿長對不上。
+                    if (!Matrix4x4.Decompose(effective, out var eScale, out var eRot, out var eTrans))
                     {
-                        report.Warn("骨骼上有縮放", "MU 的骨骼矩陣只有旋轉與位移，縮放會被忽略。"
-                                                + "請在 Blender 裡先 Apply Scale 再匯出。");
+                        eRot = Quaternion.CreateFromRotationMatrix(effective);
+                        eScale = Vector3.One;
+                        eTrans = effective.Translation;
+                    }
+
+                    float uniform = (eScale.X + eScale.Y + eScale.Z) / 3f;
+                    if (!scaleWarned && (MathF.Abs(eScale.X - uniform) > 0.01f * uniform
+                                      || MathF.Abs(eScale.Y - uniform) > 0.01f * uniform))
+                    {
+                        report.Warn("骨骼鏈上有非均勻縮放", "MU 的骨骼矩陣放不下縮放，非均勻的部分會失真。");
                         scaleWarned = true;
                     }
 
-                    Vector3 translation;
-                    Quaternion rotation;
-
-                    if (joint.Parent < 0)
-                    {
-                        // 根骨：把骨架之上的變換與座標系轉換一起烘進區域變換。
-                        var effective = Matrix4x4.CreateFromQuaternion(local.Rotation)
-                                      * Matrix4x4.CreateTranslation(local.Translation)
-                                      * rootTransform;
-
-                        translation = effective.Translation;
-                        rotation = Quaternion.CreateFromRotationMatrix(effective);
-                    }
-                    else
-                    {
-                        translation = local.Translation;
-                        rotation = local.Rotation;
-                    }
-
-                    positions[k] = translation;
-                    quaternions[k] = Quaternion.Normalize(rotation);
+                    positions[k] = MathF.Abs(uniform - 1f) > 1e-4f && uniform > 1e-6f
+                        ? eTrans / uniform
+                        : eTrans;
+                    quaternions[k] = Quaternion.Normalize(eRot);
                     rotations[k] = Vector3.Zero; // MU 只在讀檔時用尤拉角推四元數，這裡直接給四元數。
                 }
 
