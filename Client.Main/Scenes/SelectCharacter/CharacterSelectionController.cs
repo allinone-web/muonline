@@ -467,8 +467,7 @@ namespace Client.Main.Scenes.SelectCharacter
                     forceFullVisibilityRebuild: true);
             }
 
-            if (_labels.TryGetValue(activePlayer, out var label))
-                label.Visible = true;
+            // 標籤的顯示同樣交給 SelectWorld.Update —— 見 SetActiveCharacter 的說明。
         }
 
         // === Emote Animations ===

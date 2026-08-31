@@ -116,9 +116,8 @@ namespace Client.Main.Controls.UI
             // Background shadow
             DrawRect(sprite, pixel, barX - 3, barY - 3, barW + 6, ProgressBarHeight + 6, new Color(0, 0, 0, 120));
 
-            // Bar background
+            // 底槽：單一顏色，不做上下半段的漸層。
             DrawRect(sprite, pixel, barX, barY, barW, ProgressBarHeight, new Color(30, 32, 40));
-            DrawRect(sprite, pixel, barX, barY, barW, ProgressBarHeight / 2, new Color(38, 40, 50));
 
             // Progress fill
             float clampedProgress = MathHelper.Clamp(Progress, 0f, 1f);
@@ -127,12 +126,9 @@ namespace Client.Main.Controls.UI
                 int fillW = (int)(barW * clampedProgress);
                 if (fillW > 2)
                 {
-                    // Gradient effect
-                    DrawRect(sprite, pixel, barX + 1, barY + 1, fillW - 2, ProgressBarHeight - 2, new Color(40, 150, 90));
-                    DrawRect(sprite, pixel, barX + 1, barY + 1, fillW - 2, ProgressBarHeight / 2 - 1, new Color(60, 190, 115));
-
-                    // Top shine
-                    DrawRect(sprite, pixel, barX + 1, barY + 1, fillW - 2, 3, new Color(255, 255, 255, 35));
+                    // 純色填滿。原本是上下兩段漸層再加一條白色高光，
+                    // 使用者要的是簡潔，所以只留一個顏色。
+                    DrawRect(sprite, pixel, barX + 1, barY + 1, fillW - 2, ProgressBarHeight - 2, new Color(60, 190, 115));
                 }
             }
 
