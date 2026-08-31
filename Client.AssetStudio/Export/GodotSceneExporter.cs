@@ -68,6 +68,7 @@ public static class GodotSceneExporter
 
         int tiles = ExportTiles(document, world, outputDirectory, warnings);
         int grass = ExportGrass(world, outputDirectory, warnings);
+        ExportCamera(world, outputDirectory, warnings);
 
         var placements = document.Objects
             .Select(o => new ObjectPlacement(
@@ -159,6 +160,48 @@ public static class GodotSceneExporter
         }
 
         return exported;
+    }
+
+    // ── 場景鏡頭 ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// <c>Camera_Angle_Position.bmd → camera.json</c>（有才出，一般野外圖沒有）。
+    /// </summary>
+    /// <remarks>
+    /// 登入（World95 海上帆船）與選角這類特殊場景的取景不在代碼裡，
+    /// 在世界目錄的 CAP 檔（加密 INI，遊戲由 <c>WorldControl</c> 載入：
+    /// <c>FOV×FOV_SCALE</c>、position、target=HeroPosition）。中立包不帶原始
+    /// 加密檔——解好值出成 JSON，Godot 端直接讀。單位＝MU 世界單位（÷100=格）。
+    /// </remarks>
+    private static void ExportCamera(WorldEntry world, string outputDirectory, List<string> warnings)
+    {
+        string cap = Path.Combine(world.Directory, "Camera_Angle_Position.bmd");
+
+        if (!File.Exists(cap))
+            return;
+
+        try
+        {
+            var data = new Client.Data.CAP.CAPReader().Load(cap).GetAwaiter().GetResult();
+            var json = new
+            {
+                說明 = "來源 Camera_Angle_Position.bmd（加密 INI，已解值）。target=HeroPosition；FOV 再乘客戶端 FOV_SCALE。",
+                cameraPosition = new[] { data.CameraPosition.X, data.CameraPosition.Y, data.CameraPosition.Z },
+                target = new[] { data.HeroPosition.X, data.HeroPosition.Y, data.HeroPosition.Z },
+                cameraAngle = new[] { data.CameraAngle.X, data.CameraAngle.Y, data.CameraAngle.Z },
+                fov = data.CameraFOV,
+                distance = data.CameraDistance,
+                zDistance = data.CameraZDistance,
+                ratio = data.CameraRatio,
+            };
+            File.WriteAllText(
+                Path.Combine(outputDirectory, "camera.json"),
+                JsonSerializer.Serialize(json, SceneJsonOptions));
+        }
+        catch (Exception ex)
+        {
+            warnings.Add($"Camera_Angle_Position 解析失敗：{ex.Message}");
+        }
     }
 
     // ── 地形貼圖 ─────────────────────────────────────────────────
