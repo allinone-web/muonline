@@ -1,4 +1,5 @@
 using System.Text.Json;
+using SixLabors.ImageSharp;
 using System.Text.Json.Serialization;
 using Client.AssetStudio.Catalog;
 using Client.AssetStudio.Textures;
@@ -45,6 +46,7 @@ public static class GodotSceneExporter
         int WorldIndex,
         string Directory,
         int TileTextures,
+        int GrassTextures,
         int ObjectTypes,
         int ObjectTypesExported,
         int ObjectInstances,
@@ -65,6 +67,7 @@ public static class GodotSceneExporter
         MapProjectIo.SaveAsync(document, outputDirectory).GetAwaiter().GetResult();
 
         int tiles = ExportTiles(document, world, outputDirectory, warnings);
+        int grass = ExportGrass(world, outputDirectory, warnings);
 
         var placements = document.Objects
             .Select(o => new ObjectPlacement(
@@ -99,8 +102,63 @@ public static class GodotSceneExporter
             Path.Combine(outputDirectory, "scene.json"),
             JsonSerializer.Serialize(scene, SceneJsonOptions));
 
-        return new Result(worldIndex, outputDirectory, tiles, types.Length, models.Count,
+        return new Result(worldIndex, outputDirectory, tiles, grass, types.Length, models.Count,
                           placements.Count, warnings.ToArray());
+    }
+
+    // ── 草貼圖 ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// <c>TileGrass0{1,2,3}.OZT → grass/{0,1,2}.png</c>。
+    /// </summary>
+    /// <remarks>
+    /// 草不是地形貼圖：MU 用獨立的 OZT（帶 alpha），由客戶端的 GrassBuilder
+    /// 在 layer1∈{0,1,2} 的格子上程序化長出來。這條鏈原本只在 RealmForge 的
+    /// 舊 <c>import_mu_map.sh</c>（ozt2png.py）裡，中立包自己不帶 —— 於是
+    /// <c>rf sync-mu-map</c> 同步出來的地圖沒有草。檔名固定三張、輸出編號
+    /// 對齊客戶端 MuGrassBuilder 的 <c>grass/0..2.png</c> 約定；缺檔跳過
+    /// （World4 本來就沒有 TileGrass02，與貼圖索引 1 缺檔同一件事）。
+    /// </remarks>
+    private static int ExportGrass(WorldEntry world, string outputDirectory, List<string> warnings)
+    {
+        int exported = 0;
+
+        for (int i = 1; i <= 3; i++)
+        {
+            // 只認 .OZT，不走 TextureResolver —— 它會後援到同名的 .OZJ（不透明），
+            // 而 World1 正好有 TileGrass02.OZJ 沒有 .OZT：草拿到不透明貼圖
+            // 就是一片灰板。舊鏈（ozt2png.py）同樣只認 OZT、缺檔跳過。
+            string? source = new[] { $"TileGrass0{i}.OZT", $"TileGrass0{i}.ozt" }
+                .Select(name => Path.Combine(world.Directory, name))
+                .FirstOrDefault(File.Exists);
+
+            if (source is null)
+                continue;
+
+            try
+            {
+                string grassDirectory = Path.Combine(outputDirectory, "grass");
+                Directory.CreateDirectory(grassDirectory);
+
+                // 不走 TextureIO.ExportPng：它的 .ozt 分支會把 R/B 再換一次序。
+                // 那是 tex-export ↔ tex-import 之間「PNG＝檔案位元組序」的內部約定
+                // （成對抵銷，往返精確），但這裡的 PNG 是給 Godot 直接吃的——
+                // 用那條路草會反色（實測 TGA 位元組裁決過）。OZTReader 本身
+                // 已把 TGA 的 BGRA 換成 RGBA（它檔內的 Red/Blue 註解標反了），
+                // 直接存就是正色。
+                var data = new Client.Data.Texture.OZTReader().Load(source).GetAwaiter().GetResult();
+                using var image = SixLabors.ImageSharp.Image.LoadPixelData<SixLabors.ImageSharp.PixelFormats.Rgba32>(
+                    data.Data, data.Width, data.Height);
+                SixLabors.ImageSharp.ImageExtensions.SaveAsPng(image, Path.Combine(grassDirectory, $"{i - 1}.png"));
+                exported++;
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"草貼圖 TileGrass0{i} 轉檔失敗：{ex.Message}");
+            }
+        }
+
+        return exported;
     }
 
     // ── 地形貼圖 ─────────────────────────────────────────────────

@@ -247,7 +247,7 @@ if (parsed.ContainsKey("godot-export"))
 
     Console.WriteLine();
     Console.WriteLine($"World{godotResult.WorldIndex}（{godotOut}）");
-    Console.WriteLine($"地形貼圖 {godotResult.TileTextures}　"
+    Console.WriteLine($"地形貼圖 {godotResult.TileTextures}　草貼圖 {godotResult.GrassTextures}　"
                     + $"物件型別 {godotResult.ObjectTypesExported} / {godotResult.ObjectTypes}　"
                     + $"物件實例 {godotResult.ObjectInstances}");
 
