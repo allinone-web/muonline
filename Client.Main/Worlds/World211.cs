@@ -4,7 +4,7 @@ using Client.Main.Core.Utilities;
 namespace Client.Main.Worlds
 {
     /// <summary>
-    /// 天堂_妖精森林（地圖編輯器產生的新地圖）。
+    /// 天堂_說話之島（地圖編輯器產生的新地圖）。
     /// </summary>
     /// <remarks>
     /// [WorldInfo] 的編號是 OpenMU 的地圖編號，建構子的 worldIndex 是客戶端的編號，
@@ -14,12 +14,12 @@ namespace Client.Main.Worlds
     /// 覆寫 CreateMapTileObjects() 把 MapTileObjects[型別編號] 指到對應的類別，
     /// 可以參考 LorenciaWorld。
     /// </remarks>
-    [WorldInfo(210, "天堂_妖精森林")]
+    [WorldInfo(210, "天堂_說話之島")]
     public class World211 : WalkableWorldControl
     {
         public World211() : base(worldIndex: 211)
         {
-            Name = "天堂_妖精森林";
+            Name = "天堂_說話之島";
         }
     }
 }

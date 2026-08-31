@@ -73,11 +73,20 @@ namespace Client.Main.Controls.UI.Game.Inventory
         /// 又往右偏移造成的懸空，間隙也開得比需要的大。收窄的 48 px 直接讓給
         /// 最右邊的道具資訊欄 —— 那裡才是真的不夠用的地方。
         /// </summary>
-        private static int MobileEquipColumnWidth => INVENTORY_SQUARE_WIDTH * 8 + 24;
+        // 裝備收成三欄之後只需要 6 格寬（見 BuildEquipSlots）。
+        private static int MobileEquipColumnWidth => INVENTORY_SQUARE_WIDTH * 6 + 24;
 
         // 手機的四欄：立體圖 | 裝備 | 背包 | 資訊
         private Rectangle _previewPanelRect;
         private Rectangle _infoPanelRect;
+
+        /// <summary>
+        /// 手機的丟棄鈕（在資訊欄底部）。丟棄不可以是「拖出視窗」的預設結果 ——
+        /// 那條路徑弄丟過使用者的裝備兩次，已經封掉；這顆按鈕才是明確的入口。
+        /// </summary>
+        private Rectangle _mobileDropButtonRect;
+        private bool _mobileDropPressed;
+        private bool _mobileDropWasPressed;
 
         /// <summary>開啟時的滑入動畫（見 MobileUi.OpenAnimation）。</summary>
         private readonly MobileUi.OpenAnimation _openAnimation = new();
@@ -610,6 +619,31 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 return;
             }
 
+            // DROP 鈕：按下與放開都要落在按鈕上才算數（見 DrawMobileDropButton）。
+            if (s_mobile && !_mobileDropButtonRect.IsEmpty)
+            {
+                if (leftJustPressed)
+                {
+                    _mobileDropPressed = _mobileDropButtonRect.Contains(mousePos);
+                    if (_mobileDropPressed)
+                        return;
+                }
+                else if (leftJustReleased && _mobileDropPressed)
+                {
+                    bool activate = _mobileDropButtonRect.Contains(mousePos);
+                    _mobileDropPressed = false;
+                    if (activate)
+                    {
+                        DropPickedItemToGround();
+                        return;
+                    }
+                }
+                else if (leftPressed && _mobileDropPressed)
+                {
+                    return;
+                }
+            }
+
             if (leftJustPressed && IsMouseOverDragArea() && !_isDragging)
             {
                 DateTime now = DateTime.Now;
@@ -1015,14 +1049,14 @@ namespace Client.Main.Controls.UI.Game.Inventory
             // 遊戲內所有視窗一律左上角關閉，見 docs/手機遊戲界面規格.md。
             // 位置由 MobileUi 決定，和其他視窗一模一樣（左上角、垂直置中）。
             _closeButtonRect = MobileUi.WindowCloseButtonRect(new Rectangle(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT));
-            _footerRightButtonRect = new Rectangle(
-                _closeButtonRect.Right + 10, _closeButtonRect.Y,
-                MobileUi.CloseButtonSize, MobileUi.CloseButtonSize);
+            // 標題列不再放修理鈕（那顆「+」，等級 50 之後變「R」= 修理模式）。
+            // 使用者要求拿掉：真正的修理入口在修理商店，背包裡那顆只是混淆。
+            _footerRightButtonRect = Rectangle.Empty;
 
-            // 金幣改到標題列右側，補上左邊讓出來的位置
-            const int zenFieldWidth = 200;
-            _zenFieldRect = new Rectangle(WINDOW_WIDTH - PANEL_PADDING - zenFieldWidth, 10, zenFieldWidth, 32);
-            _zenIconRect = new Rectangle(_zenFieldRect.X - 34, 14, 24, 24);
+            // 標題列不放金幣（使用者要求拿掉）。
+            // HUD 右上角本來就有金幣數字，同一個數字出現兩次只是佔位。
+            _zenFieldRect = Rectangle.Empty;
+            _zenIconRect = Rectangle.Empty;
 
             // 底列原本還有一顆重複的關閉鈕，標題列已經有了，手機不再重複
             _footerLeftButtonRect = Rectangle.Empty;
@@ -1038,9 +1072,43 @@ namespace Client.Main.Controls.UI.Game.Inventory
             int panelCenterX = _equipCenterX;
             int baseY = HEADER_HEIGHT + 20;
 
+            if (s_mobile)
+            {
+                // 三欄整齊排列（使用者指定）。
+                //
+                // 原本 PEND 與兩個 RING 是塞在欄位<b>之間</b>的 1x1 小格，
+                // 整個裝備區的寬度被它們撐成四欄。改成：
+                //   左欄：PEND（原本 PET 的位置）、左手、戒指、手套
+                //   中欄：頭盔、鎧甲、褲子
+                //   右欄：翅膀、右手、戒指、靴子
+                // <b>沒有 PET 格</b> —— 使用者準備把寵物裝備整個刪掉。
+                // 裝備區因此從四欄收成三欄，整個背包面板跟著窄。
+                int colL = panelCenterX - cell * 3 - 8;
+                int colC = panelCenterX - cell;
+                int colR = panelCenterX + cell + 8;
+
+                int rowTop = baseY;                       // 2 格高（PEND 只有 1 格，貼齊上緣）
+                int rowHand = baseY + cell * 2 + 8;       // 3 格高
+                int rowRing = rowHand + cell * 3 + 8;     // 1 格高
+                int rowFeet = rowRing + cell + 8;         // 2 格高
+
+                AddEquipSlot(9, new Point(colL + cell / 2, rowTop + cell / 2), new Point(1, 1), "PEND");
+                AddEquipSlot(0, new Point(colL, rowHand), new Point(2, 3), "L.HAND");
+                AddEquipSlot(10, new Point(colL + cell / 2, rowRing), new Point(1, 1), "RING");
+                AddEquipSlot(5, new Point(colL, rowFeet), new Point(2, 2), "GLOVES");
+
+                AddEquipSlot(2, new Point(colC, rowTop), new Point(2, 2), "HELM");
+                AddEquipSlot(3, new Point(colC, rowHand), new Point(2, 3), "ARMOR");
+                AddEquipSlot(4, new Point(colC, rowFeet), new Point(2, 2), "PANTS");
+
+                AddEquipSlot(7, new Point(colR, rowTop), new Point(2, 2), "WINGS");
+                AddEquipSlot(1, new Point(colR, rowHand), new Point(2, 3), "R.HAND");
+                AddEquipSlot(11, new Point(colR + cell / 2, rowRing), new Point(1, 1), "RING");
+                AddEquipSlot(6, new Point(colR, rowFeet), new Point(2, 2), "BOOTS");
+                return;
+            }
+
             // Left column (pet, left-hand weapon, gloves)
-            // 間隙由 24 收成 8：這一欄的寬度是被最外側的兩個欄位撐出來的，
-            // 每收 1 px 兩邊就各省 1 px。
             int leftColX = panelCenterX - cell * 4 - 8;
             AddEquipSlot(8, new Point(leftColX, baseY), new Point(2, 2), "PET");
             AddEquipSlot(0, new Point(leftColX, baseY + cell * 2 + 8), new Point(2, 3), "L.HAND");
@@ -1052,7 +1120,6 @@ namespace Client.Main.Controls.UI.Game.Inventory
             AddEquipSlot(3, new Point(centerColX, baseY + cell * 2 + 8), new Point(2, 3), "ARMOR");
             AddEquipSlot(4, new Point(centerColX, baseY + cell * 5 + 16), new Point(2, 2), "PANTS");
 
-            // Rings and pendant next to the center column
             int accessoryOffset = 6;
             AddEquipSlot(9, new Point(centerColX - cell - accessoryOffset, baseY + cell * 2 + 20), new Point(1, 1), "PEND");
             AddEquipSlot(10, new Point(centerColX - cell - accessoryOffset, baseY + cell * 5 + 28), new Point(1, 1), "RING");
@@ -1060,9 +1127,6 @@ namespace Client.Main.Controls.UI.Game.Inventory
 
             // Right column (wings, right-hand weapon, boots)
             int rightColX = panelCenterX + cell * 2 + 8;
-
-            // 翅膀原本是 3 格寬、而且還往左偏半格，右緣因此比同欄的武器多出 32 px ——
-            // 整個裝備欄的寬度就是被它一個人撐出來的。改成和其他欄位一樣 2 格寬。
             AddEquipSlot(7, new Point(rightColX, baseY - 4), new Point(2, 2), "WINGS");
             AddEquipSlot(1, new Point(rightColX, baseY + cell * 2 + 8), new Point(2, 3), "R.HAND");
             AddEquipSlot(6, new Point(rightColX, baseY + cell * 5 + 16), new Point(2, 2), "BOOTS");
@@ -1473,6 +1537,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
         {
             var pixel = GraphicsManager.Instance.Pixel;
             if (pixel == null) return;
+            if (_zenFieldRect.IsEmpty) return;   // 手機不顯示（HUD 已經有金幣）
 
             // Coin icon
             Rectangle iconRect = _zenIconRect;
@@ -1931,6 +1996,44 @@ namespace Client.Main.Controls.UI.Game.Inventory
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// 把手上的道具丟到腳邊的地上。手機唯一的丟棄入口（資訊欄的 DROP 鈕）。
+        ///
+        /// 目標格用角色腳下的位置：手機沒有「滑鼠指著的地面」這回事 ——
+        /// 觸控座標就是按鈕本身。伺服器會自己找最近的可放格。
+        /// </summary>
+        private void DropPickedItemToGround()
+        {
+            var item = _pickedItemRenderer.Item;
+            if (item == null || !_network_manager_exists())
+                return;
+
+            byte slotIndex = _pickedFromEquipSlot >= 0
+                ? (byte)_pickedFromEquipSlot
+                : (byte)(InventorySlotOffsetConstant + (item.GridPosition.Y * Columns) + item.GridPosition.X);
+
+            byte tileX = 0, tileY = 0;
+            if (MuGame.Instance.ActiveScene is Client.Main.Scenes.GameScene gs && gs.Hero != null)
+            {
+                tileX = (byte)gs.Hero.Location.X;
+                tileY = (byte)gs.Hero.Location.Y;
+            }
+
+            _ = Task.Run(async () =>
+            {
+                var svc = _networkManager.GetCharacterService();
+                await svc.SendDropItemRequestAsync(tileX, tileY, slotIndex);
+                await Task.Delay(1200);
+                var state = _networkManager.GetCharacterState();
+                if (state.HasInventoryItem(slotIndex))
+                {
+                    MuGame.ScheduleOnMainThread(() => state.RaiseInventoryChanged());
+                }
+            });
+
+            ReleasePickedItem();
         }
 
         private void HandleDropOutsideInventory()
@@ -2908,8 +3011,11 @@ namespace Client.Main.Controls.UI.Game.Inventory
 
             if (_footerLeftButtonRect.Width > 0)
                 DrawFooterButton(spriteBatch, _footerLeftButtonRect, "X", _leftFooterHovered);
-            string buttonText = (_networkManager?.GetCharacterState()?.Level >= _repairEnableLevel) ? "R" : "+";
-            DrawFooterButton(spriteBatch, _footerRightButtonRect, buttonText, _rightFooterHovered);
+            if (_footerRightButtonRect.Width > 0)
+            {
+                string buttonText = (_networkManager?.GetCharacterState()?.Level >= _repairEnableLevel) ? "R" : "+";
+                DrawFooterButton(spriteBatch, _footerRightButtonRect, buttonText, _rightFooterHovered);
+            }
         }
 
         private void DrawCloseButton(SpriteBatch spriteBatch)
@@ -3160,8 +3266,14 @@ namespace Client.Main.Controls.UI.Game.Inventory
             spriteBatch.Draw(pixel, previewRect, new Color(10, 13, 19) * 0.35f);
             spriteBatch.Draw(pixel, infoRect, new Color(10, 13, 19) * 0.35f);
 
-            if (GetMobileInfoItem() != null)
+            var infoItem = GetMobileInfoItem();
+            if (infoItem != null)
+            {
+                DrawMobileDropButton(spriteBatch, infoRect, infoItem);
                 return;
+            }
+
+            _mobileDropButtonRect = Rectangle.Empty;
 
             // 遊戲的字型沒有中文字符，中文會整串變成 ??????（實機截圖確認）。
             // 這一層的字串一律用英文，與其他介面文字也一致。
@@ -3173,6 +3285,36 @@ namespace Client.Main.Controls.UI.Game.Inventory
                 infoRect.Y + (infoRect.Height - size.Y) * 0.5f);
 
             spriteBatch.DrawString(_font, hint, position, Theme.TextDark, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+        }
+
+        /// <summary>
+        /// 資訊欄底部的 DROP 鈕。只有「拿在手上」的道具可以丟 ——
+        /// 停留顯示的道具不行，否則手指劃過去就可能誤丟。
+        /// </summary>
+        private void DrawMobileDropButton(SpriteBatch spriteBatch, Rectangle infoRect, InventoryItem infoItem)
+        {
+            bool held = ReferenceEquals(_pickedItem_renderer_item(), infoItem);
+            if (!held || infoRect.Width < 120)
+            {
+                _mobileDropButtonRect = Rectangle.Empty;
+                return;
+            }
+
+            var pixel = GraphicsManager.Instance.Pixel;
+            if (pixel == null)
+                return;
+
+            _mobileDropButtonRect = new Rectangle(
+                infoRect.X + 12,
+                infoRect.Bottom - MobileUi.CloseButtonSize - 12,
+                infoRect.Width - 24,
+                MobileUi.CloseButtonSize);
+
+            // 唯一保留飽和色的按鈕：這個動作會把東西丟到地上，撿不回來就沒了。
+            var fill = _mobileDropPressed ? new Color(160, 66, 66) : new Color(132, 54, 54);
+            spriteBatch.Draw(pixel, _mobileDropButtonRect, fill * 0.95f);
+            MobileUi.DrawTextCentered(spriteBatch, _font, "DROP", _mobileDropButtonRect,
+                MobileUi.TextHeading, MobileUi.TextPrimary);
         }
 
         /// <summary>

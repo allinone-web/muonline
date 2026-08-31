@@ -180,11 +180,24 @@ namespace Client.Main.Controls.UI.Game.Hud
 
             _iconSize = ScaleValue(BaseIconSize, _uiScale);
             _iconGap = Math.Max(1, ScaleValue(BaseIconGap, _uiScale));
-            _startX = virtualSize.X - _iconSize - ScaleValue(BaseRightOffset, _uiScale);
-            _startY = Math.Clamp(
-                ScaleValue(BaseTopOffset, _uiScale),
-                ScaleValue(12, _uiScale),
-                Math.Max(ScaleValue(12, _uiScale), virtualSize.Y - ScaleValue(180, _uiScale)));
+
+            if (Client.Main.Controls.UI.MobileUi.IsMobile)
+            {
+                // 右緣對齊到共用的對齊線 —— 和右上角那六顆按鈕同一條。
+                // 原本是「距螢幕右緣 10」，比按鈕更靠外，看起來像自己一掛的；
+                // 而且落在 FPS / 金幣那一行文字上（使用者回報「遮住其他文字」）。
+                // 起始 Y 移到狀態列（時間／FPS／金幣，約 96..134）之下。
+                _startX = Client.Main.Controls.UI.MobileUi.RightEdge - _iconSize;
+                _startY = 150;
+            }
+            else
+            {
+                _startX = virtualSize.X - _iconSize - ScaleValue(BaseRightOffset, _uiScale);
+                _startY = Math.Clamp(
+                    ScaleValue(BaseTopOffset, _uiScale),
+                    ScaleValue(12, _uiScale),
+                    Math.Max(ScaleValue(12, _uiScale), virtualSize.Y - ScaleValue(180, _uiScale)));
+            }
 
             X = 0;
             Y = 0;

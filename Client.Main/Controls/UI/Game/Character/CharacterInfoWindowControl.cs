@@ -375,8 +375,12 @@ namespace Client.Main.Controls.UI.Game.Character
         private const int MobileBottomButtonHeight = 46;
         private const int MobileBottomButtonGap = 10;
 
-        /// <summary>QUEST / PET / MASTER 那一列的 Y。在頭部資訊區裡、等級那一行的右側。</summary>
-        private const int MobileHeaderRowButtonsY = 96;
+        /// <summary>
+        /// QUEST / PET / MASTER 那一列的 Y：對齊等級那一行（y=61），
+        /// 高度 40 收在果實說明（y=97 起）之前，才不會蓋住文字。
+        /// </summary>
+        private const int MobileHeaderRowButtonsY = 56;
+        private const int MobileHeaderRowButtonHeight = 40;
 
         private static Rectangle CreateBottomBounds(int xOffset, Texture2D texture)
         {
@@ -393,13 +397,14 @@ namespace Client.Main.Controls.UI.Game.Character
 
                 // 其餘三顆搬到等級那一行的右側，靠右排。
                 // 底部那一整列因此可以整個拿掉，面板矮了 76 px，不再貼著畫面下緣。
-                int slot = 3 - index;   // MASTER 最右、QUEST 最左
+                // 靠<b>右</b>對齊（使用者指定）：MASTER 貼著右緣，往左依序 PET、QUEST。
+                int slot = 3 - index;   // MASTER = 0、PET = 1、QUEST = 2
                 int right = WINDOW_WIDTH - 20;
                 return new Rectangle(
                     right - (slot + 1) * MobileBottomButtonWidth - slot * MobileBottomButtonGap,
                     MobileHeaderRowButtonsY,
                     MobileBottomButtonWidth,
-                    MobileBottomButtonHeight);
+                    MobileHeaderRowButtonHeight);
             }
 
             if (texture == null)
@@ -541,9 +546,9 @@ namespace Client.Main.Controls.UI.Game.Character
 
             if (MobileUi.IsMobile)
             {
-                // 和登入、選伺服器、背包同一個面板。標題列由 DrawPanel 一起畫掉，
-                // 原本那條金色橫槓與兩段漸層底線就不需要了。
-                MobileUi.DrawPanel(spriteBatch, window, 46);
+                // 和登入、選伺服器、背包同一個面板。標題列由 DrawPanel 一起畫掉。
+                // 高度必須用共用值：46 會讓 46 見方的關閉鈕（上下各留 6）穿出標題列。
+                MobileUi.DrawPanel(spriteBatch, window, MobileUi.WindowTitleHeight);
             }
             else
             {
@@ -563,7 +568,7 @@ namespace Client.Main.Controls.UI.Game.Character
 
             // 頭部資訊區（等級、經驗、果實）。手機的標題列高 46，區塊要接在它下面
             // 並一路到屬性列的起點。
-            int headerTop = s_mobile ? 56 : 53;
+            int headerTop = s_mobile ? MobileUi.WindowTitleHeight + 10 : 53;
             int headerHeight = s_mobile ? MobileHeaderHeight - headerTop - 10 : 78;
             DrawModernPanel(spriteBatch, new Rectangle(14, headerTop, WINDOW_WIDTH - 28, headerHeight), ModernHudTheme.BgMid);
 
