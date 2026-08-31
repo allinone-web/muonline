@@ -305,8 +305,17 @@ namespace Client.Main.Content
                 // 客戶端會直接用編號索引，越界就是當場崩。
                 int src = wanted.TryGetValue(slot, out int index) ? index : -1;
 
+                // 每個槽位一個獨立物件：Walk(2) 與 Run(10) 常指向同一個剪輯，
+                // 共用同一個 BMDTextureAction 的話，ApplyActionSpeeds 後設的槽
+                // 會把先設的 PlaySpeed 蓋掉（實測：Walk 被 Run 蓋成 0.24s）。
                 actions[slot] = src >= 0 && src < model.Actions.Length
-                    ? model.Actions[src]
+                    ? new BMDTextureAction
+                    {
+                        NumAnimationKeys = model.Actions[src].NumAnimationKeys,
+                        LockPositions = model.Actions[src].LockPositions,
+                        Positions = model.Actions[src].Positions,
+                        PlaySpeed = model.Actions[src].PlaySpeed,
+                    }
                     : new BMDTextureAction { NumAnimationKeys = 1 };
 
                 for (int b = 0; b < model.Bones.Length; b++)
