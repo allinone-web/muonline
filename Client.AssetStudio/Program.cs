@@ -33,6 +33,8 @@
 //   MuAssetStudio --library-add <gltf|glb> [--name X] [--kind 怪物]
 //   MuAssetStudio --library-show <id>                 相容性報告 + 目前的動作對映
 //   MuAssetStudio --library-map <id> --action N [--clip <動作名稱>]
+//   MuAssetStudio --library-sound <id> --event <idle|attack1|attack2|hurt|death> [--file <音效>]
+//                                                     匯進來的資產本來是啞的，用這個配音效
 //   MuAssetStudio --library-runtime [篩選]           客戶端真的載得動嗎（走 Client.Main 的路徑）
 //   MuAssetStudio --library-tune [篩選] [--apply]    動畫長度對齊伺服器節奏
 //
@@ -144,7 +146,7 @@ if (parsed.TryGetValue("library-add", out var libraryAdd) && libraryAdd is not n
 }
 
 if (parsed.TryGetValue("library-show", out var libraryShow) && libraryShow is not null)
-    return LibraryCommands.Show(session.Library, libraryShow);
+    return LibraryCommands.Show(session.Library, libraryShow, dataPath);
 
 if (parsed.TryGetValue("library-map", out var libraryMap) && libraryMap is not null)
 {
@@ -155,6 +157,21 @@ if (parsed.TryGetValue("library-map", out var libraryMap) && libraryMap is not n
     }
 
     return LibraryCommands.Map(session.Library, libraryMap, mappedAction, parsed.GetValueOrDefault("clip"));
+}
+
+if (parsed.TryGetValue("library-sound", out var librarySound) && librarySound is not null)
+{
+    string? soundEvent = parsed.GetValueOrDefault("event");
+    if (soundEvent is null)
+    {
+        Console.Error.WriteLine(
+            "--library-sound <id> 需要 --event <idle|attack1|attack2|hurt|death>"
+          + "　[--file <Sound/x.wav 或資產資料夾底下的路徑>]");
+        return 2;
+    }
+
+    return LibraryCommands.MapSound(
+        session.Library, librarySound, soundEvent, parsed.GetValueOrDefault("file"), dataPath);
 }
 
 if (parsed.TryGetValue("textures-export", out var texturesModel) && texturesModel is not null)

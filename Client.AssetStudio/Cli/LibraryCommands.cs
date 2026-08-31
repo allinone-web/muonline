@@ -81,8 +81,59 @@ public static class LibraryCommands
         return 0;
     }
 
+    /// <summary>綁一個事件的音效。</summary>
+    /// <remarks>
+    /// <b>匯進來的資產本來一定是啞的。</b>MU 原生怪物的音效寫死在各自的 <c>.cs</c> 檔裡，
+    /// 資源庫的資產沒有那個檔案 —— 綁到哪一號都不會有聲音。
+    ///
+    /// <paramref name="file"/> 可以是遊戲本來就有的（<c>Sound/mEsisAttack1.wav</c>），
+    /// 也可以是放在資產資料夾底下的自有音效（<c>sfx/atk1.wav</c>）。
+    /// </remarks>
+    public static int MapSound(AssetLibrary library, string id, string sound, string? file, string dataPath)
+    {
+        var asset = library.Find(id);
+
+        if (asset is null)
+        {
+            Console.Error.WriteLine($"資源庫裡沒有「{id}」");
+            return 2;
+        }
+
+        if (!AssetLibrary.SoundEvents.Contains(sound, StringComparer.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine(
+                $"不認得的事件「{sound}」。可用的是：{string.Join(" / ", AssetLibrary.SoundEvents)}");
+            return 2;
+        }
+
+        sound = sound.ToLowerInvariant();
+        library.MapSound(asset, sound, file);
+
+        if (file is null)
+        {
+            Console.WriteLine($"{asset.Id}：{sound} 的音效已清除");
+            return 0;
+        }
+
+        string? resolved = library.ResolveSound(asset, sound, dataPath);
+        Console.WriteLine($"{asset.Id}：{sound} → 「{file}」");
+
+        if (resolved is null)
+        {
+            // 存下去但要講清楚 —— 悄悄存一個找不到的路徑，之後只會看到「沒有聲音」。
+            Console.Error.WriteLine(
+                $"  [注意] 兩個地方都找不到這個檔案：\n"
+              + $"         {Path.Combine(library.Root, asset.Id, file)}\n"
+              + $"         {Path.Combine(dataPath, file)}");
+            return 1;
+        }
+
+        Console.WriteLine($"  解析到 {resolved}");
+        return 0;
+    }
+
     /// <summary>顯示一筆資產目前的動作對映，未對映的也列出來。</summary>
-    public static int Show(AssetLibrary library, string id)
+    public static int Show(AssetLibrary library, string id, string dataPath)
     {
         var asset = library.Find(id);
 
@@ -113,6 +164,20 @@ public static class LibraryCommands
         if (asset.Actions.Keys.Select(int.Parse).Any(a => a >= count))
         {
             Console.WriteLine("  （還有編號更大的對映，未列出）");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("音效對映（沒配的話這隻是啞的 —— 不會退回被取代那隻怪的叫聲）");
+
+        foreach (string sound in AssetLibrary.SoundEvents)
+        {
+            string? value = library.SoundFor(asset, sound);
+            string state = value is null
+                ? "－"
+                : library.ResolveSound(asset, sound, dataPath) is null
+                    ? $"{value}　[找不到檔案]"
+                    : value;
+            Console.WriteLine($"  {sound,-24} ← {state}");
         }
 
         return 0;

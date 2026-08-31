@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Client.AssetStudio.Project;
 using Client.Data.BMD;
 using Client.Main.Content;
+using Client.Main.Controls;
 
 namespace Client.Main.Objects
 {
@@ -57,6 +58,55 @@ namespace Client.Main.Objects
             Model = _model;
             await base.Load();
             Diagnose();
+        }
+
+        // ── 音效 ────────────────────────────────────────────────────────
+        //
+        // 匯進來的資產本來一定是啞的：MU 原生怪物的音效寫死在各自的 .cs 檔裡，
+        // 資源庫的資產沒有那個檔案，所以綁到哪一號都不會有聲音。
+        // 這幾個 override 就是把資源庫的 Sounds 對映接上原本的掛勾。
+        //
+        // 沒配音效就什麼都不做 —— 不要退回被取代的那隻怪的音效，
+        // 換了模型卻留著舊叫聲比沒有聲音更奇怪。
+
+        protected override void OnIdle()
+        {
+            base.OnIdle();
+            PlayAssetSound("idle");
+        }
+
+        public override void OnPerformAttack(int attackType = 1)
+        {
+            base.OnPerformAttack(attackType);
+            if (!PlayAssetSound(attackType == 2 ? "attack2" : "attack1") && attackType == 2)
+                PlayAssetSound("attack1");      // 只配了一種攻擊音就兩種都用它
+        }
+
+        public override void OnReceiveDamage()
+        {
+            base.OnReceiveDamage();
+            PlayAssetSound("hurt");
+        }
+
+        public override void OnDeathAnimationStart()
+        {
+            base.OnDeathAnimationStart();
+            PlayAssetSound("death");
+        }
+
+        /// <summary>播一個資源庫綁定的音效；沒綁或檔案不在就回傳 false。</summary>
+        private bool PlayAssetSound(string sound)
+        {
+            string path = LibraryAssetProvider.ResolveSound(Asset, sound);
+            if (path is null)
+                return false;
+
+            if (World is not WalkableWorldControl walkableWorld)
+                return false;
+
+            Controllers.SoundController.Instance.PlayBufferWithAttenuation(
+                path, Position, walkableWorld.Walker.Position);
+            return true;
         }
 
         /// <summary>

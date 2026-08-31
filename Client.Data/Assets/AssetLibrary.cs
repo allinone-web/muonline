@@ -53,6 +53,25 @@ public sealed class LibraryAsset
     public Dictionary<string, float> ActionSpeeds { get; set; } = [];
 
     /// <summary>
+    /// 事件 → 音效檔。鍵是 <c>idle</c> / <c>attack1</c> / <c>attack2</c> /
+    /// <c>hurt</c> / <c>death</c>。
+    /// </summary>
+    /// <remarks>
+    /// <b>匯進來的資產本來一定是啞的。</b>模型與動作有地方放，音效沒有 ——
+    /// 而 MU 原生怪物的音效是寫死在各自的 <c>.cs</c> 檔裡的，
+    /// 資源庫的資產沒有那個檔案，所以不管綁到哪一號都不會有聲音。
+    ///
+    /// 值可以是兩種：
+    /// <list type="bullet">
+    ///   <item><c>Sound/mEsisAttack1.wav</c> —— 沿用遊戲本來就有的音效</item>
+    ///   <item><c>sfx/atk1.wav</c> —— 資產自己的資料夾底下，跟模型放在一起</item>
+    /// </list>
+    /// 解析順序是「先看資產資料夾、再看 <c>Data/</c>」，跟模型與貼圖同一個原則：
+    /// <b>資源庫是覆寫</b>。
+    /// </remarks>
+    public Dictionary<string, string> Sounds { get; set; } = [];
+
+    /// <summary>
     /// 額外的自發光亮度，加在地形光之上（0 = 不加，就是純漫反射的 MU 原生外觀）。
     /// </summary>
     /// <remarks>
@@ -243,6 +262,47 @@ public sealed class AssetLibrary
 
     public string? ClipFor(LibraryAsset asset, int action)
         => asset.Actions.TryGetValue(action.ToString(), out var clip) ? clip : null;
+
+    /// <summary>這個資產有沒有給某個事件配音效。</summary>
+    public string? SoundFor(LibraryAsset asset, string sound)
+        => asset.Sounds.TryGetValue(sound, out var path) && !string.IsNullOrWhiteSpace(path)
+            ? path
+            : null;
+
+    /// <summary>綁一個事件的音效；<paramref name="path"/> 給 null 就是解除。</summary>
+    public void MapSound(LibraryAsset asset, string sound, string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            asset.Sounds.Remove(sound);
+        else
+            asset.Sounds[sound] = path.Replace('\\', '/');
+
+        Save();
+    }
+
+    /// <summary>
+    /// 音效檔在磁碟上的真正位置；兩個地方都沒有就回傳 null。
+    /// </summary>
+    /// <remarks>
+    /// <b>先找資產自己的資料夾</b>，找不到才當成 <c>Data/</c> 底下的相對路徑。
+    /// 順序反過來的話，資產帶進來的音效永遠蓋不掉同名的遊戲音效。
+    /// </remarks>
+    public string? ResolveSound(LibraryAsset asset, string sound, string dataPath)
+    {
+        string? value = SoundFor(asset, sound);
+        if (value is null)
+            return null;
+
+        string local = Path.Combine(Root, asset.Id, value);
+        if (File.Exists(local))
+            return local;
+
+        string shared = Path.Combine(dataPath, value);
+        return File.Exists(shared) ? shared : null;
+    }
+
+    /// <summary>資源庫認得的事件名稱。順序就是列印的順序。</summary>
+    public static readonly string[] SoundEvents = ["idle", "attack1", "attack2", "hurt", "death"];
 
     // ── 檔案 ─────────────────────────────────────────────────────
 

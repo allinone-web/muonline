@@ -23,7 +23,10 @@ namespace Client.Main.Objects.Effects
     {
         private const string DefaultPierPartModelPath = "Skill/pierpart.bmd";
         private const string DefaultCastFlashModelPath = "Skill/darklordskill.bmd";
-        private const string ImpactSoundPath = "Sound/efirebustboom.wav";
+        // 磁碟上是 eFirebustBoom.wav。這裡是寫死的常數、沒有候選鏈，
+        // 所以大小寫錯了就是直接沒聲音 —— macOS 不分大小寫所以看不出來，
+        // Linux 與 Android 會靜音。
+        private const string ImpactSoundPath = "Sound/eFirebustBoom.wav";
 
         private const float LegacyStepSeconds = 1f / 25f;
         private const int MaxLegacyStepsPerFrame = 5;

@@ -47,6 +47,14 @@ namespace Client.Main.Content
         /// <summary>資源庫的根目錄。預設是 <c>~/Documents/mu-studio-library</c>。</summary>
         public static string Root => Ensure().Root;
 
+        /// <summary>資產綁的音效在磁碟上的位置；沒綁或檔案不在就回傳 null。</summary>
+        /// <remarks>
+        /// 先找資產自己的資料夾、再找 <c>Data/</c> —— 跟模型與貼圖同一個原則：
+        /// <b>資源庫是覆寫</b>。
+        /// </remarks>
+        public static string ResolveSound(LibraryAsset asset, string sound)
+            => asset is null ? null : Ensure().ResolveSound(asset, sound, Constants.DataPath);
+
         public static int Count => Ensure() is not null ? _byNumber.Count : 0;
 
         private static AssetLibrary Ensure()
