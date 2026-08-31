@@ -1180,7 +1180,7 @@ namespace Client.Main.Scenes
             MuGame.Instance.ChangeScene<LoginScene>();
         }
 
-        private void DisableInteractionDuringSelection(string characterName)
+        private void DisableInteractionDuringSelection(string characterName, bool showLoadingScreen = true)
         {
             _isSelectionInProgress = true;
             if (_selectWorld != null)
@@ -1198,17 +1198,48 @@ namespace Client.Main.Scenes
                     label.Visible = false;
                 }
             }
+            if (showLoadingScreen)
+                ShowEnteringLoadingScreen(characterName);
+
+            UpdateNavigationButtonState();
+        }
+
+        /// <summary>
+        /// 蓋上「進入遊戲中」的載入畫面。
+        ///
+        /// 與停用互動分開，是因為載入畫面一顯示，Draw 就會 return 到純黑頁 ——
+        /// 離場動畫會完全看不到。要先讓角色走完再蓋。
+        /// </summary>
+        private void ShowEnteringLoadingScreen(string characterName)
+        {
             if (_loadingScreen == null)
             {
                 _loadingScreen = new LoadingScreenControl { Visible = true };
                 Controls.Add(_loadingScreen);
             }
+
             _loadingScreen.Message = $"Entering game as {characterName}...";
             _loadingScreen.Progress = 0f;
             _loadingScreen.Visible = true;
             _loadingScreen.BringToFront();
             Cursor?.BringToFront();
-            UpdateNavigationButtonState();
+        }
+
+        /// <summary>ENTER 之後讓其他角色走開多久，再真正進入遊戲。</summary>
+        private static readonly TimeSpan DepartureDuration = TimeSpan.FromSeconds(3);
+
+        /// <summary>
+        /// 先讓沒被選中的角色走出畫面，再送出選角請求。
+        /// 這三秒是刻意留的表演時間。
+        /// </summary>
+        private async Task EnterGameAfterDepartureAsync(string characterName)
+        {
+            _characterController?.BeginDeparture();
+
+            await Task.Delay(DepartureDuration);
+
+            ShowEnteringLoadingScreen(characterName);
+            await _networkManager.SendSelectCharacterRequestAsync(characterName);
         }
 
         private void EnableInteractionAfterSelection()
@@ -1789,8 +1820,9 @@ namespace Client.Main.Scenes
             _logger.LogInformation("Character '{CharacterName}' (Class: {Class}) selected in scene. Sending request...",
                                    _selectedCharacterInfo.Value.Name, _selectedCharacterInfo.Value.Class);
 
-            DisableInteractionDuringSelection(_currentlySelectedCharacterName);
-            _ = _networkManager.SendSelectCharacterRequestAsync(_currentlySelectedCharacterName);
+            // 停用互動，但先不蓋載入畫面 —— 要讓玩家看到其他角色走開。
+            DisableInteractionDuringSelection(_currentlySelectedCharacterName, showLoadingScreen: false);
+            _ = EnterGameAfterDepartureAsync(_currentlySelectedCharacterName);
         }
 
         /// <summary>

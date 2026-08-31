@@ -47,6 +47,9 @@ namespace Client.Main.Scenes.SelectCharacter
         /// <summary>正在等「走到定位」才表演招牌動作的角色。</summary>
         private PlayerObject _pendingSignature;
 
+        /// <summary>離場時往外走多遠。走得夠遠才會真的離開畫面。</summary>
+        private const float DepartureDistance = 1600f;
+
         private readonly List<PlayerObject> _characters = new();
         private readonly List<(string Name, CharacterClassNumber Class, ushort Level, byte[] Appearance)> _characterInfos = new();
         private readonly Dictionary<PlayerObject, LabelControl> _labels = new();
@@ -331,6 +334,33 @@ namespace Client.Main.Scenes.SelectCharacter
                 5 => PlayerAction.PlayerSkillFlash,     // 召喚師
                 _ => PlayerAction.PlayerAttackFist,     // 格鬥家
             };
+
+        /// <summary>
+        /// ENTER 之後的離場：沒被選中的角色往自己那一側的畫面外走開。
+        ///
+        /// 做法是直接把它們記錄的站位挪到遠處 —— UpdateSelectionMotion 本來就會
+        /// 把角色走向站位，連走路動畫都是現成的，不必另寫一套動畫邏輯。
+        /// 選中的那個留在原地不動。
+        /// </summary>
+        public void BeginDeparture()
+        {
+            for (int i = 0; i < _characters.Count; i++)
+            {
+                if (i == _activeIndex)
+                    continue;
+
+                var player = _characters[i];
+                if (!_slotBase.TryGetValue(player, out var slot))
+                    continue;
+
+                var outward = slot - _displayPosition;
+                if (outward.LengthSquared() < 1f)
+                    continue;
+
+                outward.Normalize();
+                _slotBase[player] = slot + (outward * DepartureDistance);
+            }
+        }
 
         /// <summary>
         /// 每幀推進選中的視覺表現：選中的角色走向鏡頭、其餘退回自己的站位，
