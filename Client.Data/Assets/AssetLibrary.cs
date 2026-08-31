@@ -52,6 +52,18 @@ public sealed class LibraryAsset
     /// </remarks>
     public Dictionary<string, float> ActionSpeeds { get; set; } = [];
 
+    /// <summary>
+    /// 額外的自發光亮度，加在地形光之上（0 = 不加，就是純漫反射的 MU 原生外觀）。
+    /// </summary>
+    /// <remarks>
+    /// <b>MU 的著色器沒有高光項</b>（DynamicLighting.fx 的最終色 = 貼圖 × (環境光 + 太陽漫反射)）。
+    /// Lineage 原版引擎有鏡面反射，所以角色在原版看起來有金屬光澤；搬進 MU 之後
+    /// 只剩漫反射，就顯得比較「霧面」。這不是 bug —— 468 個 MU 原生怪物裡有 459 個
+    /// 也是這種霧面外觀。想讓匯入的角色比 MU 原生更亮一點，可以在這裡加一個
+    /// 自發光偏移（例如 0.15），效果等同 WorldObject.Light。0 代表跟 MU 怪物一致。
+    /// </remarks>
+    public float LightBoost { get; set; }
+
     /// <summary>要接管遊戲裡的哪一個編號（怪物／NPC 的 <c>[NpcInfo]</c> typeId）。-1 表示還沒決定。</summary>
     public int BindNumber { get; set; } = -1;
 

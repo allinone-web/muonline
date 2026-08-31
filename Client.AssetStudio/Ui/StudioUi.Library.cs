@@ -183,14 +183,17 @@ public sealed partial class StudioUi
     }
 
     /// <summary>依名稱或 id 選一筆自有資產。給 <c>--open-library</c> 用。</summary>
-    public bool SelectLibraryAsset(string idOrName)
+    public bool SelectLibraryAsset(string idOrName) => SelectLibraryAsset(idOrName, openPanel: true);
+
+    /// <param name="openPanel">headless 截圖時給 false：只把模型載進檢視器，不要讓資源庫面板蓋住畫面。</param>
+    public bool SelectLibraryAsset(string idOrName, bool openPanel)
     {
         var asset = _session.Library.Find(idOrName);
 
         if (asset is null)
             return false;
 
-        _showLibrary = true;
+        _showLibrary = openPanel;
         Select(_session.Library, asset);
         return true;
     }

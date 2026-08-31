@@ -115,8 +115,14 @@ public sealed class StudioGame : Game
         if (_options.InitialPanels is string panels)
             _ui.OpenPanels(panels);
 
-        if (_options.InitialLibraryAsset is string libraryAsset && !_ui.SelectLibraryAsset(libraryAsset))
-            _session.Report($"資源庫裡沒有「{libraryAsset}」", failed: true);
+        // headless 截圖時（有指定 --screenshot 但沒要求 --panels library）不開面板，
+        // 否則資源庫視窗會蓋住模型，截出來的圖看不到角色。
+        if (_options.InitialLibraryAsset is string libraryAsset)
+        {
+            bool openPanel = _options.InitialPanels?.Contains("library") ?? false;
+            if (!_ui.SelectLibraryAsset(libraryAsset, openPanel))
+                _session.Report($"資源庫裡沒有「{libraryAsset}」", failed: true);
+        }
 
         _viewport.ShowSkeleton = _options.ShowSkeleton;
 

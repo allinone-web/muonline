@@ -40,6 +40,11 @@ namespace Client.Main.Objects
             _model = model;
             _displayName = SafeName(asset);
 
+            // 自發光偏移：MU 沒有高光，這是讓匯入角色比原生怪物亮一點的唯一手段。
+            // 預設 0 = 跟 MU 怪物一致的霧面外觀。
+            if (asset.LightBoost > 0f)
+                Light = new Microsoft.Xna.Framework.Vector3(asset.LightBoost);
+
             // 縮放已經在匯入時烘進頂點了（GltfImporter 收 asset.Scale），
             // 這裡再乘一次會變成平方。
             Scale = 1f;
