@@ -165,6 +165,13 @@ public static class GodotSceneExporter
             .Take(options.MaxObjectTypes)
             .ToArray();
 
+        // 截斷不准靜默：被 Take 丟掉的型別不會進迴圈、連警告都不會有，
+        // 畫面上就是「某些物件消失」而查不到原因（RealmForge M1 缺屋頂即此）。
+        int distinctTypes = placements.Select(p => p.Type).Distinct().Count();
+        if (byFrequency.Length < distinctTypes)
+            warnings.Add($"物件型別 {distinctTypes} 種超過上限 {options.MaxObjectTypes}，"
+                       + $"砍掉了 {distinctTypes - byFrequency.Length} 種低頻型別——用 --max-types 提高上限");
+
         // World1 用具名檔，型別編號要透過 ModelType 這個列舉才對得上檔名。
         var namedFiles = worldIndex == 1 ? IndexObjectFiles(dataPath, worldIndex) : null;
 
@@ -254,6 +261,12 @@ public static class GodotSceneExporter
             var trimmed = name.TrimEnd('0', '1', '2', '3', '4', '5', '6', '7', '8', '9');
             if (trimmed.Length > 0 && trimmed != name)
                 yield return trimmed + "01";
+
+            // Season 20 的檔名多一個 o：DungeonGate 的實際檔案是 DoungeonGate01.bmd。
+            // 不是大小寫問題，後綴比對也橋不過去。原版客戶端就是寫死這個拼法
+            //（Client.Main/Objects/Worlds/Lorencia/DungeonGateObject.cs），那才是真相來源。
+            if (name == "DungeonGate")
+                yield return "DoungeonGate01";
         }
     }
 

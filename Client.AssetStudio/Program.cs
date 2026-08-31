@@ -221,7 +221,8 @@ if (parsed.ContainsKey("godot-export"))
     var godotOptions = new Client.AssetStudio.Export.GodotSceneExporter.Options(
         MaxObjectTypes: parsed.TryGetValue("max-types", out var mt) && int.TryParse(mt, out int maxTypes)
             ? maxTypes
-            : 64,
+            : 512,   // 預設要蓋滿整張圖（Options 的預設值）。曾寫死 64：World1 有 107 種型別，
+                     // 依頻率取前 64 種正好把低頻的房屋/屋頂全部靜默砍掉（RealmForge M1 缺屋頂的根因）。
         ExportObjects: !parsed.ContainsKey("no-objects"));
 
     var godotResult = Client.AssetStudio.Export.GodotSceneExporter.Export(
