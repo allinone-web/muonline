@@ -1435,6 +1435,20 @@ namespace Client.Main.Objects.Player
         }
 
         // ───────────────────────────────── UPDATE LOOP ─────────────────────────────────
+        /// <summary>武器自己跑動畫時的速度，等同 <see cref="ModelObject.AnimationSpeed"/> 的預設值。</summary>
+        /// <remarks>
+        /// 閘門只負責「跑或不跑」，<b>不要順手改速度</b> ——
+        /// 寫成 1f 會讓拉弦變成原本的四分之一速，那是另一個 bug。
+        /// </remarks>
+        private const float WeaponDrawAnimationSpeed = 4f;
+
+        /// <summary>閘門目前的狀態；<c>null</c> 代表還沒套用過。</summary>
+        /// <remarks>
+        /// 一定要可為 null。用 <c>false</c> 當初值的話，第一幀「不在攻擊」會跟初值相同、
+        /// 被當成沒有變化而直接跳過 —— 武器就帶著預設的 4f 一路跑下去，閘門形同沒裝。
+        /// </remarks>
+        private bool? _weaponAnimationGateOpen;
+
         /// <summary>
         /// 弓與弩的模型自己帶著一段拉弦動畫，不攻擊時要停在第一格。
         /// </summary>
@@ -1456,18 +1470,34 @@ namespace Client.Main.Objects.Player
         /// </remarks>
         private void UpdateWeaponAnimationGate()
         {
-            bool drawing = CurrentAction is PlayerAction.PlayerAttackBow
-                                         or PlayerAction.PlayerAttackCrossbow
-                                         or PlayerAction.PlayerAttackFlyBow
-                                         or PlayerAction.PlayerAttackFlyCrossbow;
+            // 用 ArrowProjectileEffect 那份判斷，不要自己再列一次 ——
+            // 弓的攻擊動作有 14 個（站／飛／騎／魔狼／仰射各一組），
+            // 自己列會漏掉，漏掉的那幾個會變成「攻擊時弓卡住不動」。
+            bool drawing = ArrowProjectileEffect.IsBowAttackAction(CurrentAction);
 
-            float speed = drawing ? 1f : 0f;
+            if (drawing == _weaponAnimationGateOpen)
+                return;
 
-            if (Weapon1 != null)
-                Weapon1.AnimationSpeed = speed;
+            _weaponAnimationGateOpen = drawing;
+            float speed = drawing ? WeaponDrawAnimationSpeed : 0f;
 
-            if (Weapon2 != null)
-                Weapon2.AnimationSpeed = speed;
+            ApplyWeaponAnimationGate(Weapon1, speed, drawing);
+            ApplyWeaponAnimationGate(Weapon2, speed, drawing);
+        }
+
+        /// <remarks>
+        /// 關閘門時要<b>順便回到第一格</b>。只把速度設成 0 會讓弓停在
+        /// 攻擊結束那一瞬間的姿勢 —— 站著卻拿著一把拉滿的弓。
+        /// </remarks>
+        private static void ApplyWeaponAnimationGate(WeaponObject weapon, float speed, bool drawing)
+        {
+            if (weapon == null)
+                return;
+
+            weapon.AnimationSpeed = speed;
+
+            if (!drawing)
+                weapon.SetStaticAnimationPose(weapon.CurrentAction, 0);
         }
 
         public override void Update(GameTime gameTime)
