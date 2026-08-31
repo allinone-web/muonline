@@ -383,18 +383,36 @@ public sealed class EditorUi : IDisposable
         if (drawGrass)
         {
             // 原版是一格一張立牌（約一平方公尺一張），所以看起來稀疏。
-            // 這裡可以現場加密度比較 —— 遊戲本身維持原版，這個值只活在編輯器裡。
-            int density = _session.GrassDensity;
-            if (ImGui.SliderInt("草的密度", ref density, 1, 12, density == 1 ? "1（原版）" : "%d 叢／格"))
+            // 檔位走遊戲的 ApplyGrassQuality —— 一次設齊密度、片數、alpha 門檻、
+            // 兩個距離。單獨動滑桿的話門檻與距離不會跟上，預覽就跟遊戲對不上
+            // （這正是驗收時發現的：編輯器好好的、手機上一片色塊）。
+            ImGui.TextColored(Muted, "檔位（跟遊戲的 Grass Quality 一致）");
+            int currentLevel = Constants.GRASS_TUFTS_PER_TILE >= 8 ? 8
+                : Constants.GRASS_TUFTS_PER_TILE >= 4 ? 4 : 1;
+            foreach ((int level, string label) in new[] { (1, "原版"), (4, "中(4)"), (8, "高(8)") })
+            {
+                if (level != 1) ImGui.SameLine();
+                if (ImGui.RadioButton(label, currentLevel == level) && currentLevel != level)
+                {
+                    Client.Main.Graphics.GraphicsQualityManager.ApplyGrassQuality(level);
+                    _session.GrassDensity = Constants.GRASS_TUFTS_PER_TILE;
+                    _session.GrassPlanes = Constants.GRASS_CLUSTER_PLANES;
+                    (_game.ActiveScene as MapEditorScene)?.World?.Terrain?.ReloadGrassIfNeeded();
+                }
+            }
+
+            // 進階：單項微調。改了就跟檔位分道揚鑣，門檻與距離維持目前值。
+            int density = Constants.GRASS_TUFTS_PER_TILE;
+            if (ImGui.SliderInt("草的密度", ref density, 1, 12, density == 1 ? "1（原版）" : "%d 片／格"))
             {
                 _session.GrassDensity = density;
                 Constants.GRASS_TUFTS_PER_TILE = density;
                 (_game.ActiveScene as MapEditorScene)?.World?.Terrain?.ReloadGrassIfNeeded();
             }
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("一格地面長幾片草。原版是 1 —— 一格一張立牌。\n拉高會線性增加三角形數與風力更新成本，看右下角的 FPS。");
+                ImGui.SetTooltip("一格地面長幾片草。原版是 1 —— 一格一張立牌。\n拉高會線性增加三角形數與填充率，看右下角的 FPS。");
 
-            int planes = _session.GrassPlanes;
+            int planes = Constants.GRASS_CLUSTER_PLANES;
             if (ImGui.SliderInt("交叉片數", ref planes, 1, 4, planes == 1 ? "1（平板）" : planes == 2 ? "2（十字）" : planes == 3 ? "3（三角）" : "%d"))
             {
                 _session.GrassPlanes = planes;
@@ -402,7 +420,25 @@ public sealed class EditorUi : IDisposable
                 (_game.ActiveScene as MapEditorScene)?.World?.Terrain?.ReloadGrassIfNeeded();
             }
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("幾片草共用一個圓心、夾角散開。\n這個值不會增加三角形數 —— 只是把上面那些立牌重新分組。");
+                ImGui.SetTooltip("幾片草共用一個圓心、夾角散開。\n不增加三角形數 —— 只是把立牌重新分組。");
+
+            float dense = Constants.GRASS_DENSE_DISTANCE;
+            if (ImGui.SliderFloat("稠密距離", ref dense, 0f, 6000f, dense <= 0 ? "0（不分層）" : "%.0f"))
+                Constants.GRASS_DENSE_DISTANCE = dense;   // 只影響繪製，不用重建
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("超過這個距離每格只畫一片（遠處密度看不出來，填充率照付）。\n拉遠鏡頭 20→59 fps 的關鍵。0 = 關閉。");
+
+            float draw = Constants.GRASS_DRAW_DISTANCE;
+            if (ImGui.SliderFloat("繪製距離", ref draw, 0f, 25600f, draw <= 0 ? "0（不限）" : "%.0f"))
+                Constants.GRASS_DRAW_DISTANCE = draw;
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("超過就完全不畫。0 = 原版行為（只有視錐剔除）。");
+
+            float alphaRef = Constants.GRASS_ALPHA_REFERENCE;
+            if (ImGui.SliderFloat("alpha 門檻", ref alphaRef, 0.01f, 0.6f, "%.2f"))
+                Constants.GRASS_ALPHA_REFERENCE = alphaRef;
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("低於這個 alpha 的像素直接丟棄（不混合、不寫深度）。\n0.01 = 原版；密度>1 時太低會出現一塊塊色塊，遊戲用 0.35。");
         }
 
         ImGui.Separator();
