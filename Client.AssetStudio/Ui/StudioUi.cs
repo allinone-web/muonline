@@ -106,6 +106,9 @@ public sealed partial class StudioUi
             DrawLibraryPanel();
 
         DrawStatusBar();
+
+        if (_resetLayoutFrames > 0)
+            _resetLayoutFrames--;
     }
 
     /// <summary>逗號分隔的面板名稱（skills、export）。給 <c>--panels</c> 用。</summary>
@@ -132,6 +135,14 @@ public sealed partial class StudioUi
             ImGui.MenuItem("魔法（技能）", string.Empty, ref _showSkills);
             ImGui.MenuItem("匯出 glTF", string.Empty, ref _showExport);
             ImGui.MenuItem("資源庫（自有資產）", string.Empty, ref _showLibrary);
+
+            ImGui.Separator();
+
+            // 面板被拖到畫面外、疊在一起、或縮到看不見的時候，這是唯一的出路。
+            // 沒有它就只能去刪版面檔 —— 而使用者不會知道那個檔在哪。
+            if (ImGui.MenuItem("重設版面", "把所有面板放回預設位置"))
+                _resetLayoutFrames = 2;
+
             ImGui.EndMenu();
         }
 
@@ -151,7 +162,15 @@ public sealed partial class StudioUi
     /// 首次啟動的預設版面。與地圖編輯器同樣用 <c>FirstUseEver</c> 而不是 DockBuilder ——
     /// 使用者拖過之後 ImGui 會記進 <c>imgui.ini</c>，不會每幀被重設回去。
     /// </summary>
-    private static void PlaceWindow(string panel)
+    /// <summary>
+    /// 還要用「一定套用」擺幾幀。0 表示照常尊重使用者拖過的位置。
+    /// </summary>
+    /// <remarks>
+    /// 要兩幀而不是一幀：第一幀把浮動視窗擺回去，第二幀讓停靠狀態跟著重算。
+    /// </remarks>
+    private int _resetLayoutFrames;
+
+    private void PlaceWindow(string panel)
     {
         var viewport = ImGui.GetMainViewport();
         var origin = viewport.WorkPos;
@@ -176,8 +195,17 @@ public sealed partial class StudioUi
             _ => (origin.X + leftWidth + 80f, origin.Y + 80f, 620f, 460f),
         };
 
-        ImGui.SetNextWindowPos(new NVector2(x, y), ImGuiCond.FirstUseEver);
-        ImGui.SetNextWindowSize(new NVector2(w, h), ImGuiCond.FirstUseEver);
+        var when = _resetLayoutFrames > 0 ? ImGuiCond.Always : ImGuiCond.FirstUseEver;
+
+        ImGui.SetNextWindowPos(new NVector2(x, y), when);
+        ImGui.SetNextWindowSize(new NVector2(w, h), when);
+
+        // 重設時也要把摺疊與停靠狀態清掉，否則「收起來的面板」還是找不到。
+        if (_resetLayoutFrames > 0)
+        {
+            ImGui.SetNextWindowCollapsed(false, ImGuiCond.Always);
+            ImGui.SetNextWindowDockID(0, ImGuiCond.Always);
+        }
     }
 
     private void DrawStatusBar()
