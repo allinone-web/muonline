@@ -49,6 +49,12 @@ namespace Client.Main.Configuration
         /// </summary>
         public float? RenderScale { get; set; }
 
+        /// <summary>音樂音量（0-100）。null = 沒調過，維持預設。</summary>
+        public float? MusicVolume { get; set; }
+
+        /// <summary>音效音量（0-100）。null = 沒調過，維持預設。</summary>
+        public float? EffectsVolume { get; set; }
+
         /// <summary>
         /// 草地品質：一格地面長幾片草。1 = 原版（一格一片），4 = 中，8 = 高。
         /// null 表示沒選過，維持原版。

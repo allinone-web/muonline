@@ -1409,26 +1409,32 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             {
                 BuildCategory("Audio", (ref int currentY) =>
                 {
+                    // 每一個都要立刻保存。只寫進 Constants 的話重開遊戲就回到預設 ——
+                    // 使用者的感受是「音量調了沒用」。
                     AddOption("Background Music", () => Constants.BACKGROUND_MUSIC, value =>
                     {
                         Constants.BACKGROUND_MUSIC = value;
                         _owner.ApplyBackgroundMusicSetting(value);
+                        MuGame.PersistRenderToggle(nameof(Constants.BACKGROUND_MUSIC), value);
                     }, ref currentY, OptionRowHeight);
 
                     AddOption("Sound Effects", () => Constants.SOUND_EFFECTS, value =>
                     {
                         Constants.SOUND_EFFECTS = value;
                         _owner.ApplySoundEffectsVolume();
+                        MuGame.PersistRenderToggle(nameof(Constants.SOUND_EFFECTS), value);
                     }, ref currentY, OptionRowHeight);
                     AddVolumeControl("Music Volume", () => Constants.BACKGROUND_MUSIC_VOLUME, value =>
                     {
                         Constants.BACKGROUND_MUSIC_VOLUME = value;
                         _owner.ApplyBackgroundMusicVolume();
+                        MuGame.PersistAudioVolume("MusicVolume", value);
                     }, ref currentY, OptionRowHeight);
                     AddVolumeControl("Effects Volume", () => Constants.SOUND_EFFECTS_VOLUME, value =>
                     {
                         Constants.SOUND_EFFECTS_VOLUME = value;
                         _owner.ApplySoundEffectsVolume();
+                        MuGame.PersistAudioVolume("EffectsVolume", value);
                     }, ref currentY, OptionRowHeight);
                 });
             }

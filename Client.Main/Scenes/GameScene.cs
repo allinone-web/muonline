@@ -144,6 +144,13 @@ namespace Client.Main.Scenes
         /// 動作按鈕與搖桿都不走 UI 的點擊路由，兩者都得自己問這個問題 ——
         /// 少了它，開著技能面板選技能時，同一次觸控會連帶把角色的技能也放出去。
         /// </summary>
+        /// <summary>
+        /// 座標是否落在 HUD 的可互動元素上（右上角按鈕、藥水鈕、頭像…）。
+        /// 視窗的「點外面關閉」要跳過這些位置，否則會和 HUD 的開關互相打架。
+        /// </summary>
+        public bool IsPointOverHudElement(Point position)
+            => _modernHud?.ContainsInteractivePoint(position) ?? false;
+
         public bool IsPointOverOpenWindow(Point position)
         {
             _ = position;   // 命中判定已由 BaseScene 完成，見下方註解

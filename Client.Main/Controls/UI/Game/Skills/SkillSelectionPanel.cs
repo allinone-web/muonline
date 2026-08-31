@@ -587,6 +587,18 @@ namespace Client.Main.Controls.UI.Game.Skills
                 return;
             }
 
+            // 落在 HUD 的按鈕上就不算「點在外面」。
+            //
+            // 少了這個判斷，SKILL 鈕永遠只會「打開」面板：按下的那一幀先被
+            // 這裡當成外部點擊而 Close()，放開的那一幀 HUD 的開關看到面板
+            // 已關、又重新打開 —— 每一次點擊都是關掉再開回來。
+            if (MobileUi.IsMobile
+                && MuGame.Instance.ActiveScene is Client.Main.Scenes.GameScene gs
+                && gs.IsPointOverHudElement(mousePos))
+            {
+                return;
+            }
+
             Close();
             Scene?.SetMouseInputConsumed();
         }

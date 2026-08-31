@@ -2449,6 +2449,42 @@ namespace Client.Main
             }
         }
 
+        /// <summary>
+        /// 保存音量（0-100）。開關（音樂／音效的 ON/OFF）走 PersistRenderToggle，
+        /// 音量是數值，走這裡 —— 少了這一段，重開遊戲音量就回到預設，
+        /// 使用者的感受就是「調了沒用」。
+        /// </summary>
+        public static void PersistAudioVolume(string key, float value)
+        {
+            var logger = AppLoggerFactory?.CreateLogger<MuGame>();
+            try
+            {
+                Directory.CreateDirectory(WritableConfigDirectory ?? ConfigDirectory ?? AppContext.BaseDirectory);
+
+                JsonObject root = LoadLocalSettings(logger);
+                if (root["MuOnlineSettings"] is not JsonObject muSettings)
+                {
+                    muSettings = new JsonObject();
+                    root["MuOnlineSettings"] = muSettings;
+                }
+
+                if (muSettings["Graphics"] is not JsonObject graphics)
+                {
+                    graphics = new JsonObject();
+                    muSettings["Graphics"] = graphics;
+                }
+
+                graphics[key] = value;
+
+                var options = new JsonSerializerOptions { WriteIndented = true };
+                File.WriteAllText(LocalSettingsPath, root.ToJsonString(options));
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Failed to persist audio volume {Key}.", key);
+            }
+        }
+
         public static void PersistRenderToggle(string name, bool value)
         {
             if (string.IsNullOrWhiteSpace(name))
@@ -2496,6 +2532,11 @@ namespace Client.Main
         /// </summary>
         public static void ApplyPersistedRenderToggles(GraphicsSettings graphics)
         {
+            if (graphics?.MusicVolume is float music)
+                Constants.BACKGROUND_MUSIC_VOLUME = Math.Clamp(music, 0f, 100f);
+            if (graphics?.EffectsVolume is float effects)
+                Constants.SOUND_EFFECTS_VOLUME = Math.Clamp(effects, 0f, 100f);
+
             var toggles = graphics?.RenderToggles;
             if (toggles == null || toggles.Count == 0)
                 return;

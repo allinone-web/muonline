@@ -196,15 +196,24 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         }
 
         /// <summary>
-        /// Maps a server direction byte (0-7) to the client Direction enum using the inverse direction map.
+        /// Maps a server direction byte (0-7) to the client Direction enum.
         /// </summary>
+        /// <remarks>
+        /// The server's rotation bytes (spawn Rotation, ObjectAnimation direction) already use
+        /// the original client's convention: 0=West, 1=SouthWest, ... 7=NorthWest - which is
+        /// exactly the order of <see cref="Client.Main.Models.Direction"/>. So this is an
+        /// identity mapping. Verified against the walk path: for every one of the 8 grid deltas,
+        /// (server GetDirectionTo -> ToPacketByte) equals (client GetDirectionFromMovementDelta).
+        ///
+        /// Do NOT route this through the configured DirectionMap: that table (7-x) only
+        /// translates the *walk packet payload* codes built in WalkerObject.BuildServerDirections,
+        /// which use their own local enumeration. Applying it here rotated every monster's
+        /// attack/spawn facing by 45-135 degrees (they attacked sideways or backwards).
+        /// </remarks>
         private Client.Main.Models.Direction MapServerDirection(byte serverDirection)
         {
             if (serverDirection > 7)
                 return Client.Main.Models.Direction.South;
-
-            if (_serverToClientDirMap.TryGetValue(serverDirection, out byte clientDir))
-                return (Client.Main.Models.Direction)clientDir;
 
             return (Client.Main.Models.Direction)serverDirection;
         }
@@ -212,17 +221,12 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         /// <summary>
         /// Maps a client-facing direction (0-7) back to server-encoded direction.
         /// Used for re-queueing pending spawns through the unified scope pipeline.
+        /// Identity for the same reason as <see cref="MapServerDirection"/>.
         /// </summary>
         private byte MapClientDirectionToServer(byte clientDirection)
         {
             if (clientDirection > 7)
                 return 0;
-
-            foreach (var kvp in _serverToClientDirMap)
-            {
-                if (kvp.Value == clientDirection)
-                    return kvp.Key;
-            }
 
             return clientDirection;
         }
@@ -2492,6 +2496,30 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     if (walker is MonsterObject monster && monsterAction.HasValue &&
                         (monsterAction == MonsterActionType.Attack1 || monsterAction == MonsterActionType.Attack2))
                     {
+                        // The packet direction is quantized to 8 directions from tile centers and
+                        // can be a step stale while the target moves; when the actual target is in
+                        // the world, face it directly so the swing visibly connects.
+                        ushort maskedTargetId = (ushort)(targetId & 0x7FFF);
+                        WalkerObject targetWalker = world.FindPlayerById(maskedTargetId);
+                        if (targetWalker == null)
+                            world.TryGetWalkerById(maskedTargetId, out targetWalker);
+
+                        if (targetWalker != null && targetWalker.Status != GameControlStatus.Disposed)
+                        {
+                            float dx = targetWalker.Location.X - monster.Location.X;
+                            float dy = targetWalker.Location.Y - monster.Location.Y;
+                            if (dx != 0f || dy != 0f)
+                            {
+                                // Visual facing angle for a grid delta is 90° + atan2(dy, dx)
+                                // (grid +X => 90°, grid +Y => 180°, matching
+                                // GetDirectionFromMovementDelta), then snapped to the nearest
+                                // of the 8 directions.
+                                float angle = MathHelper.ToRadians(90f) + (float)Math.Atan2(dy, dx);
+                                monster.Direction = Client.Main.Models.DirectionExtensions
+                                    .GetDirectionFromAngle(angle);
+                            }
+                        }
+
                         monster.OnPerformAttack(monsterAction == MonsterActionType.Attack1 ? 1 : 2);
                     }
 
