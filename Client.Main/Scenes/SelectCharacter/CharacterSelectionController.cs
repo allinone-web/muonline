@@ -50,6 +50,13 @@ namespace Client.Main.Scenes.SelectCharacter
         /// <summary>離場時往外走多遠。走得夠遠才會真的離開畫面。</summary>
         private const float DepartureDistance = 1600f;
 
+        /// <summary>招牌動作之後隔多久再擺第二個姿勢（秒）。</summary>
+        private const float SecondBeatDelay = 1.6f;
+
+        /// <summary>等著擺第二個姿勢的角色，以及倒數。</summary>
+        private PlayerObject _secondBeatPlayer;
+        private float _secondBeatCountdown;
+
         private readonly List<PlayerObject> _characters = new();
         private readonly List<(string Name, CharacterClassNumber Class, ushort Level, byte[] Appearance)> _characterInfos = new();
         private readonly Dictionary<PlayerObject, LabelControl> _labels = new();
@@ -340,6 +347,41 @@ namespace Client.Main.Scenes.SelectCharacter
             };
 
         /// <summary>
+        /// 招牌動作之後的第二段：擺一個勝利姿勢。
+        ///
+        /// 只有一個動作時，選中的表演會顯得單調 —— 走上前、揮一下、結束。
+        /// 隔 1.6 秒再一個姿勢，節奏才完整。
+        /// 中途換選別人就作廢（_secondBeatPlayer 不再是選中的那個）。
+        /// </summary>
+        private void UpdateSecondBeat(float deltaSeconds)
+        {
+            if (_secondBeatPlayer == null)
+                return;
+
+            if (_activeIndex < 0 || _activeIndex >= _characters.Count
+                || !ReferenceEquals(_characters[_activeIndex], _secondBeatPlayer))
+            {
+                _secondBeatPlayer = null;
+                return;
+            }
+
+            _secondBeatCountdown -= deltaSeconds;
+            if (_secondBeatCountdown > 0f)
+                return;
+
+            var player = _secondBeatPlayer;
+            _secondBeatPlayer = null;
+
+            if (player.Status != GameControlStatus.Ready)
+                return;
+
+            player.PlayEmoteAnimation(
+                PlayerActionMapper.IsCharacterFemale(player.CharacterClass)
+                    ? PlayerAction.PlayerWinFemale1
+                    : PlayerAction.PlayerWin1);
+        }
+
+        /// <summary>
         /// ENTER 之後的離場：沒被選中的角色往自己那一側的畫面外走開。
         ///
         /// 做法是直接把它們記錄的站位挪到遠處 —— UpdateSelectionMotion 本來就會
@@ -386,6 +428,8 @@ namespace Client.Main.Scenes.SelectCharacter
 
             float step = deltaSeconds * SelectionMoveSpeed;
 
+            UpdateSecondBeat(deltaSeconds);
+
             for (int i = 0; i < _characters.Count; i++)
             {
                 var player = _characters[i];
@@ -421,6 +465,10 @@ namespace Client.Main.Scenes.SelectCharacter
                     {
                         _pendingSignature = null;
                         player.PlayEmoteAnimation(SignatureAction(player.CharacterClass));
+
+                        // 排第二段：單一個動作太單調，隔一下再擺個勝利姿勢。
+                        _secondBeatPlayer = player;
+                        _secondBeatCountdown = SecondBeatDelay;
                     }
                     else if (!player.IsOneShotPlaying
                              && player.CurrentAction != (PlayerAction)player.GetCorrectIdleAction())

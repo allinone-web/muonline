@@ -296,12 +296,11 @@ namespace Client.Main.Scenes
             var fill = baseColor;
             if (s_mobile)
             {
-                bool danger = baseColor == Theme.Danger;
-                fill = danger
-                    ? new Color(132, 54, 54) * 0.95f
-                    : baseColor == Theme.Success
-                        ? new Color(72, 86, 106) * 0.95f      // 主要動作：亮一階的中性灰
-                        : new Color(40, 48, 60) * 0.95f;      // 其餘：面板同色系
+                // 白色半透明：草地舞台的背景很花，實心深色面板會顯得笨重。
+                // 主要動作（ENTER）稍微不透明一點，讓它在四顆裡站出來。
+                fill = baseColor == Theme.Success
+                    ? Color.White * 0.28f
+                    : Color.White * 0.18f;
             }
 
             int width = s_mobile ? MobileButtonWidth : PANEL_WIDTH - INNER_PADDING * 2;
