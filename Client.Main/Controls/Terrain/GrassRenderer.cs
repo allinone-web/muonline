@@ -47,6 +47,12 @@ namespace Client.Main.Controls.Terrain
 
         /// <summary>草叢底部相對頂部的亮度。假 AO —— 讓草看起來長在地上而不是插在地上。</summary>
         private const float GrassRootShade = 0.55f;
+
+        /// <summary>草在方向場基準上的抖動幅度（弧度）。±26 度左右。</summary>
+        private const float DirectionJitter = 0.9f;
+
+        /// <summary>一叢裡各片圓心錯開的半徑，單位是格（0.16 = 16 世界單位）。</summary>
+        private const float ClusterSpread = 0.16f;
         private const float SpecialHeight = 1200f;
 
         private readonly struct GrassQuad
@@ -657,17 +663,32 @@ namespace Client.Main.Controls.Terrain
                 float sx = fx;
                 float sy = fy;
 
-                // 一叢之內平均分掉 180 度：兩片＝十字，三片＝三角。
-                // 立牌沒有正反面（CullNone），所以分 180 度而不是 360 度。
-                float angle = r2 * MathHelper.TwoPi + plane * (MathHelper.Pi / planes);
+                // 方向：低頻方向場 ＋ 小幅抖動，不是完全隨機。
+                //
+                // 完全隨機（先前的做法）看起來是「亂」，不是「自然」——
+                // 真實的草地是成片朝同一個方向倒、局部才有變化。
+                // 原版反過來，全部躺在同一條對角線上，所以「順」但是像柵欄。
+                // 方向場取兩者的中間：每片草跟鄰居大致同向，方向本身在地圖上緩慢轉。
+                float angle = SampleDirectionField(baseX + fx * scale, baseY + fy * scale)
+                              + (r2 - 0.5f) * DirectionJitter
+                              + plane * (MathHelper.Pi / planes);
                 float halfWidth = scale * (0.55f + r3 * 0.35f);
                 float height = GrassWorldHeight * (0.75f + r4 * 0.5f);
 
                 float dx = MathF.Cos(angle) * halfWidth;
                 float dy = MathF.Sin(angle) * halfWidth;
 
-                float cx = baseX + fx * scale;
-                float cy = baseY + fy * scale;
+                // 一叢裡的幾片不要全部穿過同一個點。
+                //
+                // 使用者在編輯器的俯視圖裡看出來的：三片共用一個圓心的話，
+                // 中心疊三層、叢與叢之間是空的 —— 同樣的片數，中心浪費、外圍不夠。
+                // 讓每一片的圓心沿著一個小圓錯開，一叢就從「一個交叉點」變成
+                // 「一小片草叢」，覆蓋更均勻，中心的重疊也少了。
+                float spreadAngle = (plane + 0.5f) / planes * MathHelper.TwoPi + r2 * MathHelper.TwoPi;
+                float spread = scale * ClusterSpread * (0.6f + r3 * 0.4f);
+
+                float cx = baseX + fx * scale + MathF.Cos(spreadAngle) * spread;
+                float cy = baseY + fy * scale + MathF.Sin(spreadAngle) * spread;
                 float cz = Bilinear(h1, h2, h3, h4, sx, sy);
 
                 var bottomLeft = new Vector3(cx - dx, cy - dy, cz);
@@ -702,6 +723,50 @@ namespace Client.Main.Controls.Terrain
                 (i < planes ? nearList : farList).Add(quad);
                 ExpandBounds(ref boundsMin, ref boundsMax, quad);
             }
+        }
+
+        /// <summary>
+        /// 低頻的方向場：回傳某個世界座標上「草該往哪邊倒」的角度。
+        /// </summary>
+        /// <remarks>
+        /// 用 16 格（1600 世界單位）一格的粗網格取四個角的隨機方向，再雙線性內插。
+        /// **內插的是單位向量不是角度** —— 角度是循環量，直接內插會在 350 度到 10 度
+        /// 之間掃過整個圓，草會沿著那條線整排轉向。
+        ///
+        /// 內插而不是直接用粗網格的值，是為了不要製造一個新的網格假象：
+        /// 這整輪除錯有一半的時間都花在「規則網格被眼睛看出來」上。
+        /// </remarks>
+        private static float SampleDirectionField(float worldX, float worldY)
+        {
+            const float FieldSize = 16f * 100f;   // 16 格
+
+            float gx = worldX / FieldSize;
+            float gy = worldY / FieldSize;
+            int x0 = (int)MathF.Floor(gx);
+            int y0 = (int)MathF.Floor(gy);
+            float tx = gx - x0;
+            float ty = gy - y0;
+
+            // 平滑的插值曲線，免得在格線上出現方向的折角
+            tx = tx * tx * (3f - 2f * tx);
+            ty = ty * ty * (3f - 2f * ty);
+
+            Vector2 c00 = FieldVector(x0, y0);
+            Vector2 c10 = FieldVector(x0 + 1, y0);
+            Vector2 c01 = FieldVector(x0, y0 + 1);
+            Vector2 c11 = FieldVector(x0 + 1, y0 + 1);
+
+            Vector2 bottom = Vector2.Lerp(c00, c10, tx);
+            Vector2 top = Vector2.Lerp(c01, c11, tx);
+            Vector2 dir = Vector2.Lerp(bottom, top, ty);
+
+            return dir.LengthSquared() < 1e-6f ? 0f : MathF.Atan2(dir.Y, dir.X);
+        }
+
+        private static Vector2 FieldVector(int x, int y)
+        {
+            float a = Hash01(x, y, 31) * MathHelper.TwoPi;
+            return new Vector2(MathF.Cos(a), MathF.Sin(a));
         }
 
         private static Vector3 GetCenter(in BoundingBox box) => (box.Min + box.Max) * 0.5f;

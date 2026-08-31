@@ -15,12 +15,12 @@ namespace Client.Main.Worlds
     public class SelectWorld : WorldControl
     {
         // === 選角舞台：諾利亞的開闊草地 ===
-        // 格子 (139,84) 是使用者在遊戲裡站過、挑定的位置。那一帶 7×6 格完全平坦
-        // （地形高度值 113 × 1.5 = 170），五個角色並排站上去不會高低不齊。
-        // 曾經試過 (108,111)／望向 (112,119)，取景不如這裡，已改回。
-        private const float StageGroundZ = 170f;   // 高度圖 113 × 1.5
-        private const float StageTileX = 139f;
-        private const float StageTileY = 84f;
+        // 格子 (210,171) 是使用者在遊戲裡挑定的。x 206–212、y 168–174 完全平坦
+        // （高度值都是 113），東邊有隆起可以當背景。
+        // 先前用過 (139,84)，也試過 (108,111)——後者不平坦且取景較差。
+        private const float StageGroundZ = 169.5f;   // 高度圖 113 × 1.5
+        private const float StageTileX = 210f;
+        private const float StageTileY = 171f;
 
         // 鏡頭：接近平視。公式刻意與地圖編輯器的環繞鏡頭一致（EditorCamera.Apply），
         // 這樣 tools/mu golden 拍出來的取景就等於真機看到的取景 ——
@@ -86,13 +86,22 @@ namespace Client.Main.Worlds
         /// 加的那 90 度是模型自己的正面偏移，理由見 CharacterFacingDegrees。
         /// </summary>
         public static float FacingAngleFor(Vector3 position)
+            => FacingAngleTowards(position, CameraWorldPosition);
+
+        /// <summary>
+        /// 從 <paramref name="from"/> 面向 <paramref name="to"/> 的 Z 軸旋轉（弧度）。
+        ///
+        /// 走路時要用這個面向「移動方向」，不能一直面向鏡頭 ——
+        /// 否則角色是側著身平移，像螃蟹在走。
+        /// 加的 90 度是模型自己的正面偏移，理由見 CharacterFacingDegrees。
+        /// </summary>
+        public static float FacingAngleTowards(Vector3 from, Vector3 to)
         {
-            var camera = CameraWorldPosition;
-            var toCamera = new Vector2(camera.X - position.X, camera.Y - position.Y);
-            if (toCamera.LengthSquared() < 0.0001f)
+            var direction = new Vector2(to.X - from.X, to.Y - from.Y);
+            if (direction.LengthSquared() < 0.0001f)
                 return MathHelper.ToRadians(CharacterFacingDegrees);
 
-            return MathF.Atan2(toCamera.Y, toCamera.X) + MathHelper.PiOver2;
+            return MathF.Atan2(direction.Y, direction.X) + MathHelper.PiOver2;
         }
 
         /// <summary>名字標籤與角色腳底之間留多少空隙（螢幕像素）。</summary>

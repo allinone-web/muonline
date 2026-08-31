@@ -563,8 +563,13 @@ namespace Client.Main.Controls.UI.Game
                 }
 
                 var pixel = GraphicsManager.Instance.Pixel;
-                ItemGridRenderHelper.DrawGridOverlays(spriteBatch, pixel, DisplayRectangle, _gridRect, _hoveredItem, _hoveredSlot,
-                                                      SHOP_SQUARE_WIDTH, SHOP_SQUARE_HEIGHT, Theme.SlotHover, Theme.Accent, Alpha);
+
+                // 手機沒有格線（清單版面），停留效果由每一列自己畫。
+                if (!MobileUi.IsMobile)
+                {
+                    ItemGridRenderHelper.DrawGridOverlays(spriteBatch, pixel, DisplayRectangle, _gridRect, _hoveredItem, _hoveredSlot,
+                                                          SHOP_SQUARE_WIDTH, SHOP_SQUARE_HEIGHT, Theme.SlotHover, Theme.Accent, Alpha);
+                }
                 DrawShopItems(spriteBatch);
                 DrawCloseButton(spriteBatch);
                 if (_isRepairShop)
@@ -1088,6 +1093,9 @@ namespace Client.Main.Controls.UI.Game
 
         private void DrawTooltip(SpriteBatch spriteBatch)
         {
+            // 手機的清單每一列已經寫著名稱與價格，工具提示只會把旁邊的東西蓋掉。
+            if (MobileUi.IsMobile) return;
+
             if (_hoveredItem == null || _font == null) return;
 
             var lines = ItemUiHelper.BuildTooltipLines(_hoveredItem);

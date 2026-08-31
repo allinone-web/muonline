@@ -94,6 +94,7 @@ public sealed class StudioGame : Game
         }
 
         _imgui = new ImGuiRenderer(this);
+        UseOwnLayoutFile();
         _viewport = new ModelViewport(GraphicsDevice, _imgui);
         _ui = new StudioUi(this, _imgui, _viewport, _session);
 
@@ -380,6 +381,42 @@ public sealed class StudioGame : Game
             _session.Report($"找不到「{wanted}」", failed: true);
         }
     }
+
+    /// <summary>
+    /// 讓這個工具用自己的版面檔，不要跟地圖編輯器共用。
+    /// </summary>
+    /// <remarks>
+    /// <b>這是一個真的害人很久的 bug。</b>ImGui 預設把版面存進<b>工作目錄</b>的
+    /// <c>imgui.ini</c>，而地圖編輯器與資源瀏覽器都是從專案根目錄啟動的 ——
+    /// 兩邊共用同一個檔案。
+    ///
+    /// 更糟的是<b>兩邊都有叫「檢視」的面板</b>，所以資源瀏覽器會套用
+    /// 地圖編輯器存下來的幾何（實際看到的是 <c>Pos=1140,0 Size=330,200</c>）：
+    /// 視埠被縮成 314×134、模型面板被推到畫面外。
+    /// 模型有載入、動畫有在跑，就是看不到 —— 而且怎麼查程式碼都查不出來，
+    /// 因為程式碼是對的，錯的是別人留下的設定檔。
+    ///
+    /// 版面檔也一併搬離工作目錄：放在使用者設定目錄，
+    /// 這樣從哪裡啟動都是同一份，也不會再污染專案。
+    /// </remarks>
+    private static void UseOwnLayoutFile()
+    {
+        string directory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".mu-studio");
+
+        Directory.CreateDirectory(directory);
+
+        // ImGui 的 IniFilename 是原生字串，要自己保管記憶體，否則會被 GC 回收。
+        _layoutPathHandle = System.Runtime.InteropServices.Marshal.StringToHGlobalAnsi(
+            Path.Combine(directory, "layout.ini"));
+
+        unsafe
+        {
+            ImGuiNET.ImGui.GetIO().NativePtr->IniFilename = (byte*)_layoutPathHandle;
+        }
+    }
+
+    private static IntPtr _layoutPathHandle;
 
     private void SaveModelRender(string path)
     {

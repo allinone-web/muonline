@@ -1435,8 +1435,38 @@ namespace Client.Main.Objects.Player
         }
 
         // ───────────────────────────────── UPDATE LOOP ─────────────────────────────────
+        /// <summary>
+        /// 弓與弩的模型自己帶著一段拉弦動畫，不攻擊時要停在第一格。
+        /// </summary>
+        /// <remarks>
+        /// <c>Item/Bow01.bmd</c> 這類模型本身有 1 個動作、7 個影格（拉弦上箭），
+        /// 而客戶端把武器設成 <c>LinkParentAnimation = false</c>，
+        /// 於是那 7 格會<b>獨立循環播放</b> —— 站著不動也一直在拉弓射箭。
+        ///
+        /// 武器的動畫本來就該由角色的攻擊帶動，不是自己跑。
+        /// <c>AnimationSpeed = 0</c> 會讓 <c>_animTime</c> 停住
+        /// （見 <c>ModelObject.Animation</c>：<c>_animTime += delta * PlaySpeed * AnimationSpeed</c>）。
+        /// </remarks>
+        private void UpdateWeaponAnimationGate()
+        {
+            bool drawing = CurrentAction is PlayerAction.PlayerAttackBow
+                                         or PlayerAction.PlayerAttackCrossbow
+                                         or PlayerAction.PlayerAttackFlyBow
+                                         or PlayerAction.PlayerAttackFlyCrossbow;
+
+            float speed = drawing ? 1f : 0f;
+
+            if (Weapon1 != null)
+                Weapon1.AnimationSpeed = speed;
+
+            if (Weapon2 != null)
+                Weapon2.AnimationSpeed = speed;
+        }
+
         public override void Update(GameTime gameTime)
         {
+            UpdateWeaponAnimationGate();
+
             if (IsMainWalker)
             {
                 var scene = MuGame.Instance.ActiveScene as BaseScene;

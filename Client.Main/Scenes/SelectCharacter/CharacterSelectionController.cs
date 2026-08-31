@@ -281,8 +281,12 @@ namespace Client.Main.Scenes.SelectCharacter
                 player.Hidden = false;
                 player.Interactive = true;
 
-                if (_labels.TryGetValue(player, out var label))
-                    label.Visible = true;
+                // 標籤的顯示與位置一律交給 SelectWorld.Update ——
+                // 它會把角色的世界座標投影到螢幕再擺位。
+                //
+                // 在這裡就設 Visible = true 的話，世界還沒準備好、投影還沒算過，
+                // 五個標籤會全部停在預設位置 (0,0)，疊成一團出現在畫面左上角
+                // ——「載入畫面左上角有一段看不清楚的文字」就是這個。
 
                 _slotBase[player] = _displayPosition + Worlds.SelectWorld.SlotOffset(i, _characters.Count);
 
@@ -354,6 +358,12 @@ namespace Client.Main.Scenes.SelectCharacter
                     continue;
 
                 var outward = slot - _displayPosition;
+
+                // 正中間那個角色的站位偏移是零向量，原本會被 continue 跳掉 ——
+                // 所以五個人裡永遠有一個不會離場。給它一個往右的方向。
+                if (outward.LengthSquared() < 1f)
+                    outward = Worlds.SelectWorld.SlotOffset(_characters.Count - 1, _characters.Count);
+
                 if (outward.LengthSquared() < 1f)
                     continue;
 
@@ -419,9 +429,14 @@ namespace Client.Main.Scenes.SelectCharacter
                     }
                 }
 
+                // 走路時面向移動方向，站定才轉回面向鏡頭。
+                // 一直面向鏡頭的話角色是側著身平移，像螃蟹在走。
+                float facing = arrived
+                    ? Worlds.SelectWorld.FacingAngleFor(player.Position)
+                    : Worlds.SelectWorld.FacingAngleTowards(player.Position, target);
+
                 var angle = player.Angle;
-                player.Angle = new Vector3(
-                    angle.X, angle.Y, Worlds.SelectWorld.FacingAngleFor(player.Position));
+                player.Angle = new Vector3(angle.X, angle.Y, facing);
             }
         }
 
