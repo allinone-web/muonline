@@ -447,7 +447,9 @@ namespace Client.Main.Controls.UI.Game.Inventory
             BringToFront();
             Scene.FocusControl = this;
 
-            _zenText.Visible = true;
+            // 手機的標題列已經沒有金幣欄（HUD 右上角本來就有一份），
+            // 這行字若照開，會畫在空矩形換算出來的視窗左上角外面。
+            _zenText.Visible = !_zenFieldRect.IsEmpty;
             UpdateZenText();
 
             _pickedItemRenderer.Visible = false;
