@@ -21,7 +21,13 @@ namespace Client.Main.Objects.Worlds.Noria
         private const float InitialFillRatio = 0.6f;
         private const float HorizontalSpeedMultiplier = 0.4f;
 
-        private readonly WalkableWorldControl _world;
+        private readonly WorldControl _world;
+
+        /// <summary>可行走世界才有玩家角色；展示用世界（選角舞台）沒有。</summary>
+        private readonly WalkableWorldControl _walkable;
+
+        /// <summary>沒有玩家角色時，發射點固定在這個座標。</summary>
+        private readonly Func<Vector3> _anchor;
         private readonly float _spawnRate;
         private readonly int _maxParticles;
         private readonly float _minLifetime;
@@ -69,9 +75,16 @@ namespace Client.Main.Objects.Worlds.Noria
             public float GroundTimer;
         }
 
-        public NoriaLeafAmbientEffect(WalkableWorldControl world, NoriaLeafEffectSettings settings)
+        /// <param name="anchor">
+        /// 發射點。傳 null 就跟著玩家角色 —— 遊戲內是這樣用的。
+        /// 選角舞台沒有玩家角色，必須給座標。
+        /// </param>
+        public NoriaLeafAmbientEffect(
+            WorldControl world, NoriaLeafEffectSettings settings, Func<Vector3> anchor = null)
         {
             _world = world;
+            _walkable = world as WalkableWorldControl;
+            _anchor = anchor;
             _spawnRate = MathF.Max(0f, settings.SpawnRate);
             _maxParticles = Math.Max(1, settings.MaxParticles);
 
@@ -119,10 +132,14 @@ namespace Client.Main.Objects.Worlds.Noria
 
         public override void Update(GameTime gameTime)
         {
-            var walker = _world?.Walker;
+            var walker = _walkable?.Walker;
             if (walker != null)
             {
                 Position = walker.Position;
+            }
+            else if (_anchor != null)
+            {
+                Position = _anchor();
             }
 
             base.Update(gameTime);

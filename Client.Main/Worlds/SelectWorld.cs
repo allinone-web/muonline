@@ -143,6 +143,12 @@ namespace Client.Main.Worlds
         private ILogger<SelectWorld> _logger;
         private CharacterSelectionController _controller;
 
+        // 舞台的環境動態：落葉與蝴蝶。
+        // 兩者原本都是繞著玩家角色生成的，而這個世界沒有玩家角色 ——
+        // 所以建構時要給一個錨點（見它們的 anchor 參數）。
+        private Objects.Worlds.Noria.ButterflyManager _butterflyManager;
+        private Objects.Worlds.Noria.NoriaLeafAmbientEffect _leafEffect;
+
         public Vector3 CharacterDisplayPosition => _characterDisplayPosition;
         public Vector3 CharacterDisplayAngle => _characterDisplayAngle;
 
@@ -186,6 +192,11 @@ namespace Client.Main.Worlds
         {
             // 接近平視的話沒有影子角色會像浮在地上，所以這裡要開。
             EnableShadows = true;
+
+            // 舞台在諾利亞，配樂與環境音就用諾利亞的。原本選角畫面是全靜音的。
+            BackgroundMusicPath = "Music/Noria.mp3";
+            AmbientSoundPath = "Sound/aForest.wav";
+            Name = "Noria";
             Terrain.PreferIndexBatching = true;
             _logger = MuGame.AppLoggerFactory?.CreateLogger<SelectWorld>() ?? throw new System.InvalidOperationException("LoggerFactory not initialized in MuGame");
         }
@@ -269,9 +280,43 @@ namespace Client.Main.Worlds
             return (dx * dx) + (dy * dy) <= StageObjectRadius * StageObjectRadius;
         }
 
+        public override void Dispose()
+        {
+            // 舞台的環境動態要跟著世界一起收掉，否則換場景後會留著。
+            _butterflyManager?.Clear();
+            _butterflyManager = null;
+
+            if (_leafEffect != null)
+            {
+                Objects.Remove(_leafEffect);
+                _leafEffect.Dispose();
+                _leafEffect = null;
+            }
+
+            base.Dispose();
+        }
+
+        public override async System.Threading.Tasks.Task Load()
+        {
+            var leafSettings = MuGame.AppSettings?.Environment?.NoriaLeaf;
+            if (leafSettings?.Enabled != false)
+            {
+                _leafEffect = new Objects.Worlds.Noria.NoriaLeafAmbientEffect(
+                    this,
+                    leafSettings ?? new Configuration.NoriaLeafEffectSettings(),
+                    () => _characterDisplayPosition);
+                Objects.Add(_leafEffect);
+            }
+
+            await base.Load();
+        }
+
         public override void AfterLoad()
         {
             base.AfterLoad();
+
+            _butterflyManager = new Objects.Worlds.Noria.ButterflyManager(
+                this, () => _characterDisplayPosition);
 
             // water animation parameters
             Terrain.WaterSpeed = 0.05f;
@@ -284,6 +329,8 @@ namespace Client.Main.Worlds
         {
             base.Update(time);
             if (!Visible) return;
+
+            _butterflyManager?.Update(time);
 
             // Keep the selected cinematic actor published even if a body-part model swap
             // or first-frame recovery temporarily invalidated its visibility.

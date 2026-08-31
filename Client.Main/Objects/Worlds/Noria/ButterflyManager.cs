@@ -22,22 +22,52 @@ namespace Client.Main.Objects.Worlds.Noria
         private const float NORMAL_SPAWN_COOLDOWN = 0.8f; // Spawn every 0.8 seconds
 
         private List<ButterflyObject> _butterflies = new List<ButterflyObject>();
-        private WalkableWorldControl _world;
+        private WorldControl _world;
+
+        /// <summary>可行走世界才有玩家角色；展示用世界（選角舞台）沒有。</summary>
+        private WalkableWorldControl _walkable;
+
+        /// <summary>沒有玩家角色時，改用這個座標當生成中心。</summary>
+        private Func<Vector3> _anchor;
         private Random _random = new Random();
         private float _spawnCooldown = 0f;
         private bool _isSpawning = false;
 
-        public ButterflyManager(WalkableWorldControl world)
+        /// <param name="anchor">
+        /// 生成中心。傳 null 就跟著玩家角色 —— 遊戲內是這樣用的。
+        /// 選角舞台沒有玩家角色，必須給座標。
+        /// </param>
+        public ButterflyManager(WorldControl world, Func<Vector3> anchor = null)
         {
             _world = world;
+            _walkable = world as WalkableWorldControl;
+            _anchor = anchor;
+        }
+
+        /// <summary>生成中心：優先用玩家角色，沒有就用建構時給的座標。</summary>
+        private bool TryGetAnchor(out Vector3 position)
+        {
+            if (_walkable?.Walker != null)
+            {
+                position = _walkable.Walker.Position;
+                return true;
+            }
+
+            if (_anchor != null)
+            {
+                position = _anchor();
+                return true;
+            }
+
+            position = default;
+            return false;
         }
 
         public void Update(GameTime gameTime)
         {
-            if (_world?.Walker == null)
+            if (_world == null || !TryGetAnchor(out Vector3 heroPosition))
                 return;
 
-            Vector3 heroPosition = _world.Walker.Position;
             float deltaTime = (float)gameTime.ElapsedGameTime.TotalSeconds;
 
             // Update spawn cooldown
