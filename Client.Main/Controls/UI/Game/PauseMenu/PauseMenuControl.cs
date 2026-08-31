@@ -658,16 +658,18 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             _exitInProgress = true;
             try
             {
-                // 手機上的「離開遊戲」= 登出並回到登入畫面。
+                // 手機：真的結束程式（使用者明確要求，覆蓋先前「回登入畫面」的做法）。
                 //
-                // iOS 不允許 app 自行終止（Apple 明文禁止，見 MuGame.RequestExit），
-                // 所以 HandleExitAsync 送完登出封包之後就什麼都不會發生 ——
-                // 玩家按了 EXIT，畫面卻停在原地，看起來像按鈕壞了。
-                // 回到登入畫面是這個平台上唯一做得到、也真的有意義的「離開」。
+                // 注意兩件事：
+                // 1. MonoGame 的 Game.Exit() 在 iOS 上不支援，會丟例外 ——
+                //    所以走 Environment.Exit，先把登出封包送完（HandleExitAsync 裡做）。
+                // 2. Apple 的規範不建議 app 自行終止（送審時要留意這一點），
+                //    但這是使用者在自己的研究專案上的明確決定。
                 if (MobileUi.IsMobile)
                 {
                     ExitClicked?.Invoke(this, EventArgs.Empty);
-                    await HandleReturnToServerSelectAsync();
+                    await HandleExitAsync();
+                    Environment.Exit(0);
                     return;
                 }
 
@@ -1361,7 +1363,12 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
                 _closeButton.Visible = !IsMobile;
                 Controls.Add(_closeButton);
 
-                BuildAudioCategory(); // default category
+                // 預設顯示的分類要和左欄選中的那一顆一致 ——
+                // 左欄第一顆是誰，右側就建誰的內容（手機第一顆是 Game）。
+                if (IsMobile)
+                    BuildGameCategory();
+                else
+                    BuildAudioCategory();
             }
 
             private delegate void CategoryBuilder(ref int currentY);
@@ -1441,10 +1448,11 @@ namespace Client.Main.Controls.UI.Game.PauseMenu
             {
                 BuildCategory("Game", (ref int currentY) =>
                 {
-                    AddAction("PARTY", () => _owner.TogglePartyPanelFromMenu());
-                    AddAction("CHOOSE CHARACTER", () => _ = _owner.LeaveToCharacterSelectAsync());
-                    AddAction("CHOOSE SERVER", () => _ = _owner.LeaveToServerSelectAsync());
-                    AddAction("EXIT", () => _ = _owner.ExitGameAsync());
+                    // 正常大小寫（使用者指定）。這幾顆是清單項目，不是主要動作鈕。
+                    AddAction("Party", () => _owner.TogglePartyPanelFromMenu());
+                    AddAction("Choose Character", () => _ = _owner.LeaveToCharacterSelectAsync());
+                    AddAction("Choose Server", () => _ = _owner.LeaveToServerSelectAsync());
+                    AddAction("Exit", () => _ = _owner.ExitGameAsync());
                 });
             }
 

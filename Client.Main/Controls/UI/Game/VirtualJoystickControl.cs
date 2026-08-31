@@ -32,7 +32,9 @@ namespace Client.Main.Controls.UI.Game
         private const float DeadZone = 0.18f;
 
         /// <summary>目標格子距離角色幾格。太短會頻繁重下指令，太長轉向會遲鈍。</summary>
-        private const float TargetTileDistance = 4f;
+        // 4 -> 2：一推就走四格，近距離很難停在想停的位置（使用者回報）。
+        // 兩格配上每 0.25 秒重下一次路徑，持續推仍然是連續移動，手感不變。
+        private const float TargetTileDistance = 2f;
 
         /// <summary>方向改變超過這個弧度才重新下指令（約 20 度）。</summary>
         private const float DirectionChangeThreshold = 0.35f;
@@ -45,6 +47,9 @@ namespace Client.Main.Controls.UI.Game
         private const float IdleHintBottom = 150f;
 
         private bool _active;
+
+        /// <summary>這一次按壓是否已經看過一幀（見 Update 裡「按下的第一幀不啟用」）。</summary>
+        private bool _pressSeenOnce;
         private Vector2 _center;
         private Vector2 _knob;
         private Vector2 _direction;      // 已正規化；長度 0 表示無輸入
@@ -89,6 +94,7 @@ namespace Client.Main.Controls.UI.Game
             if (!pressed)
             {
                 _active = false;
+                _pressSeenOnce = false;
                 _magnitude = 0f;
                 _direction = Vector2.Zero;
                 return;
@@ -96,6 +102,22 @@ namespace Client.Main.Controls.UI.Game
 
             if (!_active)
             {
+                // <b>按下的第一幀不啟用。</b>
+                //
+                // 觸控轉成的滑鼠座標比按鈕狀態慢一幀：新的觸控開始時，
+                // 座標還停在上一次觸控的位置（同一個延遲在選角畫面修過一次）。
+                // 上一次觸控若在搖桿區（走路剛放開），這一幀就會用<b>舊座標</b>
+                // 啟用搖桿，下一幀座標跳到真正的觸控點 —— 例如右上角的 MENU ——
+                // 於是產生一個指向右上的巨大偏移，角色朝右上角走出去。
+                // 使用者回報「點 MENU / BAG 會讓角色往右上移動」就是這個。
+                //
+                // 晚一幀（約 16 毫秒）再啟用，座標就已經是真的了。
+                if (!_pressSeenOnce)
+                {
+                    _pressSeenOnce = true;
+                    return;
+                }
+
                 if (!IsInActivationArea(position))
                     return;
 

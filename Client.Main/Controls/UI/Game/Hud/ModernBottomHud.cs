@@ -1252,7 +1252,10 @@ namespace Client.Main.Controls.UI.Game.Hud
             int potionRowW = PotionSlotCount * PotionSize + (PotionSlotCount - 1) * PotionGap;
             int potionRight = Game.TouchActionButtonsControl.ClusterLeftEdge - PotionClusterGap;
             int potionLeft = Math.Max(MobileUi.LeftEdge, potionRight - potionRowW);
-            int potionTop = vh - EdgeMargin - PotionSize;
+
+            // 底部與 ATK 群對齊（使用者指定：ATK 上移之後藥水列要跟著移，
+            // 兩者底線一致才好看）。
+            int potionTop = Game.TouchActionButtonsControl.ClusterBottomEdge - PotionSize;
 
             _slotRects = new Rectangle[SlotCount];
             for (int i = 0; i < PotionSlotCount; i++)

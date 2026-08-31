@@ -55,6 +55,13 @@ namespace Client.Main.Controls.UI.Game
         private static float MarginBottom => MobileUi.IsMobile ? 150f : 120f;
 
         /// <summary>
+        /// 整群（主按鈕）的下緣，虛擬座標。藥水列要與它<b>底部對齊</b>（使用者指定），
+        /// 所以由 HUD 引用這個值，不要各自算。
+        /// </summary>
+        public static int ClusterBottomEdge
+            => (int)MathF.Round(UiScaler.VirtualSize.Y - MarginBottom + MainButtonRadius);
+
+        /// <summary>
         /// 主按鈕圓心與畫面右緣的距離。
         ///
         /// 這一群（主按鈕 + 左上方的技能弧線）縱向跨得很高，正好落在鏡頭挖孔
