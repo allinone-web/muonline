@@ -95,10 +95,6 @@ public static class MapProjectInspector
             return new(project, [.. errors], [.. warnings], [.. terrainSources], [], []);
         }
 
-        var objectFilesByStem = Directory.EnumerateFiles(objectDirectory)
-            .GroupBy(p => Path.GetFileNameWithoutExtension(p), StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.OrdinalIgnoreCase);
-
         foreach (int type in objectTypes)
         {
             // Client.Main/Objects/MapTileObject.cs is the renderer truth:
@@ -117,11 +113,11 @@ public static class MapProjectInspector
                 var bmd = await new BMDReader().Load(bmdPath);
                 foreach (string texturePath in bmd.Meshes.Select(m => m.TexturePath).Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase))
                 {
-                    string stem = Path.GetFileNameWithoutExtension(texturePath);
-                    if (!objectFilesByStem.TryGetValue(stem, out string[]? candidates))
+                    string? material = FindRendererTexture(objectDirectory, texturePath);
+                    if (material is null)
                         errors.Add($"{bmdPath} 引用的材質貼圖 '{texturePath}' 不在 {objectDirectory}。");
                     else
-                        modelTextureSources.Add(candidates[0]);
+                        modelTextureSources.Add(material);
                 }
             }
             catch (Exception ex)
@@ -141,4 +137,42 @@ public static class MapProjectInspector
 
     private static string? FirstExisting(params string[] candidates)
         => candidates.FirstOrDefault(File.Exists);
+
+    /// <summary>
+    /// Mirrors Client.Main TextureLoader: BMD names normally use source extensions
+    /// (.tga/.jpg/.png/.dds), while Data stores the encoded counterpart. The renderer
+    /// also checks a texture/ child directory and resolves file names case-insensitively.
+    /// </summary>
+    private static string? FindRendererTexture(string directory, string texturePath)
+    {
+        string? encodedExtension = Path.GetExtension(texturePath).ToLowerInvariant() switch
+        {
+            ".tga" or ".ozt" => ".ozt",
+            ".jpg" or ".ozj" => ".ozj",
+            ".png" or ".ozp" => ".ozp",
+            ".dds" or ".ozd" => ".ozd",
+            _ => null,
+        };
+
+        if (encodedExtension is null)
+            return null;
+
+        string fileName = Path.GetFileNameWithoutExtension(texturePath) + encodedExtension;
+        return ResolveCaseInsensitive(Path.Combine(directory, fileName))
+               ?? ResolveCaseInsensitive(Path.Combine(directory, "texture", fileName));
+    }
+
+    private static string? ResolveCaseInsensitive(string path)
+    {
+        if (File.Exists(path))
+            return path;
+
+        string? directory = Path.GetDirectoryName(path);
+        if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+            return null;
+
+        string fileName = Path.GetFileName(path);
+        return Directory.EnumerateFiles(directory)
+            .FirstOrDefault(p => string.Equals(Path.GetFileName(p), fileName, StringComparison.OrdinalIgnoreCase));
+    }
 }

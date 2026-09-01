@@ -73,16 +73,19 @@ public static class MapProjectSelfTest
 
             string objectDirectory = Path.Combine(data, "Object300");
             WriteMinimalBmd(Path.Combine(objectDirectory, "Object01.bmd"), "missing-material.tga");
+            File.WriteAllBytes(Path.Combine(objectDirectory, "missing-material.bmd"), []);
             inspection = MapProjectInspector.InspectAsync(objectProject, data, requireRendererDependencies: true).GetAwaiter().GetResult();
-            results.Add(("missing BMD material", HasError(inspection, "missing-material.tga"), "BMD 材質不得靜默缺失"));
+            results.Add(("missing BMD material", HasError(inspection, "missing-material.tga"), "同名非貼圖檔不得冒充材質"));
 
-            File.WriteAllBytes(Path.Combine(objectDirectory, "missing-material.ozj"), []);
+            string nestedTextures = Path.Combine(objectDirectory, "texture");
+            Directory.CreateDirectory(nestedTextures);
+            File.WriteAllBytes(Path.Combine(nestedTextures, "MISSING-MATERIAL.OZT"), []);
             inspection = MapProjectInspector.InspectAsync(objectProject, data, requireRendererDependencies: true).GetAwaiter().GetResult();
             results.Add(("renderer dependencies", inspection.IsValid
                 && inspection.TerrainTextureSources.Length == 1
                 && inspection.ModelSources.Length == 1
                 && inspection.ModelTextureSources.Length == 1,
-                "貼圖、BMD 與材質齊全才通過"));
+                "renderer 同款副檔名、texture/ 與大小寫解析"));
         }
         catch (Exception ex)
         {
