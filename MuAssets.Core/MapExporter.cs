@@ -27,6 +27,12 @@ public static class MapExporter
 
         try
         {
+            // Authoring IDs are ints. Only the MU .map/.att codec is byte-bound.
+            // Check both headers before creating a directory, backup, or partial output.
+            LegacyMapCodec.Validate(document);
+            byte mapNumber = LegacyMapCodec.HeaderByte(document.MapNumber, nameof(document.MapNumber));
+            byte attIndex = LegacyMapCodec.HeaderByte(document.AttIndex, nameof(document.AttIndex));
+
             Directory.CreateDirectory(targetDirectory);
 
             string mapPath = Path.Combine(targetDirectory, $"EncTerrain{worldIndex}.map");
@@ -34,7 +40,7 @@ public static class MapExporter
             await new MapWriter().Save(mapPath, new TerrainMapping
             {
                 Version = document.MapVersion,
-                MapNumber = document.MapNumber,
+                MapNumber = mapNumber,
                 Layer1 = document.Layer1,
                 Layer2 = document.Layer2,
                 Alpha = document.Alpha,
@@ -43,7 +49,7 @@ public static class MapExporter
 
             string attPath = Path.Combine(targetDirectory, $"EncTerrain{worldIndex}.att");
             Backup(attPath, backedUp);
-            await new ATTWriter().Save(attPath, BuildAttribute(document));
+            await new ATTWriter().Save(attPath, BuildAttribute(document, attIndex));
             written.Add(Path.GetFileName(attPath));
 
             // 沒有物件時也要寫。跳過的話匯出目標會留著上一版的 .obj，
@@ -87,14 +93,15 @@ public static class MapExporter
     /// 產生 OpenMU 的 <c>GameMapDefinition.TerrainData</c>：3 byte 標頭 + 1 byte/格，未加密。
     /// </summary>
     public static byte[] BuildServerTerrainData(MapDocument document)
-        => new ATTWriter().ToServerTerrainData(BuildAttribute(document));
+        => new ATTWriter().ToServerTerrainData(BuildAttribute(
+            document, LegacyMapCodec.HeaderByte(document.AttIndex, nameof(document.AttIndex))));
 
-    private static TerrainAttribute BuildAttribute(MapDocument document)
+    private static TerrainAttribute BuildAttribute(MapDocument document, byte attIndex)
     {
         var attribute = new TerrainAttribute
         {
             Version = document.AttVersion,
-            Index = document.AttIndex,
+            Index = attIndex,
             Width = 255,
             Height = 255,
         };

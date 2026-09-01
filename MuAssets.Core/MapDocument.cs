@@ -22,13 +22,13 @@ public sealed class MapDocument
     public int WorldIndex { get; init; }
 
     public byte MapVersion { get; set; }
-    public byte MapNumber { get; set; }
+    public int MapNumber { get; set; }
     public byte[] Layer1 { get; set; } = new byte[CellCount];
     public byte[] Layer2 { get; set; } = new byte[CellCount];
     public byte[] Alpha { get; set; } = new byte[CellCount];
 
     public byte AttVersion { get; set; }
-    public byte AttIndex { get; set; }
+    public int AttIndex { get; set; }
     public TWFlags[] Attributes { get; set; } = new TWFlags[CellCount];
 
     public byte ObjVersion { get; set; }
@@ -68,9 +68,9 @@ public sealed class MapDocument
         {
             WorldIndex = worldIndex,
             MapVersion = 0,
-            MapNumber = (byte)worldIndex,
+            MapNumber = worldIndex,
             AttVersion = 0,
-            AttIndex = (byte)worldIndex,
+            AttIndex = worldIndex,
             ObjVersion = 0,
         };
 

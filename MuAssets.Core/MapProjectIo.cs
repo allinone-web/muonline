@@ -12,17 +12,14 @@ namespace MuAssets.Core;
 /// 專案格式的讀寫：`map.json` + 六張 PNG。
 /// </summary>
 /// <remarks>
-/// <b>格式刻意與 <c>tools/MapTool</c> 的 dump/build 完全相同</b>，
-/// 所以編輯器存出來的專案可以直接 <c>maptool build</c>，
-/// CLI dump 出來的也可以在編輯器裡打開。欄位名稱改動要兩邊一起改。
-///
+/// Schema 與讀寫都只定義在 MuAssets.Core；MapTool 與編輯器共同引用，避免兩份格式漂移。
 /// 設計成 git 友善：純量與物件在 JSON 裡可以 diff，逐格資料是 PNG（可以直接用影像工具看與改）。
 /// </remarks>
 public static class MapProjectIo
 {
     public const string ProjectFileName = "map.json";
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    public static JsonSerializerOptions JsonOptions { get; } = new()
     {
         WriteIndented = true,
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
@@ -35,7 +32,7 @@ public static class MapProjectIo
     {
         Directory.CreateDirectory(projectDirectory);
 
-        var project = new ProjectFile
+        var project = new MapProject
         {
             WorldIndex = document.WorldIndex,
             MapVersion = document.MapVersion,
@@ -44,7 +41,7 @@ public static class MapProjectIo
             AttIndex = document.AttIndex,
             ObjVersion = document.ObjVersion,
             ObjMapNumber = document.WorldIndex,
-            Objects = document.Objects.Select(ObjectRecord.From).ToList(),
+            Objects = document.Objects.Select(MapProjectObject.From).ToList(),
             Spawns = document.Spawns.Select(s => s.Clone()).ToList(),
             HeightVersion = document.Height?.Version ?? 0,
             HeightFileType = document.Height?.FileType ?? OZBFileType.BM8,
@@ -77,12 +74,7 @@ public static class MapProjectIo
 
     public static async Task<MapDocument> LoadAsync(string projectDirectory)
     {
-        string jsonPath = Path.Combine(projectDirectory, ProjectFileName);
-        if (!File.Exists(jsonPath))
-            throw new FileNotFoundException($"找不到 {jsonPath}", jsonPath);
-
-        var project = JsonSerializer.Deserialize<ProjectFile>(await File.ReadAllTextAsync(jsonPath), JsonOptions)
-                      ?? throw new InvalidDataException($"無法解析 {jsonPath}");
+        var project = await ReadAsync(projectDirectory);
 
         var document = new MapDocument
         {
@@ -92,19 +84,17 @@ public static class MapProjectIo
             AttVersion = project.AttVersion,
             AttIndex = project.AttIndex,
             ObjVersion = project.ObjVersion,
-            Objects = project.Objects.Select(o => o.To()).ToList(),
+            Objects = project.Objects.Select(o => o.ToDocumentObject()).ToList(),
             Spawns = project.Spawns,
         };
 
-        document.Layer1 = LoadGrayscale(Path.Combine(projectDirectory, "layer1.png")) ?? document.Layer1;
-        document.Layer2 = LoadGrayscale(Path.Combine(projectDirectory, "layer2.png")) ?? document.Layer2;
-        document.Alpha = LoadGrayscale(Path.Combine(projectDirectory, "alpha.png")) ?? document.Alpha;
+        document.Layer1 = LoadRequiredGrayscale(projectDirectory, "layer1.png");
+        document.Layer2 = LoadRequiredGrayscale(projectDirectory, "layer2.png");
+        document.Alpha = LoadRequiredGrayscale(projectDirectory, "alpha.png");
 
-        if (LoadGrayscale(Path.Combine(projectDirectory, "attribute.png")) is byte[] attributes)
-        {
-            for (int i = 0; i < Math.Min(attributes.Length, document.Attributes.Length); i++)
-                document.Attributes[i] = (TWFlags)attributes[i];
-        }
+        byte[] attributes = LoadRequiredGrayscale(projectDirectory, "attribute.png");
+        for (int i = 0; i < attributes.Length; i++)
+            document.Attributes[i] = (TWFlags)attributes[i];
 
         document.Height = LoadOzb(
             Path.Combine(projectDirectory, "height.png"),
@@ -114,7 +104,36 @@ public static class MapProjectIo
             Path.Combine(projectDirectory, "light.png"),
             project.LightVersion, project.LightFileType, project.LightHeaderBase64);
 
+        ValidateDocument(project, document);
+
         return document;
+    }
+
+    public static async Task<MapProject> ReadAsync(string projectDirectory)
+    {
+        string jsonPath = Path.Combine(projectDirectory, ProjectFileName);
+        if (!File.Exists(jsonPath))
+            throw new FileNotFoundException($"找不到 {jsonPath}", jsonPath);
+
+        return JsonSerializer.Deserialize<MapProject>(await File.ReadAllTextAsync(jsonPath), JsonOptions)
+               ?? throw new InvalidDataException($"無法解析 {jsonPath}");
+    }
+
+    public static byte[] LoadRequiredGrayscale(string projectDirectory, string fileName)
+    {
+        string path = Path.Combine(projectDirectory, fileName);
+        if (!File.Exists(path))
+            throw new FileNotFoundException($"專案缺少必要 PNG：{path}", path);
+
+        using var image = Image.Load<L8>(path);
+        RequireTerrainSize(path, image.Width, image.Height);
+        var values = new byte[MapDocument.CellCount];
+
+        for (int y = 0; y < MapDocument.Size; y++)
+        for (int x = 0; x < MapDocument.Size; x++)
+            values[(y * MapDocument.Size) + x] = image[x, y].PackedValue;
+
+        return values;
     }
 
     private static string? Encode(byte[]? data) => data is null ? null : Convert.ToBase64String(data);
@@ -161,33 +180,17 @@ public static class MapProjectIo
         rgb.SaveAsPng(path);
     }
 
-    private static byte[]? LoadGrayscale(string path)
+    private static OZB LoadOzb(string path, byte version, string fileType, string? headerBase64)
     {
         if (!File.Exists(path))
-            return null;
-
-        using var image = Image.Load<L8>(path);
-        var values = new byte[image.Width * image.Height];
-
-        for (int y = 0; y < image.Height; y++)
-        {
-            for (int x = 0; x < image.Width; x++)
-                values[(y * image.Width) + x] = image[x, y].PackedValue;
-        }
-
-        return values;
-    }
-
-    private static OZB? LoadOzb(string path, byte version, string fileType, string? headerBase64)
-    {
-        if (!File.Exists(path))
-            return null;
+            throw new FileNotFoundException($"專案缺少必要 PNG：{path}", path);
 
         byte[]? header = string.IsNullOrEmpty(headerBase64) ? null : Convert.FromBase64String(headerBase64);
 
         if (fileType == OZBFileType.BM8)
         {
             using var gray = Image.Load<L8>(path);
+            RequireTerrainSize(path, gray.Width, gray.Height);
             var data = new DrawingColor[gray.Width * gray.Height];
 
             for (int y = 0; y < gray.Height; y++)
@@ -210,7 +213,11 @@ public static class MapProjectIo
             };
         }
 
+        if (fileType != OZBFileType.BM6)
+            throw new InvalidDataException($"{path} 的 OZB file type '{fileType}' 非法；只允許 BM8 或 BM6。");
+
         using var image = Image.Load<Rgb24>(path);
+        RequireTerrainSize(path, image.Width, image.Height);
         var pixels = new DrawingColor[image.Width * image.Height];
 
         for (int y = 0; y < image.Height; y++)
@@ -233,104 +240,33 @@ public static class MapProjectIo
         };
     }
 
-    /// <summary>與 <c>tools/MapTool</c> 的 <c>MapProject</c> 逐欄對應，兩邊要一起改。</summary>
-    private sealed class ProjectFile
+    private static void RequireTerrainSize(string path, int width, int height)
     {
-        public int WorldIndex { get; set; }
-        public byte MapVersion { get; set; }
-        public byte MapNumber { get; set; }
-        public byte AttVersion { get; set; }
-        public byte AttIndex { get; set; }
-        public byte ObjVersion { get; set; }
-        public int ObjMapNumber { get; set; }
-        public List<ObjectRecord> Objects { get; set; } = [];
-
-        /// <summary>生怪區。MapTool 目前不處理這個欄位，會原樣忽略。</summary>
-        public List<SpawnArea> Spawns { get; set; } = [];
-        public byte HeightVersion { get; set; }
-        public string HeightFileType { get; set; } = OZBFileType.BM8;
-        public string? HeightHeaderBase64 { get; set; }
-        public byte LightVersion { get; set; }
-        public string LightFileType { get; set; } = OZBFileType.BM6;
-        public string? LightHeaderBase64 { get; set; }
+        if (width != MapDocument.Size || height != MapDocument.Size)
+            throw new InvalidDataException($"{path} 尺寸必須是 {MapDocument.Size}x{MapDocument.Size}，實際為 {width}x{height}。");
     }
 
-    private sealed class ObjectRecord
+    private static void ValidateDocument(MapProject project, MapDocument document)
     {
-        public short Type { get; set; }
-        public float[] Position { get; set; } = [0, 0, 0];
-        public float[] Angle { get; set; } = [0, 0, 0];
-        public float Scale { get; set; } = 1f;
+        if (project.WorldIndex <= 0)
+            throw new InvalidDataException($"WorldIndex={project.WorldIndex} 非法；必須大於 0。");
+        if (project.MapNumber < 0 || project.AttIndex < 0 || project.ObjMapNumber < 0)
+            throw new InvalidDataException("MapNumber、AttIndex 與 ObjMapNumber 不得為負數。");
+        if (project.ObjVersion > 5)
+            throw new InvalidDataException($"ObjVersion={project.ObjVersion} 非法；只允許 0..5。");
 
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public byte? UnknownX { get; set; }
-
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public byte? UnknownY { get; set; }
-
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public byte? UnknownZ { get; set; }
-
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public float[]? Lightning { get; set; }
-
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public byte? UnknownByte { get; set; }
-
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public float? UnknownFloat1 { get; set; }
-
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public float? UnknownFloat2 { get; set; }
-
-        // 語義標註。沒有標註的物件（絕大多數）不寫進 JSON，
-        // 這樣既省檔案大小，舊專案讀進來也自然是預設值。
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? Role { get; set; }
-
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public int? RoleId { get; set; }
-
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string[]? Tags { get; set; }
-
-        public static ObjectRecord From(MapObjectInstance instance) => new()
+        foreach (var value in document.Layer1.Concat(document.Layer2.Where(v => v != Client.Data.MAP.TerrainTextureMapping.NoLayerIndex)))
         {
-            Type = instance.Type,
-            Position = [instance.Position.X, instance.Position.Y, instance.Position.Z],
-            Angle = [instance.Angle.X, instance.Angle.Y, instance.Angle.Z],
-            Scale = instance.Scale,
-            UnknownX = instance.UnknownX,
-            UnknownY = instance.UnknownY,
-            UnknownZ = instance.UnknownZ,
-            Lightning = [instance.Lightning.X, instance.Lightning.Y, instance.Lightning.Z],
-            UnknownByte = instance.UnknownByte,
-            UnknownFloat1 = instance.UnknownFloat1,
-            UnknownFloat2 = instance.UnknownFloat2,
-            Role = instance.HasRole ? instance.Role : null,
-            RoleId = instance.RoleId == 0 ? null : instance.RoleId,
-            Tags = instance.Tags.Length == 0 ? null : instance.Tags,
-        };
+            if (!Client.Data.MAP.TerrainTextureMapping.Default.ContainsKey(value))
+                throw new InvalidDataException($"地形貼圖索引 {value} 沒有合法映射；禁止忽略或替換成預設貼圖。");
+        }
 
-        public MapObjectInstance To() => new()
+        foreach (var item in project.Objects)
         {
-            Type = Type,
-            Position = ToVector(Position),
-            Angle = ToVector(Angle),
-            Scale = Scale,
-            UnknownX = UnknownX ?? 0,
-            UnknownY = UnknownY ?? 0,
-            UnknownZ = UnknownZ ?? 0,
-            Lightning = Lightning is null ? default : ToVector(Lightning),
-            UnknownByte = UnknownByte ?? 0,
-            UnknownFloat1 = UnknownFloat1 ?? 0f,
-            UnknownFloat2 = UnknownFloat2 ?? 0f,
-            Role = Role ?? string.Empty,
-            RoleId = RoleId ?? 0,
-            Tags = Tags ?? [],
-        };
-
-        private static System.Numerics.Vector3 ToVector(float[] values)
-            => values.Length >= 3 ? new(values[0], values[1], values[2]) : default;
+            if (item.Type < 0)
+                throw new InvalidDataException($"物件 Type={item.Type} 是非法引用。");
+            if (!float.IsFinite(item.Scale) || item.Scale <= 0f)
+                throw new InvalidDataException($"物件 Type={item.Type} 的 Scale={item.Scale} 非法。");
+        }
     }
 }

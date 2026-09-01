@@ -286,7 +286,9 @@ public static class EditPipelineSelfTest
     private static (string, bool, string) BlankMap()
     {
         string directory = Path.Combine(Path.GetTempPath(), $"mu-editor-selftest-blank-{Environment.ProcessId}");
-        const int worldIndex = 999;
+        // This case exercises the legacy writer, so use a representable identity.
+        // World>255 authoring and explicit legacy rejection have their own MapProjectSelfTest.
+        const int worldIndex = 199;
 
         try
         {
