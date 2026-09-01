@@ -11,15 +11,28 @@ using MuAssets.Core;
 
 const string DefaultDataDir = "/Users/airtan/Documents/GitHub/mmorpg-3d-research/assets/MU_Red_1_20_61/Data";
 
-var parsed = ParseArgs(args);
-(int width, int height) = ParseSize(parsed.GetValueOrDefault("size"));
-string sourceDataPath = parsed.GetValueOrDefault("data") ?? DefaultDataDir;
-
-if (parsed.ContainsKey("help") || parsed.ContainsKey("h"))
+if (args.Any(arg => arg is "--help" or "-h" or "--h"))
 {
     PrintUsage();
     return;
 }
+
+Dictionary<string, string?> parsed;
+try
+{
+    parsed = ParseArgs(args);
+    ValidateModeArguments(parsed);
+}
+catch (ArgumentException ex)
+{
+    Console.Error.WriteLine($"參數錯誤：{ex.Message}");
+    Console.Error.WriteLine("用 --help 查看用法；未啟動 GUI。");
+    Environment.ExitCode = 2;
+    return;
+}
+
+(int width, int height) = ParseSize(parsed.GetValueOrDefault("size"));
+string sourceDataPath = parsed.GetValueOrDefault("data") ?? DefaultDataDir;
 
 if (parsed.GetValueOrDefault("project-check") is string projectToCheck)
 {
@@ -234,24 +247,67 @@ static (int, int) ParseSize(string? value)
 
 static Dictionary<string, string?> ParseArgs(string[] args)
 {
-    var options = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-    string? pending = null;
-
-    foreach (var arg in args)
+    var valueOptions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
-        if (arg.StartsWith("--", StringComparison.Ordinal))
-        {
-            pending = arg[2..];
-            options[pending] = null;
-        }
-        else if (pending is not null)
-        {
-            options[pending] = arg;
-            pending = null;
-        }
+        "data", "project", "project-check", "world", "tile", "size", "seconds", "screenshot",
+        "grass-density", "grass-planes", "grass-distance", "grass-dense", "shots", "shot",
+        "export-to", "export-openmu-to", "client-main", "openmu",
+    };
+    var flagOptions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "fullscreen", "selftest", "grass", "audit-objects", "catalog-report", "catalog-precision",
+        "catalog-geometry", "catalog-signal", "catalog-unknown", "build-npc-catalog",
+    };
+    var options = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+
+    for (int index = 0; index < args.Length; index++)
+    {
+        string arg = args[index];
+        if (!arg.StartsWith("--", StringComparison.Ordinal) || arg.Length == 2)
+            throw new ArgumentException($"無法辨識 '{arg}'；參數必須以 -- 開頭。");
+
+        string name = arg[2..];
+        if (!valueOptions.Contains(name) && !flagOptions.Contains(name))
+            throw new ArgumentException($"未知參數 --{name}。");
+        if (!options.TryAdd(name, null))
+            throw new ArgumentException($"--{name} 不得重複指定。");
+
+        if (!valueOptions.Contains(name))
+            continue;
+
+        if (index + 1 >= args.Length || args[index + 1].StartsWith("--", StringComparison.Ordinal))
+            throw new ArgumentException($"--{name} 需要一個值。");
+
+        options[name] = args[++index];
     }
 
     return options;
+}
+
+static void ValidateModeArguments(Dictionary<string, string?> options)
+{
+    if (options.ContainsKey("project") && options.ContainsKey("project-check"))
+        throw new ArgumentException("--project 與 --project-check 不能同時使用。");
+
+    if (options.ContainsKey("project-check"))
+    {
+        string[] irrelevant = options.Keys.Where(k => k is not "project-check" and not "data").ToArray();
+        if (irrelevant.Length > 0)
+            throw new ArgumentException($"--project-check 不接受 {string.Join(", ", irrelevant.Select(k => $"--{k}"))}。");
+    }
+
+    if (options.ContainsKey("project"))
+    {
+        string[] forbidden =
+        [
+            "world", "shots", "shot", "selftest", "audit-objects", "export-to", "export-openmu-to",
+            "catalog-report", "catalog-precision", "catalog-geometry", "catalog-signal", "catalog-unknown",
+            "build-npc-catalog", "client-main", "openmu",
+        ];
+        string[] conflicts = forbidden.Where(options.ContainsKey).ToArray();
+        if (conflicts.Length > 0)
+            throw new ArgumentException($"唯讀 --project 不接受 {string.Join(", ", conflicts.Select(k => $"--{k}"))}。");
+    }
 }
 
 static void PrintInspection(MapProjectInspection inspection)
