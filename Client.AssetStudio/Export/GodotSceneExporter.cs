@@ -69,6 +69,7 @@ public static class GodotSceneExporter
         int tiles = ExportTiles(document, world, outputDirectory, warnings);
         int grass = ExportGrass(world, outputDirectory, warnings);
         ExportCamera(world, outputDirectory, warnings);
+        double heightScale16 = ExportHeight16(document, outputDirectory, warnings);
 
         var placements = document.Objects
             .Select(o => new ObjectPlacement(
@@ -94,6 +95,7 @@ public static class GodotSceneExporter
             // 遊戲把高度圖的灰階值乘 1.5 當世界高度（TerrainLoader）。
             // Godot 端要用同一個係數，不然物件會浮在地形上或陷進去。
             HeightScale = 1.5f,
+            HeightScale16 = heightScale16,
 
             Models = models.ToDictionary(m => m.Key.ToString(), m => m.Value),
             Objects = placements,
@@ -102,6 +104,8 @@ public static class GodotSceneExporter
         File.WriteAllText(
             Path.Combine(outputDirectory, "scene.json"),
             JsonSerializer.Serialize(scene, SceneJsonOptions));
+
+        InjectHeightScale16IntoMapJson(outputDirectory, heightScale16, warnings);
 
         return new Result(worldIndex, outputDirectory, tiles, grass, types.Length, models.Count,
                           placements.Count, warnings.ToArray());
@@ -201,6 +205,72 @@ public static class GodotSceneExporter
         catch (Exception ex)
         {
             warnings.Add($"Camera_Angle_Position 解析失敗：{ex.Message}");
+        }
+    }
+
+    // ── 16-bit 高度（docs/23 跨線契約）───────────────────────────
+
+    /// <summary>
+    /// <c>height16.png</c>（16-bit 灰階）＋回傳 <c>HeightScale16</c>。
+    /// </summary>
+    /// <remarks>
+    /// 跨線契約（docs/21 卡 8）：世界高 = 像素值 × HeightScale16，height16.png 與
+    /// HeightScale16 <b>成套出現缺一不可</b>；讀取端有就讀、沒有退回 height.png。
+    /// MU 原生高度只有 8-bit（OZB byte×1.5）——這裡是<b>升容器不升精度</b>
+    /// （值 = byte×256、Scale16 = 1.5/256，與 byte×1.5 位元等值），
+    /// 出它是讓客戶端讀取器對 MU/Lineage 兩線走同一條路；
+    /// 真正吃到 16-bit 精度的是 Lineage 線（u16 原生）。
+    /// </remarks>
+    private static double ExportHeight16(MapDocument document, string outputDirectory, List<string> warnings)
+    {
+        const double scale16 = 1.5 / 256.0;
+
+        try
+        {
+            var ozb = document.Height;
+            if (ozb == null)
+            {
+                warnings.Add("height16：文件沒有高度圖，略過（height.png 同樣不會有）");
+                return scale16;
+            }
+
+            using var gray = new SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.L16>(ozb.Width, ozb.Height);
+            for (int y = 0; y < ozb.Height; y++)
+            {
+                for (int x = 0; x < ozb.Width; x++)
+                    gray[x, y] = new SixLabors.ImageSharp.PixelFormats.L16((ushort)(ozb.Data[(y * ozb.Width) + x].R << 8));
+            }
+
+            SixLabors.ImageSharp.ImageExtensions.SaveAsPng(gray, Path.Combine(outputDirectory, "height16.png"));
+        }
+        catch (Exception ex)
+        {
+            warnings.Add($"height16 寫出失敗：{ex.Message}");
+        }
+
+        return scale16;
+    }
+
+    /// <summary>契約要求 map.json 也帶 HeightScale16——不動 MuAssets.Core 的格式代碼，
+    /// 寫完後以 JSON 後處理注入欄位（R2：可以加欄位）。</summary>
+    private static void InjectHeightScale16IntoMapJson(string outputDirectory, double heightScale16, List<string> warnings)
+    {
+        try
+        {
+            string path = Path.Combine(outputDirectory, "map.json");
+            if (!File.Exists(path))
+                return;
+
+            var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path));
+            if (node is null)
+                return;
+
+            node["HeightScale16"] = heightScale16;
+            File.WriteAllText(path, node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (Exception ex)
+        {
+            warnings.Add($"map.json 注入 HeightScale16 失敗：{ex.Message}");
         }
     }
 
@@ -433,6 +503,7 @@ public static class GodotSceneExporter
         public int TerrainSize { get; set; }
         public float TerrainScale { get; set; }
         public float HeightScale { get; set; }
+        public double HeightScale16 { get; set; }
 
         /// <summary>物件 type → 模型檔（相對於這個資料夾）。</summary>
         public Dictionary<string, string> Models { get; set; } = [];
