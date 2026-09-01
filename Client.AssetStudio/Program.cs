@@ -37,6 +37,8 @@
 //                                                     匯進來的資產本來是啞的，用這個配音效
 //   MuAssetStudio --library-runtime [篩選]           客戶端真的載得動嗎（走 Client.Main 的路徑）
 //   MuAssetStudio --library-tune [篩選] [--apply]    動畫長度對齊伺服器節奏
+//   MuAssetStudio --character-manifest --out <json>  編譯玩家骨架／380 動作槽／五部位目錄
+//   MuAssetStudio --character-manifest-selftest       manifest 無 GUI 決定性回歸測試
 //
 // 所有 CLI 模式都不需要圖形裝置，可以在沒有視窗的終端機工作階段裡跑。
 
@@ -80,6 +82,16 @@ if (parsed.ContainsKey("report"))
 {
     CatalogReport.Print(session.Catalog);
     return 0;
+}
+
+if (parsed.ContainsKey("character-manifest-selftest"))
+    return CharacterManifestCommands.SelfTest(session.Catalog, dataPath);
+
+if (parsed.ContainsKey("character-manifest"))
+{
+    string output = parsed.GetValueOrDefault("out")
+        ?? Path.Combine(Environment.CurrentDirectory, "mu-character-manifest.json");
+    return CharacterManifestCommands.Compile(session.Catalog, dataPath, output);
 }
 
 if (parsed.TryGetValue("tex-export", out var textureSource) && textureSource is not null)
