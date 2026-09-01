@@ -87,6 +87,7 @@ public sealed class MapEditorScene : BaseScene
         }
 
         bool acceptInput = !UiCapturesInput && !_session.IsLoading;
+        bool acceptEdits = acceptInput && !_session.IsExternalProjectReadOnly;
 
         HoveredTile = acceptInput
             ? TerrainPicker.Pick(World, MuGame.Instance.MouseRay)
@@ -94,9 +95,9 @@ public sealed class MapEditorScene : BaseScene
 
         UpdateObjectReport();
 
-        HandleEditing(acceptInput);
-        HandleShortcuts(acceptInput);
-        HandleClipboard(acceptInput);
+        HandleEditing(acceptEdits);
+        HandleShortcuts(acceptEdits);
+        HandleClipboard(acceptEdits);
         PushPendingEdits();
 
         if (_session.ObjectsDirty)
@@ -716,6 +717,9 @@ public sealed class MapEditorScene : BaseScene
         if (document is null || entry is null || _session.FileBusy)
             return;
 
+        if (RejectExternalProjectWrite())
+            return;
+
         if (entry.MapNumber is not int mapNumber)
         {
             _session.FileMessage = "這張圖在客戶端沒有登記 WorldInfo，對不到 OpenMU 編號";
@@ -757,6 +761,9 @@ public sealed class MapEditorScene : BaseScene
         if (document is null || _session.FileBusy)
             return;
 
+        if (RejectExternalProjectWrite())
+            return;
+
         _session.FileBusy = true;
 
         try
@@ -787,7 +794,8 @@ public sealed class MapEditorScene : BaseScene
 
         try
         {
-            string directory = _session.Settings.ProjectDirectoryFor(worldIndex);
+            string directory = _session.ExternalProjectDirectory
+                ?? _session.Settings.ProjectDirectoryFor(worldIndex);
             _session.Document = await MapProjectIo.LoadAsync(directory);
 
             _session.History.Clear();
@@ -814,6 +822,9 @@ public sealed class MapEditorScene : BaseScene
     {
         var document = _session.Document;
         if (document is null || _session.FileBusy)
+            return;
+
+        if (RejectExternalProjectWrite())
             return;
 
         _session.FileBusy = true;
@@ -847,6 +858,9 @@ public sealed class MapEditorScene : BaseScene
         string target = _session.Settings.DeployDataPath;
 
         if (document is null || _session.FileBusy)
+            return;
+
+        if (RejectExternalProjectWrite())
             return;
 
         if (string.IsNullOrWhiteSpace(target) || !Directory.Exists(target))
@@ -913,7 +927,9 @@ public sealed class MapEditorScene : BaseScene
         try
         {
             // 編輯器自己的資料複本，與渲染用的那份分開載入。
-            _session.Document = await MapDocument.LoadAsync(entry);
+            _session.Document = _session.ExternalProjectDirectory is string externalProject
+                ? await MapProjectIo.LoadAsync(externalProject)
+                : await MapDocument.LoadAsync(entry);
             _session.LayerViewDirty = true;
 
             var tileObjectTypes = WorldCatalog.GetTileObjectTypes(entry);
@@ -997,5 +1013,14 @@ public sealed class MapEditorScene : BaseScene
         {
             _session.IsLoading = false;
         }
+    }
+
+    private bool RejectExternalProjectWrite()
+    {
+        if (!_session.IsExternalProjectReadOnly)
+            return false;
+
+        _session.FileMessage = "外部 --project 以唯讀模式開啟；未寫入 project、Data 或輸出目錄。";
+        return true;
     }
 }

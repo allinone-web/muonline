@@ -13,10 +13,42 @@ const string DefaultDataDir = "/Users/airtan/Documents/GitHub/mmorpg-3d-research
 
 var parsed = ParseArgs(args);
 (int width, int height) = ParseSize(parsed.GetValueOrDefault("size"));
+string sourceDataPath = parsed.GetValueOrDefault("data") ?? DefaultDataDir;
+
+if (parsed.ContainsKey("help") || parsed.ContainsKey("h"))
+{
+    PrintUsage();
+    return;
+}
+
+if (parsed.GetValueOrDefault("project-check") is string projectToCheck)
+{
+    projectToCheck = Path.GetFullPath(projectToCheck);
+    var inspection = await MapProjectInspector.InspectAsync(
+        projectToCheck, Path.GetFullPath(sourceDataPath), requireRendererDependencies: true);
+    PrintInspection(inspection);
+
+    bool canOpen = inspection.IsValid && inspection.IsLegacyCodecCompatible;
+    if (canOpen)
+    {
+        try
+        {
+            using var checkWorkspace = await ExternalProjectWorkspace.CreateAsync(projectToCheck, sourceDataPath);
+            Console.WriteLine($"唯讀 overlay 建立與清理通過：World{checkWorkspace.WorldIndex}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"錯誤：唯讀 overlay 建立失敗：{ex.Message}");
+            canOpen = false;
+        }
+    }
+
+    Environment.ExitCode = canOpen ? 0 : 2;
+    return;
+}
 
 // 這兩個必須在 MuGame 跑起來之前設好。Constants 的靜態建構子會先跑完預設值，
 // 我們的指派蓋在它上面。
-Constants.DataPath = parsed.GetValueOrDefault("data") ?? DefaultDataDir;
 Constants.ENTRY_SCENE = typeof(MapEditorScene);
 
 // 編輯器不需要遊戲的環境音與背景音樂，開著只會在切圖時亂放。
@@ -104,38 +136,36 @@ EditorSession.Current.AuditObjects = parsed.ContainsKey("audit-objects");
 EditorSession.Current.ExportOnStartPath = parsed.GetValueOrDefault("export-to");
 EditorSession.Current.ExportOpenMuOnStartPath = parsed.GetValueOrDefault("export-openmu-to");
 
-Console.WriteLine($"Data 目錄：{Constants.DataPath}");
-
 // 分類完全不需要 GPU，所以這份報告在遊戲跑起來之前就能出。
 // 這裡刻意不帶語意型別表（那需要 MuGame 才能建 world 類別），
 // 測的正是「純自動分類」對無意義檔名的資料夾有多少覆蓋率。
 if (parsed.ContainsKey("catalog-report"))
 {
-    AssetCatalogReport.Print(Constants.DataPath);
+    AssetCatalogReport.Print(sourceDataPath);
     return;
 }
 
 if (parsed.ContainsKey("catalog-precision"))
 {
-    AssetCatalogReport.PrintShapePrecision(Constants.DataPath);
+    AssetCatalogReport.PrintShapePrecision(sourceDataPath);
     return;
 }
 
 if (parsed.ContainsKey("catalog-geometry"))
 {
-    AssetCatalogReport.PrintGeometryStudy(Constants.DataPath);
+    AssetCatalogReport.PrintGeometryStudy(sourceDataPath);
     return;
 }
 
 if (parsed.ContainsKey("catalog-signal"))
 {
-    AssetCatalogReport.PrintSignalStudy(Constants.DataPath);
+    AssetCatalogReport.PrintSignalStudy(sourceDataPath);
     return;
 }
 
 if (parsed.ContainsKey("catalog-unknown"))
 {
-    AssetCatalogReport.PrintUnknownTextures(Constants.DataPath);
+    AssetCatalogReport.PrintUnknownTextures(sourceDataPath);
     return;
 }
 
@@ -163,8 +193,33 @@ if (parsed.ContainsKey("build-npc-catalog"))
     return;
 }
 
-using var game = new MapEditorGame(options);
-game.Run();
+ExternalProjectWorkspace? workspace = null;
+try
+{
+    if (parsed.GetValueOrDefault("project") is string projectDirectory)
+    {
+        workspace = await ExternalProjectWorkspace.CreateAsync(projectDirectory, sourceDataPath);
+        EditorSession.Current.ExternalProjectDirectory = workspace.ProjectDirectory;
+        EditorSession.Current.StartupWorldIndex = workspace.WorldIndex;
+        sourceDataPath = workspace.DataDirectory;
+        Console.WriteLine($"外部專案（唯讀）：{workspace.ProjectDirectory}");
+    }
+
+    Constants.DataPath = sourceDataPath;
+    Console.WriteLine($"Data 目錄：{Constants.DataPath}");
+
+    using var game = new MapEditorGame(options);
+    game.Run();
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"啟動失敗：{ex.Message}");
+    Environment.ExitCode = 2;
+}
+finally
+{
+    workspace?.Dispose();
+}
 
 static (int, int) ParseSize(string? value)
 {
@@ -197,4 +252,40 @@ static Dictionary<string, string?> ParseArgs(string[] args)
     }
 
     return options;
+}
+
+static void PrintInspection(MapProjectInspection inspection)
+{
+    if (inspection.Project is { } project)
+    {
+        Console.WriteLine($"authoring project：World{project.WorldIndex} / MapNumber={project.MapNumber} / AttIndex={project.AttIndex}");
+        Console.WriteLine($"legacy .map/.att codec：{(inspection.IsLegacyCodecCompatible ? "可輸出" : "不可輸出（超出 0..255；未取模、未重編號）")}");
+        Console.WriteLine($"terrain textures：{inspection.TerrainTextureSources.Length}");
+        Console.WriteLine($"BMD models：{inspection.ModelSources.Length}");
+        Console.WriteLine($"BMD material textures：{inspection.ModelTextureSources.Length}");
+    }
+
+    foreach (string warning in inspection.Warnings)
+        Console.WriteLine($"警告：{warning}");
+    foreach (string error in inspection.Errors)
+        Console.Error.WriteLine($"錯誤：{error}");
+
+    Console.WriteLine(inspection.IsValid ? "專案與 renderer 依賴驗證通過。" : $"驗證失敗：{inspection.Errors.Length} 項錯誤。");
+}
+
+static void PrintUsage()
+{
+    Console.WriteLine("""
+    MuMapEditor
+
+      --data <Data目錄>             明確指定 MU Data 依賴根目錄
+      --project <專案目錄>          唯讀開啟外部 map.json + 六張 PNG；先驗證貼圖與 BMD
+      --project-check <專案目錄>    無 GUI 驗證 schema、PNG、貼圖與 BMD 依賴
+      --world <N>                   從 Data 啟動 WorldN
+      --seconds <N>                 N 秒後退出
+      --help                        只印說明，不啟動 GUI
+
+    World/MapNumber/AttIndex 在 authoring schema 是 int。只有輸出 MU legacy .map/.att
+    才限制 0..255；超界會明確失敗，絕不取模、重編號或借 donor。
+    """);
 }

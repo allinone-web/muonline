@@ -280,6 +280,12 @@ public sealed class EditorUi : IDisposable
     /// </remarks>
     private void DrawNewWorld()
     {
+        if (_session.IsExternalProjectReadOnly)
+        {
+            ImGui.TextColored(Muted, "外部 --project 唯讀模式不提供新建地圖。");
+            return;
+        }
+
         if (!ImGui.CollapsingHeader("新建地圖"))
             return;
 
@@ -476,7 +482,7 @@ public sealed class EditorUi : IDisposable
         }
 
         var io = ImGui.GetIO();
-        bool acceptInput = !io.WantCaptureMouse;
+        bool acceptInput = !io.WantCaptureMouse && !_session.IsExternalProjectReadOnly;
 
         _gizmoActive = _gizmo.Draw(_session.SelectedObject, acceptInput);
 
@@ -614,6 +620,14 @@ public sealed class EditorUi : IDisposable
         if (_session.Document is null)
         {
             ImGui.TextColored(Muted, "尚未載入地圖");
+            ImGui.End();
+            return;
+        }
+
+        if (_session.IsExternalProjectReadOnly)
+        {
+            _session.Tool = EditorToolKind.None;
+            ImGui.TextColored(Warning, "外部 --project 唯讀：可瀏覽、選圖層與查看依賴，編輯工具已停用。");
             ImGui.End();
             return;
         }
@@ -1668,6 +1682,12 @@ public sealed class EditorUi : IDisposable
 
         ImGui.SameLine();
         ImGui.SetNextItemWidth(-1f);
+
+        if (_session.IsExternalProjectReadOnly)
+        {
+            ImGui.TextUnformatted(label);
+            return;
+        }
 
         if (!ImGui.BeginCombo($"##map{index}", label))
             return;

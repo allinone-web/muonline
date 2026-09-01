@@ -20,6 +20,11 @@ public sealed class EditorSession : EditSession
 
     public string DataPath { get; set; } = string.Empty;
 
+    /// <summary>外部 authoring project；存在時只讀，任何存檔／匯出／部署都被拒絕。</summary>
+    public string? ExternalProjectDirectory { get; set; }
+
+    public bool IsExternalProjectReadOnly => ExternalProjectDirectory is not null;
+
     public WorldEntry[] Worlds { get; set; } = [];
 
     /// <summary>目前載入的 world index，尚未載入任何世界時為 null。</summary>
