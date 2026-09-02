@@ -424,6 +424,44 @@ public static class GltfExporter
     /// </list>
     /// 兩者都是無損的：取樣任何時間點得到的姿勢與展開版一模一樣。
     /// </remarks>
+
+    /// <summary>原版標記 Loop=true（=播到尾停住）的玩家一次性動作：
+    /// 231 Die1、232 Die2、229 ComeUp、72 SkillHellBegin（ZzzOpenData.cpp:366–370；
+    /// 編號對照 muonline PlayerAction.cs）。</summary>
+    private static readonly HashSet<int> OneShotClosedLoopActions = [231, 232, 229, 72];
+
+    /// <summary>這個動作是否「末鍵==首鍵」的閉合環（逐骨比對位置與旋轉）。</summary>
+    private static bool ActionEndsWhereItStarts(BMD bmd, int actionIndex, int keys)
+    {
+        const float epsilon = 1e-4f;
+        var bones = bmd.Bones ?? [];
+        foreach (var bone in bones)
+        {
+            if (bone is null || bone == BMDTextureBone.Dummy ||
+                bone.Matrixes is null || actionIndex >= bone.Matrixes.Length)
+                continue;
+
+            var matrix = bone.Matrixes[actionIndex];
+            if (matrix.Position is not { Length: > 0 } || matrix.Quaternion is not { Length: > 0 })
+                continue;
+
+            int last = Math.Min(keys, Math.Min(matrix.Position.Length, matrix.Quaternion.Length)) - 1;
+            if (last <= 0)
+                continue;
+
+            if ((matrix.Position[last] - matrix.Position[0]).LengthSquared() > epsilon)
+                return false;
+
+            var q0 = matrix.Quaternion[0];
+            var q1 = matrix.Quaternion[last];
+            float dot = MathF.Abs((q0.X * q1.X) + (q0.Y * q1.Y) + (q0.Z * q1.Z) + (q0.W * q1.W));
+            if (1f - dot > epsilon)
+                return false;
+        }
+
+        return true;
+    }
+
     private static List<GltfAnimation> BuildAnimations(
         BMD bmd,
         int[] boneNodeIndex,
@@ -449,6 +487,22 @@ public static class GltfExporter
 
             // LockPositions 的動作最後一格是位移資料，不是姿勢 —— 與遊戲的 totalFrames 一致。
             int keys = Math.Max(action.LockPositions ? action.NumAnimationKeys - 1 : action.NumAnimationKeys, 1);
+
+            // 一次性動作的 loop 閉合鍵（docs/33 建議 #2）。
+            //
+            // BMD 原始資料把這幾個動作的最後一鍵做成「回到第一鍵」（實測 231/232
+            // 全 60 骨末鍵==首鍵）——原版 runtime 從不播到它：mumain 對這批動作標
+            // Actions[..].Loop = true（ZzzOpenData.cpp:366–370，語意=播到尾「停住」，
+            // ZzzBMD.cpp:735–742 clamp 不迴繞；命名反直覺），muonline 則 clamp 到
+            // totalFrames-2（ModelObject.Animation.cs:222–227）。glTF 播放器一次性
+            // 播放會播到末鍵→角色回站姿，所以匯出時把閉合鍵去掉，終幀=真實最終姿勢。
+            // 名單取自原版 Loop=true 四動作（非猜測）；再驗末鍵確實==首鍵才減，
+            // 資料不閉合就原樣保留（fail open 到「不動」，不猜）。
+            if (kind == EntityKind.Player && OneShotClosedLoopActions.Contains(actionIndex) &&
+                keys >= 2 && ActionEndsWhereItStarts(bmd, actionIndex, keys))
+            {
+                keys -= 1;
+            }
 
             // 時間 accessor 也是需要時才建，否則整個動作被壓掉時會留下沒人用的緩衝資料。
             int? timeAccessor = null;
