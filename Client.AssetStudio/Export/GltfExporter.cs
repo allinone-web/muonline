@@ -730,7 +730,7 @@ public static class GltfExporter
 
         try
         {
-            TextureIO.ExportPng(resolution.FullPath!, pngPath);
+            TextureIO.ExportPngRgba(resolution.FullPath!, pngPath);
             exportedTextures++;
         }
         catch (Exception ex)

@@ -67,7 +67,41 @@ public static class TextureIO
     public static void ExportPng(string sourcePath, string destinationPath)
     {
         using var image = Decode(sourcePath);
+        SavePng(image, destinationPath);
+    }
 
+    /// <summary>
+    /// 給**外部引擎**的匯出（Godot 地圖包/模型貼圖/effects）：.ozt 不做 ToImage 的通道對調，
+    /// 直接用 OZTReader 的 RGBA 真值。ToImage 的 .ozt 對調是 ExportPng↔WriteOzt 往返配對的
+    /// 內部約定（PNG＝檔案位元組序），texlib 靠它精確往返——但對外就是 R/B 反色：
+    /// 2026-09-02 B45-8「藤蔓青藍」審計實測 World1 有 22/94 張中招。兩個出口並存、各司其職。
+    /// </summary>
+    public static void ExportPngRgba(string sourcePath, string destinationPath)
+    {
+        string extension = Path.GetExtension(sourcePath).ToLowerInvariant();
+        if (extension == ".ozt")
+        {
+            var data = new OZTReader().Load(sourcePath).GetAwaiter().GetResult();
+            var pixels = new byte[data.Width * data.Height * 4];
+            for (int i = 0; i < data.Width * data.Height; i++)
+            {
+                int src = i * data.Components;
+                int dst = i * 4;
+                pixels[dst] = data.Data[src];
+                pixels[dst + 1] = data.Data[src + 1];
+                pixels[dst + 2] = data.Data[src + 2];
+                pixels[dst + 3] = data.Components >= 4 ? data.Data[src + 3] : (byte)255;
+            }
+            using var rgba = Image.LoadPixelData<Rgba32>(pixels, data.Width, data.Height);
+            SavePng(rgba, destinationPath);
+            return;
+        }
+        using var image = Decode(sourcePath);
+        SavePng(image, destinationPath);
+    }
+
+    private static void SavePng(Image<Rgba32> image, string destinationPath)
+    {
         string? directory = Path.GetDirectoryName(destinationPath);
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);

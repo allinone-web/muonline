@@ -300,7 +300,7 @@ public static class GodotSceneExporter
             {
                 string outDir = Path.Combine(outputDirectory, "effects");
                 Directory.CreateDirectory(outDir);
-                TextureIO.ExportPng(source, Path.Combine(outDir, name + ".png"));
+                TextureIO.ExportPngRgba(source, Path.Combine(outDir, name + ".png"));
             }
             catch (Exception ex)
             {
@@ -342,7 +342,7 @@ public static class GodotSceneExporter
 
             try
             {
-                TextureIO.ExportPng(resolution.FullPath!, Path.Combine(tileDirectory, $"{index}.png"));
+                TextureIO.ExportPngRgba(resolution.FullPath!, Path.Combine(tileDirectory, $"{index}.png"));
                 exported++;
             }
             catch (Exception ex)
