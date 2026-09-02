@@ -474,6 +474,18 @@ public static class GltfExporter
         var actions = bmd.Actions ?? [];
         var bones = bmd.Bones ?? [];
 
+        // 玩家的動畫時基是 25fps，不是通用預設的 4fps（B43 滑行感的資產側環節）。
+        //
+        // 真值：PlayerObject.cs:234 `AnimationSpeed = 25`（經典 MU 25FPS 幀系統；
+        // 通用 ModelObject 才是 4）。原版有效幀速 = PlaySpeed × AnimationSpeed——
+        // walk 0.38×25 = 9.5 幀/秒、一循環 0.95 秒；按 4fps 匯出的時間軸被
+        // 原速播放會慢 25/4 倍基準（walk 慢 2.4 倍）＝「腿在動但像太空漫步」。
+        // 職責分界照原版語意拆：**資產＝25fps 基準時間軸；每動作的 PlaySpeed
+        // 倍率（walk 0.38/attack 0.32/die 0.45…，PlayerObject.cs:1212–1269）
+        // 由 runtime 套用**——匯出器不複製那張表，避免雙份維護。
+        if (kind == EntityKind.Player)
+            framesPerSecond = 25f;
+
         float secondsPerFrame = 1f / MathF.Max(framesPerSecond, 0.01f);
 
         // 所有「只有一格」的曲線共用同一個時間 accessor。

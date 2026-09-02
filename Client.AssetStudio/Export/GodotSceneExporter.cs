@@ -70,6 +70,7 @@ public static class GodotSceneExporter
         int grass = ExportGrass(world, outputDirectory, warnings);
         ExportCamera(world, outputDirectory, warnings);
         double heightScale16 = ExportHeight16(document, outputDirectory, warnings);
+        ExportEffectTextures(dataPath, outputDirectory, warnings);
 
         var placements = document.Objects
             .Select(o => new ObjectPlacement(
@@ -271,6 +272,40 @@ public static class GodotSceneExporter
         catch (Exception ex)
         {
             warnings.Add($"map.json 注入 HeightScale16 失敗：{ex.Message}");
+        }
+    }
+
+
+    /// <summary>火光/常用特效貼圖 → <c>effects/*.png</c>（B31 FireLight fail-closed 的契約路徑）。</summary>
+    /// <remarks>
+    /// 客戶端把火把粒子貼圖釘在地圖包內 <c>effects/firehikNN.png</c>（缺即 fail-closed 不畫）。
+    /// 固定清單、逐 SOI 解 OZJ（第一個 FFD8 可能是假頭）；缺檔跳過不報錯（非每圖都有火把）。
+    /// </remarks>
+    private static void ExportEffectTextures(string dataPath, string outputDirectory, List<string> warnings)
+    {
+        string[] names = ["firehik01", "firehik02", "firehik03", "flare01", "Spark03"];
+        string effectDir = Path.Combine(dataPath, "Effect");
+
+        foreach (var name in names)
+        {
+            string source = Directory.Exists(effectDir)
+                ? Directory.EnumerateFiles(effectDir)
+                    .FirstOrDefault(f => string.Equals(Path.GetFileName(f), name + ".OZJ", StringComparison.OrdinalIgnoreCase))
+                : null;
+
+            if (source is null)
+                continue;
+
+            try
+            {
+                string outDir = Path.Combine(outputDirectory, "effects");
+                Directory.CreateDirectory(outDir);
+                TextureIO.ExportPng(source, Path.Combine(outDir, name + ".png"));
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"effects 貼圖 {name} 轉檔失敗：{ex.Message}");
+            }
         }
     }
 
