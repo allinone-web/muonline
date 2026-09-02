@@ -63,18 +63,16 @@ public static class CharacterManifestCommands
 
             if (!first.AsSpan().SequenceEqual(second))
                 problems.Add("相同來源編譯兩次的 JSON 不相同");
-            if (manifest.Player.Actions.Count != 380)
-                problems.Add($"Player.bmd 動作槽應為 380，實際 {manifest.Player.Actions.Count}");
+            if (manifest.Player.Actions.Count != 284)
+                problems.Add($"Player.bmd 動作槽應為 284（內嵌 S6 骨架＝MaxPlayerAction），實際 {manifest.Player.Actions.Count}");
             if (manifest.Player.Actions.Where((action, index) => action.Index != index).Any())
                 problems.Add("動作槽 index 不是 BMD 原始連續順序");
             if (manifest.Player.Skeleton.Count != 60)
                 problems.Add($"Player.bmd 骨骼應為 60，實際 {manifest.Player.Skeleton.Count}");
             if (manifest.Player.Meshes != 0)
                 problems.Add($"Player.bmd 應是純骨架（0 網格），實際 {manifest.Player.Meshes}");
-            if (manifest.Player.Actions.Where(a => a.Index < 284).Any(a => a.Status != "Named"))
-                problems.Add("0–283 應全部由 PlayerAction 命名");
-            if (manifest.Player.Actions.Where(a => a.Index >= 284).Any(a => a.Status != "Unknown" || a.Name != "Unknown"))
-                problems.Add("284–379 必須明確標為 Unknown，不可猜名");
+            if (manifest.Player.Actions.Any(a => a.Status != "Named"))
+                problems.Add("0–283 應全部由 PlayerAction 命名（內嵌 S6 骨架不存在 Unknown 槽）");
             if (manifest.PlayerClasses.Any(c => c.Parts.Count != 5 || c.Parts.Select(p => p.Slot).Distinct().Count() != 5))
                 problems.Add("職業外觀不是恰好五個不同部位");
             if (manifest.PlayerClasses.Count != 56 || manifest.PlayerClasses.Sum(c => c.Parts.Count) != 280)
@@ -114,9 +112,9 @@ public static class CharacterManifestCommands
 
     private static CharacterManifest Build(EntityCatalog catalog, string dataPath)
     {
-        string playerPath = Path.Combine(dataPath, PlayerModelPath);
-        if (!File.Exists(playerPath))
-            throw new FileNotFoundException("找不到玩家共用骨架", playerPath);
+        // 骨架不從資料目錄讀：資料包是 S20 動作表，與 PlayerAction 列舉（S6 表）
+        // 不咬合——照執行期 BMDLoader 特判改用內嵌 S6 檔（理由見 EmbeddedPlayerSkeleton）。
+        string playerPath = EmbeddedPlayerSkeleton.MaterializePath();
 
         var reader = new BMDReader();
         var player = reader.Load(playerPath).GetAwaiter().GetResult();

@@ -60,7 +60,16 @@ public static class GltfExporter
     {
         options ??= new Options();
 
-        var bmd = new BMDReader().Load(bmdPath).GetAwaiter().GetResult();
+        // 玩家共用骨架一律換成內嵌 S6 檔（動作表才與 PlayerAction 列舉咬合），
+        // 與執行期 BMDLoader.Prepare 的特判同語意——理由見 EmbeddedPlayerSkeleton。
+        string loadPath = bmdPath;
+        if (EmbeddedPlayerSkeleton.IsPlayerSkeletonPath(bmdPath))
+        {
+            loadPath = EmbeddedPlayerSkeleton.MaterializePath();
+            Console.WriteLine($"[骨架換源] {bmdPath} → 內嵌 S6 player.bmd（284 動作，S6 動作表）");
+        }
+
+        var bmd = new BMDReader().Load(loadPath).GetAwaiter().GetResult();
         return Export(bmd, bmdPath, outputDirectory, options);
     }
 
