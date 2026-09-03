@@ -438,6 +438,19 @@ public static class GodotSceneExporter
             return File.Exists(Path.Combine(dataPath, generic)) ? generic : null;
         }
 
+        // 世界類的對映優先於 ModelType 列舉：列舉是通用資料表，**逐世界的 CreateMapTileObjects
+        // ＋物件類的模型路徑公式才是遊戲實際載入的東西**，兩者不一致時以世界類為準。
+        // 實例：World1 型別 66，ModelType 列舉寫 BonFire02（ModelType.cs:55），但
+        // LorenciaWorld.cs:102-103 `MapTileObjects[65+i] = SteelWallObject`（i=0,1,2）＋
+        // SteelWallObject.cs:17 `SteelWall{Type-SteelWall01+1}` ⇒ 66 是 **SteelWall02**。
+        // 匯出成 Bonfire01 讓客戶端按檔名建了 27 盞假火光（光影線 2026-09-03 實查）。
+        if (WorldClassOverrides.TryGetValue((worldIndex, (ushort)type), out string? overrideName))
+        {
+            foreach (var candidate in Candidates(overrideName))
+                if (namedFiles.TryGetValue(candidate, out var overrideFile))
+                    return $"Object{worldIndex}/{overrideFile}";
+        }
+
         if (!ModelTypeNames.TryGetValue((ushort)type, out string? name))
             return null;
 
@@ -486,6 +499,16 @@ public static class GodotSceneExporter
     ///
     /// <c>ITEM_GROUP_*</c> 是道具分類，跟地圖物件不是同一組編號，整批排除。
     /// </remarks>
+    /// <summary>逐世界的型別→模型覆寫：ModelType 列舉與該世界的物件類衝突時，以物件類為真值。
+    /// 每一筆都要附 muonline 的檔:行出處，禁止憑猜加入。</summary>
+    private static readonly Dictionary<(int World, ushort Type), string> WorldClassOverrides = new()
+    {
+        // World1：LorenciaWorld.cs:102-103 `for i<3: MapTileObjects[65+i] = SteelWallObject`
+        //         ＋ SteelWallObject.cs:17 `SteelWall{Type-65+1}` ⇒ 65/66/67 = SteelWall01/02/03。
+        //         列舉 ModelType.cs:55 的 `BonFire02 = 66` 與此衝突，不採用。
+        [(1, 66)] = "SteelWall02",
+    };
+
     private static readonly Dictionary<ushort, string> ModelTypeNames = BuildModelTypeNames();
 
     private static Dictionary<ushort, string> BuildModelTypeNames()
