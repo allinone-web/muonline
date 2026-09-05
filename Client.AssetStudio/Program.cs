@@ -305,7 +305,17 @@ if (parsed.ContainsKey("db"))
 }
 
 if (parsed.TryGetValue("check", out var check) && check is not null)
-    return CatalogReport.Check(session.Catalog, check);
+{
+    // 逗號分隔可以一次吃多個模型 —— 這是併掉舊的 tools/mu texcheck 之後
+    // 唯一還缺的那個能力（它的優點就只有「一次吃多個」）。
+    // 任何一個有缺貼圖就回非零，方便接在 CI 或批次腳本後面。
+    string[] targets = check.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    int worst = 0;
+    foreach (string one in targets)
+        worst = Math.Max(worst, CatalogReport.Check(session.Catalog, one));
+
+    return worst;
+}
 
 if (parsed.TryGetValue("export", out var target) && target is not null)
 {
@@ -332,10 +342,12 @@ var options = new StudioOptions(
     RenderSize: parsed.TryGetValue("render-size", out var renderSizeText) && int.TryParse(renderSizeText, out int renderSize)
         ? Math.Clamp(renderSize, 64, 2048)
         : 640,
-    // 預設轉 180 度：相機的初始角度看到的是模型背面。
+    // 預設 0：相機本身已經擺在正面（ViewportCamera 的 _yaw = 280°）。
+    // 以前預設 180 是因為相機初始在背面，那個補償現在不需要了 ——
+    // 而且 180 其實也只轉到側背，一直都沒真的轉到正面。
     RenderYaw: parsed.TryGetValue("render-yaw", out var yawText) && float.TryParse(yawText, out float yaw)
         ? yaw
-        : 180f,
+        : 0f,
     InitialSelection: parsed.GetValueOrDefault("open"),
     InitialPanels: parsed.GetValueOrDefault("panels"),
     InitialKind: parsed.GetValueOrDefault("kind"),

@@ -1,3 +1,4 @@
+using Client.AssetStudio.Catalog;
 using Client.AssetStudio.Rendering;
 using Client.AssetStudio.Ui;
 using Client.MapEditor;
@@ -195,6 +196,8 @@ public sealed class StudioGame : Game
                         model.AttachPart(full);
                 }
             }
+
+            ApplyAdditiveHint(model, entry);
 
             _session.Model = model;
             _session.Selected = entry;
@@ -423,6 +426,38 @@ public sealed class StudioGame : Game
     }
 
     private static IntPtr _layoutPathHandle;
+
+    /// <summary>
+    /// 特效、技能、翅膀整個模型都用加法混合。
+    /// </summary>
+    /// <remarks>
+    /// <b>這不是美化，是「看不看得見」的差別。</b>這幾類的貼圖多半是不帶 alpha 的
+    /// OZJ（JPEG），底色是黑的 —— 遊戲用加法混合畫，黑色自然變透明。
+    /// 照一般模型畫的話，它們是一塊<b>不透明的黑板</b>，上面浮著一點光。
+    ///
+    /// 判斷用<b>分類與路徑</b>，不用檔名關鍵字：分類是目錄建好的事實，
+    /// 檔名關鍵字（含 "wing"、含 "eff"）會誤傷一堆正常模型。
+    /// </remarks>
+    private static void ApplyAdditiveHint(AnimatedModel model, EntityEntry entry)
+    {
+        string path = entry.ModelPath.Replace('\\', '/');
+
+        bool additive =
+            entry.Kind is EntityKind.Effect or EntityKind.SkillModel
+            || path.StartsWith("Effect/", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith("Skill/", StringComparison.OrdinalIgnoreCase)
+            || entry.Group.Contains("翅膀", StringComparison.Ordinal)
+            || entry.Group.Contains("特效", StringComparison.Ordinal);
+
+        if (!additive)
+            return;
+
+        foreach (var mesh in model.AllMeshes)
+        {
+            mesh.AdditiveHint = true;
+            mesh.ResetTransparency();
+        }
+    }
 
     private void SaveModelRender(string path)
     {

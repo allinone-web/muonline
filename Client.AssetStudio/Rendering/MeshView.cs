@@ -16,6 +16,14 @@ namespace Client.AssetStudio.Rendering;
 /// （<see cref="BMDTextureNormal.Node"/>），與頂點的不一定相同 —— 拿頂點的骨頭去轉法線，
 /// 受光會在關節處出現一圈錯誤的暗帶。
 /// </remarks>
+/// <summary>網格的混合方式。順序就是繪製順序。</summary>
+public enum MeshBlendKind
+{
+    Opaque,
+    Alpha,
+    Additive,
+}
+
 public sealed class MeshView
 {
     private readonly SkinVertex[] _source;
@@ -58,21 +66,75 @@ public sealed class MeshView
     public bool Visible { get; set; } = true;
 
     /// <summary>
-    /// 帶 alpha 通道的貼圖（<c>.ozt</c> / <c>.ozp</c> / DXT3/5 的 <c>.ozd</c>）在遊戲裡
-    /// 走的是半透明路徑（<c>ModelObject.IsRgba</c>）。這裡沿用同一個判斷。
+    /// 這個網格該用哪種混合。
     /// </summary>
-    public bool IsTransparent
+    /// <remarks>
+    /// <b>只看副檔名是不夠的。</b>特效與翅膀的貼圖多半是不帶 alpha 的 OZJ（JPEG），
+    /// 底色是黑的 —— 遊戲用<b>加法混合</b>畫，於是黑色自然變透明。
+    /// 只判斷「有沒有 alpha 通道」的話，那些模型會變成一塊<b>不透明的黑板</b>，
+    /// 上面浮著一點光 —— 而且不會有任何錯誤訊息。
+    ///
+    /// 判斷順序：
+    /// <list type="number">
+    ///   <item>貼圖檔名後綴 <c>_R</c>（Bright）→ 加法。這是遊戲自己的規則
+    ///         （<c>TextureLoader.ParseScript</c>），翅膀的發光層就靠它。</item>
+    ///   <item><see cref="AdditiveHint"/>（特效／技能／翅膀整個模型）→ 加法。</item>
+    ///   <item>貼圖有 alpha 通道 → alpha 混合。</item>
+    ///   <item>其餘 → 不透明。</item>
+    /// </list>
+    /// </remarks>
+    public MeshBlendKind BlendKind
     {
-        get => _transparentOverride ?? DefaultTransparent;
-        set => _transparentOverride = value;
+        get => _blendOverride ?? DefaultBlendKind;
+        set => _blendOverride = value;
     }
 
-    private bool? _transparentOverride;
+    private MeshBlendKind? _blendOverride;
 
-    public bool DefaultTransparent => Texture.Found
+    /// <summary>整個模型都該加法混合（特效、技能、翅膀）。由檢視器依分類設定。</summary>
+    public bool AdditiveHint { get; set; }
+
+    public MeshBlendKind DefaultBlendKind
+    {
+        get
+        {
+            if (HasBrightScript)
+                return MeshBlendKind.Additive;
+
+            if (AdditiveHint)
+                return MeshBlendKind.Additive;
+
+            return HasAlphaChannel ? MeshBlendKind.Alpha : MeshBlendKind.Opaque;
+        }
+    }
+
+    /// <summary>貼圖檔名的最後一段是 <c>_R</c>：遊戲會把這個網格改用加法混合。</summary>
+    public bool HasBrightScript
+    {
+        get
+        {
+            string stem = Path.GetFileNameWithoutExtension(TexturePath);
+            int underscore = stem.LastIndexOf('_');
+            return underscore >= 0
+                && stem.AsSpan(underscore + 1).Equals("r", StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    public bool HasAlphaChannel => Texture.Found
         && Path.GetExtension(Texture.FullPath!).ToLowerInvariant() is ".ozt" or ".ozp" or ".ozd" or ".png" or ".tga";
 
-    public void ResetTransparency() => _transparentOverride = null;
+    /// <summary>舊名。半透明 = 不是不透明。</summary>
+    public bool IsTransparent
+    {
+        get => BlendKind != MeshBlendKind.Opaque;
+        set => _blendOverride = value
+            ? (HasAlphaChannel ? MeshBlendKind.Alpha : MeshBlendKind.Additive)
+            : MeshBlendKind.Opaque;
+    }
+
+    public bool DefaultTransparent => DefaultBlendKind != MeshBlendKind.Opaque;
+
+    public void ResetTransparency() => _blendOverride = null;
 
     public VertexPositionNormalTexture[] Vertices { get; }
 

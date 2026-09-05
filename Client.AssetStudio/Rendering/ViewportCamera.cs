@@ -12,7 +12,18 @@ namespace Client.AssetStudio.Rendering;
 /// </remarks>
 public sealed class ViewportCamera
 {
-    private float _yaw = MathHelper.ToRadians(35f);
+    /// <summary>
+    /// 預設要讓角色<b>面向鏡頭</b>。
+    /// </summary>
+    /// <remarks>
+    /// 實測：MU 的角色朝 −Y，所以相機要繞到 <b>280°</b> 才看得到正面
+    /// （35° 是背面，這也是 <c>--render-yaw</c> 以前預設 180 的原因 ——
+    /// 而 180 其實只轉到側背，正面在 235 之後）。
+    /// 留 10° 不對正是為了有點立體感；完全對正（270°）會扁得像立繪。
+    ///
+    /// 驗證方式：<c>tools/mu browser --open 幻影騎士 --render x.png</c>，看得到臉就是對的。
+    /// </remarks>
+    private float _yaw = MathHelper.ToRadians(280f);
     private float _pitch = MathHelper.ToRadians(20f);
 
     public Vector3 Target { get; set; }

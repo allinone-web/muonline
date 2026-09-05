@@ -283,10 +283,13 @@ public sealed class AnimatedModel : IDisposable
 
         try
         {
-            // 兩趟：先畫不透明的，再畫半透明的。同一趟裡畫會讓半透明網格被自己的
-            // 深度寫入切掉後面的部分（怪物的翅膀、光暈幾乎都是這樣壞掉的）。
-            DrawPass(effect, options, transparent: false);
-            DrawPass(effect, options, transparent: true);
+            // 三趟，順序不能換：不透明 → alpha → 加法。
+            // 同一趟裡畫會讓半透明網格被自己的深度寫入切掉後面的部分
+            // （怪物的翅膀、光暈幾乎都是這樣壞掉的）；
+            // 加法排最後是因為它完全不該遮住任何東西。
+            DrawPass(effect, options, MeshBlendKind.Opaque);
+            DrawPass(effect, options, MeshBlendKind.Alpha);
+            DrawPass(effect, options, MeshBlendKind.Additive);
         }
         finally
         {
@@ -296,10 +299,17 @@ public sealed class AnimatedModel : IDisposable
         }
     }
 
-    private void DrawPass(BasicEffect effect, RenderOptions options, bool transparent)
+    private void DrawPass(BasicEffect effect, RenderOptions options, MeshBlendKind kind)
     {
-        _device.BlendState = transparent ? BlendState.NonPremultiplied : BlendState.Opaque;
-        _device.DepthStencilState = transparent ? DepthStencilState.DepthRead : DepthStencilState.Default;
+        _device.BlendState = kind switch
+        {
+            MeshBlendKind.Alpha => BlendState.NonPremultiplied,
+            MeshBlendKind.Additive => BlendState.Additive,
+            _ => BlendState.Opaque,
+        };
+        _device.DepthStencilState = kind == MeshBlendKind.Opaque
+            ? DepthStencilState.Default
+            : DepthStencilState.DepthRead;
         _device.RasterizerState = options.Wireframe
             ? WireframeState
             : RasterizerState.CullNone;
@@ -309,7 +319,7 @@ public sealed class AnimatedModel : IDisposable
             if (!mesh.Visible || mesh.Vertices.Length < 3)
                 continue;
 
-            if (mesh.IsTransparent != transparent)
+            if (mesh.BlendKind != kind)
                 continue;
 
             effect.Texture = options.ShowTextures ? (Resolve(mesh) ?? _white) : _white;
