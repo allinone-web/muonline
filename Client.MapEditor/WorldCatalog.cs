@@ -74,4 +74,61 @@ public static class WorldCatalog
 
     private static string? ResolveName(int worldIndex)
         => WorldTypeFor(worldIndex)?.GetCustomAttribute<WorldInfoAttribute>()?.DisplayName;
+
+    /// <summary>
+    /// 把每張圖的語意型別表匯出成 JSON，給無頭的工具用。
+    /// </summary>
+    /// <remarks>
+    /// 這是分類線索裡最準的一條 —— 有它的圖未分類約 2%，沒有的高到 79%。
+    /// 但它要實例化 <c>Client.Main</c> 的 <c>WorldControl</c> 並反射叫
+    /// <c>CreateMapTileObjects()</c>，所以只有帶著 MonoGame 的行程拿得到。
+    /// MapTool 刻意無頭（CI 跑得動），於是拿不到。
+    ///
+    /// 解法不是讓 MapTool 相依 MonoGame，也不是用 regex 去解析 <c>World*.cs</c>
+    /// （那些檔案有迴圈、有陣列、有繼承，正則會在看不見的地方解錯），
+    /// 而是**由唯一解得對的地方導出一次**，其他人讀同一份。
+    ///
+    /// 輸出：<c>{ "1": { "0": "TreeObject", "5": "HouseObject" }, ... }</c>
+    /// —— 外層是 world 編號，內層是 type → 類別名（只收非 null 的）。
+    /// </remarks>
+    public static void ExportSemanticTypes(string dataPath, string outputPath)
+    {
+        var payload = new SortedDictionary<int, SortedDictionary<int, string>>();
+        int worlds = 0, entries = 0;
+
+        foreach (var entry in WorldDirectory.Discover(dataPath).OrderBy(w => w.Index))
+        {
+            var types = GetTileObjectTypes(entry);
+            if (types is null)
+                continue;
+
+            var map = new SortedDictionary<int, string>();
+            for (int type = 0; type < types.Length; type++)
+            {
+                // MapTileObject 是所有格子的預設基底，21558/21760 筆都是它 ——
+                // 它不帶任何語意，收進去只會讓檔案大 100 倍而查不到東西。
+                if (types[type] is Type t && t.Name != "MapTileObject")
+                    map[type] = t.Name;
+            }
+
+            if (map.Count == 0)
+                continue;
+
+            payload[entry.Index] = map;
+            worlds++;
+            entries += map.Count;
+        }
+
+        string json = System.Text.Json.JsonSerializer.Serialize(payload, new System.Text.Json.JsonSerializerOptions
+        {
+            WriteIndented = true,
+        });
+
+        string? directory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
+
+        File.WriteAllText(outputPath, json);
+        Console.WriteLine($"語意型別：{worlds} 張圖、{entries} 筆 → {outputPath}");
+    }
 }

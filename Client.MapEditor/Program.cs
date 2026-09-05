@@ -149,6 +149,12 @@ EditorSession.Current.AuditObjects = parsed.ContainsKey("audit-objects");
 EditorSession.Current.ExportOnStartPath = parsed.GetValueOrDefault("export-to");
 EditorSession.Current.ExportOpenMuOnStartPath = parsed.GetValueOrDefault("export-openmu-to");
 
+// 語意型別表（World 類別的 CreateMapTileObjects）—— 分類線索裡最準的一條。
+// 不能在這裡直接導：它要實例化 WorldControl，而那要 MuGame 起來之後才行
+// （在 CLI 階段呼叫實測 86 張圖全部 NullReferenceException）。
+// 所以只記路徑，等遊戲初始化完再導，導完就結束。
+EditorSession.Current.ExportSemanticTypesOnStartPath = parsed.GetValueOrDefault("export-semantic-types");
+
 // 分類完全不需要 GPU，所以這份報告在遊戲跑起來之前就能出。
 // 這裡刻意不帶語意型別表（那需要 MuGame 才能建 world 類別），
 // 測的正是「純自動分類」對無意義檔名的資料夾有多少覆蓋率。
@@ -251,7 +257,7 @@ static Dictionary<string, string?> ParseArgs(string[] args)
     {
         "data", "project", "project-check", "world", "tile", "size", "seconds", "screenshot",
         "grass-density", "grass-planes", "grass-distance", "grass-dense", "shots", "shot",
-        "export-to", "export-openmu-to", "client-main", "openmu",
+        "export-to", "export-openmu-to", "client-main", "openmu", "export-semantic-types",
     };
     var flagOptions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -302,7 +308,7 @@ static void ValidateModeArguments(Dictionary<string, string?> options)
         [
             "world", "shots", "shot", "selftest", "audit-objects", "export-to", "export-openmu-to",
             "catalog-report", "catalog-precision", "catalog-geometry", "catalog-signal", "catalog-unknown",
-            "build-npc-catalog", "client-main", "openmu",
+            "build-npc-catalog", "client-main", "openmu", "export-semantic-types",
         ];
         string[] conflicts = forbidden.Where(options.ContainsKey).ToArray();
         if (conflicts.Length > 0)

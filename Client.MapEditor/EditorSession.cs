@@ -107,6 +107,16 @@ public sealed class EditorSession : EditSession
     /// <summary>--export-openmu-to：把伺服器端資料匯出到這個目錄。</summary>
     public string? ExportOpenMuOnStartPath { get; set; }
 
+    /// <summary>
+    /// 啟動後把全部地圖的語意型別表導出到這個路徑，然後直接結束。
+    /// </summary>
+    /// <remarks>
+    /// 為什麼要等遊戲起來才做：語意型別要實例化 <c>WorldControl</c>，
+    /// 而那需要 MuGame 已經初始化 —— 在 <c>Program.cs</c> 的 CLI 階段呼叫會全部
+    /// 拿到 NullReferenceException（實測 86 張圖全失敗）。
+    /// </remarks>
+    public string? ExportSemanticTypesOnStartPath { get; set; }
+
     public WorldEntry? LoadedWorld
         => LoadedWorldIndex is int index ? Worlds.FirstOrDefault(w => w.Index == index) : null;
 

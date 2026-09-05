@@ -134,11 +134,15 @@ public sealed class EditorUi : IDisposable
         _layerView = new LayerView(game.GraphicsDevice, imgui);
         _thumbnails = new ThumbnailCache(game.GraphicsDevice, imgui);
 
-        // 人工標註存在使用者目錄，不污染遊戲資源。
-        _catalog = new AssetCatalog(Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".mu-editor",
-            "object-catalog.json"));
+        // 個人標註存在使用者目錄，不污染遊戲資源；
+        // 共用標註跟著 repo 走（tools/assets/object-catalog.json），大家看到同一份。
+        // 個人的優先 —— 自己標過的不該被共用檔蓋掉。
+        _catalog = new AssetCatalog(
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".mu-editor",
+                "object-catalog.json"),
+            AssetCatalog.SharedCatalogPath);
     }
 
     public void Draw()

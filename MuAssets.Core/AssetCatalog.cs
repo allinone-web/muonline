@@ -220,11 +220,40 @@ public sealed class AssetCatalog
 
     private readonly Dictionary<string, AssetCategory> _manual = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _catalogPath;
+    private readonly string? _basePath;
 
-    public AssetCatalog(string catalogPath)
+    /// <param name="catalogPath">個人標註。寫入只會寫到這裡。</param>
+    /// <param name="basePath">
+    /// 共用的基底標註（跟著 repo 走，大家看到同一份）。先讀它，再讓個人的覆蓋上去。
+    /// </param>
+    /// <remarks>
+    /// 為什麼要兩層：編輯器原本寫 <c>~/.mu-editor/</c>（不污染遊戲資源，這是對的），
+    /// 但 MapTool 讀的是 <c>&lt;Data&gt;/object-catalog.json</c> —— 兩邊互相看不到對方標的東西。
+    /// 共用基底入庫、個人的留在使用者目錄並優先，兩個需求就都成立。
+    /// </remarks>
+    public AssetCatalog(string catalogPath, string? basePath = null)
     {
         _catalogPath = catalogPath;
+        _basePath = basePath;
         Load();
+    }
+
+    /// <summary>共用標註檔在 repo 裡的位置。找不到 repo 就回 null。</summary>
+    public static string? SharedCatalogPath
+    {
+        get
+        {
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            while (dir is not null)
+            {
+                string candidate = Path.Combine(dir.FullName, "tools", "assets", "object-catalog.json");
+                if (File.Exists(candidate))
+                    return candidate;
+                dir = dir.Parent;
+            }
+
+            return null;
+        }
     }
 
     /// <summary>掃一個 <c>Object{N}</c> 目錄，把裡面每個 <c>.bmd</c> 歸類。</summary>
@@ -237,10 +266,33 @@ public sealed class AssetCatalog
     /// </summary>
     public bool UseShapeFallback { get; set; } = true;
 
+    /// <param name="semanticTypes">
+    /// 每個 type 的語意類別。傳 <see cref="Type"/> 只是呼叫端方便 ——
+    /// 分類只用得到 <c>Name</c>，所以內部一律轉成字串（見吃字串的那個多載）。
+    /// </param>
     public AssetEntry[] Scan(
         string dataPath,
         int worldIndex,
         Type[]? semanticTypes,
+        Dictionary<short, PlacementProfile>? placement = null)
+        => ScanWithNames(
+            dataPath,
+            worldIndex,
+            semanticTypes?.Select(t => t?.Name).ToArray(),
+            placement);
+
+    /// <summary>
+    /// 吃類別**名稱**的版本。給無頭的工具用 —— 它們載不到 <c>Client.Main</c> 的型別，
+    /// 但讀得到編輯器導出的 <c>semantic-types.json</c>。
+    /// </summary>
+    /// <remarks>
+    /// 取不同的名字而不是多載：兩者都接受 <c>null</c>，多載會在
+    /// <c>Scan(path, index, null)</c> 這種呼叫上變成歧義（實測 5 處編譯錯誤）。
+    /// </remarks>
+    public AssetEntry[] ScanWithNames(
+        string dataPath,
+        int worldIndex,
+        string?[]? semanticTypes,
         Dictionary<short, PlacementProfile>? placement = null)
     {
         string directory = Path.Combine(dataPath, $"Object{worldIndex}");
@@ -272,7 +324,7 @@ public sealed class AssetCatalog
     private AssetEntry Classify(
         string path,
         int worldIndex,
-        Type[]? semanticTypes,
+        string?[]? semanticTypes,
         Dictionary<short, PlacementProfile>? placement)
     {
         string fileName = Path.GetFileName(path);
@@ -284,10 +336,10 @@ public sealed class AssetCatalog
 
         if (objectType is short type && semanticTypes is not null &&
             type >= 0 && type < semanticTypes.Length &&
-            semanticTypes[type] is Type semantic &&
-            TryFromSemanticClass(semantic.Name, out var fromClass))
+            semanticTypes[type] is string semantic &&
+            TryFromSemanticClass(semantic, out var fromClass))
         {
-            return new AssetEntry(id, fileName, path, worldIndex, objectType, fromClass, semantic.Name);
+            return new AssetEntry(id, fileName, path, worldIndex, objectType, fromClass, semantic);
         }
 
         if (TryFromKeyword(Path.GetFileNameWithoutExtension(fileName), out var fromName))
@@ -411,15 +463,24 @@ public sealed class AssetCatalog
         }
     }
 
+    /// <summary>先讀共用基底，再讓個人標註覆蓋 —— 順序不能反。</summary>
     private void Load()
     {
-        if (!File.Exists(_catalogPath))
+        if (_basePath is not null)
+            LoadInto(_basePath);
+
+        LoadInto(_catalogPath);
+    }
+
+    private void LoadInto(string path)
+    {
+        if (!File.Exists(path))
             return;
 
         try
         {
             var stored = JsonSerializer.Deserialize<Dictionary<string, AssetCategory>>(
-                File.ReadAllText(_catalogPath), JsonOptions);
+                File.ReadAllText(path), JsonOptions);
 
             if (stored is null)
                 return;
@@ -429,7 +490,7 @@ public sealed class AssetCatalog
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[AssetCatalog] 讀取 {_catalogPath} 失敗：{ex.Message}");
+            Console.WriteLine($"[AssetCatalog] 讀取 {path} 失敗：{ex.Message}");
         }
     }
 

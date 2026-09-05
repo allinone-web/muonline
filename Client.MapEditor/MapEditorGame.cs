@@ -78,6 +78,16 @@ public sealed class MapEditorGame : MuGame
             graphics.ApplyChanges();
         }
 
+        // 語意型別表導完就走。擺在 Initialize 尾端：MuGame 已經備妥，
+        // 但還沒開始載地圖，所以是最快能導的時機。
+        if (EditorSession.Current.ExportSemanticTypesOnStartPath is string semanticPath)
+        {
+            // 用 Constants.DataPath 而不是 session 的 —— 後者要等 MapEditorScene
+            // 建構時才填，這裡還是空字串（會靜默導出 0 張圖）。
+            WorldCatalog.ExportSemanticTypes(Constants.DataPath, semanticPath);
+            Exit();
+        }
+
         // MuGame.Initialize 會關掉系統游標（遊戲有自己的游標貼圖），編輯器要用回系統游標。
         IsMouseVisible = true;
 
