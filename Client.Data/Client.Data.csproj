@@ -1,9 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <ClientDataTargetFramework>net10.0</ClientDataTargetFramework>
+    <!-- 兩個目標框架：
+           net10.0  本專案的工具鏈與 MonoGame 客戶端
+           net8.0   Godot 4.3 的上限 —— 地圖編輯器要轉去 Godot，那邊必須引用得到這份解析。
+         解析只有一份，不會為了引擎再抄一份（RealmForge 就是因為讀中立包才沒有第二份解析）。
+         消費端可以覆寫成單一值（iOS 建置就這樣做），所以用 TargetFrameworks 但保留原本的屬性名。 -->
+    <ClientDataTargetFramework Condition="'$(ClientDataTargetFramework)'==''">net10.0;net8.0</ClientDataTargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <TargetFramework>$(ClientDataTargetFramework)</TargetFramework>
+    <TargetFrameworks>$(ClientDataTargetFramework)</TargetFrameworks>
     <AssemblyName>Client.Data</AssemblyName>
     <RootNamespace>Client.Data</RootNamespace>
     <UseSourceGenerators>true</UseSourceGenerators>

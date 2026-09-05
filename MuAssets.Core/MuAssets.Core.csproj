@@ -1,7 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <!-- 跟著 Client.Data 一起雙目標：net10.0 給工具鏈，net8.0 給 Godot 4.3。
+         編輯語意（筆刷、歷史、專案 IO、匯出）只有這一份，Godot 編輯器直接引用，
+         不要在 Godot 那邊重寫一份會漂移的。 -->
+    <TargetFrameworks Condition="'$(TargetFrameworks)'=='' and '$(TargetFramework)'==''">net10.0;net8.0</TargetFrameworks>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>MuAssets.Core</AssemblyName>
