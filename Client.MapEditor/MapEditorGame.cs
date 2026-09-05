@@ -188,7 +188,10 @@ public sealed class MapEditorGame : MuGame
 
             var io = ImGui.GetIO();
             if (ActiveScene is MapEditorScene scene)
-                scene.UiCapturesInput = io.WantCaptureMouse || io.WantCaptureKeyboard || _ui.GizmoCapturesMouse;
+            {
+                scene.UiCapturesMouse = io.WantCaptureMouse || _ui.GizmoCapturesMouse;
+                scene.UiCapturesKeyboard = io.WantCaptureKeyboard;
+            }
         }
 
         // 用「經過的時間」而不是幀數：關掉 vsync 後這支程式跑到兩千多 FPS，

@@ -31,6 +31,9 @@
   <ItemGroup>
     <ProjectReference Include="..\MuAssets.Core\MuAssets.Core.csproj" />
     <ProjectReference Include="..\Client.Main\Client.Main.csproj" />
+    <!-- Godot 中立包的匯出器（GodotSceneExporter）住在 AssetStudio。
+         複製一份到編輯器只會分岔，直接參考過去。 -->
+    <ProjectReference Include="..\Client.AssetStudio\Client.AssetStudio.csproj" />
   </ItemGroup>
 
   <ItemGroup>

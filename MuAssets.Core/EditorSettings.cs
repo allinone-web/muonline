@@ -23,6 +23,16 @@ public sealed class EditorSettings
     public string DeployDataPath { get; set; } = string.Empty;
 
     /// <summary>
+    /// Godot 中立包的輸出根目錄。RealmForge 的 <c>tools/client/import_mu_map.sh</c>
+    /// 預設就是從 <c>tools/tep-map-mu-godot/World{N}</c> 取，所以維持同一個約定 ——
+    /// 改成別的地方的話，那邊要一起設 <c>MU_EXPORT_ROOT</c>。
+    /// </summary>
+    public string GodotExportRoot { get; set; } = DefaultGodotExportRoot;
+
+    /// <summary>Godot 匯出時要不要一併匯出物件模型（gltf）。關掉只出地形，快很多。</summary>
+    public bool GodotExportObjects { get; set; } = true;
+
+    /// <summary>
     /// 介面字型大小。macOS 上視窗不是 HiDPI，系統會把畫面放大約 1.7 倍，
     /// 調大字型是最直接的補償方式。
     /// </summary>
@@ -49,6 +59,27 @@ public sealed class EditorSettings
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".mu-editor");
 
     private static string DefaultOutputRoot => Path.Combine(ConfigDirectory, "output");
+
+    /// <summary>
+    /// 專案樹裡的 <c>tools/tep-map-mu-godot</c>。找不到專案根（例如從別處啟動）就退回設定目錄，
+    /// 使用者再自己填 —— 猜一個不存在的路徑比留空更難查。
+    /// </summary>
+    private static string DefaultGodotExportRoot
+    {
+        get
+        {
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            while (dir is not null)
+            {
+                string candidate = Path.Combine(dir.FullName, "tools", "tep-map-mu-godot");
+                if (Directory.Exists(candidate))
+                    return candidate;
+                dir = dir.Parent;
+            }
+
+            return Path.Combine(ConfigDirectory, "godot-export");
+        }
+    }
     private static string DefaultProjectRoot => Path.Combine(ConfigDirectory, "projects");
 
     private static string SettingsPath => Path.Combine(ConfigDirectory, "settings.json");
@@ -82,6 +113,9 @@ public sealed class EditorSettings
     }
 
     public string OutputDirectoryFor(int worldIndex) => Path.Combine(OutputRoot, $"World{worldIndex}");
+
+    public string GodotExportDirectoryFor(int worldIndex)
+        => Path.Combine(GodotExportRoot, $"World{worldIndex}");
 
     public string ProjectDirectoryFor(int worldIndex) => Path.Combine(ProjectRoot, $"World{worldIndex}");
 }

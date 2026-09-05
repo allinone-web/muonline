@@ -372,6 +372,13 @@ public sealed class EditorUi : IDisposable
 
         ImGui.Separator();
 
+        // 平移一直都在（中鍵拖曳），但 Mac 沒有中鍵，等於摸不到 ——
+        // 於是只能一格一格按「相機對準」。把操作列出來，別再靠猜。
+        if (ImGui.CollapsingHeader("操作說明", ImGuiTreeNodeFlags.DefaultOpen))
+            ImGui.TextColored(Muted, EditorCamera.ControlsHelp);
+
+        ImGui.Separator();
+
         // 會搖動的草不是地形貼圖，是另一套 billboard，由 Constants.DRAW_GRASS 控制。
         // 啟動時它的值來自畫質預設：Auto 在這台 Mac 上解析成 Medium，而 Medium 關草。
         // 遊戲那邊玩家可以在暫停選單裡開；編輯器沒有那個選單，所以開關放這裡。
@@ -571,8 +578,45 @@ public sealed class EditorUi : IDisposable
         }
 
         ImGui.Separator();
+
+        // 第四層：Godot 中立包。跟上面三層是不同方向的出口 ——
+        // 前三層是「回到 MU 客戶端」，這一層是「出去給 RealmForge」。
+        ImGui.TextColored(Muted, "Godot 中立包（給 RealmForge）");
+        ImGui.SetNextItemWidth(-1f);
+
+        string godotRoot = _session.Settings.GodotExportRoot;
+        if (ImGui.InputText("##godotroot", ref godotRoot, 512))
+        {
+            _session.Settings.GodotExportRoot = godotRoot;
+            _session.Settings.Save();
+        }
+
+        bool godotObjects = _session.Settings.GodotExportObjects;
+        if (ImGui.Checkbox("含物件模型", ref godotObjects))
+        {
+            _session.Settings.GodotExportObjects = godotObjects;
+            _session.Settings.Save();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("關掉只出地形，快很多。要看完整場景就留著。");
+
+        ImGui.BeginDisabled(_session.FileBusy);
+        if (ImGui.Button("匯出到 Godot"))
+            _ = scene?.ExportGodotAsync();
+        ImGui.EndDisabled();
+
+        // 匯出器讀的是磁碟上的 Data，不是這裡的記憶體文件 —— 沒講清楚的話
+        // 使用者會以為剛畫的東西已經出去了。
+        if (_session.HasUnsavedChanges)
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(Warning, "未存的改動不會出現在包裡");
+        }
+
+        ImGui.Separator();
         ImGui.TextColored(Muted, $"專案　{_session.Settings.ProjectDirectoryFor(document.WorldIndex)}");
         ImGui.TextColored(Muted, $"輸出　{_session.Settings.OutputDirectoryFor(document.WorldIndex)}");
+        ImGui.TextColored(Muted, $"Godot　{_session.Settings.GodotExportDirectoryFor(document.WorldIndex)}");
 
         if (!string.IsNullOrEmpty(_session.FileMessage))
         {

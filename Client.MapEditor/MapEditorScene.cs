@@ -24,8 +24,21 @@ public sealed class MapEditorScene : BaseScene
 {
     private readonly EditorSession _session = EditorSession.Current;
 
-    /// <summary>ImGui 這一幀有沒有吃掉滑鼠/鍵盤。由 <see cref="MapEditorGame"/> 每幀更新。</summary>
-    public bool UiCapturesInput { get; set; }
+    /// <summary>ImGui 這一幀有沒有吃掉滑鼠。由 <see cref="MapEditorGame"/> 每幀更新。</summary>
+    public bool UiCapturesMouse { get; set; }
+
+    /// <summary>
+    /// ImGui 這一幀有沒有吃掉鍵盤（有輸入框在打字）。
+    /// 跟滑鼠分開記：合成一個旗標的話，面板裡點過一次輸入框就連滑鼠轉鏡頭都動不了。
+    /// </summary>
+    public bool UiCapturesKeyboard { get; set; }
+
+    /// <summary>ImGui 這一幀有沒有吃掉滑鼠或鍵盤。</summary>
+    public bool UiCapturesInput
+    {
+        get => UiCapturesMouse || UiCapturesKeyboard;
+        set => UiCapturesMouse = UiCapturesKeyboard = value;
+    }
 
     private MouseState _previousMouse;
     private KeyboardState _previousKeyboard;
@@ -86,10 +99,33 @@ public sealed class MapEditorScene : BaseScene
             _ = LoadWorldAsync(requested);
         }
 
-        bool acceptInput = !UiCapturesInput && !_session.IsLoading;
-        bool acceptEdits = acceptInput && !_session.IsExternalProjectReadOnly;
+        bool loading = _session.IsLoading;
+        bool acceptMouse = !UiCapturesMouse && !loading;
+        bool acceptKeyboard = !UiCapturesKeyboard && !loading;
+        bool acceptInput = acceptMouse && acceptKeyboard;
 
-        HoveredTile = acceptInput
+        // 相機先更新，畫筆才問得到「這一幀是不是在用抓手平移」。
+        // 擺在編輯之後的話，抓手要等一幀才生效，按下去的那一瞬間會先點出一筆。
+        //
+        // 黃金影像模式：相機由鏡位獨佔。
+        // 每一幀都套而不是載入時套一次 —— 世界載完之後有 FrameWholeMap 之類的動作會改相機，
+        // 只套一次的話基準圖會隨著「哪一幀截到」而變，那就不是基準了。
+        if (_session.GoldenShot is { } goldenShot)
+        {
+            goldenShot.ApplyTo(_session.Camera);
+            _session.Camera.Update(gameTime, acceptInput: false);
+        }
+        else
+        {
+            _session.Camera.Update(gameTime, acceptMouse, acceptKeyboard);
+        }
+
+        // 抓手平移時左鍵是在推鏡頭，不是在下筆 —— 不擋的話拖到哪就畫到哪。
+        bool acceptEdits = acceptInput
+                           && !_session.IsExternalProjectReadOnly
+                           && !_session.Camera.IsPanning;
+
+        HoveredTile = acceptMouse
             ? TerrainPicker.Pick(World, MuGame.Instance.MouseRay)
             : default;
 
@@ -104,19 +140,6 @@ public sealed class MapEditorScene : BaseScene
         {
             RebuildWorldObjects();
             _session.ObjectsDirty = false;
-        }
-
-        // 黃金影像模式：相機由鏡位獨佔。
-        // 每一幀都套而不是載入時套一次 —— 世界載完之後有 FrameWholeMap 之類的動作會改相機，
-        // 只套一次的話基準圖會隨著「哪一幀截到」而變，那就不是基準了。
-        if (_session.GoldenShot is { } goldenShot)
-        {
-            goldenShot.ApplyTo(_session.Camera);
-            _session.Camera.Update(gameTime, acceptInput: false);
-        }
-        else
-        {
-            _session.Camera.Update(gameTime, acceptInput);
         }
 
         ApplyObjectDrawDistance();
@@ -838,6 +861,62 @@ public sealed class MapEditorScene : BaseScene
                 ? $"已匯出 {result.Files.Length} 個檔案到 {directory}" +
                   (result.BackedUp.Length > 0 ? $"（備份 {result.BackedUp.Length} 個）" : string.Empty)
                 : $"匯出失敗：{result.Error}";
+        }
+        finally
+        {
+            _session.FileBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// 把整張圖匯出成 Godot 吃得下的中立包（給 RealmForge 用）。
+    /// </summary>
+    /// <remarks>
+    /// <b>來源是磁碟上的 Data 目錄，不是編輯器記憶體裡的文件。</b>
+    /// <see cref="Client.AssetStudio.Export.GodotSceneExporter"/> 自己去讀 <c>World{N}/</c>，
+    /// 所以還沒「匯出客戶端 → 部署到遊戲」的改動不會出現在中立包裡。
+    /// 這裡不偷偷代跑部署（那會動到遊戲資源，不該是一個匯出按鈕的副作用），
+    /// 改成把狀態講清楚，讓使用者自己決定。
+    ///
+    /// 匯出一張圖大約 8 秒、11 MB，所以整段丟到背景執行緒，不要卡住畫面。
+    /// </remarks>
+    public async Task ExportGodotAsync()
+    {
+        var document = _session.Document;
+        if (document is null || _session.FileBusy)
+            return;
+
+        _session.FileBusy = true;
+        int worldIndex = document.WorldIndex;
+        string directory = _session.Settings.GodotExportDirectoryFor(worldIndex);
+        string dataPath = _session.DataPath;
+        bool withObjects = _session.Settings.GodotExportObjects;
+
+        try
+        {
+            var result = await Task.Run(() =>
+                Client.AssetStudio.Export.GodotSceneExporter.Export(
+                    dataPath,
+                    worldIndex,
+                    directory,
+                    new Client.AssetStudio.Export.GodotSceneExporter.Options(
+                        ExportObjects: withObjects)));
+
+            string warnings = result.Warnings.Length > 0
+                ? $"\n警告 {result.Warnings.Length} 則：" +
+                  string.Join("\n  ", result.Warnings.Take(5))
+                : string.Empty;
+
+            _session.FileMessage =
+                $"已匯出 Godot 中立包到 {directory}\n" +
+                $"地形貼圖 {result.TileTextures}、草 {result.GrassTextures}、" +
+                $"物件 {result.ObjectInstances} 個（{result.ObjectTypesExported}/{result.ObjectTypes} 種模型）" +
+                warnings +
+                "\n在 RealmForge 端執行：tools/client/import_mu_map.sh " + worldIndex;
+        }
+        catch (Exception ex)
+        {
+            _session.FileMessage = $"Godot 匯出失敗：{ex.Message}";
         }
         finally
         {
