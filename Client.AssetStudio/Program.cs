@@ -6,6 +6,7 @@
 //                 [--seconds N] [--screenshot <path>]
 //
 //   MuAssetStudio --report                          目錄盤點（不開視窗）
+//   MuAssetStudio --skills-json --out <file>         399 個技能連名稱與全部屬性 → JSON
 //   MuAssetStudio --catalog-json [--inspect] --out <file>
 //                                                   整份目錄倒成 JSON（--inspect 連模型細節）
 //   MuAssetStudio --verify [分類]                    解析每一個模型，回報解不開的與缺貼圖的
@@ -33,6 +34,8 @@
 //   自有資產的資源庫（引擎中立：glTF + PNG + JSON 清單）
 //   MuAssetStudio --library-list [--library <資料夾>]
 //   MuAssetStudio --library-add <gltf|glb> [--name X] [--kind 怪物]
+//   MuAssetStudio --library-add-dir <資料夾> [--kind 怪物] [--copy] [--limit N] [--filter X]
+//                                                   整個資料夾一次收進來（預設只記路徑不複製）
 //   MuAssetStudio --library-show <id>                 相容性報告 + 目前的動作對映
 //   MuAssetStudio --library-map <id> --action N [--clip <動作名稱>]
 //   MuAssetStudio --library-sound <id> --event <idle|attack1|attack2|hurt|death> [--file <音效>]
@@ -159,6 +162,14 @@ if (parsed.TryGetValue("library-add", out var libraryAdd) && libraryAdd is not n
                                parsed.GetValueOrDefault("name"), parsed.GetValueOrDefault("kind"));
 }
 
+if (parsed.ContainsKey("skills-json"))
+{
+    string skillsOut = parsed.GetValueOrDefault("out")
+        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                        "Documents", "mu-skills.json");
+    return SkillJsonCommand.Run(session.Skills, skillsOut);
+}
+
 if (parsed.ContainsKey("catalog-json"))
 {
     string catalogOut = parsed.GetValueOrDefault("out")
@@ -166,6 +177,25 @@ if (parsed.ContainsKey("catalog-json"))
                         "Documents", "mu-catalog.json");
     return CatalogJsonCommand.Run(session.Catalog, dataPath, catalogOut,
                                   inspect: parsed.ContainsKey("inspect"));
+}
+
+if (parsed.TryGetValue("library-add-dir", out var bulkDir) && bulkDir is not null)
+{
+    var bulkKind = parsed.GetValueOrDefault("kind") switch
+    {
+        "角色" or "player" => EntityKind.Player,
+        "NPC" or "npc" => EntityKind.Npc,
+        "道具" or "item" => EntityKind.Item,
+        "特效" or "effect" => EntityKind.Effect,
+        _ => EntityKind.Monster,
+    };
+
+    int bulkLimit = int.TryParse(parsed.GetValueOrDefault("limit"), out int parsedLimit) ? parsedLimit : 0;
+
+    return LibraryBulkCommand.Run(session.Library, bulkDir, bulkKind,
+                                  copy: parsed.ContainsKey("copy"),
+                                  limit: bulkLimit,
+                                  filter: parsed.GetValueOrDefault("filter"));
 }
 
 if (parsed.TryGetValue("library-show", out var libraryShow) && libraryShow is not null)

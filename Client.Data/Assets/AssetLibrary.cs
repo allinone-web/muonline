@@ -23,6 +23,15 @@ public sealed class LibraryAsset
     public float Scale { get; set; } = 1f;
 
     /// <summary>
+    /// 這一筆只記路徑、沒有把來源檔複製進資源庫。
+    /// </summary>
+    /// <remarks>
+    /// 批次收進別人維護的成品時用。<b>來源移動或刪掉這一筆就壞了</b>，
+    /// 所以自己做的資產不要用這個模式。
+    /// </remarks>
+    public bool Linked { get; set; }
+
+    /// <summary>
     /// 遊戲的動作編號 → 外部檔案裡的動作名稱。
     /// </summary>
     /// <remarks>
@@ -175,7 +184,16 @@ public sealed class AssetLibrary
     /// 資源庫存的是「你的來源檔」，衍生物（貼圖 PNG、將來的引擎資源）都能從它重建。
     /// 這與地圖那邊的 <c>map.json + PNG</c> 是同一個原則。
     /// </remarks>
-    public LibraryAsset? Add(string sourcePath, string? name, EntityKind kind, out ImportedModel? imported)
+    /// <param name="link">
+    /// <b>只記路徑，不複製來源檔。</b>批次收進上千個外部資產時用 ——
+    /// 天堂那批角色平均 2.7 MB，1,500 個複製下來是 4 GB，
+    /// 而它們本來就在另一個 repo 裡受版本管理，複製一份只是多一份會過期的副本。
+    ///
+    /// 代價要講清楚：<b>來源那邊移動或刪掉檔案，這一筆就壞了</b>。
+    /// 所以自己做的資產仍然應該用複製（預設），link 只給「別人維護的成品」。
+    /// </param>
+    public LibraryAsset? Add(string sourcePath, string? name, EntityKind kind,
+                             out ImportedModel? imported, bool link = false)
     {
         imported = null;
         LastError = null;
@@ -204,7 +222,8 @@ public sealed class AssetLibrary
             // 來源檔連同它旁邊的相依檔（.bin、貼圖）一起複製。
             // .gltf 是「一份 JSON 加一堆外部檔」，只複製 JSON 會得到一個開不起來的資產。
             string sourceName = Path.GetFileName(sourcePath);
-            CopySourceWithDependencies(sourcePath, directory);
+            if (!link)
+                CopySourceWithDependencies(sourcePath, directory);
 
             string textures = Path.Combine(directory, "textures");
             Directory.CreateDirectory(textures);
@@ -217,7 +236,10 @@ public sealed class AssetLibrary
                 Id = id,
                 Name = name ?? Path.GetFileNameWithoutExtension(sourcePath),
                 Kind = kind,
-                Source = Path.Combine(id, sourceName),
+                // link 時存絕對路徑。SourcePathOf 用的是 Path.Combine，
+                // 而 Path.Combine 遇到絕對路徑的第二段會直接回傳它 —— 不必改解析。
+                Source = link ? Path.GetFullPath(sourcePath) : Path.Combine(id, sourceName),
+                Linked = link,
                 Scale = model.Report.SuggestedScale,
             };
 
