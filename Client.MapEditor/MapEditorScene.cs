@@ -572,6 +572,44 @@ public sealed class MapEditorScene : BaseScene
         _session.StatusMessage = $"放置 type {instance.Type} @ ({HoveredTile.TileX}, {HoveredTile.TileY})";
     }
 
+    /// <summary>
+    /// 把整張圖的某一種物件換成另一種（「這張圖的樹全部換成那棵樹」）。
+    /// </summary>
+    /// <remarks>
+    /// 換的是每個實例的 type，原始 <c>.bmd</c> 完全沒動，所以撤銷一次就全部回來。
+    /// 回傳換掉的數量。
+    /// </remarks>
+    public int ReplaceObjectType(short fromType, short toType, float scaleMultiplier = 1f)
+    {
+        var document = _session.Document;
+        if (document is null || _session.IsExternalProjectReadOnly)
+            return 0;
+
+        var (edit, result) = ObjectTypeReplacer.Replace(document, fromType, toType, scaleMultiplier);
+        if (edit is null)
+        {
+            _session.StatusMessage = $"沒有 type {fromType} 可以換";
+            return 0;
+        }
+
+        _session.ObjectHistory.Push(edit);
+        _session.IssuesStale = true;
+        _session.ObjectsDirty = true;
+        _session.HasUnsavedChanges = true;
+
+        // 選取的物件可能就是剛被換掉的那個，型別已經變了，留著會誤導。
+        _session.SelectedObject = null;
+
+        string scaleNote = Math.Abs(scaleMultiplier - 1f) > 0.0001f
+            ? $"，縮放 ×{scaleMultiplier:0.##}"
+            : string.Empty;
+
+        _session.StatusMessage =
+            $"已把 {result.Replaced} 個 type {fromType} 換成 type {toType}{scaleNote}（可撤銷）";
+
+        return result.Replaced;
+    }
+
     /// <summary>選最靠近點擊處的物件。用平面距離就夠，物件通常貼著地面。</summary>
     private void SelectObjectAt(MapDocument document)
     {

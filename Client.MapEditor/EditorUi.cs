@@ -100,6 +100,18 @@ public sealed class EditorUi : IDisposable
     private AssetEntry[] _assets = [];
     private int _assetWorldIndex = -1;
 
+    /// <summary>
+    /// 正在挑「要把這種物件換成什麼」。有值時素材庫進入挑選模式，
+    /// 點一個模型就整張圖換掉。null = 一般模式。
+    /// </summary>
+    private short? _replaceFromType;
+
+    /// <summary>換型時要套的縮放倍率。1 = 不動；建議值由兩個模型的高度比算出來。</summary>
+    private float _replaceScale = 1f;
+
+    /// <summary>挑選模式下只顯示同類別的模型（換樹就給樹）。關掉可以跨類別換。</summary>
+    private bool _replaceSameCategoryOnly = true;
+
     /// <summary>素材庫裡被選起來的模型，用來批次標註。</summary>
     private readonly HashSet<string> _selectedAssets = [];
 
@@ -1671,11 +1683,12 @@ public sealed class EditorUi : IDisposable
         const ImGuiTableFlags flags = ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY
                                     | ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp;
 
-        if (ImGui.BeginTable("mapping", 4, flags))
+        if (ImGui.BeginTable("mapping", 5, flags))
         {
             ImGui.TableSetupColumn("索引", ImGuiTableColumnFlags.WidthFixed, 46f);
             ImGui.TableSetupColumn("格數", ImGuiTableColumnFlags.WidthFixed, 62f);
             ImGui.TableSetupColumn("貼圖檔");
+            ImGui.TableSetupColumn("類型 / 尺寸", ImGuiTableColumnFlags.WidthFixed, 150f);
             ImGui.TableSetupColumn("預覽", ImGuiTableColumnFlags.WidthFixed, 44f);
             ImGui.TableSetupScrollFreeze(0, 1);
             ImGui.TableHeadersRow();
@@ -1700,7 +1713,30 @@ public sealed class EditorUi : IDisposable
                 ImGui.TableSetColumnIndex(2);
                 DrawMappingCombo(entry, index, file, isCustom);
 
+                // 「這張圖是什麼」——換素材時要看的就是這幾個數字。
+                // 槽位來自檔名（結構上該長什麼），外觀來自影像（現在實際是什麼），
+                // 兩者不一定一致而且兩邊都是真的：迪維亞斯的 TileGrass01 是雪白色。
                 ImGui.TableSetColumnIndex(3);
+                if (file is not null)
+                {
+                    var info = GetTileTextureInfo(Path.Combine(entry.Directory, file));
+                    if (info is not null)
+                    {
+                        ImGui.TextColored(Muted, info);
+                        if (ImGui.IsItemHovered())
+                            ImGui.SetTooltip(
+                                "槽位＝檔名說它扮演什麼角色；外觀＝影像實際長什麼樣。\n" +
+                                "「鋪 N×N 格」照 64 像素一格的規則算。\n" +
+                                "想知道這張圖被幾張地圖共用、一次全換掉：\n" +
+                                "  tools/mu map dupes --name " + Path.GetFileNameWithoutExtension(file));
+                    }
+                    else
+                    {
+                        ImGui.TextColored(Muted, "量不到");
+                    }
+                }
+
+                ImGui.TableSetColumnIndex(4);
                 if (file is not null && _previews.Get(Path.Combine(entry.Directory, file)) is IntPtr preview)
                     ImGui.Image(preview, new NVector2(36f, 36f));
 
@@ -1711,6 +1747,28 @@ public sealed class EditorUi : IDisposable
         }
 
         ImGui.End();
+    }
+
+    /// <summary>貼圖的槽位／外觀／尺寸。量一張要解 OZJ 並掃像素，所以查過就快取。</summary>
+    private readonly Dictionary<string, string?> _tileInfoCache = new(StringComparer.OrdinalIgnoreCase);
+
+    private string? GetTileTextureInfo(string path)
+    {
+        if (_tileInfoCache.TryGetValue(path, out var cached))
+            return cached;
+
+        string? text = null;
+        var profile = TerrainTextureClassifier.Measure(path);
+
+        if (profile is not null)
+        {
+            var slot = TerrainTextureClassifier.SlotOf(Path.GetFileName(path));
+            var look = TerrainTextureClassifier.LookOf(profile);
+            text = $"{slot} / {look}　{profile.Width}×{profile.Height}　鋪 {profile.Width / 64f:0.##}×{profile.Height / 64f:0.##} 格";
+        }
+
+        _tileInfoCache[path] = text;
+        return text;
     }
 
     private void DrawMappingCombo(WorldEntry entry, int index, string? current, bool isCustom)
@@ -1811,11 +1869,12 @@ public sealed class EditorUi : IDisposable
         const ImGuiTableFlags flags = ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY
                                     | ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp;
 
-        if (ImGui.BeginTable("objects", 3, flags))
+        if (ImGui.BeginTable("objects", 4, flags))
         {
             ImGui.TableSetupColumn("type", ImGuiTableColumnFlags.WidthFixed, 44f);
             ImGui.TableSetupColumn("數量", ImGuiTableColumnFlags.WidthFixed, 50f);
             ImGui.TableSetupColumn("類別");
+            ImGui.TableSetupColumn("##replace", ImGuiTableColumnFlags.WidthFixed, 44f);
             ImGui.TableSetupScrollFreeze(0, 1);
             ImGui.TableHeadersRow();
 
@@ -1840,12 +1899,40 @@ public sealed class EditorUi : IDisposable
                     ImGui.TextColored(Muted, "未分類");
                 else
                     ImGui.Text(item.ClassName);
+
+                // 「這張圖的這種東西全部換掉」的入口。按下去只是進挑選模式，
+                // 真正的替換要在素材庫點一個模型才發生 —— 不會誤按就改掉一萬個物件。
+                ImGui.TableSetColumnIndex(3);
+                ImGui.PushID(item.Type);
+                ImGui.BeginDisabled(_session.IsExternalProjectReadOnly);
+                if (ImGui.SmallButton("替換"))
+                    BeginReplaceType(item.Type);
+                ImGui.EndDisabled();
+                ImGui.PopID();
+
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip($"到素材庫挑一個模型，把這張圖的 {item.Count} 個 type {item.Type} 全部換掉");
             }
 
             ImGui.EndTable();
         }
 
         ImGui.End();
+    }
+
+    /// <summary>進入「挑替換目標」模式。真正的替換在素材庫點下去才發生。</summary>
+    private void BeginReplaceType(short fromType)
+    {
+        _replaceFromType = fromType;
+        _replaceScale = 1f;
+
+        // 換樹就先只給樹看 —— 但允許關掉，因為「把石頭換成樹」也是合理的需求。
+        var source = _assets.FirstOrDefault(a => a.ObjectType == fromType);
+        _categoryFilter = _replaceSameCategoryOnly && source is not null
+            ? source.Category
+            : AssetCategory.Unclassified;
+
+        _session.StatusMessage = $"挑一個模型來取代 type {fromType}（在「素材庫」面板）";
     }
 
     private static ObjectSummary[] BuildObjectSummary(MapDocument document, WorldEntry entry)
@@ -2059,6 +2146,7 @@ public sealed class EditorUi : IDisposable
             return;
         }
 
+        DrawReplaceBanner(entry);
         DrawAssetToolbar(entry);
         ImGui.Separator();
 
@@ -2084,6 +2172,69 @@ public sealed class EditorUi : IDisposable
 
         ImGui.EndChild();
         ImGui.End();
+    }
+
+    /// <summary>
+    /// 挑選模式的橫幅。沒在挑的時候完全不佔位置。
+    /// </summary>
+    private void DrawReplaceBanner(WorldEntry entry)
+    {
+        if (_replaceFromType is not short fromType)
+            return;
+
+        var document = _session.Document;
+        int count = document?.Objects.Count(o => o.Type == fromType) ?? 0;
+
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, new NVector4(0.20f, 0.32f, 0.20f, 1f));
+        if (ImGui.BeginChild("replaceBanner", new NVector2(0f, 0f), ImGuiChildFlags.AutoResizeY))
+        {
+            ImGui.TextColored(Warning, $"挑一個模型，取代這張圖的 {count} 個 type {fromType}");
+            ImGui.TextColored(Muted, "點縮圖就會整批換掉。可以撤銷。");
+
+            if (ImGui.Checkbox("只顯示同類別", ref _replaceSameCategoryOnly))
+            {
+                var source = _assets.FirstOrDefault(a => a.ObjectType == fromType);
+                _categoryFilter = _replaceSameCategoryOnly && source is not null
+                    ? source.Category
+                    : AssetCategory.Unclassified;
+            }
+
+            ImGui.SetNextItemWidth(160f);
+            ImGui.SliderFloat("縮放倍率", ref _replaceScale, 0.1f, 5f, "×%.2f");
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(
+                    "兩個模型高矮差很多時用。\n" +
+                    "游標移到縮圖上會顯示照高度算出來的建議值 —— 但要不要用是美術判斷，這裡不自動套。");
+
+            ImGui.SameLine();
+            if (ImGui.SmallButton("重設"))
+                _replaceScale = 1f;
+
+            ImGui.SameLine();
+            if (ImGui.SmallButton("取消替換"))
+            {
+                _replaceFromType = null;
+                _replaceScale = 1f;
+            }
+        }
+
+        ImGui.EndChild();
+        ImGui.PopStyleColor();
+        ImGui.Separator();
+    }
+
+    /// <summary>在挑選模式下點一個模型：整張圖換掉。</summary>
+    private void ApplyReplaceWith(AssetEntry asset)
+    {
+        if (_replaceFromType is not short fromType || asset.ObjectType is not short toType)
+            return;
+
+        var scene = _game.ActiveScene as MapEditorScene;
+        scene?.ReplaceObjectType(fromType, toType, _replaceScale);
+
+        _replaceFromType = null;
+        _replaceScale = 1f;
+        _objectSummaryWorldIndex = -1;   // 下一幀重算摘要，數量才對得上
     }
 
     private void DrawAssetToolbar(WorldEntry entry)
@@ -2278,7 +2429,9 @@ public sealed class EditorUi : IDisposable
         {
             var io = ImGui.GetIO();
 
-            if (io.KeyShift && _assetAnchor is not null)
+            if (_replaceFromType is not null && asset.ObjectType is not null)
+                ApplyReplaceWith(asset);
+            else if (io.KeyShift && _assetAnchor is not null)
                 SelectAssetRange(_assetAnchor, asset.Id);
             else if (io.KeySuper || io.KeyCtrl)
                 ToggleAssetSelection(asset.Id);
@@ -2295,6 +2448,23 @@ public sealed class EditorUi : IDisposable
             ImGui.Text(asset.FileName);
             ImGui.TextColored(Muted, $"類別：{AssetCategoryNames.Of(asset.Category)}（來源：{asset.CategorySource}）");
             ImGui.TextColored(Muted, asset.ObjectType is short type ? $"物件 type {type}" : "具名模型，非 ObjectNN");
+
+            // 挑選模式下多給一行：兩個模型的高度比。承諾在橫幅的提示裡，這裡兌現。
+            if (_replaceFromType is short replaceFrom && asset.ObjectType is short replaceTo)
+            {
+                ImGui.Separator();
+                var preview = ObjectTypeReplacer.Inspect(
+                    _session.Document!, replaceFrom, replaceTo, _session.DataPath);
+
+                ImGui.TextColored(Warning, $"點下去換掉 {preview.Count} 個");
+
+                if (preview.SuggestedScale is float suggested)
+                    ImGui.TextColored(Muted,
+                        $"高度 {preview.FromShape!.Height:0} → {preview.ToShape!.Height:0}，" +
+                        $"要維持原高度建議 ×{suggested:0.##}");
+                else
+                    ImGui.TextColored(Muted, "量不到其中一個模型的尺寸，縮放請自行判斷");
+            }
 
             // 貼圖清單：要替換素材就得先知道這個模型吃哪幾張圖。
             ImGui.Separator();
