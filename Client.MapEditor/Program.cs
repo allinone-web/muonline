@@ -220,8 +220,16 @@ try
 {
     if (parsed.GetValueOrDefault("project") is string projectDirectory)
     {
-        workspace = await ExternalProjectWorkspace.CreateAsync(
-            projectDirectory, sourceDataPath, terrainOnly: parsed.ContainsKey("terrain-only"));
+        // 這裡刻意用同步等待，不用 await。
+        //
+        // 頂層 await 之後續行會被排到執行緒池，於是 game.Run() 不再跑在主執行緒上，
+        // 而 macOS 不允許在非主執行緒設應用程式主選單：
+        //   API misuse: setting the main menu on a non-main thread
+        // 一般啟動路徑沒有 await 所以沒事，只有 --project 會踩到 —— 而回歸測試
+        // 只驗過 --project 的參數錯誤（在建立視窗前就退出），沒驗過真的開起來。
+        workspace = ExternalProjectWorkspace.CreateAsync(
+            projectDirectory, sourceDataPath, terrainOnly: parsed.ContainsKey("terrain-only"))
+            .GetAwaiter().GetResult();
         EditorSession.Current.ExternalProjectDirectory = workspace.ProjectDirectory;
         EditorSession.Current.StartupWorldIndex = workspace.WorldIndex;
         sourceDataPath = workspace.DataDirectory;
@@ -230,6 +238,12 @@ try
 
     Constants.DataPath = sourceDataPath;
     Console.WriteLine($"Data 目錄：{Constants.DataPath}");
+
+    // 面板要能在執行期換到別的專案，所以先記住「家在哪」與有哪些來源可以看。
+    // 外部專案模式下 sourceDataPath 已經被換成暫存區了，家要用原本那個。
+    EditorSession.Current.HomeDataPath = Path.GetFullPath(
+        parsed.GetValueOrDefault("data") ?? DefaultDataDir);
+    EditorSession.Current.MapSources = MapSourceCatalog.Defaults(EditorSession.Current.HomeDataPath);
 
     using var game = new MapEditorGame(options);
     game.Run();
@@ -241,7 +255,8 @@ catch (Exception ex)
 }
 finally
 {
-    workspace?.Dispose();
+    // 面板換過來源的話，要丟的是最後那一個，不是啟動時建的那個。
+    (EditorSession.Current.ExternalWorkspace ?? workspace)?.Dispose();
 }
 
 static (int, int) ParseSize(string? value)

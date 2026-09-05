@@ -573,6 +573,92 @@ public sealed class MapEditorScene : BaseScene
     }
 
     /// <summary>
+    /// 換到另一個專案的一張圖來看（唯讀）。
+    /// </summary>
+    /// <remarks>
+    /// <b>不複製檔案。</b> 建一個唯讀暫存區（symlink 到本專案的共用資源 ＋
+    /// 從對方目錄衍生出渲染端要的五個檔），把 <c>Constants.DataPath</c> 指過去，
+    /// 重新掃一次世界清單再載入。來源專案一個位元組都不會被動到。
+    ///
+    /// 為什麼不是「匯入」：三個專案各自都有天堂地圖的窗格（本專案 5、RealmForge 39、
+    /// 天堂抽取 130），而且是同一條管線的不同快照。複製進來只會多出好幾份會各自漂移的副本。
+    /// </remarks>
+    public async Task OpenExternalMapAsync(string projectDirectory)
+    {
+        if (_session.IsLoading)
+            return;
+
+        _session.IsLoading = true;
+        _session.StatusMessage = $"開啟外部專案：{Path.GetFileName(projectDirectory)}…";
+
+        var previous = _session.ExternalWorkspace;
+
+        try
+        {
+            // terrainOnly 一律開：外部專案多半是 Godot 中立包，沒有 BMD。
+            // 有 BMD 的話照樣會載，這個旗標只是「缺了不算錯」。
+            var workspace = await ExternalProjectWorkspace.CreateAsync(
+                projectDirectory, _session.HomeDataPath, terrainOnly: true);
+
+            _session.ExternalWorkspace = workspace;
+            _session.ExternalProjectDirectory = workspace.ProjectDirectory;
+
+            Constants.DataPath = workspace.DataDirectory;
+            _session.DataPath = workspace.DataDirectory;
+            _session.Worlds = WorldCatalog.Discover(workspace.DataDirectory);
+
+            _session.IsLoading = false;
+            await LoadWorldAsync(workspace.WorldIndex);
+
+            // 舊的暫存區要等新的載完才丟 —— 先丟的話載入途中會讀到被刪掉的檔案。
+            previous?.Dispose();
+
+            // ★ 物件模型不是從外部專案來的。
+            // 暫存區把本專案 Data 底下的非 World 目錄整批 symlink 過去，
+            // 所以渲染端拿到的是我們自己的 Object{N}/。
+            //
+            // 兩張圖的 WorldIndex 一樣不代表 type 編號一樣 —— 實測 World212 與
+            // World422 都是同一張 fod2 的窗格，81 個共同 type 裡沒有一個指到同一個模型。
+            // 所以只要有物件，就把這件事講出來，不要讓人以為看到的是對方專案的模型。
+            bool hasObjects = _session.Document?.Objects.Count > 0;
+            string modelNote = hasObjects
+                ? $"　⚠ 物件模型取自本專案的 Object{workspace.WorldIndex}/，" +
+                  "不是來源專案的；type 編號不保證對得上，擺錯了不會報錯"
+                : string.Empty;
+
+            _session.StatusMessage =
+                $"唯讀瀏覽：{projectDirectory}（來源專案不會被修改）{modelNote}";
+        }
+        catch (Exception ex)
+        {
+            _session.IsLoading = false;
+            _session.StatusMessage = $"開啟失敗：{ex.Message}";
+        }
+    }
+
+    /// <summary>切回本專案的 Data（可編輯）。</summary>
+    public async Task ReturnHomeAsync()
+    {
+        if (_session.IsLoading || _session.ExternalProjectDirectory is null)
+            return;
+
+        var previous = _session.ExternalWorkspace;
+
+        _session.ExternalWorkspace = null;
+        _session.ExternalProjectDirectory = null;
+
+        Constants.DataPath = _session.HomeDataPath;
+        _session.DataPath = _session.HomeDataPath;
+        _session.Worlds = WorldCatalog.Discover(_session.HomeDataPath);
+
+        int world = _session.Worlds.FirstOrDefault()?.Index ?? 1;
+        await LoadWorldAsync(world);
+
+        previous?.Dispose();
+        _session.StatusMessage = "回到本專案的 Data（可編輯）";
+    }
+
+    /// <summary>
     /// 把整張圖的某一種物件換成另一種（「這張圖的樹全部換成那棵樹」）。
     /// </summary>
     /// <remarks>

@@ -23,6 +23,24 @@ public sealed class EditorSession : EditSession
     /// <summary>外部 authoring project；存在時只讀，任何存檔／匯出／部署都被拒絕。</summary>
     public string? ExternalProjectDirectory { get; set; }
 
+    /// <summary>
+    /// 開著的唯讀外部專案暫存區。執行期切換來源時要換掉，換之前先 Dispose 舊的。
+    /// </summary>
+    /// <remarks>
+    /// 由這裡持有而不是 Program 持有：面板要能在執行期換一張別的專案的圖，
+    /// 而那需要重建暫存區。Program 只在最後收尾時 Dispose 一次。
+    /// </remarks>
+    public IDisposable? ExternalWorkspace { get; set; }
+
+    /// <summary>本專案自己的 Data 目錄。切回「本專案」這個來源時要用它。</summary>
+    public string HomeDataPath { get; set; } = string.Empty;
+
+    /// <summary>可以瀏覽的地圖來源。第一個一定是本專案的 Data。</summary>
+    public MapSource[] MapSources { get; set; } = [];
+
+    /// <summary>目前在瀏覽哪一個來源（索引到 <see cref="MapSources"/>）。</summary>
+    public int ActiveSourceIndex { get; set; }
+
     public bool IsExternalProjectReadOnly => ExternalProjectDirectory is not null;
 
     public WorldEntry[] Worlds { get; set; } = [];

@@ -221,10 +221,27 @@ public sealed class EditorUi : IDisposable
         ImGui.SetNextWindowSize(new NVector2(w, h), ImGuiCond.FirstUseEver);
     }
 
+    /// <summary>來源底下的地圖清單快取。掃 130 個目錄不便宜，換來源時才重掃。</summary>
+    private MapSourceEntry[] _sourceEntries = [];
+    private int _cachedSourceIndex = -1;
+    private string _newSourceRoot = string.Empty;
+
     private void DrawWorldList()
     {
         PlaceWindow("地圖清單");
         ImGui.Begin("地圖清單");
+
+        DrawSourcePicker();
+
+        // 外部來源走另一套清單：那些圖不在 Data 裡，是別的專案的目錄。
+        if (_session.MapSources.Length > 0 &&
+            _session.ActiveSourceIndex > 0 &&
+            _session.ActiveSourceIndex < _session.MapSources.Length)
+        {
+            DrawExternalSourceList();
+            ImGui.End();
+            return;
+        }
 
         ImGui.SetNextItemWidth(-1f);
         ImGui.InputTextWithHint("##filter", "搜尋名稱或編號", ref _worldFilter, 64);
@@ -1937,6 +1954,161 @@ public sealed class EditorUi : IDisposable
             : AssetCategory.Unclassified;
 
         _session.StatusMessage = $"挑一個模型來取代 type {fromType}（在「素材庫」面板）";
+    }
+
+    /// <summary>
+    /// 來源選擇器。三個專案預設就在，也可以自己加目錄。
+    /// </summary>
+    /// <remarks>
+    /// 這裡刻意講「瀏覽」不講「匯入」：選外部來源只是把畫面指過去，
+    /// 檔案留在對方專案裡。三個專案各有天堂地圖的窗格而且會各自漂移，
+    /// 複製進來只會多出好幾份對不起來的副本。
+    /// </remarks>
+    private void DrawSourcePicker()
+    {
+        if (_session.MapSources.Length == 0)
+            return;
+
+        int index = Math.Clamp(_session.ActiveSourceIndex, 0, _session.MapSources.Length - 1);
+        var active = _session.MapSources[index];
+
+        ImGui.SetNextItemWidth(-1f);
+        if (ImGui.BeginCombo("##source", active.Name))
+        {
+            for (int i = 0; i < _session.MapSources.Length; i++)
+            {
+                var source = _session.MapSources[i];
+                if (ImGui.Selectable(source.Name, i == index))
+                {
+                    _session.ActiveSourceIndex = i;
+
+                    // 切回本專案就把外部暫存區收掉，回到可編輯狀態。
+                    if (i == 0 && _session.ExternalProjectDirectory is not null)
+                        _ = (_game.ActiveScene as MapEditorScene)?.ReturnHomeAsync();
+                }
+
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip(source.Root);
+            }
+
+            ImGui.EndCombo();
+        }
+
+        if (_session.ExternalProjectDirectory is string external)
+        {
+            ImGui.TextColored(Warning, "唯讀瀏覽中");
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip($"{external}\n來源專案不會被修改。要編輯請切回「本專案」。");
+        }
+
+        ImGui.Separator();
+    }
+
+    private void DrawExternalSourceList()
+    {
+        int index = _session.ActiveSourceIndex;
+        var source = _session.MapSources[index];
+
+        if (_cachedSourceIndex != index)
+        {
+            _sourceEntries = MapSourceCatalog.Enumerate(source);
+            _cachedSourceIndex = index;
+            _worldFilter = string.Empty;
+        }
+
+        ImGui.SetNextItemWidth(-1f);
+        ImGui.InputTextWithHint("##sfilter", "搜尋名稱", ref _worldFilter, 64);
+
+        var visible = string.IsNullOrWhiteSpace(_worldFilter)
+            ? _sourceEntries
+            : [.. _sourceEntries.Where(e =>
+                e.Name.Contains(_worldFilter, StringComparison.OrdinalIgnoreCase))];
+
+        ImGui.TextColored(Muted, $"{visible.Length} / {_sourceEntries.Length} 張　（雙擊開啟，唯讀）");
+        ImGui.TextColored(Muted, "檔案留在原專案，不會複製進來");
+
+        if (_sourceEntries.Length == 0)
+        {
+            ImGui.TextColored(Warning, "這個目錄底下沒有 map.json");
+            DrawAddSource();
+            return;
+        }
+
+        ImGui.Separator();
+
+        const ImGuiTableFlags flags = ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY
+                                    | ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp;
+
+        if (ImGui.BeginTable("sourceMaps", 3, flags))
+        {
+            ImGui.TableSetupColumn("名稱");
+            ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed, 60f);
+            ImGui.TableSetupColumn("內容", ImGuiTableColumnFlags.WidthFixed, 64f);
+            ImGui.TableSetupScrollFreeze(0, 1);
+            ImGui.TableHeadersRow();
+
+            foreach (var entry in visible)
+            {
+                ImGui.TableNextRow();
+
+                ImGui.TableSetColumnIndex(0);
+                bool selected = string.Equals(entry.Directory, _session.ExternalProjectDirectory,
+                    StringComparison.Ordinal);
+
+                if (ImGui.Selectable(entry.Name, selected, ImGuiSelectableFlags.SpanAllColumns)
+                    && ImGui.IsMouseDoubleClicked(0))
+                {
+                    _ = (_game.ActiveScene as MapEditorScene)?.OpenExternalMapAsync(entry.Directory);
+                }
+
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip(entry.Directory);
+
+                ImGui.TableSetColumnIndex(1);
+                ImGui.TextColored(Muted, entry.WorldIndex is int w ? w.ToString() : "－");
+
+                ImGui.TableSetColumnIndex(2);
+                // 編號超過 255 的開不起來：MU 的 .map/.att 檔頭把 MapNumber 存成一個位元組。
+                if (entry.WorldIndex is int index2 && index2 - 1 > byte.MaxValue)
+                    ImGui.TextColored(Warning, "編號過大");
+                else
+                    ImGui.TextColored(Muted, entry.HasObjects ? "有物件" : "只有地形");
+            }
+
+            ImGui.EndTable();
+        }
+
+        DrawAddSource();
+    }
+
+    private void DrawAddSource()
+    {
+        ImGui.Separator();
+        ImGui.TextColored(Muted, "加入目錄（底下每個子目錄要有 map.json）");
+        ImGui.SetNextItemWidth(-70f);
+        ImGui.InputTextWithHint("##newsource", "貼上路徑", ref _newSourceRoot, 512);
+        ImGui.SameLine();
+
+        ImGui.BeginDisabled(string.IsNullOrWhiteSpace(_newSourceRoot));
+        if (ImGui.Button("加入"))
+        {
+            string root = _newSourceRoot.Trim();
+            if (Directory.Exists(root))
+            {
+                string name = Path.GetFileName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)));
+                _session.MapSources = [.. _session.MapSources,
+                    new MapSource(name, Path.GetFullPath(root), MapSourceKind.ProjectRoot)];
+                _session.ActiveSourceIndex = _session.MapSources.Length - 1;
+                _cachedSourceIndex = -1;
+                _newSourceRoot = string.Empty;
+            }
+            else
+            {
+                _session.StatusMessage = $"找不到目錄：{root}";
+            }
+        }
+
+        ImGui.EndDisabled();
     }
 
     private static ObjectSummary[] BuildObjectSummary(MapDocument document, WorldEntry entry)
