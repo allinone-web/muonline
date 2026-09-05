@@ -15,10 +15,29 @@ public sealed record ModelSummary(
     /// <summary>解析失敗的原因。成功時是 null。</summary>
     public string? Error { get; init; }
 
+    /// <summary>頂點總數（所有網格加總）。</summary>
+    public int Vertices { get; init; }
+
+    /// <summary>每個網格的三角形數，順序與模型裡的網格順序一致。</summary>
+    public int[] MeshTriangles { get; init; } = [];
+
+    /// <summary>
+    /// 每個動作的影格數與播放參數。
+    /// </summary>
+    /// <remarks>
+    /// <b>「幾個動作」不足以判斷這個模型會不會自己動。</b>
+    /// 武器全都有 1 個動作，但只有弓與弩那一個動作真的有 7 幀 ——
+    /// 其餘只有 1 幀，等於靜止。少了影格數，這個差別在清單上完全看不出來。
+    /// </remarks>
+    public ActionSummary[] ActionDetails { get; init; } = [];
+
     public static readonly ModelSummary Empty = new(0, 0, 0, 0, [], []);
 
     public static ModelSummary Failed(string error) => Empty with { Error = error };
 }
+
+/// <summary>一個動作的可量事實。</summary>
+public sealed record ActionSummary(int Index, int Frames, float PlaySpeed, bool LockPositions);
 
 /// <summary>
 /// 離線檢查模型：網格數、骨骼數、動作數，以及<b>缺哪幾張貼圖</b>。
@@ -58,10 +77,15 @@ public static class ModelInspector
             var textures = new List<string>();
             var missing = new List<string>();
             int triangles = 0;
+            int vertices = 0;
+            var meshTriangles = new List<int>();
 
             foreach (var mesh in bmd.Meshes ?? [])
             {
-                triangles += mesh.Triangles?.Length ?? 0;
+                int meshTriangleCount = mesh.Triangles?.Length ?? 0;
+                triangles += meshTriangleCount;
+                vertices += mesh.Vertices?.Length ?? 0;
+                meshTriangles.Add(meshTriangleCount);
 
                 string name = mesh.TexturePath ?? string.Empty;
                 if (string.IsNullOrWhiteSpace(name))
@@ -77,13 +101,30 @@ public static class ModelInspector
                     missing.Add(name);
             }
 
+            var actionDetails = new List<ActionSummary>();
+            var actions = bmd.Actions ?? [];
+            for (int i = 0; i < actions.Length; i++)
+            {
+                var action = actions[i];
+                if (action is null)
+                    continue;
+
+                actionDetails.Add(new ActionSummary(
+                    i, action.NumAnimationKeys, action.PlaySpeed, action.LockPositions));
+            }
+
             summary = new ModelSummary(
                 bmd.Meshes?.Length ?? 0,
                 bmd.Bones?.Length ?? 0,
-                bmd.Actions?.Length ?? 0,
+                actions.Length,
                 triangles,
                 textures.ToArray(),
-                missing.ToArray());
+                missing.ToArray())
+            {
+                Vertices = vertices,
+                MeshTriangles = meshTriangles.ToArray(),
+                ActionDetails = actionDetails.ToArray(),
+            };
         }
         catch (Exception ex)
         {

@@ -6,6 +6,8 @@
 //                 [--seconds N] [--screenshot <path>]
 //
 //   MuAssetStudio --report                          目錄盤點（不開視窗）
+//   MuAssetStudio --catalog-json [--inspect] --out <file>
+//                                                   整份目錄倒成 JSON（--inspect 連模型細節）
 //   MuAssetStudio --verify [分類]                    解析每一個模型，回報解不開的與缺貼圖的
 //   MuAssetStudio --selftest                        匯出／匯入管線的無視窗回歸測試（離開碼 0/1/2）
 //   MuAssetStudio --items [篩選]                     道具模型的語意分類（劍／斧／盔甲…）
@@ -155,6 +157,15 @@ if (parsed.TryGetValue("library-add", out var libraryAdd) && libraryAdd is not n
 {
     return LibraryCommands.Add(session.Library, libraryAdd,
                                parsed.GetValueOrDefault("name"), parsed.GetValueOrDefault("kind"));
+}
+
+if (parsed.ContainsKey("catalog-json"))
+{
+    string catalogOut = parsed.GetValueOrDefault("out")
+        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                        "Documents", "mu-catalog.json");
+    return CatalogJsonCommand.Run(session.Catalog, dataPath, catalogOut,
+                                  inspect: parsed.ContainsKey("inspect"));
 }
 
 if (parsed.TryGetValue("library-show", out var libraryShow) && libraryShow is not null)
