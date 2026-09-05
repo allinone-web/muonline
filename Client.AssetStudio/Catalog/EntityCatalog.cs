@@ -41,6 +41,34 @@ public sealed record EntityEntry
     public bool ModelMissing => FullPath is null;
 
     /// <summary>
+    /// 這一筆在<b>語意上</b>屬於哪一類。<see cref="Kind"/> 說的是「怎麼載入」。
+    /// </summary>
+    /// <remarks>
+    /// 兩者必須分開。<see cref="EntityKind.Library"/> 是<b>載入機制</b>
+    /// （走 glTF 而不是 BMD），不是「這是什麼東西」——
+    /// 天堂那 1,514 個角色語意上就是怪物，卻因為 Kind 是 Library
+    /// 全部擠在「資源庫」那一格裡，跟 MU 的怪物完全看不到彼此。
+    ///
+    /// 分開之後：分類看 <see cref="SemanticKind"/>（怪物歸怪物），
+    /// 載入看 <see cref="Kind"/>（Library 走 GltfImporter）。
+    /// 來源用 <see cref="Group"/> 區分，所以在同一個「怪物」底下
+    /// 仍然分得出哪些是 MU 原生、哪些是匯入的。
+    /// </remarks>
+    /// <remarks>
+    /// ★ 後備值一定要用 <c>null</c>，不能用「等於 default 就代表沒設」——
+    /// <c>EntityKind.Monster</c> 的值就是 0，也就是 default。
+    /// 用 default 當哨兵的話，<b>所有語意上是怪物的匯入資產都會被判成「沒設」</b>
+    /// 然後被覆寫回 Library，而且看起來完全正常。
+    /// </remarks>
+    public EntityKind SemanticKind
+    {
+        get => _semanticKind ?? Kind;
+        init => _semanticKind = value;
+    }
+
+    private readonly EntityKind? _semanticKind;
+
+    /// <summary>
     /// 這個檔案有沒有被任何類別引用（當主模型、身體部位或附掛模型都算）。
     /// </summary>
     /// <remarks>
@@ -242,7 +270,7 @@ public sealed class EntityCatalog
             entries.AddRange(LibraryEntries(library));
 
         Entries = entries
-            .OrderBy(e => e.Kind)
+            .OrderBy(e => e.SemanticKind)
             .ThenBy(e => e.Group, StringComparer.Ordinal)
             .ThenBy(e => e.ClassName is null)          // 有類別的排前面
             .ThenBy(e => e.Number < 0 ? int.MaxValue : e.Number)
@@ -251,7 +279,7 @@ public sealed class EntityCatalog
 
         _groups = Entries
             .Where(e => e.Group.Length > 0)
-            .GroupBy(e => e.Kind)
+            .GroupBy(e => e.SemanticKind)
             .ToDictionary(
                 g => g.Key,
                 g => g.GroupBy(e => e.Group)
@@ -277,11 +305,14 @@ public sealed class EntityCatalog
             yield return new EntityEntry
             {
                 Kind = EntityKind.Library,
+                // 語意上它是一隻怪物／一件道具，只是載入方式不同（見 SemanticKind 的說明）
+                SemanticKind = asset.Kind,
                 Number = asset.BindNumber,
                 Name = asset.Name,
                 ClassName = null,
-                // 子分類用「原本打算取代誰」，這樣同一批匯入的東西會聚在一起。
-                Group = EntityKindNames.Of(asset.Kind),
+                // 同一個「怪物」分類底下要分得出來源，否則 MU 原生的 591 隻
+                // 會被匯入的 1,514 個淹掉，而且看不出差別。
+                Group = "資源庫（匯入）",
                 Detail = asset.BindNumber >= 0 ? $"綁定 #{asset.BindNumber}" : string.Empty,
                 ModelPath = asset.Source,
                 FullPath = File.Exists(source) ? source : null,
@@ -290,7 +321,8 @@ public sealed class EntityCatalog
         }
     }
 
-    public EntityEntry[] OfKind(EntityKind kind) => Entries.Where(e => e.Kind == kind).ToArray();
+    /// <summary>某一類底下的全部資源。用<b>語意分類</b>，所以匯入的怪物也在「怪物」裡。</summary>
+    public EntityEntry[] OfKind(EntityKind kind) => Entries.Where(e => e.SemanticKind == kind).ToArray();
 
     /// <summary>某一類底下實際出現過的子分類，依數量排序。</summary>
     public string[] GroupsOf(EntityKind kind) => _groups.GetValueOrDefault(kind, []);

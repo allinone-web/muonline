@@ -70,7 +70,7 @@ public sealed partial class StudioUi
         {
             foreach (var kind in EntityKindNames.All)
             {
-                int count = _session.Catalog.Entries.Count(e => e.Kind == kind);
+                int count = _session.Catalog.Entries.Count(e => e.SemanticKind == kind);
                 if (count == 0)
                     continue;
 
@@ -200,7 +200,7 @@ public sealed partial class StudioUi
     /// </remarks>
     public void RevealInCatalog(EntityEntry entry)
     {
-        _kindFilter = entry.Kind;
+        _kindFilter = entry.SemanticKind;
         _catalogFilter = entry.ClassName ?? Path.GetFileNameWithoutExtension(entry.ModelPath);
         _groupFilter = string.Empty;
         _filterByTag = false;
@@ -293,7 +293,7 @@ public sealed partial class StudioUi
         if (key == _visibleKey)
             return _visible;
 
-        var query = _session.Catalog.Entries.Where(e => e.Kind == _kindFilter);
+        var query = _session.Catalog.Entries.Where(e => e.SemanticKind == _kindFilter);
 
         if (_groupFilter.Length > 0)
             query = query.Where(e => e.Group == _groupFilter);
