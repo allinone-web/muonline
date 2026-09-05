@@ -38,7 +38,9 @@ if (parsed.GetValueOrDefault("project-check") is string projectToCheck)
 {
     projectToCheck = Path.GetFullPath(projectToCheck);
     var inspection = await MapProjectInspector.InspectAsync(
-        projectToCheck, Path.GetFullPath(sourceDataPath), requireRendererDependencies: true);
+        projectToCheck, Path.GetFullPath(sourceDataPath),
+        requireRendererDependencies: true,
+        allowMissingModels: parsed.ContainsKey("terrain-only"));
     PrintInspection(inspection);
 
     bool canOpen = inspection.IsValid && inspection.IsLegacyCodecCompatible;
@@ -46,7 +48,8 @@ if (parsed.GetValueOrDefault("project-check") is string projectToCheck)
     {
         try
         {
-            using var checkWorkspace = await ExternalProjectWorkspace.CreateAsync(projectToCheck, sourceDataPath);
+            using var checkWorkspace = await ExternalProjectWorkspace.CreateAsync(
+                projectToCheck, sourceDataPath, terrainOnly: parsed.ContainsKey("terrain-only"));
             Console.WriteLine($"唯讀 overlay 建立與清理通過：World{checkWorkspace.WorldIndex}");
         }
         catch (Exception ex)
@@ -217,7 +220,8 @@ try
 {
     if (parsed.GetValueOrDefault("project") is string projectDirectory)
     {
-        workspace = await ExternalProjectWorkspace.CreateAsync(projectDirectory, sourceDataPath);
+        workspace = await ExternalProjectWorkspace.CreateAsync(
+            projectDirectory, sourceDataPath, terrainOnly: parsed.ContainsKey("terrain-only"));
         EditorSession.Current.ExternalProjectDirectory = workspace.ProjectDirectory;
         EditorSession.Current.StartupWorldIndex = workspace.WorldIndex;
         sourceDataPath = workspace.DataDirectory;
@@ -263,6 +267,8 @@ static Dictionary<string, string?> ParseArgs(string[] args)
     {
         "fullscreen", "selftest", "grass", "audit-objects", "catalog-report", "catalog-precision",
         "catalog-geometry", "catalog-signal", "catalog-unknown", "build-npc-catalog",
+        // 只看地形：物件模型缺了不算錯。給「開別的專案的 Godot 中立包」用。
+        "terrain-only",
     };
     var options = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
 
@@ -297,7 +303,9 @@ static void ValidateModeArguments(Dictionary<string, string?> options)
 
     if (options.ContainsKey("project-check"))
     {
-        string[] irrelevant = options.Keys.Where(k => k is not "project-check" and not "data").ToArray();
+        string[] irrelevant = options.Keys
+            .Where(k => k is not "project-check" and not "data" and not "terrain-only")
+            .ToArray();
         if (irrelevant.Length > 0)
             throw new ArgumentException($"--project-check 不接受 {string.Join(", ", irrelevant.Select(k => $"--{k}"))}。");
     }
