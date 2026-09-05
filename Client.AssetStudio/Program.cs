@@ -34,7 +34,9 @@
 //   自有資產的資源庫（引擎中立：glTF + PNG + JSON 清單）
 //   MuAssetStudio --library-list [--library <資料夾>]
 //   MuAssetStudio --library-add <gltf|glb> [--name X] [--kind 怪物]
-//   MuAssetStudio --library-add-dir <資料夾> [--kind 怪物] [--copy] [--limit N] [--filter X]
+//   MuAssetStudio --library-add-dir <資料夾> [--kind 怪物|auto] [--copy] [--limit N] [--filter X]
+//   MuAssetStudio --library-reclassify              依包名前綴重新分類已收進來的資產
+//   MuAssetStudio --library-repair --roots <資料夾,…>  link 斷掉時照檔名找回來
 //                                                   整個資料夾一次收進來（預設只記路徑不複製）
 //   MuAssetStudio --library-show <id>                 相容性報告 + 目前的動作對映
 //   MuAssetStudio --library-map <id> --action N [--clip <動作名稱>]
@@ -177,6 +179,119 @@ if (parsed.ContainsKey("catalog-json"))
                         "Documents", "mu-catalog.json");
     return CatalogJsonCommand.Run(session.Catalog, dataPath, catalogOut,
                                   inspect: parsed.ContainsKey("inspect"));
+}
+
+if (parsed.ContainsKey("library-repair"))
+{
+    // link 模式的代價：來源那邊一重組，這裡全部指向不存在的路徑。
+    // 實際發生過 —— lineage-asset-extract 重建了 out/deliver/，
+    // 只留下 maps，1,550 筆連結一次全斷。
+    //
+    // 修法是「照檔名去候選根目錄裡找回來」，不是要人手動改 1,550 行 JSON。
+    var roots = (parsed.GetValueOrDefault("roots") ?? string.Empty)
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .ToList();
+
+    if (roots.Count == 0)
+    {
+        Console.Error.WriteLine("--library-repair 需要 --roots <資料夾1,資料夾2,…>");
+        Console.Error.WriteLine("  例：--roots ~/Documents/GitHub/lineage-asset-extract/out");
+        return 2;
+    }
+
+    // 先把候選根目錄底下的模型全部建成「檔名 → 完整路徑」的索引。
+    // 逐筆去 walk 一次目錄的話，1,550 × 幾萬個檔案是不可接受的。
+    var index = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    foreach (string root in roots)
+    {
+        string expanded = root.StartsWith('~')
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), root[2..])
+            : root;
+
+        if (!Directory.Exists(expanded))
+        {
+            Console.Error.WriteLine($"跳過不存在的根目錄：{expanded}");
+            continue;
+        }
+
+        foreach (string file in Directory.EnumerateFiles(expanded, "*.gl*", SearchOption.AllDirectories))
+        {
+            string extension = Path.GetExtension(file).ToLowerInvariant();
+            if (extension is not (".glb" or ".gltf"))
+                continue;
+
+            index.TryAdd(Path.GetFileName(file), file);
+        }
+    }
+
+    int repaired = 0, stillBroken = 0, fine = 0;
+    var broken = new List<string>();
+
+    foreach (var asset in session.Library.Assets)
+    {
+        string current = session.Library.SourcePathOf(asset);
+        if (File.Exists(current))
+        {
+            fine++;
+            continue;
+        }
+
+        if (index.TryGetValue(Path.GetFileName(asset.Source), out string? found))
+        {
+            asset.Source = found;
+            asset.Linked = true;
+            repaired++;
+        }
+        else
+        {
+            stillBroken++;
+            if (broken.Count < 10)
+                broken.Add(asset.Name);
+        }
+    }
+
+    if (repaired > 0)
+        session.Library.Update();
+
+    Console.WriteLine();
+    Console.WriteLine($"候選根目錄裡有 {index.Count} 個模型");
+    Console.WriteLine($"原本就好的 {fine}　修好 {repaired}　仍然壞的 {stillBroken}");
+    foreach (string name in broken)
+        Console.WriteLine($"  [找不到] {name}");
+
+    return stillBroken > 0 && repaired == 0 ? 1 : 0;
+}
+
+if (parsed.ContainsKey("library-reclassify"))
+{
+    // 已經收進來的資產重新分類。批次匯入時全部指定成同一種，
+    // 之後才發現包名前綴帶了類型 —— 重收一次要 1.1 GB 的 IO，
+    // 而要改的只是 library.json 裡的一個欄位。
+    int changed = 0, unknown = 0;
+    foreach (var asset in session.Library.Assets)
+    {
+        if (!LineageNaming.IsKnown(asset.Name))
+        {
+            unknown++;
+            continue;
+        }
+
+        var (resolvedKind, _) = LineageNaming.Classify(asset.Name, asset.Kind);
+        if (resolvedKind == asset.Kind)
+            continue;
+
+        asset.Kind = resolvedKind;
+        changed++;
+    }
+
+    session.Library.Update();
+
+    Console.WriteLine();
+    Console.WriteLine($"重新分類 {changed} 筆；{unknown} 筆包名認不出類型（維持原樣）");
+    foreach (var group in session.Library.Assets.GroupBy(a => a.Kind).OrderByDescending(g => g.Count()))
+        Console.WriteLine($"  {EntityKindNames.Of(group.Key),-8}{group.Count(),6}");
+
+    return 0;
 }
 
 if (parsed.TryGetValue("library-add-dir", out var bulkDir) && bulkDir is not null)

@@ -20,7 +20,7 @@ namespace Client.AssetStudio.Cli;
 public static class LibraryBulkCommand
 {
     public static int Run(AssetLibrary library, string directory, EntityKind kind,
-                          bool copy, int limit, string? filter)
+                          bool copy, int limit, string? filter, bool autoKind = false)
     {
         if (!Directory.Exists(directory))
         {
@@ -77,7 +77,10 @@ public static class LibraryBulkCommand
                 continue;
             }
 
-            var asset = library.Add(path, name, kind, out _, link: !copy);
+            // --kind auto：從包名前綴判斷。不加這一層的話 1,514 個全部當怪物收，
+            // 裡面混著 NPC、寶箱、裝飾物。
+            var resolved = autoKind ? LineageNaming.Classify(name, kind).Kind : kind;
+            var asset = library.Add(path, name, resolved, out _, link: !copy);
             if (asset is null)
             {
                 failed++;
@@ -93,6 +96,13 @@ public static class LibraryBulkCommand
 
         Console.WriteLine();
         Console.WriteLine($"新增 {added}　已存在跳過 {skipped}　失敗 {failed}");
+
+        if (autoKind)
+        {
+            int unknown = candidates.Count(c => !LineageNaming.IsKnown(c.Name));
+            if (unknown > 0)
+                Console.WriteLine($"其中 {unknown} 個包名認不出類型，用了預設的 {EntityKindNames.Of(kind)}");
+        }
         foreach (string failure in failures)
             Console.WriteLine($"  [失敗] {failure}");
 
